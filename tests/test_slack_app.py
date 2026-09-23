@@ -14,7 +14,6 @@ from code_with_slack.approvals import Approvals
 from code_with_slack.config import Config
 from code_with_slack.footer import UsageCache
 from code_with_slack.guards import ChannelGuard, Identity
-from code_with_slack.render.sinks import StreamingSwitch
 from code_with_slack.sessions import SessionDeps, SessionManager
 from code_with_slack.slack_app import build_app, slack_unescape
 from code_with_slack.state import StateStore
@@ -64,7 +63,6 @@ class World:
                 state=self.state,
                 approvals=self.approvals,
                 usage=UsageCache(no_usage),
-                streaming=StreamingSwitch(),
                 client_factory=factory,
             )
         )
@@ -112,13 +110,13 @@ def message(text: str = "hello", **event: Any) -> dict[str, Any]:
     return body
 
 
-async def test_owner_message_becomes_a_prompt_in_its_thread(world: World) -> None:
+async def test_owner_message_becomes_a_prompt(world: World) -> None:
     body = message("list the files")
     await world.dispatch(body)
     assert world.queries() == ["list the files"]
 
 
-async def test_a_thread_reply_stays_in_its_thread(world: World) -> None:
+async def test_a_message_in_a_thread_is_a_prompt_too(world: World) -> None:
     thread_bodies = [
         p.stem for p in sorted((FIXTURES / "slack").glob("*-event_callback-message.json"))
     ]

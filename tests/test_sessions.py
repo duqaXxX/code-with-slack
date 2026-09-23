@@ -18,7 +18,6 @@ from code_with_slack import sessions, texts
 from code_with_slack.approvals import Answer, Approvals, Approve
 from code_with_slack.footer import UsageCache
 from code_with_slack.guards import Identity
-from code_with_slack.render.sinks import StreamingSwitch
 from code_with_slack.sessions import SessionDeps, SessionManager, resolve_directory
 from code_with_slack.state import StateStore
 from tests.fakes import (
@@ -64,7 +63,6 @@ class Harness:
             state=self.state,
             approvals=self.approvals,
             usage=UsageCache(fetch),
-            streaming=StreamingSwitch(),
             client_factory=self.factory,
         )
         self.manager = SessionManager(self.deps)
@@ -80,13 +78,22 @@ class Harness:
         assert session is not None
         return session
 
-    def streamed_text(self) -> str:
-        return "".join(
-            c.get("text", "")
-            for m in ("chat.startStream", "chat.appendStream", "chat.stopStream")
+    def replies(self) -> list[str]:
+        """The first markdown text of every reply posted in the channel, in order."""
+        return [
+            b["text"]
+            for a in self.slack.calls_to("chat.postMessage")
+            for b in a.get("blocks") or []
+            if b.get("type") == "markdown"
+        ]
+
+    def written_text(self) -> str:
+        return "\n".join(
+            b["text"]
+            for m in ("chat.postMessage", "chat.update")
             for a in self.slack.calls_to(m)
-            for c in a.get("chunks") or []
-            if c.get("type") == "markdown_text"
+            for b in a.get("blocks") or []
+            if b.get("type") == "markdown"
         )
 
 
@@ -103,19 +110,20 @@ async def harness_for(slack: FakeSlack, tmp_path: Path) -> AsyncIterator[Callabl
         await harness.manager.close_all()
 
 
-async def test_a_turn_streams_in_its_thread_and_records_the_session(
+async def test_a_turn_replies_in_the_main_window_and_records_the_session(
     harness_for: Callable[..., Harness],
 ) -> None:
     turn_messages = sdk_messages("tools")
     h = harness_for({"turns": [turn_messages]})
-    turn = await h.session().submit("list the files", "111.222")
+    turn = await h.session().submit("list the files")
     await asyncio.wait_for(turn.done.wait(), 2)
     assert h.clients[0].queries == ["list the files"]
-    assert h.slack.calls_to("chat.startStream")[0]["thread_ts"] == "111.222"
+    assert all(a.get("thread_ts") is None for a in h.slack.calls_to("chat.postMessage"))
     result = turn_messages[-1]
     assert isinstance(result, ResultMessage)
     assert h.state.get(CHANNEL).session_id == result.session_id
-    assert h.slack.calls_to("chat.stopStream")[0]["blocks"][0]["type"] == "context"
+    last = [a for m, a in h.slack.calls if m in ("chat.postMessage", "chat.update")][-1]
+    assert last["blocks"][-1]["type"] == "context"  # the footer closes the reply
 
 
 async def test_the_client_is_launched_as_the_design_says(
@@ -144,8 +152,8 @@ async def test_clear_records_the_new_session_id(harness_for: Callable[..., Harne
     first, second = split_turns(sdk_messages("clear"))
     h = harness_for({"turns": [first, second]})
     session = h.session()
-    await asyncio.wait_for((await session.submit("hi", "1.1")).done.wait(), 2)
-    await asyncio.wait_for((await session.submit("/clear", "2.2")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("hi")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("/clear")).done.wait(), 2)
     assert isinstance(second[-1], ResultMessage)
     assert h.state.get(CHANNEL).session_id == second[-1].session_id
 
@@ -161,10 +169,10 @@ async def test_stale_session_starts_fresh_and_says_so(harness_for: Callable[...,
     )
     h = harness_for({"connect_error": gone}, {"turns": [sdk_messages("tools")]})
     h.state.set_session(CHANNEL, "gone")
-    turn = await h.session().submit("hello", "1.1")
+    turn = await h.session().submit("hello")
     await asyncio.wait_for(turn.done.wait(), 2)
     assert [c.options.resume for c in h.clients] == ["gone", None]
-    assert "could not be resumed" in h.streamed_text()
+    assert "could not be resumed" in h.written_text()
     assert h.state.get(CHANNEL).session_id not in (None, "gone")
 
 
@@ -185,8 +193,8 @@ async def test_queue_waits_while_approval_pending(harness_for: Callable[..., Har
     ask = CanUseToolCall("Bash", {"command": "ls"})
     h = harness_for({"turns": [[ask, *sdk_messages("tools")], sdk_messages("tools")]})
     session = h.session()
-    first = await session.submit("first", "1.1")
-    second = await session.submit("second", "2.2")
+    first = await session.submit("first")
+    second = await session.submit("second")
     await until(lambda: any("blocks" in a for a in h.slack.calls_to("chat.postMessage")))
     await asyncio.sleep(0.05)
     assert h.clients[0].queries == ["first"] and session.busy
@@ -207,7 +215,7 @@ async def test_stop_denies_pending_and_interrupts(harness_for: Callable[..., Har
         }
     )
     session = h.session()
-    turn = await session.submit("clean", "1.1")
+    turn = await session.submit("clean")
     await until(lambda: bool(h.approvals._pending))
     assert await session.stop() is True
     await asyncio.wait_for(turn.done.wait(), 2)
@@ -221,7 +229,7 @@ async def test_ask_user_question_returns_answers(harness_for: Callable[..., Harn
     recorded = sdk_json("ask-can-use-tool")
     call = CanUseToolCall(recorded["tool_name"], recorded["input"])
     h = harness_for({"turns": [[call, *sdk_messages("tools")]]})
-    turn = await h.session().submit("ask me", "1.1")
+    turn = await h.session().submit("ask me")
     await until(lambda: bool(h.approvals._pending))
     approval_id = next(iter(h.approvals._pending))
     answers = {q["question"]: q["options"][0]["label"] for q in recorded["input"]["questions"]}
@@ -232,20 +240,15 @@ async def test_ask_user_question_returns_answers(harness_for: Callable[..., Harn
     assert result.updated_input == {"questions": recorded["input"]["questions"], "answers": answers}
 
 
-async def test_injected_turn_opens_its_own_thread(harness_for: Callable[..., Harness]) -> None:
+async def test_injected_turn_gets_its_own_reply(harness_for: Callable[..., Harness]) -> None:
     turns = split_turns(sdk_messages("background"))
     h = harness_for({"turns": [turns[0]]})
     session = h.session()
-    await asyncio.wait_for((await session.submit("start it", "1.1")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
     for later in turns[1:]:
         h.clients[0].inject(later)
-    await until(
-        lambda: any(
-            a.get("text") == texts.BACKGROUND_ROOT for a in h.slack.calls_to("chat.postMessage")
-        )
-    )
-    threads = {a["thread_ts"] for a in h.slack.calls_to("chat.startStream")}
-    assert "1.1" in threads and len(threads) >= 2
+    await until(lambda: any(texts.BACKGROUND_NOTICE in r for r in h.replies()))
+    assert texts.BACKGROUND_NOTICE not in h.replies()[0]
 
 
 async def test_rate_limit_event_invalidates_usage(harness_for: Callable[..., Harness]) -> None:
@@ -253,7 +256,7 @@ async def test_rate_limit_event_invalidates_usage(harness_for: Callable[..., Har
     assert events, "the spec measured one RateLimitEvent on a client's first turn"
     h = harness_for({"turns": [sdk_messages("tools")]})
     session = h.session()
-    await asyncio.wait_for((await session.submit("a", "1.1")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("a")).done.wait(), 2)
     await until(lambda: h.usage_fetches == 1)
     await h.deps.usage.refresh_if_stale()
     assert h.usage_fetches == 1  # still fresh
@@ -268,7 +271,7 @@ async def test_logs_hold_no_message_content(
 ) -> None:
     h = harness_for({"turns": [sdk_messages("tools")]})
     with caplog.at_level(logging.DEBUG, logger="code_with_slack"):
-        turn = await h.session().submit("SECRET-PROMPT-CONTENT", "1.1")
+        turn = await h.session().submit("SECRET-PROMPT-CONTENT")
         await asyncio.wait_for(turn.done.wait(), 2)
     assert "SECRET-PROMPT-CONTENT" not in caplog.text
 
@@ -322,21 +325,17 @@ async def test_owner_query_waits_for_an_expected_background_turn(
     assert any(isinstance(m, TaskNotificationMessage) for m in notice)
     h = harness_for({"turns": [first, sdk_messages("tools")]})
     session = h.session()
-    await asyncio.wait_for((await session.submit("start it", "1.1")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
     h.clients[0].inject(notice)
     await asyncio.sleep(0.05)
-    second = await session.submit("next", "2.2")
+    second = await session.submit("next")
     await asyncio.sleep(0.05)
     assert h.clients[0].queries == ["start it"]
     h.clients[0].inject(injected)
     await asyncio.wait_for(second.done.wait(), 2)
     assert h.clients[0].queries == ["start it", "next"]
-    roots = [
-        a for a in h.slack.calls_to("chat.postMessage") if a.get("text") == texts.BACKGROUND_ROOT
-    ]
-    assert len(roots) == 1
-    threads = [a["thread_ts"] for a in h.slack.calls_to("chat.startStream")]
-    assert threads[0] == "1.1" and threads[-1] == "2.2" and len(threads) == 3
+    background = [texts.BACKGROUND_NOTICE in r for r in h.replies()]
+    assert background == [False, True, False]  # the owner's replies around the background one
 
 
 async def test_a_notification_with_no_turn_is_shown_and_releases_the_queue(
@@ -347,12 +346,12 @@ async def test_a_notification_with_no_turn_is_shown_and_releases_the_queue(
     first, notice, _ = split_background()
     h = harness_for({"turns": [first, sdk_messages("tools")]})
     session = h.session()
-    await asyncio.wait_for((await session.submit("start it", "1.1")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
     h.clients[0].inject(notice)
     await asyncio.sleep(0.05)
-    second = await session.submit("next", "2.2")
+    second = await session.submit("next")
     await asyncio.wait_for(second.done.wait(), 2)
-    assert any(a.get("text") == texts.BACKGROUND_ROOT for a in h.slack.calls_to("chat.postMessage"))
+    assert any(texts.BACKGROUND_NOTICE in r for r in h.replies())
     assert h.clients[0].queries == ["start it", "next"]
 
 
@@ -362,12 +361,12 @@ async def test_a_query_crossing_a_notification_never_hangs(
     first, notice, injected = split_background()
     h = harness_for({"turns": [first, sdk_messages("tools"), sdk_messages("tools")]})
     session = h.session()
-    await asyncio.wait_for((await session.submit("start it", "1.1")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
     h.clients[0].inject(notice)
-    second = await session.submit("next", "2.2")
+    second = await session.submit("next")
     await asyncio.wait_for(second.done.wait(), 2)
     h.clients[0].inject(injected)
-    third = await session.submit("after", "3.3")
+    third = await session.submit("after")
     await asyncio.wait_for(third.done.wait(), 2)
     assert h.clients[0].queries == ["start it", "next", "after"]
 
@@ -379,13 +378,13 @@ async def test_a_slack_network_error_does_not_stop_the_session(
 
     h = harness_for({"turns": [sdk_messages("tools"), sdk_messages("tools")]})
     down = aiohttp.ClientConnectionError("network down")
-    for method in ("chat.startStream", "chat.appendStream", "chat.stopStream", "chat.postMessage"):
+    for method in ("chat.postMessage", "chat.update"):
         h.slack.responses[method] = down
     session = h.session()
-    await asyncio.wait_for((await session.submit("while offline", "1.1")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("while offline")).done.wait(), 2)
     assert h.clients[0].connected
     h.slack.responses = FakeSlack().responses
-    await asyncio.wait_for((await session.submit("back online", "2.2")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("back online")).done.wait(), 2)
     assert h.clients[0].queries == ["while offline", "back online"] and len(h.clients) == 1
 
 
@@ -396,8 +395,8 @@ async def test_a_cli_that_exits_ends_the_turn_and_the_next_message_reconnects(
         {"turns": [[*sdk_messages("tools")[:3], EndOfStream()]]}, {"turns": [sdk_messages("tools")]}
     )
     session = h.session()
-    await asyncio.wait_for((await session.submit("first", "1.1")).done.wait(), 2)
-    await asyncio.wait_for((await session.submit("second", "2.2")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("first")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("second")).done.wait(), 2)
     assert [c.queries for c in h.clients] == [["first"], ["second"]]
 
 
@@ -411,11 +410,11 @@ async def test_a_failed_background_post_still_releases_the_queue(
     first, notice, _ = split_background()
     h = harness_for({"turns": [first, sdk_messages("tools")]})
     session = h.session()
-    await asyncio.wait_for((await session.submit("start it", "1.1")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
     h.slack.responses["chat.postMessage"] = aiohttp.ClientConnectionError("network down")
     h.clients[0].inject(notice)
     await asyncio.sleep(0.02)
-    second = await session.submit("next", "2.2")
+    second = await session.submit("next")
     await asyncio.wait_for(second.done.wait(), 2)
     assert h.clients[0].queries == ["start it", "next"]
 
@@ -428,7 +427,7 @@ async def test_a_missing_directory_asks_to_bind_again(
     h = harness_for({})
     h.state.bind(CHANNEL, gone)
     gone.rmdir()
-    turn = await h.session().submit("hello", "1.1")
+    turn = await h.session().submit("hello")
     await asyncio.wait_for(turn.done.wait(), 2)
     assert h.clients == []
     posted = [a["text"] for a in h.slack.calls_to("chat.postMessage")]
@@ -444,7 +443,7 @@ async def test_an_unreadable_directory_says_how_to_grant_access(
     h.state.bind(CHANNEL, locked)
     locked.chmod(0)
     try:
-        turn = await h.session().submit("hello", "1.1")
+        turn = await h.session().submit("hello")
         await asyncio.wait_for(turn.done.wait(), 2)
     finally:
         locked.chmod(0o755)

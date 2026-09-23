@@ -117,10 +117,9 @@ def build_app(
         if session is None:
             await tell_owner(channel, texts.UNBOUND)
             return
-        root = await slack.chat_postMessage(
-            channel=channel, text=texts.COMMAND_ROOT.format(command=text)
-        )
-        await session.submit(f"/{text}", str(root["ts"]))
+        # A slash command leaves no message in the channel: echo it, so the reply has a question.
+        await slack.chat_postMessage(channel=channel, text=texts.COMMAND_ROOT.format(command=text))
+        await session.submit(f"/{text}")
 
     @app.event("message")
     async def on_message(event: dict[str, Any]) -> None:
@@ -144,7 +143,8 @@ def build_app(
             await session.ensure_connected()
             command = bang_command(text, {str(c.get("name")) for c in session.commands})
             prompt = f"/{command}" if command else text
-        await session.submit(prompt, str(event.get("thread_ts") or event["ts"]))
+        # Every reply goes to the main window, even for a message written inside a thread.
+        await session.submit(prompt)
 
     @app.command("/cc")
     async def on_cc(ack: AsyncAck, body: dict[str, Any]) -> None:
@@ -267,7 +267,7 @@ def build_app(
         if approvals.resolve(str(action["value"]), channel, decision) is None:
             await tell_owner(channel, texts.APPROVAL_GONE)
             return
-        # The tool's card in the reply records the call: the request message has done its job.
+        # The tool's line in the reply records the call: the request message has done its job.
         try:
             await slack.chat_delete(channel=channel, ts=body["message"]["ts"])
         except Exception as exc:

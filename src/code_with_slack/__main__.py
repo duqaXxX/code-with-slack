@@ -15,7 +15,6 @@ from code_with_slack.config import CONFIG_DIR, ConfigError, load_config
 from code_with_slack.footer import UsageCache, UsageProbe
 from code_with_slack.guards import ChannelGuard, Identity
 from code_with_slack.lock import AlreadyRunning, single_instance
-from code_with_slack.render.sinks import StreamingSwitch
 from code_with_slack.sessions import SessionDeps, SessionManager, default_client_factory
 from code_with_slack.slack_app import build_app
 from code_with_slack.state import StateError, StateStore
@@ -40,7 +39,6 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
                 state=state,
                 approvals=approvals,
                 usage=UsageCache(probe),
-                streaming=StreamingSwitch(),
                 client_factory=default_client_factory,
             )
         )

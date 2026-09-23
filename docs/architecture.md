@@ -52,46 +52,49 @@ reaches the owner as an ephemeral message; everyone else gets nothing.
 ## Rendering
 
 `code_with_slack.render.renderer.TurnRenderer` reads SDK message types only, never tool names, so
-a tool Claude Code adds later renders as a card with no code change.
+a tool Claude Code adds later gets its line in the reply with no code change.
 
 | SDK input | What the owner sees |
 |---|---|
 | `StreamEvent` with no parent, a `text_delta` | the text, as it is written |
-| a top-level `TextBlock` in an `AssistantMessage` | nothing more: the same text already streamed |
-| `ToolUseBlock` or `ServerToolUseBlock` with no parent | a new card, in progress, titled `Name: first string argument` |
-| the same inside a subagent (`parent_tool_use_id` set) | a line in the parent card's details (the last 10) |
-| `ToolResultBlock` or `ServerToolResultBlock` for a card | the card completes, or shows an error when `is_error`; its output is the first line |
-| `TaskStartedMessage` | its tool's card notes "Running in background", or a new card |
-| `TaskProgressMessage` | the card's details show the task's description |
-| `TaskNotificationMessage`, a terminal `TaskUpdatedMessage` | the card completes, shows an error when the task failed, or completes with `Stopped` |
+| a top-level `TextBlock` in an `AssistantMessage` | nothing more: the same text already arrived as deltas |
+| `ToolUseBlock` or `ServerToolUseBlock` with no parent | a new tool line, in progress, titled `Name: first string argument` |
+| the same inside a subagent (`parent_tool_use_id` set) | the parent's line shows the subagent's latest call |
+| `ToolResultBlock` or `ServerToolResultBlock` for a line | the line completes, or shows an error with the output's first line when `is_error` |
+| `TaskStartedMessage` | its tool's line notes "Running in background", or a new line |
+| `TaskProgressMessage` | the line shows the task's description |
+| `TaskNotificationMessage`, a terminal `TaskUpdatedMessage` | the line completes, shows an error when the task failed, or completes with `Stopped` |
 | `AssistantMessage.error` `authentication_failed` | a note asking to run `claude` and `/login` on the host |
 | any other `AssistantMessage.error` | `Claude Code reported an error` with the error code |
-| `ResultMessage` | its text, when nothing else was written (local commands such as `/usage` stream nothing) |
+| `ResultMessage` | its text, when nothing else was written (local commands such as `/usage` send no deltas) |
 
-When the turn ends, every card still open is closed first (with `Stopped` when the turn was
-interrupted), then the reply ends.
+When the turn ends, every line still in progress is closed first (with `Stopped` when the turn
+was interrupted), then the reply ends.
 
 ## Writing to Slack
 
-Each reply streams into the thread of the message that asked for it, through slack-sdk's
-`chat_stream` (`chat.startStream`, `chat.appendStream`, `chat.stopStream`) with task cards in
-`timeline` mode. Cards finish with the status `complete`; Slack rejects `completed`. Every card
-still open when the turn ends is closed first, because Slack draws a card left open as an error.
-The footer travels as a context block on `chat.stopStream`.
+`code_with_slack.render.sinks.ReplySink` writes each reply as one message in the channel's main
+window, below the message that asked for it. The message is rewritten with `chat.update` at most
+once a second (Slack allows `chat.update` 50 or more times a minute), in the order things happen:
+text as Claude writes it, and a line per tool call where the call happens, updated in place
+(`…` while it runs, `✓` when it succeeds, `✗` and the first line of its output when it fails).
+While the turn runs, the last line reads `Claude is writing…`; when it ends, the footer replaces
+it. A reply longer than about 11,000 characters continues in a new message.
 
-If Slack refuses to start a stream, `code_with_slack.render.sinks.ReplySink` replays the reply
-into one message updated with `chat.update` at most once a second, and every later reply in the
-process does the same. If a stream fails after it started, only that reply moves to a new message.
+Slack's native streaming API (`chat.startStream`) is not used: in an ordinary channel it works
+only inside a thread, and replies belong in the main window. A write Slack refuses, or cannot
+receive because the network is down, is retried with the whole reply at the next rewrite; it never
+stops the Claude Code session.
 
 ## Approvals
 
 When Claude Code asks for permission, the SDK calls `can_use_tool`. The session posts the
-request in the reply's thread with **Approve** and **Deny** buttons, and waits, for as long as it
+request as a message of its own, below the reply, with **Approve** and **Deny** buttons, and waits, for as long as it
 takes. A clarifying question (Claude Code's `AskUserQuestion` tool) arrives the same way and is
 posted as one menu per question with **Submit** and **Skip**; the picked labels go back as the
 tool's answers. Each request has a random id that only its buttons carry; a click resolves it
 once, only from the channel it was posted in, and only after the identity and channel guards.
-Once decided, the request message is deleted: the tool's card in the reply records the call.
+Once decided, the request message is deleted: the tool's line in the reply records the call.
 `/cc stop` denies every request still pending in the channel and deletes its message.
 
 ## Footer
@@ -121,19 +124,19 @@ left out.
   macOS privacy protection denies the daemon the directory (a launchd service does not inherit
   Terminal's access to `~/Documents`), nothing starts and the reply says how to grant access.
 - If the Claude Code process exits or its stream fails, the open reply ends with an error line,
-  every waiting message is told, and the next message starts a new process. A reply Slack cannot
-  take (a network failure) is dropped; the session and the running turn go on.
-- Messages are queued and run one at a time; each reply streams in the thread of its message.
+  every waiting message is told, and the next message starts a new process. A Slack failure
+  while a reply is written never stops the session or the running turn.
+- Messages are queued and run one at a time; each gets its own reply in the channel.
   `/cc stop` interrupts the running turn and denies its pending approvals.
 - One reader task follows the SDK's message stream for the life of the client. On each result
   the session id is stored (so `/clear`, which starts a new session, is recorded), the footer is
   built and the reply closed.
 - A background task that finishes between turns sends its notification while the session is
-  idle, then Claude Code starts a turn of its own to report it. That turn is posted under a new
-  root message, `Background task update`, and the next queued message waits for it to finish. If
-  no turn follows within 30 seconds, the notification is posted on its own and the queue moves
+  idle, then Claude Code starts a turn of its own to report it. That turn gets a reply of its own
+  that starts with `Background task update`, and the next queued message waits for it to finish.
+  If no turn follows within 30 seconds, the notification is posted on its own and the queue moves
   on. When a queued message and a notification cross, the result's `origin` tells whose turn it
-  was, and the queue is put back in order; that one reply can land in the other thread.
+  was, and the queue is put back in order; that one reply can carry the other's label.
 - Logs carry channel ids and exception type names, never prompt or reply text.
 
 Bypass is a field of the in-memory session and nothing else: `state.json` never holds it, and a

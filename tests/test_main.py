@@ -45,7 +45,6 @@ def test_no_name_carries_claude_code() -> None:
 def test_the_manifest_asks_for_the_minimum() -> None:
     manifest = json.loads((ROOT / "slack-app-manifest.json").read_text())
     assert sorted(manifest["oauth_config"]["scopes"]["bot"]) == [
-        "assistant:write",
         "chat:write",
         "commands",
         "groups:history",
@@ -53,3 +52,5 @@ def test_the_manifest_asks_for_the_minimum() -> None:
     ]
     assert manifest["settings"]["event_subscriptions"]["bot_events"] == ["message.groups"]
     assert manifest["settings"]["is_mcp_enabled"] is False
+    # Replies are plain messages in the main window: no agent view, no task cards.
+    assert "agent_view" not in manifest["features"]
