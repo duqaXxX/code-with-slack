@@ -268,3 +268,26 @@ async def test_an_incomplete_answer_is_refused(world: World) -> None:
     await world.dispatch(body)
     assert not pending.future.done()
     assert world.ephemerals() == [texts.QUESTION_INCOMPLETE]
+
+
+async def test_a_failing_command_tells_the_owner(world: World) -> None:
+    (world.root / "app").rmdir()
+    await world.dispatch(command("bypass on"))
+    assert world.ephemerals() == [texts.DIRECTORY_MISSING.format(directory=world.root / "app")]
+
+
+async def test_the_picker_action_from_anyone_else_does_nothing(world: World) -> None:
+    body = recorded("block_actions")
+    body["actions"] = [
+        {
+            "action_id": "picker_select",
+            "type": "external_select",
+            "selected_option": {
+                "text": {"type": "plain_text", "text": "/compact"},
+                "value": "compact",
+            },
+        }
+    ]
+    body["user"]["id"] = STRANGER
+    await world.dispatch(body)
+    assert world.queries() == [] and not world.posted_anything()
