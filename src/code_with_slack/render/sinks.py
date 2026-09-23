@@ -15,7 +15,7 @@ from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
 from code_with_slack import texts
-from code_with_slack.render.renderer import TaskUpdate
+from code_with_slack.render.renderer import STOPPED, TaskUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ class _Tool:
     def line(self) -> str:
         update = self.update
         line = f"{ICONS[update.status]} `{update.title}`"
-        if update.status == "error" and update.output:
+        if (update.status == "error" and update.output) or update.output == STOPPED:
             line += f" · {update.output}"
         elif update.status == "in_progress" and update.details:
             line += f" · {update.details.splitlines()[-1]}"
@@ -89,6 +89,8 @@ class ReplySink:
         self._pending: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
         self._status = texts.WRITING
+        self._finished = False
+        self._footer: str | None = None
 
     async def open(self, status: str) -> None:
         """Post the reply at once, showing only its status: the owner sees an answer is coming."""
@@ -114,13 +116,21 @@ class ReplySink:
             self._parts.append(tool)
         else:
             tool.update = update
-        self._schedule()
+        if self._finished:
+            # A background task ending after its reply: rare, and possibly during shutdown, so
+            # written at once rather than on a timer that may never fire.
+            await self._flush(final=True, footer=self._footer)
+        else:
+            self._schedule()
 
     async def finish(self, closing: list[TaskUpdate], footer: str | None) -> None:
+        """End the reply. A tool line still in progress is a background task: the reply counts
+        those above the footer, and `task` keeps updating them after the end."""
         for update in closing:
             await self.task(update)
         if self._pending is not None:
             self._pending.cancel()
+        self._finished, self._footer = True, footer
         await self._flush(final=True, footer=footer)
 
     def _schedule(self) -> None:
@@ -153,7 +163,17 @@ class ReplySink:
         ]
         if not final:
             messages[-1].append(context_block(self._status))
-        elif footer:
+            return messages
+        running = sum(1 for tool in self._tools.values() if tool.update.status == "in_progress")
+        if running:
+            messages[-1].append(
+                context_block(
+                    texts.BACKGROUND_RUNNING_ONE
+                    if running == 1
+                    else texts.BACKGROUND_RUNNING_MANY.format(count=running)
+                )
+            )
+        if footer:
             messages[-1] += [{"type": "divider"}, context_block(footer)]
         return messages
 

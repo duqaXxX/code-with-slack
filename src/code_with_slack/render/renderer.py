@@ -85,6 +85,9 @@ class TurnRenderer:
         self._root_of: dict[str, str] = {}
         self._children: dict[str, list[str]] = {}
         self._card_of_task: dict[str, str] = {}
+        # Tasks started and not yet ended (task_id -> card id). Only the lifecycle frames say
+        # this reliably: a subagent can move to the background without a second task_started.
+        self._running: dict[str, str] = {}
         self._wrote_text = False
         self.result: ResultMessage | None = None
         self.auth_failed = False
@@ -119,15 +122,30 @@ class TurnRenderer:
             case _:
                 pass
 
+    @property
+    def running_tasks(self) -> list[str]:
+        """Ids of the tasks that outlive the turn; a later task frame fed here updates them."""
+        return list(self._running)
+
     async def close(self, footer: str | None) -> None:
-        """Close every open task, then end the reply: a finished reply shows nothing running."""
+        """End the reply: every open tool line is closed, except a task still running, whose line
+        stays open until its own end arrives through `feed` or `stop_running`."""
         interrupted = self.result is not None and self.result.terminal_reason in INTERRUPTED
+        running = set(self._running.values())
         closing = [
-            replace(card, status="complete", output=STOPPED if interrupted else card.output)
+            replace(card, status="in_progress", details=BACKGROUND)
+            if card.id in running
+            else replace(card, status="complete", output=STOPPED if interrupted else card.output)
             for card in self._cards.values()
-            if card.status in ("pending", "in_progress")
+            if card.id in running or card.status in ("pending", "in_progress")
         ]
+        self._cards.update((card.id, card) for card in closing)
         await self._sink.finish(closing, footer)
+
+    async def stop_running(self) -> None:
+        """The Claude Code process is gone and its tasks with it: close their lines as stopped."""
+        for task_id in list(self._running):
+            await self._task_ended(task_id, "stopped", None)
 
     async def feed_notice(self, text: str) -> None:
         """A note from the daemon itself, written before Claude Code's reply."""
@@ -159,7 +177,10 @@ class TurnRenderer:
                 await self._child(root, title)
         elif isinstance(block, ToolResultBlock | ServerToolResultBlock):
             card = self._cards.get(block.tool_use_id)
-            if card is not None:
+            if card is not None and card.id in self._running.values():
+                # The call only launched a task, which is still running: its line stays open.
+                await self._set(replace(card, output=result_summary(block.content)))
+            elif card is not None:
                 failed = isinstance(block, ToolResultBlock) and bool(block.is_error)
                 await self._set(
                     replace(
@@ -172,15 +193,18 @@ class TurnRenderer:
     async def _task_started(self, message: TaskStartedMessage) -> None:
         if message.tool_use_id and message.tool_use_id in self._cards:
             self._card_of_task[message.task_id] = message.tool_use_id
+            self._running[message.task_id] = message.tool_use_id
             await self._set(replace(self._cards[message.tool_use_id], details=BACKGROUND))
             return
         card_id = f"task-{message.task_id}"
         self._card_of_task[message.task_id] = card_id
+        self._running[message.task_id] = card_id
         await self._set(
             TaskUpdate(card_id, one_line(message.description, TITLE_LIMIT), "in_progress")
         )
 
     async def _task_ended(self, task_id: str, status: str, summary: str | None) -> None:
+        self._running.pop(task_id, None)
         card_id = self._card_of_task.get(task_id, f"task-{task_id}")
         card = self._cards.get(card_id) or TaskUpdate(
             card_id, one_line(summary or task_id, TITLE_LIMIT), "in_progress"

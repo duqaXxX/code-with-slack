@@ -4,10 +4,16 @@ from pathlib import Path
 
 import pytest
 from claude_agent_sdk import AssistantMessage, Message
-from claude_agent_sdk.types import ToolUseBlock
+from claude_agent_sdk.types import TaskNotificationMessage, TaskUpdatedMessage, ToolUseBlock
 
 from code_with_slack import texts
-from code_with_slack.render.renderer import TaskUpdate, TurnRenderer, task_title
+from code_with_slack.render.renderer import (
+    BACKGROUND,
+    STOPPED,
+    TaskUpdate,
+    TurnRenderer,
+    task_title,
+)
 from tests.fakes import sdk_messages, split_turns
 
 ALLOWED = {"pending", "in_progress", "complete", "error"}
@@ -100,6 +106,29 @@ async def test_background_notification_in_a_later_turn_gets_a_card() -> None:
     assert len(turns) >= 2, "the recording holds the injected notification turn"
     sink, _ = await render(turns[1])
     assert sink.tasks and sink.tasks[-1].status in {"complete", "error"}
+
+
+async def test_a_task_still_running_when_its_turn_ends_stays_open_until_it_ends() -> None:
+    first, later = split_turns(sdk_messages("background"))[:2]
+    sink, renderer = await render(first)
+    assert sink.finished is not None
+    (running,) = [t for t in sink.finished[0] if t.status == "in_progress"]
+    assert running.details == BACKGROUND
+    assert renderer.running_tasks
+    for message in later:
+        if isinstance(message, TaskNotificationMessage | TaskUpdatedMessage):
+            await renderer.feed(message)
+    assert not renderer.running_tasks
+    assert sink.tasks[-1].id == running.id
+    assert sink.tasks[-1].status == "complete"
+
+
+async def test_stopping_the_running_tasks_closes_their_lines() -> None:
+    first = split_turns(sdk_messages("background"))[0]
+    sink, renderer = await render(first)
+    await renderer.stop_running()
+    assert not renderer.running_tasks
+    assert sink.tasks[-1].status == "complete" and sink.tasks[-1].output == STOPPED
 
 
 @pytest.mark.parametrize("name", ["FutureTool", "TodoWrite", "mcp__srv__do_thing"])

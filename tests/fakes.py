@@ -206,5 +206,21 @@ class FakeSlack(AsyncWebClient):
             shown[ts] = markdown[0] if markdown else shown.get(ts, "")
         return [shown[ts] for ts in order]
 
+    def message_blocks(self) -> list[list[dict[str, Any]]]:
+        """The blocks each posted message shows last, in the order the messages were posted."""
+        posted = iter(self.posted_ts)
+        order: list[str] = []
+        shown: dict[str, list[dict[str, Any]]] = {}
+        for method, args in self.calls:
+            if method == "chat.postMessage":
+                ts = next(posted)
+                order.append(ts)
+            elif method == "chat.update":
+                ts = args["ts"]
+            else:
+                continue
+            shown[ts] = list(args.get("blocks") or [])
+        return [shown[ts] for ts in order]
+
     def calls_to(self, method: str) -> list[dict[str, Any]]:
         return [args for name, args in self.calls if name == method]

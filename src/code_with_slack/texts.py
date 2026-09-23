@@ -46,6 +46,8 @@ STATUS = (
     "Claude Code: `{version}`\nNow: {activity}"
 )
 ACTIVITY_IDLE = "idle"
+BACKGROUND_RUNNING_ONE = "⏳ 1 background task running"
+BACKGROUND_RUNNING_MANY = "⏳ {count} background tasks running"
 ACTIVITY_BUSY = "running a turn, {queued} queued"
 USAGE = (
     "Usage: `/cc <command> [args]`, `/cc bind <path>`, `/cc bypass on|off`, `/cc status`, "

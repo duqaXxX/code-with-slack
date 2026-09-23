@@ -61,7 +61,7 @@ a tool Claude Code adds later gets its line in the reply with no code change.
 | `ToolUseBlock` or `ServerToolUseBlock` with no parent | a new tool line, in progress, titled `Name: first string argument` |
 | the same inside a subagent (`parent_tool_use_id` set) | the parent's line shows the subagent's latest call |
 | `ToolResultBlock` or `ServerToolResultBlock` for a line | the line completes, or shows an error with the output's first line when `is_error` |
-| `TaskStartedMessage` | its tool's line notes "Running in background", or a new line |
+| `TaskStartedMessage` | its tool's line notes "Running in background" and stays in progress, even after the call's own result, or a new line |
 | `TaskProgressMessage` | the line shows the task's description |
 | `TaskNotificationMessage`, a terminal `TaskUpdatedMessage` | the line completes, shows an error when the task failed, or completes with `Stopped` |
 | `AssistantMessage.error` `authentication_failed` | a note asking to run `claude` and `/login` on the host |
@@ -69,7 +69,11 @@ a tool Claude Code adds later gets its line in the reply with no code change.
 | `ResultMessage` | its text, when nothing else was written (local commands such as `/usage` send no deltas) |
 
 When the turn ends, every line still in progress is closed first (with `Stopped` when the turn
-was interrupted), then the reply ends.
+was interrupted), then the reply ends. A task that started and has not ended is the exception:
+its line stays open with "Running in background", and the reply shows how many such tasks are
+running above the footer. `TurnRenderer.running_tasks` lists them. Only the task lifecycle
+messages decide this, because a subagent can move to the background with no second
+`TaskStartedMessage`.
 
 ## Writing to Slack
 
@@ -142,6 +146,11 @@ left out.
   If no turn follows within 30 seconds, the notification is posted on its own and the queue moves
   on. When a queued message and a notification cross, the result's `origin` tells whose turn it
   was, and the queue is put back in order; that one reply can carry the other's label.
+- A task that outlives its turn keeps its line in the reply that started it: the session maps
+  the task id to that reply, and a later task message for it, arriving while idle or during
+  another turn, updates the line and the count, then goes through the routing above as before.
+  When the Claude Code process goes away (shutdown, rebinding, a process that exits), its tasks
+  go with it, and their lines close with `Stopped`. The map lives in memory only.
 - Logs carry channel ids and exception type names, never prompt or reply text.
 
 Bypass is a field of the in-memory session and nothing else: `state.json` never holds it, and a
