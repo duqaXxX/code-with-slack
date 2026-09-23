@@ -119,3 +119,13 @@ left out.
 Bypass is a field of the in-memory session and nothing else: `state.json` never holds it, and a
 restart brings every channel back to Claude Code's own mode. That matches Claude Code, whose
 `--resume` does not restore `bypassPermissions` either.
+
+## Slack handlers
+
+`code_with_slack.slack_app.build_app` registers one listener per inbound path: `message`
+events, the `/cc` command, the Approve, Deny, Submit and Skip buttons, and the command picker
+(an `external_select` whose options come from the session's `get_server_info()["commands"]`).
+Each acknowledges Slack first, then checks the owner, the workspace and the channel itself. A
+message starting with `!` runs a Claude Code command when the word after it is one the session
+offers, and is sent as a normal prompt otherwise. Bolt's per-request authorization returns the
+identity `auth.test` gave at startup, so no request costs an extra API call.
