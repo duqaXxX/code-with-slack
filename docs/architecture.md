@@ -35,3 +35,25 @@ before anything reaches Claude Code:
 
 Messages with a subtype (edits, deletions, joins) and messages from bots are ignored. A refusal
 reaches the owner as an ephemeral message; everyone else gets nothing.
+
+## Rendering
+
+`code_with_slack.render.renderer.TurnRenderer` reads SDK message types only, never tool names, so
+a tool Claude Code adds later renders as a card with no code change.
+
+| SDK input | What the owner sees |
+|---|---|
+| `StreamEvent` with no parent, a `text_delta` | the text, as it is written |
+| a top-level `TextBlock` in an `AssistantMessage` | nothing more: the same text already streamed |
+| `ToolUseBlock` or `ServerToolUseBlock` with no parent | a new card, in progress, titled `Name: first string argument` |
+| the same inside a subagent (`parent_tool_use_id` set) | a line in the parent card's details (the last 10) |
+| `ToolResultBlock` or `ServerToolResultBlock` for a card | the card completes, or shows an error when `is_error`; its output is the first line |
+| `TaskStartedMessage` | its tool's card notes "Running in background", or a new card |
+| `TaskProgressMessage` | the card's details show the task's description |
+| `TaskNotificationMessage`, a terminal `TaskUpdatedMessage` | the card completes, shows an error when the task failed, or completes with `Stopped` |
+| `AssistantMessage.error` `authentication_failed` | a note asking to run `claude` and `/login` on the host |
+| any other `AssistantMessage.error` | `Claude Code reported an error` with the error code |
+| `ResultMessage` | its text, when nothing else was written (local commands such as `/usage` stream nothing) |
+
+When the turn ends, every card still open is closed first (with `Stopped` when the turn was
+interrupted), then the reply ends.
