@@ -79,3 +79,13 @@ posted as one menu per question with **Submit** and **Skip**; the picked labels 
 tool's answers. Each request has a random id that only its buttons carry; a click resolves it
 once, only from the channel it was posted in, and only after the identity and channel guards.
 `/cc stop` denies every request still pending in the channel.
+
+## Footer
+
+Every reply ends with one context line: `⚡ bypass` when bypass is on, the git branch of the
+channel's directory, the model and the context percentage from the SDK's
+`get_context_usage()`, the session's tokens from the turn's `ResultMessage.model_usage`, and the
+5-hour and weekly limits. The limits come from Claude Code's `/usage`, sent on a separate
+long-lived client and cached for five minutes; a rate-limit event from the SDK invalidates the
+cache. The limit fields exist only with a claude.ai subscription. A field that cannot be read is
+left out.

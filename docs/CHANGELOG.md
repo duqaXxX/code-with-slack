@@ -17,3 +17,4 @@ All notable changes to this project are documented here. The format follows
 - Generic rendering of SDK messages into streamed text and task cards.
 - Streaming replies with task cards, and the `chat.update` fallback.
 - Approvals and clarifying questions answered with Slack buttons.
+- The reply footer: branch, model, context, tokens, usage limits, bypass.
