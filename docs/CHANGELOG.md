@@ -20,3 +20,4 @@ All notable changes to this project are documented here. The format follows
 - The reply footer: branch, model, context, tokens, usage limits, bypass.
 - One Claude Code session per channel with a turn queue, resume, stale-session recovery, bypass
   and stop.
+- Slack handlers for messages, `/cc`, approvals and the command picker.
