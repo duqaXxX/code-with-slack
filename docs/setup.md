@@ -4,9 +4,7 @@ This guide takes a Mac from nothing to a Slack channel that drives a local Claud
 It covers the Slack app, the configuration code-with-slack reads, how it starts on macOS, and the
 security settings the design relies on.
 
-Status: code-with-slack is under development. Part 1 (the Slack app) works today. Parts 2 to 5
-describe the configuration and the service the first release reads; the implementation keeps
-this file true as it lands.
+Status: first release. Every part below describes what the code does.
 
 ## Requirements
 
@@ -16,6 +14,21 @@ this file true as it lands.
 - [uv](https://docs.astral.sh/uv/) and Python 3.12 or later.
 - A Slack workspace where you are the only member. On the free plan Slack allows one workspace;
   use it only if nobody else is in it (see Part 5).
+
+## Part 0: install
+
+```bash
+git clone https://github.com/duqaXxX/code-with-slack.git
+cd code-with-slack
+uv tool install .
+```
+
+This puts the `code-with-slack` command in `~/.local/bin`, where the LaunchAgent of Part 4 runs
+it. To update, pull and run `uv tool install --reinstall .`.
+
+code-with-slack runs the Claude Code CLI that ships inside the Claude Agent SDK it depends on,
+not the `claude` on your `PATH`. Both read the same login, so logging in once with `claude` and
+`/login` covers both.
 
 ## Part 1: the Slack app
 
@@ -202,9 +215,22 @@ The bot answers one person, and the rest of this list protects what that person 
 | `!<command>` | The same as `/cc <command>`, for use inside a thread, where Slack runs no slash command |
 | `/cc bypass on` / `off` | Switches the channel's session to `bypassPermissions` and back; a restart turns it off |
 | `/cc status` | Shows the channel's directory, session and mode |
+| `/cc stop` | Stops the turn that is running and denies its pending approvals |
+| a question from Claude | Appears as one menu per question with **Submit** and **Skip** |
 
 Slack does not pass a Claude Code command typed with its own slash: `/compact` alone makes Slack
 answer that it is not a valid command. Use `/cc compact` or `!compact`.
+
+`/cc status`, `/cc stop`, `/cc bind` and `/cc bypass` are code-with-slack's own. Claude Code's
+own `/status` is `!status`.
+
+Messages sent while a turn is running wait their turn; each reply streams under its own message.
+When a background task finishes, its report arrives under a new message, `Background task
+update`.
+
+Every reply ends with a footer: `⚡ bypass` when bypass is on, the git branch, the model, the
+context used, the session's tokens, and the 5-hour and weekly limits (`5h N% ↻ 2h · 7d N%`),
+which exist only with a claude.ai subscription.
 
 ## Troubleshooting
 
@@ -214,3 +240,5 @@ answer that it is not a valid command. Use `/cc compact` or `!compact`.
 | Replies show text but no task cards | **Agent experience** is off in the app settings |
 | `Not logged in · Please run /login` | Claude Code on the machine is logged out: run `claude`, then `/login` |
 | Some messages get no reply | A second instance is running and receiving part of the events |
+| `The previous session could not be resumed` | The stored session no longer exists (its transcript was deleted or the directory moved); the reply runs in a new session |
+| `another code-with-slack is running` in the log | A second instance tried to start; only one may run |
