@@ -193,15 +193,20 @@ macOS keeps `~/Documents`, `~/Desktop`, `~/Downloads` and a few other folders pr
 apps you allowed. A program started from Terminal uses Terminal's permission; code-with-slack,
 started by launchd, has none, and Claude Code fails to start in a directory there. If your
 projects live in one of those folders, give Full Disk Access to the Python interpreter that runs
-code-with-slack. Print its path:
+code-with-slack:
 
-```bash
-readlink -f "$(head -1 ~/.local/share/uv/tools/code-with-slack/bin/code-with-slack | cut -c3-)"
-```
+1. Show the interpreter in Finder (it sits in a hidden folder, so this is the simplest way to
+   reach it):
 
-Then open **System Settings**, **Privacy & Security**, **Full Disk Access**, choose **+**, press
-**⌘⇧G**, paste the path, and turn the new entry on. Restart the service with
-`launchctl kickstart -k gui/$(id -u)/local.code-with-slack`.
+   ```bash
+   open -R "$(readlink -f "$(head -1 ~/.local/share/uv/tools/code-with-slack/bin/code-with-slack | cut -c3-)")"
+   ```
+
+2. Open **System Settings**, **Privacy & Security**, **Full Disk Access**, and drag the selected
+   file (`python3.12` or similar) from Finder into the list. Alternatively choose **+** and press
+   **⌘⇧.** in the file picker to show hidden folders.
+3. Check that the new entry is turned on, then restart the service:
+   `launchctl kickstart -k gui/$(id -u)/local.code-with-slack`.
 
 The permission belongs to that interpreter, which uv shares between the tools that use the same
 Python version: any of them started outside Terminal gets the same access. Projects outside the
