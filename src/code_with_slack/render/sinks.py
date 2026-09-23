@@ -25,6 +25,7 @@ DEBOUNCE_SECONDS = 1.0
 MESSAGE_LIMIT = 11_000
 FALLBACK_LIMIT = 3_000
 ICONS = {"pending": "·", "in_progress": "…", "complete": "✓", "error": "✗"}
+RUNNING_LINES = 10  # a context block's text holds at most 3,000 characters
 
 
 def describe(exc: Exception) -> str:
@@ -91,6 +92,7 @@ class ReplySink:
         self._status = texts.WRITING
         self._finished = False
         self._footer: str | None = None
+        self._running: list[str] = []
 
     async def open(self, status: str) -> None:
         """Post the reply at once, showing only its status: the owner sees an answer is coming."""
@@ -107,7 +109,7 @@ class ReplySink:
             self._parts[-1].text += markdown
         else:
             self._parts.append(_Text(markdown))
-        self._schedule()
+        await self._changed()
 
     async def task(self, update: TaskUpdate) -> None:
         tool = self._tools.get(update.id)
@@ -116,22 +118,34 @@ class ReplySink:
             self._parts.append(tool)
         else:
             tool.update = update
-        if self._finished:
-            # A background task ending after its reply: rare, and possibly during shutdown, so
-            # written at once rather than on a timer that may never fire.
-            await self._flush(final=True, footer=self._footer)
-        else:
-            self._schedule()
+        await self._changed()
+
+    async def set_running(self, lines: list[str]) -> None:
+        """Show what still runs in the channel at the end of this reply, above its status or
+        footer; an empty list removes it. Only the channel's latest reply shows one."""
+        if lines == self._running:
+            return
+        self._running = lines
+        if self._finished or self._messages:
+            await self._changed()
 
     async def finish(self, closing: list[TaskUpdate], footer: str | None) -> None:
-        """End the reply. A tool line still in progress is a background task: the reply counts
-        those above the footer, and `task` keeps updating them after the end."""
+        """End the reply. A line still in progress is a task that outlives the turn: `task`
+        keeps updating it after the end."""
         for update in closing:
             await self.task(update)
         if self._pending is not None:
             self._pending.cancel()
         self._finished, self._footer = True, footer
         await self._flush(final=True, footer=footer)
+
+    async def _changed(self) -> None:
+        if self._finished:
+            # A background task or subagent after the reply ended: rare, and possibly during
+            # shutdown, so written at once in its final form rather than on a timer.
+            await self._flush(final=True, footer=self._footer)
+        else:
+            self._schedule()
 
     def _schedule(self) -> None:
         if self._pending is None or self._pending.done():
@@ -161,19 +175,15 @@ class ReplySink:
         messages: list[list[dict[str, Any]]] = [
             [{"type": "markdown", "text": chunk}] if chunk else [] for chunk in chunks
         ]
+        if self._running:
+            shown = self._running[:RUNNING_LINES]
+            if len(self._running) > len(shown):
+                shown.append(texts.RUNNING_MORE.format(count=len(self._running) - len(shown)))
+            header = texts.RUNNING.format(count=len(self._running))
+            messages[-1].append(context_block("\n".join([header, *shown])))
         if not final:
             messages[-1].append(context_block(self._status))
-            return messages
-        running = sum(1 for tool in self._tools.values() if tool.update.status == "in_progress")
-        if running:
-            messages[-1].append(
-                context_block(
-                    texts.BACKGROUND_RUNNING_ONE
-                    if running == 1
-                    else texts.BACKGROUND_RUNNING_MANY.format(count=running)
-                )
-            )
-        if footer:
+        elif footer:
             messages[-1] += [{"type": "divider"}, context_block(footer)]
         return messages
 

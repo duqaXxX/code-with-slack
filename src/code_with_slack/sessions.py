@@ -72,6 +72,9 @@ QUESTION_TOOL = "AskUserQuestion"
 # After a background task's notification, the CLI starts a turn of its own to report it
 # (measured on Claude Code 2.1.280). If that turn never comes, the owner's queue moves on.
 INJECTED_TURN_WAIT = 30.0
+# Tasks whose reply the session remembers. An ended task stays a while, since an agent can
+# report again after its notification; past this many, the oldest ended ones are forgotten.
+TASK_REPLIES_KEPT = 100
 
 
 class DirectoryUnavailable(Exception):
@@ -177,8 +180,11 @@ class ChannelSession:
         self._background: set[asyncio.Task[None]] = set()
         # Task messages that arrived between turns, shown in the next turn's reply.
         self._held: list[Message] = []
-        # Tasks that outlived their turn, and the reply whose line each one keeps up to date.
+        # Tasks that outlived their turn, and the reply whose line each one keeps up to date,
+        # for as long as the Claude Code process lives: an agent can report more than once.
         self._task_replies: dict[str, TurnRenderer] = {}
+        # The channel's newest reply: the only one that shows what is still running.
+        self._latest: ReplySink | None = None
         # Clear while a background notification's own turn is expected or running: the owner's
         # next query waits, so the two replies never share a thread.
         self._settled = asyncio.Event()
@@ -200,7 +206,7 @@ class ChannelSession:
     async def submit(self, prompt: str) -> Turn:
         """Queue a prompt; its reply appears at once, saying Claude is writing or waiting."""
         waiting = self.busy or not self._queue.empty() or not self._settled.is_set()
-        sink = self._sink()
+        sink = await self._sink()
         await sink.open(texts.WAITING if waiting else texts.WRITING)
         turn = Turn(prompt, sink)
         self._queue.put_nowait(turn)
@@ -342,12 +348,18 @@ class ChannelSession:
         if isinstance(message, SystemMessage) and message.subtype == "init":
             self.cli_version = message.data.get("claude_code_version")
         if isinstance(message, TASK_MESSAGES) and message.task_id in self._task_replies:
-            # The reply that started the task shows its end too; the report below still runs.
-            # The link holds until the notification, which follows a terminal task_updated and
-            # carries the summary a failed line shows; the process ending clears the rest.
+            # A task that outlived its turn shows only on its own line, wherever it started.
             await self._task_replies[message.task_id].feed(message)
-            if isinstance(message, TaskNotificationMessage):
-                del self._task_replies[message.task_id]
+            await self._show_running()
+            if self._active is None and isinstance(message, TaskNotificationMessage):
+                self._expect_injected_turn()
+            return
+        parent = getattr(message, "parent_tool_use_id", None)
+        origin = self._origin_of(parent) if parent else None
+        if origin is not None:
+            # A background subagent at work after its turn: its calls belong under its line.
+            await origin.feed(message)
+            return
         if self._active is None:
             if isinstance(message, TASK_MESSAGES):
                 self._held.append(message)
@@ -392,7 +404,7 @@ class ChannelSession:
             self._expiry.cancel()
         turn = None if injected else self._sent.popleft()
         if turn is None:
-            renderer = TurnRenderer(self._sink())
+            renderer = TurnRenderer(await self._sink())
             await renderer.feed_notice(texts.BACKGROUND_NOTICE)
         else:
             renderer = TurnRenderer(turn.sink)
@@ -408,16 +420,21 @@ class ChannelSession:
     async def _standalone(self, messages: list[Message]) -> None:
         if not messages:
             return
-        renderer = TurnRenderer(self._sink())
+        renderer = TurnRenderer(await self._sink())
         await renderer.feed_notice(texts.BACKGROUND_NOTICE)
         for message in messages:
             await renderer.feed(message)
         await self._close_reply(renderer, None)
 
     async def _close_reply(self, renderer: TurnRenderer, footer: str | None) -> None:
-        await renderer.close(footer)
         for task_id in renderer.running_tasks:
             self._task_replies[task_id] = renderer
+        ended = [t for t, r in self._task_replies.items() if t not in r.running_tasks]
+        for task_id in ended[: max(0, len(self._task_replies) - TASK_REPLIES_KEPT)]:
+            del self._task_replies[task_id]
+        # Before the close, so the reply's last write already carries the list.
+        await self._show_running()
+        await renderer.close(footer)
 
     async def _stop_task_replies(self) -> None:
         """The Claude Code process is going away with its tasks: no reply keeps showing one."""
@@ -426,9 +443,27 @@ class ChannelSession:
         for renderer in renderers:
             with contextlib.suppress(Exception):
                 await renderer.stop_running()
+        await self._show_running()
 
-    def _sink(self) -> ReplySink:
-        return ReplySink(self._deps.slack, channel=self.channel_id)
+    def _origin_of(self, tool_use_id: str) -> TurnRenderer | None:
+        return next((r for r in self._task_replies.values() if r.owns(tool_use_id)), None)
+
+    def _running_lines(self) -> list[str]:
+        titles = (r.running_title(task_id) for task_id, r in self._task_replies.items())
+        return [f"… `{title}`" for title in titles if title is not None]
+
+    async def _show_running(self) -> None:
+        if self._latest is not None:
+            await self._latest.set_running(self._running_lines())
+
+    async def _sink(self) -> ReplySink:
+        """A new reply, which becomes the channel's latest and takes over the running list."""
+        sink = ReplySink(self._deps.slack, channel=self.channel_id)
+        previous, self._latest = self._latest, sink
+        await sink.set_running(self._running_lines())
+        if previous is not None:
+            await previous.set_running([])
+        return sink
 
     async def _finish(self, active: ActiveTurn, result: ResultMessage) -> None:
         try:
@@ -455,7 +490,7 @@ class ChannelSession:
         elif turn is not None and injected:
             logger.warning("a background reply in %s went to an owner reply", self.channel_id)
             # That reply is spent: the owner's own turn gets a fresh one.
-            turn.sink = self._sink()
+            turn.sink = await self._sink()
             await turn.sink.open(texts.WRITING)
             self._sent.appendleft(turn)
             self._settled.set()

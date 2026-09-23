@@ -70,10 +70,9 @@ a tool Claude Code adds later gets its line in the reply with no code change.
 
 When the turn ends, every line still in progress is closed first (with `Stopped` when the turn
 was interrupted), then the reply ends. A task that started and has not ended is the exception:
-its line stays open with "Running in background", and the reply shows how many such tasks are
-running above the footer. `TurnRenderer.running_tasks` lists them. Only the task lifecycle
-messages decide this, because a subagent can move to the background with no second
-`TaskStartedMessage`.
+its line stays open with "Running in background". `TurnRenderer.running_tasks` lists them. Only
+the task lifecycle messages decide this, because a subagent can move to the background with no
+second `TaskStartedMessage`.
 
 ## Writing to Slack
 
@@ -143,14 +142,19 @@ left out.
 - A background task that finishes between turns sends its notification while the session is
   idle, then Claude Code starts a turn of its own to report it. That turn gets a reply of its own
   that starts with `Background task update`, and the next queued message waits for it to finish.
-  If no turn follows within 30 seconds, the notification is posted on its own and the queue moves
-  on. When a queued message and a notification cross, the result's `origin` tells whose turn it
+  If no turn follows within 30 seconds, the queue moves on; a notification for a task no reply
+  tracks is then posted on its own. When a queued message and a notification cross, the result's `origin` tells whose turn it
   was, and the queue is put back in order; that one reply can carry the other's label.
 - A task that outlives its turn keeps its line in the reply that started it: the session maps
-  the task id to that reply, and a later task message for it, arriving while idle or during
-  another turn, updates the line and the count, then goes through the routing above as before.
-  When the Claude Code process goes away (shutdown, rebinding, a process that exits), its tasks
-  go with it, and their lines close with `Stopped`. The map lives in memory only.
+  the task id to that reply, and every later task message for it updates that line only, never
+  another reply. A background subagent's own calls (`parent_tool_use_id` pointing at a line of
+  an ended turn) go under its line the same way and never open a reply. A notification for such
+  a task still makes the next queued message wait for the turn Claude Code starts to report it.
+- The channel's latest reply ends with the list of what is still running (`⏳ N running`, one
+  line per task, at most 10), above its status or footer. A new reply takes the list over and
+  the previous one drops it, so the list stays at the bottom of the channel.
+- When the Claude Code process goes away (shutdown, rebinding, a process that exits), its tasks
+  go with it: their lines close with `Stopped` and the list empties. The map lives in memory only.
 - Logs carry channel ids and exception type names, never prompt or reply text.
 
 Bypass is a field of the in-memory session and nothing else: `state.json` never holds it, and a

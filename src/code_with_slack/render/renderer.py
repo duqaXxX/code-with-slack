@@ -127,6 +127,15 @@ class TurnRenderer:
         """Ids of the tasks that outlive the turn; a later task frame fed here updates them."""
         return list(self._running)
 
+    def running_title(self, task_id: str) -> str | None:
+        """The line title of a task still running, or None once it ended."""
+        card_id = self._running.get(task_id)
+        return self._cards[card_id].title if card_id in self._cards else None
+
+    def owns(self, tool_use_id: str) -> bool:
+        """Whether this reply holds the line of that tool call, or of the subagent it runs in."""
+        return tool_use_id in self._cards or tool_use_id in self._root_of
+
     async def close(self, footer: str | None) -> None:
         """End the reply: every open tool line is closed, except a task still running, whose line
         stays open until its own end arrives through `feed` or `stop_running`."""
