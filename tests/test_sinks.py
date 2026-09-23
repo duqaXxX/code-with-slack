@@ -152,32 +152,36 @@ async def test_opening_shows_the_status_before_any_content(slack: FakeSlack) -> 
     assert len(slack.calls_to("chat.postMessage")) == 1
 
 
-async def test_a_finished_reply_counts_its_background_tasks_until_they_end(
-    slack: FakeSlack,
-) -> None:
+async def test_the_running_list_sits_at_the_end_of_a_finished_reply(slack: FakeSlack) -> None:
     sink = reply(slack)
     await sink.text("Started it.")
-    running = TaskUpdate("t1", "Bash: sleep 20", "in_progress", details="Running in background")
-    await sink.finish([running], "footer")
-    shown = last_blocks(slack)
+    await sink.finish([], "footer")
+    await sink.set_running(["… `Bash: sleep 60`"])
+    shown = last_blocks(slack)  # written at once: no rewrite is scheduled after the end
     assert [b["type"] for b in shown] == ["markdown", "context", "divider", "context"]
-    assert shown[1] == sinks.context_block(texts.BACKGROUND_RUNNING_ONE)
-    await sink.task(TaskUpdate("t1", "Bash: sleep 20", "complete"))
-    final = last_blocks(slack)  # written at once: no rewrite is scheduled after the end
-    assert [b["type"] for b in final] == ["markdown", "divider", "context"]
-    assert "✓ `Bash: sleep 20`" in final[0]["text"]
-    assert final[-1] == sinks.context_block("footer")
+    assert shown[1] == sinks.context_block(texts.RUNNING.format(count=1) + "\n… `Bash: sleep 60`")
+    await sink.set_running([])
+    assert [b["type"] for b in last_blocks(slack)] == ["markdown", "divider", "context"]
     assert len(slack.calls_to("chat.postMessage")) == 1
 
 
-async def test_several_background_tasks_are_counted(slack: FakeSlack) -> None:
+async def test_the_running_list_sits_above_the_status_while_writing(slack: FakeSlack) -> None:
     sink = reply(slack)
-    await sink.finish(
-        [TaskUpdate(f"t{i}", f"Agent: job {i}", "in_progress") for i in range(3)], None
-    )
-    assert last_blocks(slack)[-1] == sinks.context_block(
-        texts.BACKGROUND_RUNNING_MANY.format(count=3)
-    )
+    await sink.text("Working.")
+    await sink.set_running(["… `Agent: review`", "… `Bash: sleep 60`"])
+    await asyncio.sleep(0.05)
+    shown = last_blocks(slack)
+    assert [b["type"] for b in shown] == ["markdown", "context", "context"]
+    assert shown[1]["elements"][0]["text"].startswith(texts.RUNNING.format(count=2))
+    assert shown[2] == sinks.context_block(texts.WRITING)
+
+
+async def test_an_unchanged_running_list_writes_nothing(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.finish([], "footer")
+    before = len(writes(slack))
+    await sink.set_running([])
+    assert len(writes(slack)) == before
 
 
 async def test_closing_several_lines_writes_the_reply_once(slack: FakeSlack) -> None:
@@ -189,3 +193,14 @@ async def test_closing_several_lines_writes_the_reply_once(slack: FakeSlack) -> 
         [TaskUpdate(f"t{i}", f"Bash: step {i}", "complete") for i in range(5)], "footer"
     )
     assert len(writes(slack)) == before + 1
+
+
+async def test_text_after_the_end_keeps_the_footer(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.text("Done.")
+    await sink.finish([], "footer")
+    await sink.text("\n\nA late error.")
+    await asyncio.sleep(0.05)
+    shown = last_blocks(slack)
+    assert "A late error." in shown[0]["text"]
+    assert shown[-1] == sinks.context_block("footer")

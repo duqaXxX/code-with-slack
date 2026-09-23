@@ -13,6 +13,7 @@ from claude_agent_sdk.types import (
     PermissionResultDeny,
     SystemMessage,
     TaskNotificationMessage,
+    TaskStartedMessage,
     TaskUpdatedMessage,
 )
 
@@ -336,19 +337,84 @@ async def test_owner_query_waits_for_an_expected_background_turn(
     assert background == [False, False, True]
 
 
-async def test_a_background_task_updates_the_reply_that_started_it(
+def running_block(blocks: list[dict[str, Any]]) -> str | None:
+    """The running list a message shows, if any."""
+    running = texts.RUNNING.split("{")[0]
+    for block in blocks:
+        if block.get("type") == "context":
+            text = str(block["elements"][0]["text"])
+            if text.startswith(running):
+                return text
+    return None
+
+
+async def test_the_running_list_follows_the_latest_reply(
+    harness_for: Callable[..., Harness],
+) -> None:
+    first, notice, injected = split_background()
+    h = harness_for({"turns": [first, sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    shown = h.slack.message_blocks()
+    assert running_block(shown[0]) is not None
+    await asyncio.wait_for((await session.submit("next")).done.wait(), 2)
+    shown = h.slack.message_blocks()
+    assert running_block(shown[0]) is None  # moved to the latest reply
+    assert running_block(shown[1]) is not None
+    h.clients[0].inject(notice + injected)
+    await until(lambda: any(texts.BACKGROUND_NOTICE in r for r in h.replies()))
+    await asyncio.sleep(0.05)
+    assert all(running_block(blocks) is None for blocks in h.slack.message_blocks())
+    assert h.replies()[0].startswith("✓")  # the line where the task started
+
+
+async def test_a_background_task_frame_stays_out_of_other_replies(
     harness_for: Callable[..., Harness],
 ) -> None:
     first, notice, injected = split_background()
     h = harness_for({"turns": [first]})
-    session = h.session()
-    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    assert texts.BACKGROUND_RUNNING_ONE in str(h.slack.message_blocks()[0])
+    await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
     h.clients[0].inject(notice + injected)
     await until(lambda: any(texts.BACKGROUND_NOTICE in r for r in h.replies()))
-    started = h.slack.message_blocks()[0]
-    assert texts.BACKGROUND_RUNNING_ONE not in str(started)
-    assert "…" not in started[0]["text"]
+    await asyncio.sleep(0.05)
+    report = next(r for r in h.replies() if texts.BACKGROUND_NOTICE in r)
+    task_id = next(m.task_id for m in notice if isinstance(m, TaskNotificationMessage))
+    assert task_id not in report
+
+
+async def test_a_background_agent_s_calls_update_its_line_and_open_no_reply(
+    harness_for: Callable[..., Harness],
+) -> None:
+    recorded = sdk_messages("subagent")
+    turn = [m for m in recorded if getattr(m, "parent_tool_use_id", None) is None]
+    children = [m for m in recorded if getattr(m, "parent_tool_use_id", None) is not None]
+    h = harness_for({"turns": [turn]})
+    await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
+    posted = len(h.slack.posted_ts)
+    h.clients[0].inject(children)
+    await asyncio.sleep(0.1)
+    assert len(h.slack.posted_ts) == posted
+    assert "Bash" in h.replies()[0].splitlines()[0]
+
+
+async def test_ended_tasks_are_forgotten_past_the_limit(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "TASK_REPLIES_KEPT", 1)
+    first, notice, injected = split_background()
+    renamed = [
+        dataclasses.replace(m, task_id="other")
+        if isinstance(m, TaskStartedMessage | TaskNotificationMessage | TaskUpdatedMessage)
+        else m
+        for m in first
+    ]
+    h = harness_for({"turns": [first, renamed]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    h.clients[0].inject(notice + injected)
+    await until(lambda: any(texts.BACKGROUND_NOTICE in r for r in h.replies()))
+    await asyncio.wait_for((await session.submit("again")).done.wait(), 2)
+    assert list(session._task_replies) == ["other"]
 
 
 async def test_a_failed_background_task_shows_why_in_the_reply_that_started_it(
@@ -379,11 +445,11 @@ async def test_closing_the_session_stops_the_lines_of_running_tasks(
     await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
     await h.manager.close_all()
     started = h.slack.message_blocks()[0]
-    assert texts.BACKGROUND_RUNNING_ONE not in str(started)
+    assert running_block(started) is None
     assert "Stopped" in started[0]["text"]
 
 
-async def test_a_notification_with_no_turn_is_shown_and_releases_the_queue(
+async def test_a_notification_with_no_turn_updates_its_line_and_releases_the_queue(
     harness_for: Callable[..., Harness],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -396,7 +462,9 @@ async def test_a_notification_with_no_turn_is_shown_and_releases_the_queue(
     await asyncio.sleep(0.05)
     second = await session.submit("next")
     await asyncio.wait_for(second.done.wait(), 2)
-    assert any(texts.BACKGROUND_NOTICE in r for r in h.replies())
+    # The task is known: its end shows on the line where it started, not in a post of its own.
+    assert h.replies()[0].startswith("✓")
+    assert not any(texts.BACKGROUND_NOTICE in r for r in h.replies())
     assert h.clients[0].queries == ["start it", "next"]
 
 
