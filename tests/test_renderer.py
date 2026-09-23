@@ -137,3 +137,17 @@ def test_task_title_uses_the_first_string_argument() -> None:
     assert task_title("Bash", {"timeout": 5, "command": "ls   -la\n/x"}) == "Bash: ls -la /x"
     assert task_title("Thing", {"n": 1}) == "Thing"
     assert len(task_title("Read", {"file_path": "x" * 500})) == 80
+
+
+async def test_feed_error_appends_to_the_reply() -> None:
+    sink = RecordingSink()
+    renderer = TurnRenderer(sink)
+    await renderer.feed_error("Claude Code reported an error: `ProcessError`")
+    assert sink.texts == ["\n\nClaude Code reported an error: `ProcessError`"]
+
+
+async def test_feed_notice_opens_the_reply() -> None:
+    sink = RecordingSink()
+    renderer = TurnRenderer(sink)
+    await renderer.feed_notice("The previous session could not be resumed.")
+    assert sink.texts == ["The previous session could not be resumed.\n\n"]
