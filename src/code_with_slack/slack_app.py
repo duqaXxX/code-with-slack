@@ -41,7 +41,7 @@ from code_with_slack.guards import (
 )
 from code_with_slack.render.renderer import one_line
 from code_with_slack.render.sinks import describe
-from code_with_slack.sessions import DirectoryMissing, SessionManager, resolve_directory
+from code_with_slack.sessions import DirectoryUnavailable, SessionManager, resolve_directory
 
 logger = logging.getLogger(__name__)
 MAX_OPTIONS = 100
@@ -102,8 +102,8 @@ def build_app(
         """A failure after the checks reaches the owner as a line of its own, never as silence."""
         try:
             await work
-        except DirectoryMissing as exc:
-            await tell_owner(channel, texts.DIRECTORY_MISSING.format(directory=exc.directory))
+        except DirectoryUnavailable as exc:
+            await tell_owner(channel, exc.message)
         except Exception as exc:
             logger.error("a request failed in %s: %s", channel, type(exc).__name__)
             await tell_owner(channel, texts.ERROR_REPLY.format(error=type(exc).__name__))
