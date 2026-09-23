@@ -25,3 +25,4 @@ All notable changes to this project are documented here. The format follows
 - A Slack network failure drops a reply without stopping the session; a Claude Code process that
   exits releases the channel; a missing directory asks to bind again.
 - A directory macOS privacy protection denies gets a message that says how to grant access.
+- A decided approval request is removed from the thread; the tool's card records it.

@@ -15,7 +15,6 @@ from code_with_slack.approvals import (
     Approve,
     Decision,
     Deny,
-    outcome_blocks,
     read_answers,
 )
 from code_with_slack.commands import (
@@ -45,12 +44,7 @@ from code_with_slack.sessions import DirectoryUnavailable, SessionManager, resol
 
 logger = logging.getLogger(__name__)
 MAX_OPTIONS = 100
-OUTCOMES = {
-    "approval_allow": texts.APPROVED,
-    "approval_deny": texts.DENIED,
-    "question_submit": texts.ANSWERED,
-    "question_skip": texts.SKIPPED,
-}
+DECISION_ACTIONS = ("approval_allow", "approval_deny", "question_submit", "question_skip")
 
 
 def slack_unescape(text: str) -> str:
@@ -273,12 +267,13 @@ def build_app(
         if approvals.resolve(str(action["value"]), channel, decision) is None:
             await tell_owner(channel, texts.APPROVAL_GONE)
             return
-        outcome = OUTCOMES[action["action_id"]].format(title=pending.title)
-        await slack.chat_update(
-            channel=channel, ts=body["message"]["ts"], text=outcome, blocks=outcome_blocks(outcome)
-        )
+        # The tool's card in the reply records the call: the request message has done its job.
+        try:
+            await slack.chat_delete(channel=channel, ts=body["message"]["ts"])
+        except Exception as exc:
+            logger.warning("could not remove a request in %s: %s", channel, describe(exc))
 
-    for action_id in OUTCOMES:
+    for action_id in DECISION_ACTIONS:
         app.action(action_id)(on_decision)
 
     @app.error
