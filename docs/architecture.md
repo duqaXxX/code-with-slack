@@ -78,6 +78,7 @@ window, below the message that asked for it. The message is rewritten with `chat
 once a second (Slack allows `chat.update` 50 or more times a minute), in the order things happen:
 text as Claude writes it, and a line per tool call where the call happens, updated in place
 (`…` while it runs, `✓` when it succeeds, `✗` and the first line of its output when it fails).
+Consecutive tool lines form one paragraph; a blank line separates them from the text around them.
 The reply is posted as soon as the owner's message is queued, showing only a status line:
 `Claude is writing…`, or `Waiting for the previous reply…` behind another turn. While the turn
 runs the status stays last; when it ends, a divider and the footer replace it. A reply longer than about 11,000 characters continues in a new message.
