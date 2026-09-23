@@ -240,10 +240,12 @@ answer that it is not a valid command. Use `/cc compact` or `!compact`.
 `/cc status`, `/cc stop`, `/cc bind` and `/cc bypass` are code-with-slack's own. Claude Code's
 own `/status` is `!status`.
 
-A reply is one message in the channel, rewritten about once a second while Claude works: text
-in the order it is written, and a line per tool call where it happens (`…` while it runs, `✓` when
-it succeeds, `✗` with its output when it fails). The last line reads `Claude is writing…` until
-the reply is complete. A reply longer than one Slack message continues in the next one.
+A reply is one message in the channel. It appears as soon as you send your message, reading
+`Claude is writing…`, or `Waiting for the previous reply…` when another turn is still running.
+It is then rewritten about once a second while Claude works: text in the order it is written,
+and a line per tool call where it happens (`…` while it runs, `✓` when it succeeds, `✗` with its
+output when it fails). When the reply is complete, a divider and the footer replace the status
+line. A reply longer than one Slack message continues in the next one.
 
 An approval request is a message of its own below the reply; once you decide, it disappears and
 the tool's line in the reply records the call.
@@ -252,8 +254,12 @@ Messages sent while a turn is running wait their turn; each gets its own reply. 
 task finishes, its report arrives as a reply that starts with `Background task update`.
 
 Every reply ends with a footer: `⚡ bypass` when bypass is on, the git branch, the model, the
-context used, the session's tokens, and the 5-hour and weekly limits (`5h N% ↻ 2h · 7d N%`),
-which exist only with a claude.ai subscription.
+effort level, the context used, the session's tokens, and the 5-hour and weekly limits
+(`5h N% ↻ 2h · 7d N%`), which exist only with a claude.ai subscription. The effort level is the
+one last set in the session with `/cc effort` or `!effort` (or `/model`), otherwise
+`effortLevel` from your Claude Code settings, otherwise `default`: Claude Code does not report
+the level it uses to programs, so a change made from the terminal in the same session is not
+seen.
 
 ## Troubleshooting
 

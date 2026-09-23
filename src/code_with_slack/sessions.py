@@ -46,6 +46,8 @@ from code_with_slack.approvals import (
 from code_with_slack.footer import (
     FooterData,
     UsageCache,
+    effort_change,
+    effort_from_settings,
     format_footer,
     git_branch,
     session_tokens,
@@ -149,6 +151,7 @@ class SessionDeps:
 @dataclass
 class Turn:
     prompt: str
+    sink: ReplySink
     done: asyncio.Event = field(default_factory=asyncio.Event)
 
 
@@ -184,13 +187,20 @@ class ChannelSession:
         self.native_mode = "default"
         self.cli_version: str | None = None
         self.bypass = False
+        # The effort level set in this session, as its command output reported it (the SDK
+        # reports none); None falls back to the settings.
+        self.effort: str | None = None
 
     @property
     def busy(self) -> bool:
         return self._active is not None or bool(self._sent)
 
     async def submit(self, prompt: str) -> Turn:
-        turn = Turn(prompt)
+        """Queue a prompt; its reply appears at once, saying Claude is writing or waiting."""
+        waiting = self.busy or not self._queue.empty() or not self._settled.is_set()
+        sink = self._sink()
+        await sink.open(texts.WAITING if waiting else texts.WRITING)
+        turn = Turn(prompt, sink)
         self._queue.put_nowait(turn)
         if self._worker is None or self._worker.done():
             self._worker = asyncio.create_task(self._work(), name=f"worker-{self.channel_id}")
@@ -226,6 +236,7 @@ class ChannelSession:
             if self.bypass:
                 await client.set_permission_mode("bypassPermissions")
             self._client = client
+            self.effort = None  # a new Claude Code process starts from the settings' level
             self._reader = asyncio.create_task(self._read(client), name=f"reader-{self.channel_id}")
             return client
 
@@ -290,14 +301,12 @@ class ChannelSession:
                 await client.query(turn.prompt)
                 await turn.done.wait()
             except DirectoryUnavailable as exc:
-                await self._post(exc.message)
-                turn.done.set()
+                await self._fail(turn, exc.message)
             except Exception as exc:  # a failed turn must not stop the channel's queue
                 logger.error("turn failed in %s: %s", self.channel_id, type(exc).__name__)
                 if turn in self._sent:
                     self._sent.remove(turn)
-                await self._post(texts.ERROR_REPLY.format(error=type(exc).__name__))
-                turn.done.set()
+                await self._fail(turn, texts.ERROR_REPLY.format(error=type(exc).__name__))
 
     async def _read(self, client: ClaudeClient) -> None:
         """Follow the client's stream until it ends; whatever ends it, release the channel."""
@@ -372,9 +381,12 @@ class ChannelSession:
         if self._expiry is not None:
             self._expiry.cancel()
         turn = None if injected else self._sent.popleft()
-        renderer = TurnRenderer(self._sink())
         if turn is None:
+            renderer = TurnRenderer(self._sink())
             await renderer.feed_notice(texts.BACKGROUND_NOTICE)
+        else:
+            renderer = TurnRenderer(turn.sink)
+            await turn.sink.announce(texts.WRITING)
         if self._notice is not None:
             await renderer.feed_notice(self._notice)
             self._notice = None
@@ -399,22 +411,29 @@ class ChannelSession:
         try:
             if result.session_id:
                 self._deps.state.set_session(self.channel_id, result.session_id)
+            changed, effort = effort_change(result.result or "")
+            if changed:
+                self.effort = effort
             await active.renderer.close(await self._footer(result))
         finally:
-            self._settle(active.turn, result)
+            await self._settle(active.turn, result)
 
-    def _settle(self, turn: Turn | None, result: ResultMessage) -> None:
+    async def _settle(self, turn: Turn | None, result: ResultMessage) -> None:
         """Release whoever waits on this turn. The result's origin says whose turn it really was:
         when an owner query and a task notification cross, the guess made at the turn's start can
-        be wrong, and this puts the queue back in order (that one reply is in the wrong thread)."""
+        be wrong; this puts the queue back in order (that one reply carries the other's text)."""
         kind = result.origin.get("kind") if result.origin else None
         injected = kind not in (None, "human")
         if turn is None and not injected and self._sent:
-            logger.warning("an owner reply in %s went to a background thread", self.channel_id)
-            self._sent.popleft().done.set()
+            logger.warning("an owner reply in %s went to a background reply", self.channel_id)
+            owner = self._sent.popleft()
+            await self._fail(owner, texts.REPLY_ABOVE)
             self._expect_injected_turn()
         elif turn is not None and injected:
-            logger.warning("a background reply in %s went to an owner thread", self.channel_id)
+            logger.warning("a background reply in %s went to an owner reply", self.channel_id)
+            # That reply is spent: the owner's own turn gets a fresh one.
+            turn.sink = self._sink()
+            await turn.sink.open(texts.WRITING)
             self._sent.appendleft(turn)
             self._settled.set()
         elif turn is not None:
@@ -433,8 +452,8 @@ class ChannelSession:
                 with contextlib.suppress(Exception):
                     await active.renderer.feed_error(texts.ERROR_REPLY.format(error=error))
                     await active.renderer.close(None)
-            for _ in sent:
-                await self._post(texts.ERROR_REPLY.format(error=error))
+            for turn in sent:
+                await self._fail(turn, texts.ERROR_REPLY.format(error=error))
         finally:
             for turn in waiting:
                 turn.done.set()
@@ -452,6 +471,7 @@ class ChannelSession:
             context_percent=context.get("percentage"),
             session_tokens=session_tokens(result),
             usage=self._deps.usage.current,
+            effort=self.effort or effort_from_settings(self.directory) or "default",
         )
         return format_footer(data, datetime.now().astimezone()) or None
 
@@ -475,6 +495,14 @@ class ChannelSession:
         finally:
             self._deps.approvals.discard(approval_id)
         return to_permission(decision, tool_input, questions)
+
+    async def _fail(self, turn: Turn, text: str) -> None:
+        """End a turn's reply with a line saying why, and release whoever waits on it."""
+        try:
+            await turn.sink.text(text)
+            await turn.sink.finish([], None)
+        finally:
+            turn.done.set()
 
     async def _post(self, text: str) -> None:
         try:

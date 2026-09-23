@@ -78,8 +78,9 @@ window, below the message that asked for it. The message is rewritten with `chat
 once a second (Slack allows `chat.update` 50 or more times a minute), in the order things happen:
 text as Claude writes it, and a line per tool call where the call happens, updated in place
 (`…` while it runs, `✓` when it succeeds, `✗` and the first line of its output when it fails).
-While the turn runs, the last line reads `Claude is writing…`; when it ends, the footer replaces
-it. A reply longer than about 11,000 characters continues in a new message.
+The reply is posted as soon as the owner's message is queued, showing only a status line:
+`Claude is writing…`, or `Waiting for the previous reply…` behind another turn. While the turn
+runs the status stays last; when it ends, a divider and the footer replace it. A reply longer than about 11,000 characters continues in a new message.
 
 Slack's native streaming API (`chat.startStream`) is not used: in an ordinary channel it works
 only inside a thread, and replies belong in the main window. A write Slack refuses, or cannot
@@ -101,8 +102,11 @@ Once decided, the request message is deleted: the tool's line in the reply recor
 
 Every reply ends with one context line: `⚡ bypass` when bypass is on, the git branch of the
 channel's directory, the model and the context percentage from the SDK's
-`get_context_usage()`, the session's tokens from the turn's `ResultMessage.model_usage`, and the
-5-hour and weekly limits. The limits come from Claude Code's `/usage`, sent on a separate
+`get_context_usage()`, the effort level, the session's tokens from the turn's `ResultMessage.model_usage`, and the
+5-hour and weekly limits. The SDK reports no effort level, so, as ccstatusline does, the
+footer follows the output of `/effort` and `/model` in the session (`Set effort level to ...`),
+then `effortLevel` in the user, project and local settings, then shows `default`. The limits
+come from Claude Code's `/usage`, sent on a separate
 long-lived client and cached for five minutes; a rate-limit event from the SDK invalidates the
 cache. The limit fields exist only with a claude.ai subscription. A field that cannot be read is
 left out.

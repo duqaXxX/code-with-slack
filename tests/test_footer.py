@@ -12,6 +12,8 @@ from code_with_slack.footer import (
     Limit,
     Usage,
     UsageCache,
+    effort_change,
+    effort_from_settings,
     format_footer,
     git_branch,
     parse_usage,
@@ -140,3 +142,50 @@ def repo(tmp_path: Path) -> Path:
 async def test_git_branch(repo: Path) -> None:
     assert await git_branch(repo) == "feature-x"
     assert await git_branch(repo / "missing") is None
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [
+        # Measured on Claude Code 2.1.280 (2026-09-23) through the SDK.
+        (
+            "Set effort level to high (this session only): Comprehensive implementation",
+            (True, "high"),
+        ),
+        ("Effort level set to auto (this session only)", (True, "auto")),
+        ("Set model to `Sonnet 5` for this session only", (True, None)),
+        # The form ccstatusline reads from transcripts.
+        ("Set model to Opus with xhigh effort", (True, "xhigh")),
+        ("Current session: 5% used", (False, None)),
+    ],
+)
+def test_effort_change(output: str, expected: tuple[bool, str | None]) -> None:
+    assert effort_change(output) == expected
+
+
+def test_effort_from_settings_follows_the_settings_precedence(tmp_path: Path) -> None:
+    home, project = tmp_path / "home", tmp_path / "project"
+    (home / ".claude").mkdir(parents=True)
+    (project / ".claude").mkdir(parents=True)
+    assert effort_from_settings(project, home) is None
+    (home / ".claude" / "settings.json").write_text('{"effortLevel": "high"}')
+    assert effort_from_settings(project, home) == "high"
+    (project / ".claude" / "settings.json").write_text('{"effortLevel": "medium"}')
+    assert effort_from_settings(project, home) == "medium"
+    (project / ".claude" / "settings.local.json").write_text("{not json")
+    assert effort_from_settings(project, home) == "medium"
+    (project / ".claude" / "settings.local.json").write_text('{"effortLevel": "max"}')
+    assert effort_from_settings(project, home) == "max"
+
+
+def test_the_footer_shows_the_effort_after_the_model() -> None:
+    data = FooterData(
+        bypass=False,
+        branch="main",
+        model="claude-opus-5-5",
+        context_percent=None,
+        session_tokens=None,
+        usage=None,
+        effort="high",
+    )
+    assert format_footer(data, NOW) == "main · claude-opus-5-5 · effort high"

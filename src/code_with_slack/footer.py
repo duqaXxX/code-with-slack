@@ -2,6 +2,7 @@
 
 import asyncio
 import calendar
+import json
 import logging
 import re
 import time
@@ -25,6 +26,10 @@ RESET = re.compile(
     r"^(?P<mon>[A-Z][a-z]{2}) (?P<day>\d{1,2}) at (?P<hour>\d{1,2})(?::(?P<min>\d{2}))?"
     r"(?P<ampm>am|pm) \((?P<tz>[^)]+)\)$"
 )
+# Outputs measured on Claude Code 2.1.280 (2026-09-23); the "with X effort" form is the one
+# ccstatusline reads from transcripts.
+EFFORT_OUTPUT = re.compile(r"^(?:Set effort level to|Effort level set to) ([a-z0-9-]+)", re.I)
+MODEL_OUTPUT = re.compile(r"^Set model to\b(?:.*? with ([a-z0-9-]+) effort)?", re.I | re.S)
 MONTHS = {name: i for i, name in enumerate(calendar.month_abbr) if name}
 
 
@@ -160,6 +165,41 @@ async def git_branch(cwd: Path) -> str | None:
     return branch if proc.returncode == 0 and branch else None
 
 
+def effort_change(output: str) -> tuple[bool, str | None]:
+    """Whether a command's output changes the effort level, and to what (None: back to unknown).
+
+    The SDK reports no effort level (Claude Code 2.1.280): like ccstatusline, the footer follows
+    the output of `/effort` and `/model`. A model change without an effort clears the level.
+    """
+    text = output.strip()
+    match = EFFORT_OUTPUT.match(text)
+    if match:
+        return True, match[1].lower()
+    match = MODEL_OUTPUT.match(text)
+    if match:
+        return True, match[1].lower() if match[1] else None
+    return False, None
+
+
+def effort_from_settings(directory: Path, home: Path | None = None) -> str | None:
+    """`effortLevel` from the settings Claude Code reads, the later file winning."""
+    home = home or Path.home()
+    level: str | None = None
+    for path in (
+        home / ".claude" / "settings.json",
+        directory / ".claude" / "settings.json",
+        directory / ".claude" / "settings.local.json",
+    ):
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        value = data.get("effortLevel") if isinstance(data, dict) else None
+        if isinstance(value, str) and value:
+            level = value.lower()
+    return level
+
+
 def session_tokens(result: ResultMessage) -> int | None:
     if not result.model_usage:
         return None
@@ -180,6 +220,7 @@ class FooterData:
     context_percent: float | None
     session_tokens: int | None
     usage: Usage | None
+    effort: str | None = None
 
 
 def format_tokens(count: int) -> str:
@@ -206,6 +247,8 @@ def format_footer(data: FooterData, now: datetime) -> str:
         parts.append(data.branch)
     if data.model:
         parts.append(data.model)
+    if data.effort:
+        parts.append(f"effort {data.effort}")
     if data.context_percent is not None:
         parts.append(f"ctx {data.context_percent:.0f}%")
     if data.session_tokens is not None:

@@ -4,6 +4,7 @@ from typing import Any
 import aiohttp
 import pytest
 
+from code_with_slack import texts
 from code_with_slack.render import sinks
 from code_with_slack.render.renderer import TaskUpdate
 from code_with_slack.render.sinks import ReplySink
@@ -17,17 +18,6 @@ def fast(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def writes(slack: FakeSlack) -> list[dict[str, Any]]:
     return [a for m, a in slack.calls if m in ("chat.postMessage", "chat.update")]
-
-
-def bodies(slack: FakeSlack) -> dict[str, str]:
-    """The last markdown body written to each message, by message ts."""
-    posted_ts = slack.responses["chat.postMessage"]["ts"]
-    out: dict[str, str] = {}
-    for method, args in slack.calls:
-        if method in ("chat.postMessage", "chat.update"):
-            ts = args.get("ts") or posted_ts
-            out[ts] = next(b["text"] for b in args["blocks"] if b["type"] == "markdown")
-    return out
 
 
 def last_blocks(slack: FakeSlack) -> list[dict[str, Any]]:
@@ -48,9 +38,7 @@ async def test_a_reply_is_one_message_in_the_main_window(slack: FakeSlack) -> No
     await sink.finish([], "main · ctx 6%")
     posts = slack.calls_to("chat.postMessage")
     assert len(posts) == 1 and posts[0].get("thread_ts") is None
-    assert all(
-        a["ts"] == slack.responses["chat.postMessage"]["ts"] for a in slack.calls_to("chat.update")
-    )
+    assert all(a["ts"] == slack.posted_ts[0] for a in slack.calls_to("chat.update"))
     assert last_blocks(slack)[-1] == {
         "type": "context",
         "elements": [{"type": "mrkdwn", "text": "main · ctx 6%"}],
@@ -64,7 +52,7 @@ async def test_tool_lines_sit_where_they_happen(slack: FakeSlack) -> None:
     await sink.task(TaskUpdate("t1", "Bash: ls", "complete"))
     await sink.text("Then I read the README.")
     await sink.finish([], None)
-    body = next(iter(bodies(slack).values()))
+    (body,) = slack.message_texts()
     assert body == "First I list the files.\n✓ `Bash: ls`\nThen I read the README."
 
 
@@ -75,18 +63,18 @@ async def test_a_running_tool_and_the_writing_line_show_until_the_end(slack: Fak
     await asyncio.sleep(0.05)
     shown = last_blocks(slack)
     assert "… `Bash: pytest`" in shown[0]["text"]
-    assert shown[-1]["elements"][0]["text"] == sinks.WRITING
+    assert shown[-1]["elements"][0]["text"] == texts.WRITING
     await sink.finish([TaskUpdate("t1", "Bash: pytest", "complete")], "footer")
     final = last_blocks(slack)
     assert "✓ `Bash: pytest`" in final[0]["text"]
-    assert all(sinks.WRITING not in str(b) for b in final)
+    assert all(texts.WRITING not in str(b) for b in final)
 
 
 async def test_a_failed_tool_shows_its_output(slack: FakeSlack) -> None:
     sink = reply(slack)
     await sink.task(TaskUpdate("t1", "Bash: ls missing", "error", output="Exit code 1"))
     await sink.finish([], None)
-    assert next(iter(bodies(slack).values())) == "✗ `Bash: ls missing` · Exit code 1"
+    assert slack.message_texts() == ["✗ `Bash: ls missing` · Exit code 1"]
 
 
 async def test_a_long_reply_continues_in_a_new_message(slack: FakeSlack) -> None:
@@ -124,3 +112,21 @@ async def test_a_slack_failure_never_raises(slack: FakeSlack) -> None:
     await sink.task(TaskUpdate("t1", "Bash: ls", "in_progress"))
     await asyncio.sleep(0.05)
     await sink.finish([], "footer")
+
+
+async def test_a_divider_separates_the_reply_from_its_footer(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.text("Done.")
+    await sink.finish([], "main · ctx 6%")
+    assert [b["type"] for b in last_blocks(slack)] == ["markdown", "divider", "context"]
+
+
+async def test_opening_shows_the_status_before_any_content(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.open(texts.WAITING)
+    assert last_blocks(slack) == [sinks.context_block(texts.WAITING)]
+    await sink.announce(texts.WRITING)
+    assert last_blocks(slack) == [sinks.context_block(texts.WRITING)]
+    await sink.text("Hello.")
+    await sink.finish([], None)
+    assert len(slack.calls_to("chat.postMessage")) == 1

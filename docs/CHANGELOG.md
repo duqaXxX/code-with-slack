@@ -29,3 +29,5 @@ All notable changes to this project are documented here. The format follows
 - Replies live in the channel's main window: one message per reply, rewritten about once a second,
   with a line per tool call where it happens and a `Claude is writing…` line until the footer.
   Native streaming in threads is gone, and so are the `assistant:write` scope and the agent view.
+- A reply appears as soon as the owner's message arrives, with a writing or waiting status; a
+  divider separates it from the footer; the footer shows the effort level.
