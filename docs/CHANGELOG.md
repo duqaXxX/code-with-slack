@@ -22,3 +22,5 @@ All notable changes to this project are documented here. The format follows
   and stop.
 - Slack handlers for messages, `/cc`, approvals and the command picker.
 - The `code-with-slack` entry point, started by a user LaunchAgent.
+- A Slack network failure drops a reply without stopping the session; a Claude Code process that
+  exits releases the channel; a missing directory asks to bind again.

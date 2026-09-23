@@ -1,11 +1,11 @@
 """The Slack side: every inbound path, each checked on its own before it reaches a session."""
 
 import logging
+from collections.abc import Awaitable
 from typing import Any
 
 from slack_bolt.async_app import AsyncAck, AsyncApp
 from slack_bolt.authorization import AuthorizeResult
-from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
 from code_with_slack import texts
@@ -40,7 +40,8 @@ from code_with_slack.guards import (
     message_actor,
 )
 from code_with_slack.render.renderer import one_line
-from code_with_slack.sessions import SessionManager, resolve_directory
+from code_with_slack.render.sinks import describe
+from code_with_slack.sessions import DirectoryMissing, SessionManager, resolve_directory
 
 logger = logging.getLogger(__name__)
 MAX_OPTIONS = 100
@@ -94,10 +95,18 @@ def build_app(
     async def tell_owner(channel: str, text: str) -> None:
         try:
             await slack.chat_postEphemeral(channel=channel, user=identity.owner_user_id, text=text)
-        except SlackApiError as exc:
-            logger.warning(
-                "could not reach the owner in %s: %s", channel, exc.response.get("error")
-            )
+        except Exception as exc:
+            logger.warning("could not reach the owner in %s: %s", channel, describe(exc))
+
+    async def reply_on_failure(channel: str, work: Awaitable[None]) -> None:
+        """A failure after the checks reaches the owner as a line of its own, never as silence."""
+        try:
+            await work
+        except DirectoryMissing as exc:
+            await tell_owner(channel, texts.DIRECTORY_MISSING.format(directory=exc.directory))
+        except Exception as exc:
+            logger.error("a request failed in %s: %s", channel, type(exc).__name__)
+            await tell_owner(channel, texts.ERROR_REPLY.format(error=type(exc).__name__))
 
     async def admitted(user: str | None, team: str | None, channel: str | None) -> bool:
         if not channel or not is_owner(identity, user, team):
@@ -128,6 +137,9 @@ def build_app(
         if not await admitted(user, team, channel):
             return
         assert channel is not None
+        await reply_on_failure(channel, handle_message(channel, event))
+
+    async def handle_message(channel: str, event: dict[str, Any]) -> None:
         session = sessions.get(channel)
         if session is None:
             await tell_owner(channel, texts.UNBOUND)
@@ -148,7 +160,10 @@ def build_app(
         if not await admitted(user, team, channel):
             return
         assert channel is not None
-        match parse_cc(body.get("text") or ""):
+        await reply_on_failure(channel, handle_cc(channel, body.get("text") or ""))
+
+    async def handle_cc(channel: str, text: str) -> None:
+        match parse_cc(text):
             case Bind(path=path):
                 directory = resolve_directory(path, config.allowed_root)
                 if directory is None:
@@ -160,8 +175,8 @@ def build_app(
                     await tell_owner(channel, texts.BIND_OK.format(directory=directory))
             case Invalid():
                 await tell_owner(channel, texts.USAGE)
-            case Passthrough(text=text):
-                await run_command(channel, text)
+            case Passthrough(text=command):
+                await run_command(channel, command)
             case parsed:
                 session = sessions.get(channel)
                 if session is None:
@@ -222,7 +237,8 @@ def build_app(
         if not await admitted(user, team, channel):
             return
         assert channel is not None
-        await run_command(channel, str(body["actions"][0]["selected_option"]["value"]))
+        command = str(body["actions"][0]["selected_option"]["value"])
+        await reply_on_failure(channel, run_command(channel, command))
 
     @app.action("answer")
     async def on_answer(ack: AsyncAck) -> None:

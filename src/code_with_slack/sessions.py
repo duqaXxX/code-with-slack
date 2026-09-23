@@ -33,7 +33,6 @@ from claude_agent_sdk.types import (
     TaskUpdatedMessage,
     ToolPermissionContext,
 )
-from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
 from code_with_slack import texts
@@ -53,7 +52,7 @@ from code_with_slack.footer import (
 )
 from code_with_slack.guards import Identity
 from code_with_slack.render.renderer import TurnRenderer, task_title
-from code_with_slack.render.sinks import ReplySink, StreamingSwitch
+from code_with_slack.render.sinks import ReplySink, StreamingSwitch, describe
 from code_with_slack.state import StateStore
 
 logger = logging.getLogger(__name__)
@@ -71,6 +70,14 @@ QUESTION_TOOL = "AskUserQuestion"
 # After a background task's notification, the CLI starts a turn of its own to report it
 # (measured on Claude Code 2.1.280). If that turn never comes, the owner's queue moves on.
 INJECTED_TURN_WAIT = 30.0
+
+
+class DirectoryMissing(Exception):
+    """The channel's directory no longer exists: the owner has to bind the channel again."""
+
+    def __init__(self, directory: Path) -> None:
+        super().__init__(f"directory missing: {directory}")
+        self.directory = directory
 
 
 class ClaudeClient(Protocol):
@@ -182,6 +189,8 @@ class ChannelSession:
         async with self._connect_lock:
             if self._client is not None:
                 return self._client
+            if not self.directory.is_dir():
+                raise DirectoryMissing(self.directory)
             stored = self._deps.state.get(self.channel_id)
             session_id = stored.session_id if stored else None
             try:
@@ -189,7 +198,7 @@ class ChannelSession:
             except ResultError as exc:
                 if session_id is None:
                     raise
-                # The stored session is gone (transcript deleted, directory moved): start fresh.
+                # The stored session is gone (its transcript was deleted): start fresh.
                 logger.warning("could not resume the stored session in %s", self.channel_id)
                 self._deps.state.set_session(self.channel_id, None)
                 reason = exc.errors[0] if exc.errors else (exc.subtype or "unknown error")
@@ -264,6 +273,10 @@ class ChannelSession:
                 self._sent.append(turn)
                 await client.query(turn.prompt)
                 await turn.done.wait()
+            except DirectoryMissing as exc:
+                text = texts.DIRECTORY_MISSING.format(directory=exc.directory)
+                await self._post(turn.thread_ts, text)
+                turn.done.set()
             except Exception as exc:  # a failed turn must not stop the channel's queue
                 logger.error("turn failed in %s: %s", self.channel_id, type(exc).__name__)
                 if turn in self._sent:
@@ -272,16 +285,26 @@ class ChannelSession:
                 turn.done.set()
 
     async def _read(self, client: ClaudeClient) -> None:
+        """Follow the client's stream until it ends; whatever ends it, release the channel."""
+        reason = "the Claude Code process exited"
         try:
             async for message in client.receive_messages():
-                await self._dispatch(message)
+                try:
+                    await self._dispatch(message)
+                except Exception as exc:  # one message that fails to render must not end it all
+                    logger.error(
+                        "could not render a message in %s: %s", self.channel_id, describe(exc)
+                    )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.error("session reader stopped in %s: %s", self.channel_id, type(exc).__name__)
-            await self._abandon(type(exc).__name__)
-            if self._client is client:
-                self._client = None
+            reason = type(exc).__name__
+        logger.error("session reader stopped in %s: %s", self.channel_id, reason)
+        if self._client is client:
+            self._client = None
+        try:
+            await self._abandon(reason)
+        finally:
             with contextlib.suppress(Exception):
                 await client.disconnect()
 
@@ -314,12 +337,18 @@ class ChannelSession:
 
     async def _expire_injected_turn(self) -> None:
         await asyncio.sleep(INJECTED_TURN_WAIT)
-        if self._injected_expected and self._active is None:
-            logger.warning("no turn followed a task notification in %s", self.channel_id)
-            self._injected_expected = False
-            held, self._held = self._held, []
-            with contextlib.suppress(SlackApiError):
-                await self._standalone(held)
+        if not self._injected_expected or self._active is not None:
+            return
+        logger.warning("no turn followed a task notification in %s", self.channel_id)
+        self._injected_expected = False
+        held, self._held = self._held, []
+        try:
+            await self._standalone(held)
+        except Exception as exc:
+            logger.warning(
+                "could not post a background update in %s: %s", self.channel_id, describe(exc)
+            )
+        finally:
             self._settled.set()
 
     async def _start_turn(self) -> ActiveTurn:
@@ -384,20 +413,22 @@ class ChannelSession:
             self._settled.set()
 
     async def _abandon(self, error: str) -> None:
-        """The client died mid-turn: end the reply that was open and release every waiting turn."""
-        if self._active is not None:
-            active, self._active = self._active, None
-            with contextlib.suppress(Exception):
-                await active.renderer.feed_error(texts.ERROR_REPLY.format(error=error))
-                await active.renderer.close(None)
-            if active.turn is not None:
-                active.turn.done.set()
-        while self._sent:
-            turn = self._sent.popleft()
-            await self._post(turn.thread_ts, texts.ERROR_REPLY.format(error=error))
-            turn.done.set()
+        """The client is gone: end the reply that was open and release every waiting turn."""
+        active, self._active = self._active, None
+        sent, self._sent = list(self._sent), deque()
+        waiting = ([active.turn] if active and active.turn else []) + sent
         self._injected_expected = False
-        self._settled.set()
+        try:
+            if active is not None:
+                with contextlib.suppress(Exception):
+                    await active.renderer.feed_error(texts.ERROR_REPLY.format(error=error))
+                    await active.renderer.close(None)
+            for turn in sent:
+                await self._post(turn.thread_ts, texts.ERROR_REPLY.format(error=error))
+        finally:
+            for turn in waiting:
+                turn.done.set()
+            self._settled.set()
 
     async def _footer(self, result: ResultMessage) -> str | None:
         context: dict[str, Any] = {}
@@ -449,8 +480,8 @@ class ChannelSession:
             await self._deps.slack.chat_postMessage(
                 channel=self.channel_id, thread_ts=thread_ts, text=text
             )
-        except SlackApiError as exc:
-            logger.error("could not post in %s: %s", self.channel_id, exc.response.get("error"))
+        except Exception as exc:
+            logger.error("could not post in %s: %s", self.channel_id, describe(exc))
 
     async def _mark_outcome(self, message_ts: str | None, text: str) -> None:
         if message_ts is None:
@@ -459,12 +490,8 @@ class ChannelSession:
             await self._deps.slack.chat_update(
                 channel=self.channel_id, ts=message_ts, text=text, blocks=outcome_blocks(text)
             )
-        except SlackApiError as exc:
-            logger.error(
-                "could not update an approval in %s: %s",
-                self.channel_id,
-                exc.response.get("error"),
-            )
+        except Exception as exc:
+            logger.error("could not update an approval in %s: %s", self.channel_id, describe(exc))
 
 
 class SessionManager:

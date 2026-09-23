@@ -27,6 +27,7 @@ from tests.fakes import (
     OWNER,
     TEAM,
     CanUseToolCall,
+    EndOfStream,
     FakeClaudeClient,
     FakeSlack,
     sdk_json,
@@ -368,3 +369,66 @@ async def test_a_query_crossing_a_notification_never_hangs(
     third = await session.submit("after", "3.3")
     await asyncio.wait_for(third.done.wait(), 2)
     assert h.clients[0].queries == ["start it", "next", "after"]
+
+
+async def test_a_slack_network_error_does_not_stop_the_session(
+    harness_for: Callable[..., Harness],
+) -> None:
+    import aiohttp
+
+    h = harness_for({"turns": [sdk_messages("tools"), sdk_messages("tools")]})
+    down = aiohttp.ClientConnectionError("network down")
+    for method in ("chat.startStream", "chat.appendStream", "chat.stopStream", "chat.postMessage"):
+        h.slack.responses[method] = down
+    session = h.session()
+    await asyncio.wait_for((await session.submit("while offline", "1.1")).done.wait(), 2)
+    assert h.clients[0].connected
+    h.slack.responses = FakeSlack().responses
+    await asyncio.wait_for((await session.submit("back online", "2.2")).done.wait(), 2)
+    assert h.clients[0].queries == ["while offline", "back online"] and len(h.clients) == 1
+
+
+async def test_a_cli_that_exits_ends_the_turn_and_the_next_message_reconnects(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for(
+        {"turns": [[*sdk_messages("tools")[:3], EndOfStream()]]}, {"turns": [sdk_messages("tools")]}
+    )
+    session = h.session()
+    await asyncio.wait_for((await session.submit("first", "1.1")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("second", "2.2")).done.wait(), 2)
+    assert [c.queries for c in h.clients] == [["first"], ["second"]]
+
+
+async def test_a_failed_background_post_still_releases_the_queue(
+    harness_for: Callable[..., Harness],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import aiohttp
+
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.05)
+    first, notice, _ = split_background()
+    h = harness_for({"turns": [first, sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it", "1.1")).done.wait(), 2)
+    h.slack.responses["chat.postMessage"] = aiohttp.ClientConnectionError("network down")
+    h.clients[0].inject(notice)
+    await asyncio.sleep(0.02)
+    second = await session.submit("next", "2.2")
+    await asyncio.wait_for(second.done.wait(), 2)
+    assert h.clients[0].queries == ["start it", "next"]
+
+
+async def test_a_missing_directory_asks_to_bind_again(
+    harness_for: Callable[..., Harness], tmp_path: Path
+) -> None:
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    h = harness_for({})
+    h.state.bind(CHANNEL, gone)
+    gone.rmdir()
+    turn = await h.session().submit("hello", "1.1")
+    await asyncio.wait_for(turn.done.wait(), 2)
+    assert h.clients == []
+    posted = [a["text"] for a in h.slack.calls_to("chat.postMessage")]
+    assert posted == [texts.DIRECTORY_MISSING.format(directory=gone)]

@@ -16,6 +16,9 @@ REASON_NOT_PRIVATE = "it is not a private channel"
 REASON_SHARED = "it is shared with another workspace"
 REASON_MEMBERS = "it has members other than you and the bot"
 REASON_UNREADABLE = "the bot cannot read its details"
+DIRECTORY_MISSING = (
+    "The directory `{directory}` no longer exists. Bind this channel again with `/cc bind <path>`."
+)
 STALE_SESSION = (
     "The previous session could not be resumed ({error}). This reply starts a new session."
 )

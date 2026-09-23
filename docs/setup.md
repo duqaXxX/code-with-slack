@@ -238,7 +238,8 @@ which exist only with a claude.ai subscription.
 |---|---|
 | The bot does not see a channel | The channel is public, or the bot was not invited |
 | Replies show text but no task cards | **Agent experience** is off in the app settings |
-| `Not logged in · Please run /login` | Claude Code on the machine is logged out: run `claude`, then `/login` |
+| `Claude Code is not logged in on the host` | Claude Code on the machine is logged out: run `claude`, then `/login` |
 | Some messages get no reply | A second instance is running and receiving part of the events |
-| `The previous session could not be resumed` | The stored session no longer exists (its transcript was deleted or the directory moved); the reply runs in a new session |
+| `The previous session could not be resumed` | The stored session no longer exists (its transcript was deleted); the reply runs in a new session |
+| `The directory ... no longer exists` | The channel's directory was moved or deleted: bind the channel again with `/cc bind <path>` |
 | `another code-with-slack is running` in the log | A second instance tried to start; only one may run |

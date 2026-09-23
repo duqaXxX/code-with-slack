@@ -119,7 +119,10 @@ class UpdateSink:
 
     async def _later(self) -> None:
         await asyncio.sleep(DEBOUNCE_SECONDS)
-        await self._flush(None)
+        try:
+            await self._flush(None)
+        except Exception as exc:  # the next flush retries with the whole reply
+            logger.warning("could not update a reply: %s", type(exc).__name__)
 
     def _blocks(self, footer: str | None) -> list[dict[str, Any]]:
         body = self._text
@@ -176,6 +179,7 @@ class ReplySink:
         )
         self._update = UpdateSink(slack, channel=channel, thread_ts=thread_ts)
         self._log: list[Callable[[Sink], Awaitable[None]]] = []
+        self._lost = False
 
     async def text(self, markdown: str) -> None:
         await self._do(lambda sink: sink.text(markdown))
@@ -187,23 +191,42 @@ class ReplySink:
         await self._do(lambda sink: sink.finish(closing, footer))
 
     async def _do(self, op: Callable[[Sink], Awaitable[None]]) -> None:
+        """Never raises: a reply Slack cannot take is lost, the Claude Code session goes on."""
         self._log.append(op)
-        if self._stream is None:
-            await op(self._update)
+        if self._lost:
             return
+        pending = [op]
+        if self._stream is not None:
+            try:
+                await op(self._stream)
+                return
+            except Exception as exc:
+                self._stream_failed(exc)
+                pending = list(self._log)
         try:
-            await op(self._stream)
-        except SlackApiError as exc:
-            error = exc.response.get("error")
-            if not self._stream.started:
-                logger.warning(
-                    "Slack refused streaming (%s); replies use chat.update from now on", error
-                )
-                self._switch.enabled = False
-            else:
-                logger.warning(
-                    "streaming failed mid-reply (%s); this reply continues as a new message", error
-                )
-            self._stream = None
-            for logged in self._log:
+            for logged in pending:
                 await logged(self._update)
+        except Exception as exc:
+            logger.warning("could not write a reply to Slack: %s", describe(exc))
+            self._lost = True
+
+    def _stream_failed(self, exc: Exception) -> None:
+        assert self._stream is not None
+        if isinstance(exc, SlackApiError) and not self._stream.started:
+            logger.warning(
+                "Slack refused streaming (%s); replies use chat.update from now on", describe(exc)
+            )
+            self._switch.enabled = False
+        else:
+            logger.warning(
+                "streaming failed mid-reply (%s); this reply continues as a new message",
+                describe(exc),
+            )
+        self._stream = None
+
+
+def describe(exc: Exception) -> str:
+    """Slack's error code, or the exception type: never the request or its content."""
+    if isinstance(exc, SlackApiError):
+        return str(exc.response.get("error"))
+    return type(exc).__name__

@@ -55,6 +55,10 @@ def slack_payload(name: str) -> dict[str, Any]:
     return data
 
 
+class EndOfStream:
+    """A point in a script where the CLI process exits and its message stream ends."""
+
+
 @dataclass(frozen=True)
 class CanUseToolCall:
     """A point in a scripted turn where the CLI would ask the host for a permission decision."""
@@ -71,14 +75,14 @@ class FakeClaudeClient:
         self,
         options: ClaudeAgentOptions,
         *,
-        turns: list[list[Message | CanUseToolCall]] | None = None,
+        turns: list[list[Message | CanUseToolCall | EndOfStream]] | None = None,
         server_info: dict[str, Any] | None = None,
         context_usage: dict[str, Any] | None = None,
         connect_error: Exception | None = None,
     ) -> None:
         self.options = options
         self._turns = list(turns or [])
-        self._feed: asyncio.Queue[list[Message | CanUseToolCall]] = asyncio.Queue()
+        self._feed: asyncio.Queue[list[Message | CanUseToolCall | EndOfStream]] = asyncio.Queue()
         self._server_info = server_info or {
             "commands": sdk_json("server-info")["commands"],
             "current_permission_mode": "default",
@@ -104,7 +108,7 @@ class FakeClaudeClient:
         if self._turns:
             self._feed.put_nowait(self._turns.pop(0))
 
-    def inject(self, batch: list[Message | CanUseToolCall]) -> None:
+    def inject(self, batch: list[Message | CanUseToolCall | EndOfStream]) -> None:
         """Deliver a turn nobody asked for, as the CLI does for a background-task notification."""
         self._feed.put_nowait(batch)
 
@@ -112,6 +116,8 @@ class FakeClaudeClient:
         while True:
             batch = await self._feed.get()
             for item in batch:
+                if isinstance(item, EndOfStream):
+                    return
                 if isinstance(item, CanUseToolCall):
                     assert self.options.can_use_tool is not None
                     result = await self.options.can_use_tool(
@@ -143,7 +149,8 @@ class FakeSlack(AsyncWebClient):
     def __init__(self) -> None:
         super().__init__(token="xox" + "b-fake")
         self.calls: list[tuple[str, dict[str, Any]]] = []
-        self.responses: dict[str, dict[str, Any] | list[dict[str, Any]]] = {
+        # A response may be an exception: the call raises it, as a network failure would.
+        self.responses: dict[str, Any] = {
             "auth.test": slack_payload("api-auth-test"),
             "conversations.info": slack_payload("api-conversations-info"),
             "conversations.members": slack_payload("api-conversations-members"),
@@ -165,6 +172,8 @@ class FakeSlack(AsyncWebClient):
         answer = self.responses.get(api_method, {"ok": True})
         if isinstance(answer, list):  # a scripted sequence: one answer per call, the last repeats
             answer = answer.pop(0) if len(answer) > 1 else answer[0]
+        if isinstance(answer, BaseException):
+            raise answer
         return AsyncSlackResponse(
             client=self,
             http_verb="POST",
