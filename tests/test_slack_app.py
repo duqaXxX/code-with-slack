@@ -233,9 +233,13 @@ async def open_request(world: World) -> tuple[str, Any]:
 
 async def test_the_owner_approves(world: World) -> None:
     approval_id, pending = await open_request(world)
-    await world.dispatch(click("approval_allow", approval_id))
+    body = click("approval_allow", approval_id)
+    await world.dispatch(body)
     assert pending.future.done()
-    assert world.slack.calls_to("chat.update")[0]["text"] == texts.APPROVED.format(title="Bash: ls")
+    # The tool's card in the reply records the call: the request message goes away.
+    deleted = [(a["channel"], a["ts"]) for a in world.slack.calls_to("chat.delete")]
+    assert deleted == [(CHANNEL, body["message"]["ts"])]
+    assert not world.slack.calls_to("chat.update")
 
 
 @pytest.mark.parametrize("user", [{"id": STRANGER}, {"team_id": OTHER_TEAM}])

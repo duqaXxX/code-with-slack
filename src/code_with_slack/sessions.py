@@ -40,7 +40,6 @@ from code_with_slack import texts
 from code_with_slack.approvals import (
     Approvals,
     approval_blocks,
-    outcome_blocks,
     question_blocks,
     to_permission,
 )
@@ -244,7 +243,7 @@ class ChannelSession:
         if self._client is None or not self.busy:
             return False
         for pending in self._deps.approvals.deny_all(self.channel_id):
-            await self._mark_outcome(pending.message_ts, texts.DENIED.format(title=pending.title))
+            await self._delete_request(pending.message_ts)
         await self._client.interrupt()
         return True
 
@@ -502,15 +501,14 @@ class ChannelSession:
         except Exception as exc:
             logger.error("could not post in %s: %s", self.channel_id, describe(exc))
 
-    async def _mark_outcome(self, message_ts: str | None, text: str) -> None:
+    async def _delete_request(self, message_ts: str | None) -> None:
+        """Remove a decided request: the tool's card in the reply records what happened."""
         if message_ts is None:
             return
         try:
-            await self._deps.slack.chat_update(
-                channel=self.channel_id, ts=message_ts, text=text, blocks=outcome_blocks(text)
-            )
+            await self._deps.slack.chat_delete(channel=self.channel_id, ts=message_ts)
         except Exception as exc:
-            logger.error("could not update an approval in %s: %s", self.channel_id, describe(exc))
+            logger.error("could not remove a request in %s: %s", self.channel_id, describe(exc))
 
 
 class SessionManager:

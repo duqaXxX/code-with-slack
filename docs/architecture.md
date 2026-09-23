@@ -91,7 +91,8 @@ takes. A clarifying question (Claude Code's `AskUserQuestion` tool) arrives the 
 posted as one menu per question with **Submit** and **Skip**; the picked labels go back as the
 tool's answers. Each request has a random id that only its buttons carry; a click resolves it
 once, only from the channel it was posted in, and only after the identity and channel guards.
-`/cc stop` denies every request still pending in the channel.
+Once decided, the request message is deleted: the tool's card in the reply records the call.
+`/cc stop` denies every request still pending in the channel and deletes its message.
 
 ## Footer
 

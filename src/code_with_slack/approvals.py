@@ -182,10 +182,6 @@ def question_blocks(approval_id: str, questions: list[dict[str, Any]]) -> list[d
     return blocks
 
 
-def outcome_blocks(text: str) -> list[dict[str, Any]]:
-    return [{"type": "context", "elements": [{"type": "mrkdwn", "text": text[:SECTION_LIMIT]}]}]
-
-
 def read_answers(
     questions: list[dict[str, Any]], state_values: dict[str, Any]
 ) -> dict[str, str | list[str]] | None:

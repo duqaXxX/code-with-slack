@@ -213,6 +213,7 @@ async def test_stop_denies_pending_and_interrupts(harness_for: Callable[..., Har
     await asyncio.wait_for(turn.done.wait(), 2)
     assert h.clients[0].interrupts == 1
     assert isinstance(h.clients[0].permission_results[0], PermissionResultDeny)
+    assert len(h.slack.calls_to("chat.delete")) == 1
     assert await session.stop() is False
 
 
