@@ -10,3 +10,4 @@ All notable changes to this project are documented here. The format follows
 - Package scaffold: `pyproject.toml` with pinned dependencies, MIT license, docs test.
 - CI (sensitive-data scan; tests, types, lint), the published text scan, Dependabot for uv and
   GitHub Actions.
+- Configuration loading from `~/.config/code-with-slack/.env` with the mode 600 check.

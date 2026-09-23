@@ -5,6 +5,7 @@ Slack channel is one Claude Code session in one working directory. Nobody else c
 
 Status: under development. [docs/setup.md](docs/setup.md) describes the Slack app and the
 configuration the first release reads.
+How it fits together: [docs/architecture.md](docs/architecture.md).
 
 Powered by Claude, through the
 [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview).
