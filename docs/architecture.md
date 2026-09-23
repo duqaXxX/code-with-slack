@@ -20,3 +20,18 @@ the new one. A file that cannot be read stops the daemon instead of being replac
 `code_with_slack.lock.single_instance` holds an exclusive `flock` on the configuration directory
 itself. A second process fails to start. The kernel releases the lock when the holder exits, so
 a crash leaves no stale lock and no lock file.
+
+## Who may talk to it
+
+Every inbound path (a message, `/cc`, a button, the command picker) runs two checks of its own
+before anything reaches Claude Code:
+
+1. `code_with_slack.guards.is_owner`: the Slack user is the configured owner AND the workspace is
+   the one `auth.test` reported at startup. A click from a user whose home workspace differs is
+   refused.
+2. `code_with_slack.guards.ChannelGuard.refusal`: the channel is private, not shared with another
+   workspace, and its members are exactly the owner and the bot. It is read from Slack every
+   time, so inviting a third person stops the bot in that channel at once.
+
+Messages with a subtype (edits, deletions, joins) and messages from bots are ignored. A refusal
+reaches the owner as an ephemeral message; everyone else gets nothing.

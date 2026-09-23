@@ -13,3 +13,4 @@ All notable changes to this project are documented here. The format follows
 - Configuration loading from `~/.config/code-with-slack/.env` with the mode 600 check.
 - `state.json` with atomic writes, and a single-instance lock on the configuration directory.
 - Parsing of `/cc` subcommands and the `!` prefix.
+- Identity and channel guards on every inbound path.
