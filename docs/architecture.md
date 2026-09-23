@@ -69,3 +69,13 @@ The footer travels as a context block on `chat.stopStream`.
 If Slack refuses to start a stream, `code_with_slack.render.sinks.ReplySink` replays the reply
 into one message updated with `chat.update` at most once a second, and every later reply in the
 process does the same. If a stream fails after it started, only that reply moves to a new message.
+
+## Approvals
+
+When Claude Code asks for permission, the SDK calls `can_use_tool`. The session posts the
+request in the reply's thread with **Approve** and **Deny** buttons, and waits, for as long as it
+takes. A clarifying question (Claude Code's `AskUserQuestion` tool) arrives the same way and is
+posted as one menu per question with **Submit** and **Skip**; the picked labels go back as the
+tool's answers. Each request has a random id that only its buttons carry; a click resolves it
+once, only from the channel it was posted in, and only after the identity and channel guards.
+`/cc stop` denies every request still pending in the channel.
