@@ -484,6 +484,26 @@ async def test_a_query_crossing_a_notification_never_hangs(
     assert h.clients[0].queries == ["start it", "next", "after"]
 
 
+async def test_a_notification_after_the_owner_query_was_sent_leaves_the_turn_to_the_owner(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # Measured 2026-09-24: the owner's prompt reached the CLI queue first, then the task ended;
+    # the CLI reported the task inside the owner's turn and started no turn of its own.
+    first, notice, _ = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    second = await session.submit("next")
+    await until(lambda: h.clients[0].queries == ["start it", "next"])
+    h.clients[0].inject(notice)
+    await asyncio.sleep(0.05)
+    h.clients[0].inject(sdk_messages("tools"))
+    await asyncio.wait_for(second.done.wait(), 2)
+    replies = h.replies()
+    assert texts.REPLY_ABOVE not in replies[1]
+    assert not any(texts.BACKGROUND_NOTICE in r for r in replies)
+
+
 async def test_a_slack_network_error_does_not_stop_the_session(
     harness_for: Callable[..., Harness],
 ) -> None:

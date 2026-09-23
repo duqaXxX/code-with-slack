@@ -36,3 +36,5 @@ All notable changes to this project are documented here. The format follows
   its Claude Code process goes away; a stopped line says `Stopped`. The channel's latest reply
   lists what is still running above its footer. A background subagent's calls update its line
   instead of opening a reply.
+- A task that ends just after the owner's message was sent no longer takes over that message's
+  reply.

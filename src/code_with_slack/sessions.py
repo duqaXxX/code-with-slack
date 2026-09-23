@@ -352,7 +352,7 @@ class ChannelSession:
             await self._task_replies[message.task_id].feed(message)
             await self._show_running()
             if self._active is None and isinstance(message, TaskNotificationMessage):
-                self._expect_injected_turn()
+                self._notified()
             return
         parent = getattr(message, "parent_tool_use_id", None)
         origin = self._origin_of(parent) if parent else None
@@ -364,7 +364,7 @@ class ChannelSession:
             if isinstance(message, TASK_MESSAGES):
                 self._held.append(message)
                 if isinstance(message, TaskNotificationMessage):
-                    self._expect_injected_turn()
+                    self._notified()
                 return
             if not isinstance(message, TURN_MESSAGES):
                 return
@@ -374,6 +374,13 @@ class ChannelSession:
         if isinstance(message, ResultMessage):
             self._active = None
             await self._finish(active, message)
+
+    def _notified(self) -> None:
+        """A task ended while no turn runs. Claude Code starts a turn to report it, unless an
+        owner query already sits in its queue: that turn comes first and carries the report
+        (measured 2026-09-24, Claude Code 2.1.280), and no turn of its own follows."""
+        if not self._sent:
+            self._expect_injected_turn()
 
     def _expect_injected_turn(self) -> None:
         self._injected_expected = True
