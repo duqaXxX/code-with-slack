@@ -32,3 +32,6 @@ All notable changes to this project are documented here. The format follows
 - A reply appears as soon as the owner's message arrives, with a writing or waiting status; a
   divider separates it from the footer; the footer shows the effort level.
 - A blank line separates a reply's tool lines from its text.
+- A background task keeps its line in progress in the reply that started it, with a count of
+  running tasks above the footer, until it ends or its Claude Code process goes away. A stopped
+  line says `Stopped`.

@@ -177,6 +177,8 @@ class ChannelSession:
         self._background: set[asyncio.Task[None]] = set()
         # Task messages that arrived between turns, shown in the next turn's reply.
         self._held: list[Message] = []
+        # Tasks that outlived their turn, and the reply whose line each one keeps up to date.
+        self._task_replies: dict[str, TurnRenderer] = {}
         # Clear while a background notification's own turn is expected or running: the owner's
         # next query waits, so the two replies never share a thread.
         self._settled = asyncio.Event()
@@ -277,6 +279,7 @@ class ChannelSession:
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
         self._deps.approvals.deny_all(self.channel_id)
+        await self._stop_task_replies()
         if self._client is not None:
             client, self._client = self._client, None
             with contextlib.suppress(Exception):
@@ -338,6 +341,13 @@ class ChannelSession:
             return
         if isinstance(message, SystemMessage) and message.subtype == "init":
             self.cli_version = message.data.get("claude_code_version")
+        if isinstance(message, TASK_MESSAGES) and message.task_id in self._task_replies:
+            # The reply that started the task shows its end too; the report below still runs.
+            # The link holds until the notification, which follows a terminal task_updated and
+            # carries the summary a failed line shows; the process ending clears the rest.
+            await self._task_replies[message.task_id].feed(message)
+            if isinstance(message, TaskNotificationMessage):
+                del self._task_replies[message.task_id]
         if self._active is None:
             if isinstance(message, TASK_MESSAGES):
                 self._held.append(message)
@@ -402,7 +412,20 @@ class ChannelSession:
         await renderer.feed_notice(texts.BACKGROUND_NOTICE)
         for message in messages:
             await renderer.feed(message)
-        await renderer.close(None)
+        await self._close_reply(renderer, None)
+
+    async def _close_reply(self, renderer: TurnRenderer, footer: str | None) -> None:
+        await renderer.close(footer)
+        for task_id in renderer.running_tasks:
+            self._task_replies[task_id] = renderer
+
+    async def _stop_task_replies(self) -> None:
+        """The Claude Code process is going away with its tasks: no reply keeps showing one."""
+        renderers = set(self._task_replies.values())
+        self._task_replies.clear()
+        for renderer in renderers:
+            with contextlib.suppress(Exception):
+                await renderer.stop_running()
 
     def _sink(self) -> ReplySink:
         return ReplySink(self._deps.slack, channel=self.channel_id)
@@ -414,7 +437,7 @@ class ChannelSession:
             changed, effort = effort_change(result.result or "")
             if changed:
                 self.effort = effort
-            await active.renderer.close(await self._footer(result))
+            await self._close_reply(active.renderer, await self._footer(result))
         finally:
             await self._settle(active.turn, result)
 
@@ -451,7 +474,8 @@ class ChannelSession:
             if active is not None:
                 with contextlib.suppress(Exception):
                     await active.renderer.feed_error(texts.ERROR_REPLY.format(error=error))
-                    await active.renderer.close(None)
+                    await self._close_reply(active.renderer, None)
+            await self._stop_task_replies()
             for turn in sent:
                 await self._fail(turn, texts.ERROR_REPLY.format(error=error))
         finally:

@@ -6,7 +6,7 @@ import pytest
 
 from code_with_slack import texts
 from code_with_slack.render import sinks
-from code_with_slack.render.renderer import TaskUpdate
+from code_with_slack.render.renderer import STOPPED, TaskUpdate
 from code_with_slack.render.sinks import ReplySink
 from tests.fakes import CHANNEL, FakeSlack
 
@@ -90,6 +90,13 @@ async def test_a_failed_tool_shows_its_output(slack: FakeSlack) -> None:
     assert slack.message_texts() == ["✗ `Bash: ls missing` · Exit code 1"]
 
 
+async def test_a_stopped_tool_says_so(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.task(TaskUpdate("t1", "Bash: sleep 20", "complete", output=STOPPED))
+    await sink.finish([], None)
+    assert slack.message_texts() == ["✓ `Bash: sleep 20` · Stopped"]
+
+
 async def test_a_long_reply_continues_in_a_new_message(slack: FakeSlack) -> None:
     slack.responses["chat.postMessage"] = [
         {"ok": True, "ts": "1.1"},
@@ -143,3 +150,42 @@ async def test_opening_shows_the_status_before_any_content(slack: FakeSlack) -> 
     await sink.text("Hello.")
     await sink.finish([], None)
     assert len(slack.calls_to("chat.postMessage")) == 1
+
+
+async def test_a_finished_reply_counts_its_background_tasks_until_they_end(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.text("Started it.")
+    running = TaskUpdate("t1", "Bash: sleep 20", "in_progress", details="Running in background")
+    await sink.finish([running], "footer")
+    shown = last_blocks(slack)
+    assert [b["type"] for b in shown] == ["markdown", "context", "divider", "context"]
+    assert shown[1] == sinks.context_block(texts.BACKGROUND_RUNNING_ONE)
+    await sink.task(TaskUpdate("t1", "Bash: sleep 20", "complete"))
+    final = last_blocks(slack)  # written at once: no rewrite is scheduled after the end
+    assert [b["type"] for b in final] == ["markdown", "divider", "context"]
+    assert "✓ `Bash: sleep 20`" in final[0]["text"]
+    assert final[-1] == sinks.context_block("footer")
+    assert len(slack.calls_to("chat.postMessage")) == 1
+
+
+async def test_several_background_tasks_are_counted(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.finish(
+        [TaskUpdate(f"t{i}", f"Agent: job {i}", "in_progress") for i in range(3)], None
+    )
+    assert last_blocks(slack)[-1] == sinks.context_block(
+        texts.BACKGROUND_RUNNING_MANY.format(count=3)
+    )
+
+
+async def test_closing_several_lines_writes_the_reply_once(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.text("Working.")
+    await asyncio.sleep(0.05)
+    before = len(writes(slack))
+    await sink.finish(
+        [TaskUpdate(f"t{i}", f"Bash: step {i}", "complete") for i in range(5)], "footer"
+    )
+    assert len(writes(slack)) == before + 1
