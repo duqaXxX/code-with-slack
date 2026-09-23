@@ -41,21 +41,12 @@ not the `claude` on your `PATH`. Both read the same login, so logging in once wi
 4. Check the summary and choose **Create**.
 
 The manifest asks for private channels only (`groups:history`, `groups:read`,
-`message.groups`), `chat:write`, `commands` for `/cc`, and `assistant:write` for the agent
-features. Socket Mode is on, so the app needs no public URL and your machine opens
-no inbound port.
+`message.groups`), `chat:write`, and `commands` for `/cc`. Socket Mode is on, so the app
+needs no public URL and your machine opens no inbound port.
 
-### Turn on the agent experience
-
-In the app settings, open **Agents** and turn on **Agent experience**. Without it, Slack accepts
-the task updates code-with-slack streams but does not draw them: a reply shows its text and none
-of the tool, subagent or background-task cards.
-
-Leave **Slack Model Context Protocol (MCP) Server** off. It lets an app act on behalf of Slack
-users, which code-with-slack never needs.
-
-If Slack asks for a description, any short sentence will do. For **Suggested Prompts**, choose
-**Fixed** and leave the list empty.
+code-with-slack needs none of the app's agent features: leave **Agent experience** and the
+**Slack Model Context Protocol (MCP) Server** off in the app settings. The MCP server lets an app
+act on behalf of Slack users, which code-with-slack never needs.
 
 ### Install it and collect two tokens
 
@@ -234,10 +225,10 @@ The bot answers one person, and the rest of this list protects what that person 
 | In Slack | What it does |
 |---|---|
 | `/cc bind <path>` | Binds this channel to a directory under `ALLOWED_ROOT`. A new channel does nothing until bound |
-| a message | Sends a prompt to the channel's session; the reply streams in a thread under it |
+| a message | Sends a prompt to the channel's session; the reply appears below it in the channel and grows as Claude works |
 | `/cc <command> [args]` | Runs a Claude Code command, for example `/cc compact` or `/cc model opus` |
 | `/cc` | Lists the commands the session offers |
-| `!<command>` | The same as `/cc <command>`, for use inside a thread, where Slack runs no slash command |
+| `!<command>` | The same as `/cc <command>`, typed as a normal message |
 | `/cc bypass on` / `off` | Switches the channel's session to `bypassPermissions` and back; a restart turns it off |
 | `/cc status` | Shows the channel's directory, session and mode |
 | `/cc stop` | Stops the turn that is running and denies its pending approvals |
@@ -249,9 +240,16 @@ answer that it is not a valid command. Use `/cc compact` or `!compact`.
 `/cc status`, `/cc stop`, `/cc bind` and `/cc bypass` are code-with-slack's own. Claude Code's
 own `/status` is `!status`.
 
-Messages sent while a turn is running wait their turn; each reply streams under its own message.
-When a background task finishes, its report arrives under a new message, `Background task
-update`.
+A reply is one message in the channel, rewritten about once a second while Claude works: text
+in the order it is written, and a line per tool call where it happens (`…` while it runs, `✓` when
+it succeeds, `✗` with its output when it fails). The last line reads `Claude is writing…` until
+the reply is complete. A reply longer than one Slack message continues in the next one.
+
+An approval request is a message of its own below the reply; once you decide, it disappears and
+the tool's line in the reply records the call.
+
+Messages sent while a turn is running wait their turn; each gets its own reply. When a background
+task finishes, its report arrives as a reply that starts with `Background task update`.
 
 Every reply ends with a footer: `⚡ bypass` when bypass is on, the git branch, the model, the
 context used, the session's tokens, and the 5-hour and weekly limits (`5h N% ↻ 2h · 7d N%`),
@@ -262,7 +260,6 @@ which exist only with a claude.ai subscription.
 | Symptom | Cause |
 |---|---|
 | The bot does not see a channel | The channel is public, or the bot was not invited |
-| Replies show text but no task cards | **Agent experience** is off in the app settings |
 | `Claude Code is not logged in on the host` | Claude Code on the machine is logged out: run `claude`, then `/login` |
 | Some messages get no reply | A second instance is running and receiving part of the events |
 | `The previous session could not be resumed` | The stored session no longer exists (its transcript was deleted); the reply runs in a new session |

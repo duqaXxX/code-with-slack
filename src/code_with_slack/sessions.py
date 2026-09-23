@@ -52,7 +52,7 @@ from code_with_slack.footer import (
 )
 from code_with_slack.guards import Identity
 from code_with_slack.render.renderer import TurnRenderer, task_title
-from code_with_slack.render.sinks import ReplySink, StreamingSwitch, describe
+from code_with_slack.render.sinks import ReplySink, describe
 from code_with_slack.state import StateStore
 
 logger = logging.getLogger(__name__)
@@ -143,21 +143,18 @@ class SessionDeps:
     state: StateStore
     approvals: Approvals
     usage: UsageCache
-    streaming: StreamingSwitch
     client_factory: ClientFactory = default_client_factory
 
 
 @dataclass
 class Turn:
     prompt: str
-    thread_ts: str
     done: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 @dataclass
 class ActiveTurn:
     turn: Turn | None
-    thread_ts: str
     renderer: TurnRenderer
 
 
@@ -192,8 +189,8 @@ class ChannelSession:
     def busy(self) -> bool:
         return self._active is not None or bool(self._sent)
 
-    async def submit(self, prompt: str, thread_ts: str) -> Turn:
-        turn = Turn(prompt, thread_ts)
+    async def submit(self, prompt: str) -> Turn:
+        turn = Turn(prompt)
         self._queue.put_nowait(turn)
         if self._worker is None or self._worker.done():
             self._worker = asyncio.create_task(self._work(), name=f"worker-{self.channel_id}")
@@ -293,13 +290,13 @@ class ChannelSession:
                 await client.query(turn.prompt)
                 await turn.done.wait()
             except DirectoryUnavailable as exc:
-                await self._post(turn.thread_ts, exc.message)
+                await self._post(exc.message)
                 turn.done.set()
             except Exception as exc:  # a failed turn must not stop the channel's queue
                 logger.error("turn failed in %s: %s", self.channel_id, type(exc).__name__)
                 if turn in self._sent:
                     self._sent.remove(turn)
-                await self._post(turn.thread_ts, texts.ERROR_REPLY.format(error=type(exc).__name__))
+                await self._post(texts.ERROR_REPLY.format(error=type(exc).__name__))
                 turn.done.set()
 
     async def _read(self, client: ClaudeClient) -> None:
@@ -375,33 +372,28 @@ class ChannelSession:
         if self._expiry is not None:
             self._expiry.cancel()
         turn = None if injected else self._sent.popleft()
-        thread_ts = turn.thread_ts if turn else await self._root(texts.BACKGROUND_ROOT)
-        renderer = TurnRenderer(self._sink(thread_ts))
+        renderer = TurnRenderer(self._sink())
+        if turn is None:
+            await renderer.feed_notice(texts.BACKGROUND_NOTICE)
         if self._notice is not None:
             await renderer.feed_notice(self._notice)
             self._notice = None
         held, self._held = self._held, []
         for message in held:
             await renderer.feed(message)
-        return ActiveTurn(turn, thread_ts, renderer)
+        return ActiveTurn(turn, renderer)
 
     async def _standalone(self, messages: list[Message]) -> None:
         if not messages:
             return
-        renderer = TurnRenderer(self._sink(await self._root(texts.BACKGROUND_ROOT)))
+        renderer = TurnRenderer(self._sink())
+        await renderer.feed_notice(texts.BACKGROUND_NOTICE)
         for message in messages:
             await renderer.feed(message)
         await renderer.close(None)
 
-    def _sink(self, thread_ts: str) -> ReplySink:
-        return ReplySink(
-            self._deps.slack,
-            self._deps.streaming,
-            channel=self.channel_id,
-            thread_ts=thread_ts,
-            team_id=self._deps.identity.team_id,
-            user_id=self._deps.identity.owner_user_id,
-        )
+    def _sink(self) -> ReplySink:
+        return ReplySink(self._deps.slack, channel=self.channel_id)
 
     async def _finish(self, active: ActiveTurn, result: ResultMessage) -> None:
         try:
@@ -441,8 +433,8 @@ class ChannelSession:
                 with contextlib.suppress(Exception):
                     await active.renderer.feed_error(texts.ERROR_REPLY.format(error=error))
                     await active.renderer.close(None)
-            for turn in sent:
-                await self._post(turn.thread_ts, texts.ERROR_REPLY.format(error=error))
+            for _ in sent:
+                await self._post(texts.ERROR_REPLY.format(error=error))
         finally:
             for turn in waiting:
                 turn.done.set()
@@ -474,14 +466,9 @@ class ChannelSession:
             if questions
             else approval_blocks(approval_id, tool_name, tool_input, context)
         )
-        thread_ts = (
-            self._active.thread_ts
-            if self._active
-            else (self._sent[0].thread_ts if self._sent else None)
-        )
         try:
             posted = await self._deps.slack.chat_postMessage(
-                channel=self.channel_id, thread_ts=thread_ts, text=title, blocks=blocks
+                channel=self.channel_id, text=title, blocks=blocks
             )
             pending.message_ts = str(posted["ts"])
             decision = await pending.future
@@ -489,20 +476,14 @@ class ChannelSession:
             self._deps.approvals.discard(approval_id)
         return to_permission(decision, tool_input, questions)
 
-    async def _root(self, text: str) -> str:
-        posted = await self._deps.slack.chat_postMessage(channel=self.channel_id, text=text)
-        return str(posted["ts"])
-
-    async def _post(self, thread_ts: str, text: str) -> None:
+    async def _post(self, text: str) -> None:
         try:
-            await self._deps.slack.chat_postMessage(
-                channel=self.channel_id, thread_ts=thread_ts, text=text
-            )
+            await self._deps.slack.chat_postMessage(channel=self.channel_id, text=text)
         except Exception as exc:
             logger.error("could not post in %s: %s", self.channel_id, describe(exc))
 
     async def _delete_request(self, message_ts: str | None) -> None:
-        """Remove a decided request: the tool's card in the reply records what happened."""
+        """Remove a decided request: the tool's line in the reply records what happened."""
         if message_ts is None:
             return
         try:

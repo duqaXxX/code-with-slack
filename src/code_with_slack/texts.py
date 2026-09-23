@@ -27,7 +27,7 @@ STALE_SESSION = (
     "The previous session could not be resumed ({error}). This reply starts a new session."
 )
 ERROR_REPLY = "Claude Code reported an error: `{error}`"
-BACKGROUND_ROOT = "Background task update"
+BACKGROUND_NOTICE = "_Background task update_"
 COMMAND_ROOT = "`/{command}`"
 BIND_OK = "Bound this channel to `{directory}`. The next message starts a new session there."
 BIND_OUTSIDE = "`{path}` is not a directory under the allowed root `{root}`."

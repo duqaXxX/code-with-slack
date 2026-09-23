@@ -26,3 +26,6 @@ All notable changes to this project are documented here. The format follows
   exits releases the channel; a missing directory asks to bind again.
 - A directory macOS privacy protection denies gets a message that says how to grant access.
 - A decided approval request is removed from the thread; the tool's card records it.
+- Replies live in the channel's main window: one message per reply, rewritten about once a second,
+  with a line per tool call where it happens and a `Claude is writing…` line until the footer.
+  Native streaming in threads is gone, and so are the `assistant:write` scope and the agent view.

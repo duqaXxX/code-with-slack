@@ -12,9 +12,9 @@ Powered by Claude, through the
 
 ## What it does
 
-- A message in a bound channel is a prompt; the reply streams in a thread, with a card per tool
-  call, subagent and background task, and a footer with the branch, the model, the context used
-  and the usage limits.
+- A message in a bound channel is a prompt; the reply appears below it and grows as Claude
+  works, with a line per tool call, subagent and background task, and a footer with the branch,
+  the model, the context used and the usage limits.
 - Whatever Claude Code asks approval for arrives as **Approve** and **Deny** buttons.
 - `/cc <command>` or `!<command>` runs a Claude Code command; `/cc` alone lists them.
 - `/cc bypass on` switches the channel to `bypassPermissions` until `/cc bypass off` or a

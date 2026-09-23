@@ -1,4 +1,4 @@
-"""Turn SDK messages into what the owner sees: text as it is written, and one task card per tool
+"""Turn SDK messages into what the owner sees: text as it is written, and one task per tool
 call or background task. Generic over message types: no branch names a tool, so a tool Claude
 Code adds tomorrow renders with no change here."""
 
@@ -120,7 +120,7 @@ class TurnRenderer:
                 pass
 
     async def close(self, footer: str | None) -> None:
-        """Close every open card, then end the reply: Slack draws an open card as an error."""
+        """Close every open task, then end the reply: a finished reply shows nothing running."""
         interrupted = self.result is not None and self.result.terminal_reason in INTERRUPTED
         closing = [
             replace(card, status="complete", output=STOPPED if interrupted else card.output)

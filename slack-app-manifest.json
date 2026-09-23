@@ -16,11 +16,7 @@
         "usage_hint": "[command] [args] | bind <path> | bypass on|off",
         "should_escape": false
       }
-    ],
-    "agent_view": {
-      "agent_description": "Drives the Claude Code sessions on your own machine from private Slack channels.",
-      "suggested_prompts": []
-    }
+    ]
   },
   "oauth_config": {
     "scopes": {
@@ -28,8 +24,7 @@
         "groups:history",
         "groups:read",
         "chat:write",
-        "commands",
-        "assistant:write"
+        "commands"
       ]
     },
     "pkce_enabled": false
