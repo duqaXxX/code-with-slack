@@ -11,3 +11,4 @@ All notable changes to this project are documented here. The format follows
 - CI (sensitive-data scan; tests, types, lint), the published text scan, Dependabot for uv and
   GitHub Actions.
 - Configuration loading from `~/.config/code-with-slack/.env` with the mode 600 check.
+- `state.json` with atomic writes, and a single-instance lock on the configuration directory.

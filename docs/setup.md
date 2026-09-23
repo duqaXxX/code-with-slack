@@ -78,6 +78,12 @@ code-with-slack keeps its files in `~/.config/code-with-slack/`:
 | `.env` | you | the tokens and the settings below |
 | `state.json` | code-with-slack | for each channel, its directory and its Claude Code session id |
 
+`state.json` looks like this; you never need to edit it:
+
+```json
+{"version": 1, "channels": {"C0123456789": {"directory": "/home/dev/code/project", "session_id": "..."}}}
+```
+
 Create the directory and the file, readable by you only. code-with-slack refuses to start when
 `.env` is readable by anyone else, is a symbolic link, or belongs to another user, and when a
 token is of the wrong kind (`xoxb-` for the bot token, `xapp-` for the app-level token).
