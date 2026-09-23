@@ -3,6 +3,16 @@
 code-with-slack is one Python process. It holds a Slack Socket Mode connection and one Claude
 Agent SDK client per bound channel, all on one asyncio event loop.
 
+## Startup
+
+`code-with-slack` (`code_with_slack.__main__.main`) starts in this order: it loads the
+configuration, so a bad `.env` fails before anything else; takes the single-instance lock, so a
+second daemon fails before it opens a Socket Mode connection; reads `state.json`; calls
+`auth.test` for the workspace id and the bot user id; then opens the Socket Mode connection.
+`SIGTERM`, which `launchctl bootout` sends, and `SIGINT` close the connection, then every
+session. Logs go to standard error, which the LaunchAgent writes to
+`~/Library/Logs/code-with-slack/code-with-slack.log`.
+
 ## Configuration
 
 `code_with_slack.config.load_config` reads `~/.config/code-with-slack/.env` with
