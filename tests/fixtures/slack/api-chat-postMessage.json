@@ -1,0 +1,172 @@
+{
+  "ok": true,
+  "channel": "C000CHAN",
+  "ts": "1790192011.564799",
+  "message": {
+    "user": "U000BOT",
+    "type": "message",
+    "ts": "1790192011.564799",
+    "bot_id": "B000BOT",
+    "app_id": "A000APP",
+    "text": "Recording",
+    "team": "T000TEAM",
+    "bot_profile": {
+      "id": "B000BOT",
+      "app_id": "A000APP",
+      "user_id": "U000BOT",
+      "name": "alice",
+      "icons": {
+        "image_36": "https://avatars.slack-edge.com/2026-09-23/12137395412209_bd907266275be1f90792_36.jpg",
+        "image_48": "https://avatars.slack-edge.com/2026-09-23/12137395412209_bd907266275be1f90792_48.jpg",
+        "image_72": "https://avatars.slack-edge.com/2026-09-23/12137395412209_bd907266275be1f90792_72.jpg"
+      },
+      "deleted": false,
+      "updated": 1790185807,
+      "team_id": "T000TEAM"
+    },
+    "blocks": [
+      {
+        "type": "section",
+        "block_id": "T1un6",
+        "text": {
+          "type": "mrkdwn",
+          "text": "Recording: approval buttons",
+          "verbatim": false
+        }
+      },
+      {
+        "type": "actions",
+        "block_id": "approval",
+        "elements": [
+          {
+            "type": "button",
+            "action_id": "approval_allow",
+            "text": {
+              "type": "plain_text",
+              "text": "Approve",
+              "emoji": true
+            },
+            "style": "primary",
+            "value": "rec-1"
+          },
+          {
+            "type": "button",
+            "action_id": "approval_deny",
+            "text": {
+              "type": "plain_text",
+              "text": "Deny",
+              "emoji": true
+            },
+            "style": "danger",
+            "value": "rec-1"
+          }
+        ]
+      },
+      {
+        "type": "section",
+        "block_id": "q0",
+        "text": {
+          "type": "mrkdwn",
+          "text": "Colour?",
+          "verbatim": false
+        },
+        "accessory": {
+          "type": "static_select",
+          "action_id": "answer",
+          "options": [
+            {
+              "text": {
+                "type": "plain_text",
+                "text": "red",
+                "emoji": true
+              },
+              "value": "0"
+            },
+            {
+              "text": {
+                "type": "plain_text",
+                "text": "blue",
+                "emoji": true
+              },
+              "value": "1"
+            }
+          ]
+        }
+      },
+      {
+        "type": "section",
+        "block_id": "q1",
+        "text": {
+          "type": "mrkdwn",
+          "text": "Also?",
+          "verbatim": false
+        },
+        "accessory": {
+          "type": "multi_static_select",
+          "action_id": "answer",
+          "options": [
+            {
+              "text": {
+                "type": "plain_text",
+                "text": "a",
+                "emoji": true
+              },
+              "value": "0"
+            },
+            {
+              "text": {
+                "type": "plain_text",
+                "text": "b",
+                "emoji": true
+              },
+              "value": "1"
+            },
+            {
+              "text": {
+                "type": "plain_text",
+                "text": "c",
+                "emoji": true
+              },
+              "value": "2"
+            }
+          ]
+        }
+      },
+      {
+        "type": "actions",
+        "block_id": "question",
+        "elements": [
+          {
+            "type": "button",
+            "action_id": "question_submit",
+            "text": {
+              "type": "plain_text",
+              "text": "Submit",
+              "emoji": true
+            },
+            "value": "rec-2"
+          }
+        ]
+      },
+      {
+        "type": "section",
+        "block_id": "picker",
+        "text": {
+          "type": "mrkdwn",
+          "text": "Command",
+          "verbatim": false
+        },
+        "accessory": {
+          "type": "external_select",
+          "action_id": "picker_select",
+          "placeholder": {
+            "type": "plain_text",
+            "text": "Choose a command",
+            "emoji": true
+          },
+          "min_query_length": 0
+        }
+      }
+    ]
+  }
+}
