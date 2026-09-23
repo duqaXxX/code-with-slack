@@ -57,3 +57,15 @@ a tool Claude Code adds later renders as a card with no code change.
 
 When the turn ends, every card still open is closed first (with `Stopped` when the turn was
 interrupted), then the reply ends.
+
+## Writing to Slack
+
+Each reply streams into the thread of the message that asked for it, through slack-sdk's
+`chat_stream` (`chat.startStream`, `chat.appendStream`, `chat.stopStream`) with task cards in
+`timeline` mode. Cards finish with the status `complete`; Slack rejects `completed`. Every card
+still open when the turn ends is closed first, because Slack draws a card left open as an error.
+The footer travels as a context block on `chat.stopStream`.
+
+If Slack refuses to start a stream, `code_with_slack.render.sinks.ReplySink` replays the reply
+into one message updated with `chat.update` at most once a second, and every later reply in the
+process does the same. If a stream fails after it started, only that reply moves to a new message.

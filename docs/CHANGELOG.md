@@ -15,3 +15,4 @@ All notable changes to this project are documented here. The format follows
 - Parsing of `/cc` subcommands and the `!` prefix.
 - Identity and channel guards on every inbound path.
 - Generic rendering of SDK messages into streamed text and task cards.
+- Streaming replies with task cards, and the `chat.update` fallback.
