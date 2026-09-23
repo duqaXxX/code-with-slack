@@ -24,3 +24,4 @@ All notable changes to this project are documented here. The format follows
 - The `code-with-slack` entry point, started by a user LaunchAgent.
 - A Slack network failure drops a reply without stopping the session; a Claude Code process that
   exits releases the channel; a missing directory asks to bind again.
+- A directory macOS privacy protection denies gets a message that says how to grant access.

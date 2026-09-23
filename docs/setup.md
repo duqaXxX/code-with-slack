@@ -187,6 +187,26 @@ launchctl print gui/$(id -u)/local.code-with-slack
 
 The log holds what the service did, never the content of your messages.
 
+### Folders macOS protects
+
+macOS keeps `~/Documents`, `~/Desktop`, `~/Downloads` and a few other folders private to the
+apps you allowed. A program started from Terminal uses Terminal's permission; code-with-slack,
+started by launchd, has none, and Claude Code fails to start in a directory there. If your
+projects live in one of those folders, give Full Disk Access to the Python interpreter that runs
+code-with-slack. Print its path:
+
+```bash
+readlink -f "$(head -1 ~/.local/share/uv/tools/code-with-slack/bin/code-with-slack | cut -c3-)"
+```
+
+Then open **System Settings**, **Privacy & Security**, **Full Disk Access**, choose **+**, press
+**⌘⇧G**, paste the path, and turn the new entry on. Restart the service with
+`launchctl kickstart -k gui/$(id -u)/local.code-with-slack`.
+
+The permission belongs to that interpreter, which uv shares between the tools that use the same
+Python version: any of them started outside Terminal gets the same access. Projects outside the
+protected folders need no permission at all.
+
 ## Part 5: security checklist
 
 The bot answers one person, and the rest of this list protects what that person sees.
@@ -242,4 +262,5 @@ which exist only with a claude.ai subscription.
 | Some messages get no reply | A second instance is running and receiving part of the events |
 | `The previous session could not be resumed` | The stored session no longer exists (its transcript was deleted); the reply runs in a new session |
 | `The directory ... no longer exists` | The channel's directory was moved or deleted: bind the channel again with `/cc bind <path>` |
+| `macOS does not let code-with-slack read ...` | The directory is in a folder macOS protects: see Part 4, "Folders macOS protects" |
 | `another code-with-slack is running` in the log | A second instance tried to start; only one may run |

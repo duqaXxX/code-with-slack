@@ -432,3 +432,21 @@ async def test_a_missing_directory_asks_to_bind_again(
     assert h.clients == []
     posted = [a["text"] for a in h.slack.calls_to("chat.postMessage")]
     assert posted == [texts.DIRECTORY_MISSING.format(directory=gone)]
+
+
+async def test_an_unreadable_directory_says_how_to_grant_access(
+    harness_for: Callable[..., Harness], tmp_path: Path
+) -> None:
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    h = harness_for({})
+    h.state.bind(CHANNEL, locked)
+    locked.chmod(0)
+    try:
+        turn = await h.session().submit("hello", "1.1")
+        await asyncio.wait_for(turn.done.wait(), 2)
+    finally:
+        locked.chmod(0o755)
+    assert h.clients == []
+    posted = [a["text"] for a in h.slack.calls_to("chat.postMessage")]
+    assert posted == [texts.DIRECTORY_UNREADABLE.format(directory=locked)]

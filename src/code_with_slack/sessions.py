@@ -4,6 +4,7 @@ that turns the SDK's message stream into replies."""
 import asyncio
 import contextlib
 import logging
+import os
 from collections import deque
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
@@ -72,12 +73,26 @@ QUESTION_TOOL = "AskUserQuestion"
 INJECTED_TURN_WAIT = 30.0
 
 
-class DirectoryMissing(Exception):
-    """The channel's directory no longer exists: the owner has to bind the channel again."""
+class DirectoryUnavailable(Exception):
+    """The channel's directory cannot be used; `message` tells the owner what to do."""
+
+    def __init__(self, directory: Path, message: str) -> None:
+        super().__init__(message)
+        self.directory = directory
+        self.message = message
+
+
+class DirectoryMissing(DirectoryUnavailable):
+    def __init__(self, directory: Path) -> None:
+        super().__init__(directory, texts.DIRECTORY_MISSING.format(directory=directory))
+
+
+class DirectoryUnreadable(DirectoryUnavailable):
+    """macOS privacy protection (TCC) denies the daemon a folder such as ~/Documents: a process
+    started by launchd does not inherit the Terminal's permission, and the CLI fails to start."""
 
     def __init__(self, directory: Path) -> None:
-        super().__init__(f"directory missing: {directory}")
-        self.directory = directory
+        super().__init__(directory, texts.DIRECTORY_UNREADABLE.format(directory=directory))
 
 
 class ClaudeClient(Protocol):
@@ -191,6 +206,11 @@ class ChannelSession:
                 return self._client
             if not self.directory.is_dir():
                 raise DirectoryMissing(self.directory)
+            try:
+                with os.scandir(self.directory):
+                    pass
+            except PermissionError:
+                raise DirectoryUnreadable(self.directory) from None
             stored = self._deps.state.get(self.channel_id)
             session_id = stored.session_id if stored else None
             try:
@@ -273,9 +293,8 @@ class ChannelSession:
                 self._sent.append(turn)
                 await client.query(turn.prompt)
                 await turn.done.wait()
-            except DirectoryMissing as exc:
-                text = texts.DIRECTORY_MISSING.format(directory=exc.directory)
-                await self._post(turn.thread_ts, text)
+            except DirectoryUnavailable as exc:
+                await self._post(turn.thread_ts, exc.message)
                 turn.done.set()
             except Exception as exc:  # a failed turn must not stop the channel's queue
                 logger.error("turn failed in %s: %s", self.channel_id, type(exc).__name__)

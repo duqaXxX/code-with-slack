@@ -116,7 +116,9 @@ left out.
   and `!`) and the permission mode that `/cc bypass off` returns to.
 - If the stored session cannot be resumed (its transcript was deleted), the session id is
   cleared, a new session starts, and the reply opens with a line saying so. If the channel's
-  directory no longer exists, nothing starts and the reply asks to bind the channel again.
+  directory no longer exists, nothing starts and the reply asks to bind the channel again. If
+  macOS privacy protection denies the daemon the directory (a launchd service does not inherit
+  Terminal's access to `~/Documents`), nothing starts and the reply says how to grant access.
 - If the Claude Code process exits or its stream fails, the open reply ends with an error line,
   every waiting message is told, and the next message starts a new process. A reply Slack cannot
   take (a network failure) is dropped; the session and the running turn go on.

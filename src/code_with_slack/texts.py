@@ -19,6 +19,10 @@ REASON_UNREADABLE = "the bot cannot read its details"
 DIRECTORY_MISSING = (
     "The directory `{directory}` no longer exists. Bind this channel again with `/cc bind <path>`."
 )
+DIRECTORY_UNREADABLE = (
+    "macOS does not let code-with-slack read `{directory}`. Grant access in System Settings, "
+    "Privacy & Security, Full Disk Access (see docs/setup.md, Part 4)."
+)
 STALE_SESSION = (
     "The previous session could not be resumed ({error}). This reply starts a new session."
 )
