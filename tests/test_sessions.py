@@ -79,13 +79,8 @@ class Harness:
         return session
 
     def replies(self) -> list[str]:
-        """The first markdown text of every reply posted in the channel, in order."""
-        return [
-            b["text"]
-            for a in self.slack.calls_to("chat.postMessage")
-            for b in a.get("blocks") or []
-            if b.get("type") == "markdown"
-        ]
+        """The text every posted message ends up showing, in the order they were posted."""
+        return self.slack.message_texts()
 
     def written_text(self) -> str:
         return "\n".join(
@@ -335,7 +330,8 @@ async def test_owner_query_waits_for_an_expected_background_turn(
     await asyncio.wait_for(second.done.wait(), 2)
     assert h.clients[0].queries == ["start it", "next"]
     background = [texts.BACKGROUND_NOTICE in r for r in h.replies()]
-    assert background == [False, True, False]  # the owner's replies around the background one
+    # The second reply appeared (waiting) when it was sent, before the background report began.
+    assert background == [False, False, True]
 
 
 async def test_a_notification_with_no_turn_is_shown_and_releases_the_queue(
@@ -430,8 +426,7 @@ async def test_a_missing_directory_asks_to_bind_again(
     turn = await h.session().submit("hello")
     await asyncio.wait_for(turn.done.wait(), 2)
     assert h.clients == []
-    posted = [a["text"] for a in h.slack.calls_to("chat.postMessage")]
-    assert posted == [texts.DIRECTORY_MISSING.format(directory=gone)]
+    assert h.replies() == [texts.DIRECTORY_MISSING.format(directory=gone)]
 
 
 async def test_an_unreadable_directory_says_how_to_grant_access(
@@ -448,5 +443,57 @@ async def test_an_unreadable_directory_says_how_to_grant_access(
     finally:
         locked.chmod(0o755)
     assert h.clients == []
-    posted = [a["text"] for a in h.slack.calls_to("chat.postMessage")]
-    assert posted == [texts.DIRECTORY_UNREADABLE.format(directory=locked)]
+    assert h.replies() == [texts.DIRECTORY_UNREADABLE.format(directory=locked)]
+
+
+def statuses(h: Harness) -> list[str]:
+    """The status line (last context block) of every write, in order."""
+    return [
+        a["blocks"][-1]["elements"][0]["text"]
+        for m, a in h.slack.calls
+        if m in ("chat.postMessage", "chat.update")
+        and a.get("blocks")
+        and a["blocks"][-1]["type"] == "context"
+    ]
+
+
+async def test_a_reply_shows_that_claude_is_writing_right_away(
+    harness_for: Callable[..., Harness],
+) -> None:
+    ask = CanUseToolCall("Bash", {"command": "ls"})
+    h = harness_for({"turns": [[ask, *sdk_messages("tools")], sdk_messages("tools")]})
+    session = h.session()
+    first = await session.submit("first")
+    second = await session.submit("second")
+    await until(lambda: bool(h.approvals._pending))
+    assert statuses(h)[:2] == [texts.WRITING, texts.WAITING]
+    h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, Approve())
+    await asyncio.wait_for(second.done.wait(), 2)
+    assert first.done.is_set()
+    replies = [
+        a
+        for a in h.slack.calls_to("chat.postMessage")
+        if a.get("blocks", [{}])[0].get("type") != "section"
+    ]
+    assert len(replies) == 2  # one message per reply, the placeholder becomes the reply
+
+
+async def test_the_footer_follows_an_effort_set_from_slack(
+    harness_for: Callable[..., Harness],
+) -> None:
+    import dataclasses
+
+    turn = sdk_messages("usage")
+    result = turn[-1]
+    assert isinstance(result, ResultMessage)
+    effort_turn = [
+        *turn[:-1],
+        dataclasses.replace(
+            result, result="Set effort level to high (this session only): Comprehensive"
+        ),
+    ]
+    h = harness_for({"turns": [effort_turn, sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("/effort high")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("next")).done.wait(), 2)
+    assert "effort high" in statuses(h)[-1]

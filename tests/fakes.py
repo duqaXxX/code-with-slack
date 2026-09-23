@@ -149,6 +149,7 @@ class FakeSlack(AsyncWebClient):
     def __init__(self) -> None:
         super().__init__(token="xox" + "b-fake")
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.posted_ts: list[str] = []  # the ts of every chat.postMessage, in order
         # A response may be an exception: the call raises it, as a network failure would.
         self.responses: dict[str, Any] = {
             "auth.test": slack_payload("api-auth-test"),
@@ -174,6 +175,10 @@ class FakeSlack(AsyncWebClient):
             answer = answer.pop(0) if len(answer) > 1 else answer[0]
         if isinstance(answer, BaseException):
             raise answer
+        if api_method == "chat.postMessage":
+            if answer is self.responses.get(api_method):  # the default: a new ts for each message
+                answer = {**answer, "ts": f"1790000000.{len(self.posted_ts) + 1:06d}"}
+            self.posted_ts.append(str(answer["ts"]))
         return AsyncSlackResponse(
             client=self,
             http_verb="POST",
@@ -183,6 +188,23 @@ class FakeSlack(AsyncWebClient):
             headers={},
             status_code=200,
         ).validate()
+
+    def message_texts(self) -> list[str]:
+        """The markdown each posted message shows last, in the order the messages were posted."""
+        posted = iter(self.posted_ts)
+        order: list[str] = []
+        shown: dict[str, str] = {}
+        for method, args in self.calls:
+            if method == "chat.postMessage":
+                ts = next(posted)
+                order.append(ts)
+            elif method == "chat.update":
+                ts = args["ts"]
+            else:
+                continue
+            markdown = [b["text"] for b in args.get("blocks") or [] if b.get("type") == "markdown"]
+            shown[ts] = markdown[0] if markdown else shown.get(ts, "")
+        return [shown[ts] for ts in order]
 
     def calls_to(self, method: str) -> list[dict[str, Any]]:
         return [args for name, args in self.calls if name == method]

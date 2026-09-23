@@ -14,6 +14,7 @@ from typing import Any
 from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
+from code_with_slack import texts
 from code_with_slack.render.renderer import TaskUpdate
 
 logger = logging.getLogger(__name__)
@@ -23,7 +24,6 @@ DEBOUNCE_SECONDS = 1.0
 # place from pushing a full message over the limit.
 MESSAGE_LIMIT = 11_000
 FALLBACK_LIMIT = 3_000
-WRITING = "_Claude is writing…_"
 ICONS = {"pending": "·", "in_progress": "…", "complete": "✓", "error": "✗"}
 
 
@@ -74,9 +74,10 @@ def split(body: str) -> list[str]:
 
 class ReplySink:
     """One reply in the channel, written in the order things happen: text, then a line per tool
-    where it ran, updated in place. The last line says Claude is writing until the footer replaces
-    it. A reply past MESSAGE_LIMIT continues in a new message. Never raises: a write Slack refuses
-    is retried with the whole reply at the next flush, and the session goes on."""
+    where it ran, updated in place. The last line shows a status (Claude is writing, or waiting
+    for the previous reply) until a divider and the footer replace it. A reply past MESSAGE_LIMIT
+    continues in a new message. Never raises: a write Slack refuses is retried with the whole
+    reply at the next flush, and the session goes on."""
 
     def __init__(self, slack: AsyncWebClient, *, channel: str) -> None:
         self._slack = slack
@@ -87,6 +88,17 @@ class ReplySink:
         self._shown: list[list[dict[str, Any]]] = []  # the blocks each message shows now
         self._pending: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
+        self._status = texts.WRITING
+
+    async def open(self, status: str) -> None:
+        """Post the reply at once, showing only its status: the owner sees an answer is coming."""
+        self._status = status
+        await self._flush(final=False, footer=None)
+
+    async def announce(self, status: str) -> None:
+        """Change the status line now, without waiting for the next rewrite."""
+        self._status = status
+        await self._flush(final=False, footer=None)
 
     async def text(self, markdown: str) -> None:
         if self._parts and isinstance(self._parts[-1], _Text):
@@ -135,9 +147,10 @@ class ReplySink:
         messages: list[list[dict[str, Any]]] = [
             [{"type": "markdown", "text": chunk}] if chunk else [] for chunk in chunks
         ]
-        tail = footer if final else WRITING
-        if tail:
-            messages[-1].append(context_block(tail))
+        if not final:
+            messages[-1].append(context_block(self._status))
+        elif footer:
+            messages[-1] += [{"type": "divider"}, context_block(footer)]
         return messages
 
     async def _flush(self, *, final: bool, footer: str | None) -> None:
