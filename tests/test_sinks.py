@@ -53,7 +53,20 @@ async def test_tool_lines_sit_where_they_happen(slack: FakeSlack) -> None:
     await sink.text("Then I read the README.")
     await sink.finish([], None)
     (body,) = slack.message_texts()
-    assert body == "First I list the files.\n✓ `Bash: ls`\nThen I read the README."
+    assert body == "First I list the files.\n\n✓ `Bash: ls`\n\nThen I read the README."
+
+
+async def test_text_that_already_breaks_a_paragraph_gets_no_extra_blank_line(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.text("Checking.\n\n")
+    await sink.task(TaskUpdate("t1", "Bash: ls", "complete"))
+    await sink.task(TaskUpdate("t2", "Read: README.md", "complete"))
+    await sink.text("\nDone.")
+    await sink.finish([], None)
+    (body,) = slack.message_texts()
+    assert body == "Checking.\n\n✓ `Bash: ls`\n✓ `Read: README.md`\n\nDone."
 
 
 async def test_a_running_tool_and_the_writing_line_show_until_the_end(slack: FakeSlack) -> None:

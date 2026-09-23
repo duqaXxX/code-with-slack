@@ -31,3 +31,4 @@ All notable changes to this project are documented here. The format follows
   Native streaming in threads is gone, and so are the `assistant:write` scope and the agent view.
 - A reply appears as soon as the owner's message arrives, with a writing or waiting status; a
   divider separates it from the footer; the footer shows the effort level.
+- A blank line separates a reply's tool lines from its text.

@@ -132,14 +132,18 @@ class ReplySink:
         await self._flush(final=False, footer=None)
 
     def _body(self) -> str:
+        # A blank line between text and a run of tool lines makes them separate markdown
+        # paragraphs; consecutive tool lines stay one compact paragraph.
         body = ""
+        previous: _Text | _Tool | None = None
         for part in self._parts:
+            if previous is not None and type(part) is not type(previous):
+                body = body.rstrip("\n") + "\n\n"
             if isinstance(part, _Text):
-                body += part.text
+                body += part.text.lstrip("\n") if isinstance(previous, _Tool) else part.text
             else:
-                if body and not body.endswith("\n"):
-                    body += "\n"
                 body += part.line() + "\n"
+            previous = part
         return body.rstrip("\n")
 
     def _render(self, final: bool, footer: str | None) -> list[list[dict[str, Any]]]:
