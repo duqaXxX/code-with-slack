@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "url": "alice",
+  "team": "Example",
+  "user": "codewithslack",
+  "team_id": "T000TEAM",
+  "user_id": "U000BOT",
+  "bot_id": "B000BOT"
+}

@@ -1,0 +1,11 @@
+{
+  "team_id": "T000TEAM",
+  "team_domain": "alice",
+  "channel_id": "C000CHAN",
+  "channel_name": "cc-project",
+  "user_id": "U000ALICE",
+  "user_name": "alice",
+  "command": "/cc",
+  "text": "usage",
+  "api_app_id": "A000APP"
+}
