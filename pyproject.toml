@@ -1,0 +1,46 @@
+[project]
+name = "code-with-slack"
+version = "0.1.0"
+description = "Drive the Claude Code sessions on your own Mac from private Slack channels. Powered by Claude."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp==3.14.3",
+    "claude-agent-sdk==0.2.158",
+    "python-dotenv==1.2.3",
+    "slack-bolt==1.30.0",
+    "slack-sdk==3.44.1",
+]
+
+[project.scripts]
+code-with-slack = "code_with_slack.__main__:main"
+
+[dependency-groups]
+dev = [
+    "mypy==2.3.1",
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "ruff==0.16.8",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.18,<0.13"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "ASYNC", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
