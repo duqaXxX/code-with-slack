@@ -9,6 +9,10 @@ configuration the first release reads.
 Powered by Claude, through the
 [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview).
 
+## Security and contributing
+
+See [SECURITY.md](SECURITY.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Changes
 
 See [docs/CHANGELOG.md](docs/CHANGELOG.md).
