@@ -142,6 +142,9 @@ left out.
 - A background task that finishes between turns sends its notification while the session is
   idle, then Claude Code starts a turn of its own to report it. That turn gets a reply of its own
   that starts with `Background task update`, and the next queued message waits for it to finish.
+  When a message was already sent and waits for its turn, that turn comes first and Claude Code
+  reports the task inside it, with no turn of its own (measured on Claude Code 2.1.280), so
+  nothing waits.
   If no turn follows within 30 seconds, the queue moves on; a notification for a task no reply
   tracks is then posted on its own. When a queued message and a notification cross, the result's `origin` tells whose turn it
   was, and the queue is put back in order; that one reply can carry the other's label.
