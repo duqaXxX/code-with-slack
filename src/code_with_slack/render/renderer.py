@@ -129,6 +129,14 @@ class TurnRenderer:
         ]
         await self._sink.finish(closing, footer)
 
+    async def feed_notice(self, text: str) -> None:
+        """A note from the daemon itself, written before Claude Code's reply."""
+        await self._text(text + "\n\n")
+
+    async def feed_error(self, text: str) -> None:
+        """A failure outside the SDK stream (the client died): say so in the reply."""
+        await self._text("\n\n" + text)
+
     async def _assistant(self, message: AssistantMessage) -> None:
         if message.error == "authentication_failed":
             self.auth_failed = True

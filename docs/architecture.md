@@ -89,3 +89,33 @@ channel's directory, the model and the context percentage from the SDK's
 long-lived client and cached for five minutes; a rate-limit event from the SDK invalidates the
 cache. The limit fields exist only with a claude.ai subscription. A field that cannot be read is
 left out.
+
+## Sessions
+
+`code_with_slack.sessions.SessionManager` keeps one `ChannelSession` per bound channel.
+
+- The Claude Agent SDK client is created on first use, with the channel's directory as its
+  working directory, `resume` set to the stored session id, the owner's own settings
+  (`setting_sources` user, project and local), streaming of partial messages, the approval
+  callback, and `--allow-dangerously-skip-permissions`, which makes `/cc bypass on` possible
+  without turning it on.
+- After connecting, `get_server_info()` gives the commands the session offers (for the picker
+  and `!`) and the permission mode that `/cc bypass off` returns to.
+- If the stored session cannot be resumed (its transcript was deleted or its directory moved),
+  the session id is cleared, a new session starts, and the reply opens with a line saying so.
+- Messages are queued and run one at a time; each reply streams in the thread of its message.
+  `/cc stop` interrupts the running turn and denies its pending approvals.
+- One reader task follows the SDK's message stream for the life of the client. On each result
+  the session id is stored (so `/clear`, which starts a new session, is recorded), the footer is
+  built and the reply closed.
+- A background task that finishes between turns sends its notification while the session is
+  idle, then Claude Code starts a turn of its own to report it. That turn is posted under a new
+  root message, `Background task update`, and the next queued message waits for it to finish. If
+  no turn follows within 30 seconds, the notification is posted on its own and the queue moves
+  on. When a queued message and a notification cross, the result's `origin` tells whose turn it
+  was, and the queue is put back in order; that one reply can land in the other thread.
+- Logs carry channel ids and exception type names, never prompt or reply text.
+
+Bypass is a field of the in-memory session and nothing else: `state.json` never holds it, and a
+restart brings every channel back to Claude Code's own mode. That matches Claude Code, whose
+`--resume` does not restore `bypassPermissions` either.
