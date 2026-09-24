@@ -170,8 +170,9 @@ class TurnRenderer:
             await self._task_ended(task_id, "stopped", None)
 
     async def feed_notice(self, text: str) -> None:
-        """A note from the daemon itself, written before Claude Code's reply."""
-        await self._text(text + "\n\n")
+        """A note from the daemon itself, written before Claude Code's reply. It is not Claude's
+        text, so a local command's result still shows after it."""
+        await self._sink.text(text + "\n\n")
 
     async def feed_error(self, text: str) -> None:
         """A failure outside the SDK stream (the client died): say so in the reply."""

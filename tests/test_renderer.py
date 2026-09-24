@@ -226,3 +226,13 @@ async def test_a_silent_turn_that_was_stopped_says_so() -> None:
     stopped = dataclasses.replace(silent_result(), terminal_reason="aborted_streaming")
     sink, _ = await render([stopped])
     assert "".join(sink.texts) == texts.STOPPED
+
+
+async def test_a_notice_does_not_hide_a_local_command_s_result() -> None:
+    sink = RecordingSink()
+    renderer = TurnRenderer(sink)
+    await renderer.feed_notice("The previous session could not be resumed.")
+    for message in sdk_messages("usage"):
+        await renderer.feed(message)
+    assert renderer.result is not None and renderer.result.result
+    assert renderer.result.result in "".join(sink.texts)
