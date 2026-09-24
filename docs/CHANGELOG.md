@@ -41,3 +41,5 @@ All notable changes to this project are documented here. The format follows
 - Commands are typed as `!word` messages: `!help [text]` lists the daemon's words and the
   session's Claude Code commands, filtered by the text when one is given, and `!bind`, `!bypass`, `!status` and `!stop` replace the `/cc`
   subcommands. The `/cc` slash command, its command picker and the `commands` scope are gone.
+- A compaction shows the tokens before and after, and a turn with no text says it is done
+  instead of leaving the reply empty.

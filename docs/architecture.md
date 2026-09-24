@@ -62,9 +62,12 @@ a tool Claude Code adds later gets its line in the reply with no code change.
 | `TaskNotificationMessage`, a terminal `TaskUpdatedMessage` | the line completes, shows an error when the task failed, or completes with `Stopped` |
 | `AssistantMessage.error` `authentication_failed` | a note asking to run `claude` and `/login` on the host |
 | any other `AssistantMessage.error` | `Claude Code reported an error` with the error code |
+| `SystemMessage` `compact_boundary` | `Compacted the conversation: 15.0k → 2.0k tokens.`, from its `compact_metadata`, whether the owner asked (`!compact`) or Claude Code compacted on its own |
 | `ResultMessage` | its text, when nothing else was written (local commands such as `/usage` send no deltas) |
 
-When the turn ends, every line still in progress is closed first (with `Stopped` when the turn
+A turn that ends with no text and no tool line says `Done. Claude Code returned no text.`, or
+`Stopped the current turn.` when it was interrupted, so no reply is left empty. When the turn
+ends, every line still in progress is closed first (with `Stopped` when the turn
 was interrupted), then the reply ends. A task that started and has not ended is the exception:
 its line stays open with "Running in background". `TurnRenderer.running_tasks` lists them. Only
 the task lifecycle messages decide this, because a subagent can move to the background with no

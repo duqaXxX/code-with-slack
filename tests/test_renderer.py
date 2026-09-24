@@ -3,7 +3,8 @@ import re
 from pathlib import Path
 
 import pytest
-from claude_agent_sdk import AssistantMessage, Message
+from claude_agent_sdk import AssistantMessage, Message, ResultMessage
+from claude_agent_sdk._internal.message_parser import parse_message
 from claude_agent_sdk.types import TaskNotificationMessage, TaskUpdatedMessage, ToolUseBlock
 
 from code_with_slack import texts
@@ -180,3 +181,48 @@ async def test_feed_notice_opens_the_reply() -> None:
     renderer = TurnRenderer(sink)
     await renderer.feed_notice("The previous session could not be resumed.")
     assert sink.texts == ["The previous session could not be resumed.\n\n"]
+
+
+# The compact_boundary payload of a /compact turn, as the bundled CLI 2.1.280 sent it
+# (recorded 2026-09-24 by actions/scripts/2026-09-24-compact-stream-probe.py; ids synthetic).
+COMPACT_BOUNDARY = {
+    "type": "system",
+    "subtype": "compact_boundary",
+    "session_id": "00000000-0000-0000-0000-000000000001",
+    "uuid": "00000000-0000-0000-0000-000000000002",
+    "compact_metadata": {
+        "trigger": "manual",
+        "pre_tokens": 15022,
+        "post_tokens": 2035,
+        "cumulative_dropped_tokens": 12987,
+        "duration_ms": 15136,
+    },
+    "logical_parent_uuid": "00000000-0000-0000-0000-000000000003",
+}
+
+
+def silent_result() -> ResultMessage:
+    """A recorded result with no text, as /compact ends (`result` was '')."""
+    result = next(m for m in sdk_messages("tools") if isinstance(m, ResultMessage))
+    return dataclasses.replace(result, result="")
+
+
+async def test_a_compaction_says_how_many_tokens_it_saved() -> None:
+    sink, _ = await render([parse_message(COMPACT_BOUNDARY), silent_result()])
+    assert "".join(sink.texts).strip() == texts.COMPACTED.format(before="15.0k", after="2.0k")
+
+
+async def test_a_turn_with_no_text_and_no_tool_says_it_is_done() -> None:
+    sink, _ = await render([silent_result()])
+    assert "".join(sink.texts) == texts.NO_OUTPUT
+
+
+async def test_a_turn_with_only_tool_lines_gets_no_filler() -> None:
+    sink, _ = await render([m for m in sdk_messages("tools") if not isinstance(m, ResultMessage)])
+    assert texts.NO_OUTPUT not in "".join(sink.texts)
+
+
+async def test_a_silent_turn_that_was_stopped_says_so() -> None:
+    stopped = dataclasses.replace(silent_result(), terminal_reason="aborted_streaming")
+    sink, _ = await render([stopped])
+    assert "".join(sink.texts) == texts.STOPPED
