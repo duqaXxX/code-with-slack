@@ -126,3 +126,10 @@ async def test_the_guard_asks_slack_every_time(slack: FakeSlack) -> None:
     await guard.refusal(CHANNEL)
     slack.responses["conversations.members"] = {"ok": True, "members": [OWNER, BOT, STRANGER]}
     assert await guard.refusal(CHANNEL) == texts.REASON_MEMBERS
+
+
+async def test_a_network_failure_reading_the_channel_is_a_refusal(slack: FakeSlack) -> None:
+    import aiohttp
+
+    slack.responses["conversations.info"] = aiohttp.ClientConnectionError("network down")
+    assert await ChannelGuard(slack, IDENTITY).refusal(CHANNEL) == texts.REASON_UNREADABLE

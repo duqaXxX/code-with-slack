@@ -79,3 +79,9 @@ def test_the_file_holds_directory_and_session_only(tmp_path: Path) -> None:
     data = json.loads(path.read_text())
     entry = {"directory": str(tmp_path), "session_id": "s"}
     assert data == {"version": 1, "channels": {"C000CHAN": entry}}
+
+
+def test_a_session_for_an_unbound_channel_is_not_recorded(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.json")
+    store.set_session("C000NONE", "68da9311-c5e1-4465-a7e5-75d74e30aaa4")
+    assert store.get("C000NONE") is None

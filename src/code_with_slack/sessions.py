@@ -31,6 +31,7 @@ from claude_agent_sdk.types import (
     HookMatcher,
     PermissionMode,
     PermissionResult,
+    PermissionResultDeny,
     RateLimitEvent,
     SystemMessage,
     TaskNotificationMessage,
@@ -161,7 +162,9 @@ def client_options(
 
 def resolve_directory(raw: str, root: Path) -> Path | None:
     """The real directory `raw` names, if it exists under `root`; guards against a typo only."""
-    path = Path(raw).expanduser().resolve()
+    # A relative path is read under the root: the daemon's own working directory means nothing
+    # to the owner (launchd starts it in `/`).
+    path = (root / Path(raw).expanduser()).resolve()
     if not path.is_dir():
         return None
     return path if path == root or root in path.parents else None
@@ -199,6 +202,7 @@ class ChannelSession:
         self._reader: asyncio.Task[None] | None = None
         self._worker: asyncio.Task[None] | None = None
         self._queue: asyncio.Queue[Turn] = asyncio.Queue()
+        self._taken: Turn | None = None  # out of the queue, not sent yet
         self._sent: deque[Turn] = deque()
         self._active: ActiveTurn | None = None
         self._connect_lock = asyncio.Lock()
@@ -268,11 +272,16 @@ class ChannelSession:
                 reason = exc.errors[0] if exc.errors else (exc.subtype or "unknown error")
                 self._notice = texts.STALE_SESSION.format(error=reason)
                 client = await self._connect(None)
-            info = await client.get_server_info() or {}
-            self.commands = list(info.get("commands") or [])
-            self.native_mode = str(info.get("current_permission_mode") or "default")
-            if self.bypass:
-                await client.set_permission_mode("bypassPermissions")
+            try:
+                info = await client.get_server_info() or {}
+                self.commands = list(info.get("commands") or [])
+                self.native_mode = str(info.get("current_permission_mode") or "default")
+                if self.bypass:
+                    await client.set_permission_mode("bypassPermissions")
+            except BaseException:
+                # A client nobody holds would leave its Claude Code process running.
+                await self._disconnect(client)
+                raise
             self._client = client
             self.effort = None  # a resumed session runs at the settings' level (measured)
             self._reader = asyncio.create_task(self._read(client), name=f"reader-{self.channel_id}")
@@ -311,13 +320,18 @@ class ChannelSession:
     async def close(self, reason: str = texts.ENDED_SHUTDOWN) -> None:
         """Stop the session. Every reply still waiting (running, sent or queued) ends with a line
         saying why, so none is left showing that Claude is writing."""
-        for task in (self._worker, self._reader, self._expiry):
-            if task is not None:
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
+        # Every task is cancelled before any is awaited: a reader left running while the worker
+        # stops could still end a turn and record its session after a rebind.
+        tasks = [t for t in (self._worker, self._reader, self._expiry) if t is not None]
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
         self._deps.approvals.deny_all(self.channel_id)
-        queued: list[Turn] = []
+        # A turn the worker took but had not sent yet is in no queue.
+        queued: list[Turn] = [self._taken] if self._taken is not None else []
+        self._taken = None
         while not self._queue.empty():
             queued.append(self._queue.get_nowait())
         line = texts.ENDED.format(reason=reason)
@@ -327,8 +341,13 @@ class ChannelSession:
                 await self._fail(turn, line)
         if self._client is not None:
             client, self._client = self._client, None
-            with contextlib.suppress(Exception):
-                await client.disconnect()
+            await self._disconnect(client)
+
+    async def _disconnect(self, client: ClaudeClient) -> None:
+        try:
+            await client.disconnect()
+        except Exception as exc:
+            logger.warning("could not close Claude Code in %s: %s", self.channel_id, describe(exc))
 
     async def _connect(self, session_id: str | None) -> ClaudeClient:
         options = client_options(self.directory, session_id, self._can_use_tool, self._on_stop)
@@ -339,6 +358,7 @@ class ChannelSession:
     async def _work(self) -> None:
         while True:
             turn = await self._queue.get()
+            self._taken = turn
             try:
                 client = await self.ensure_connected()
                 refresh = asyncio.create_task(self._deps.usage.refresh_if_stale())
@@ -346,11 +366,14 @@ class ChannelSession:
                 refresh.add_done_callback(self._background.discard)
                 await self._settled.wait()
                 self._sent.append(turn)
+                self._taken = None
                 await client.query(turn.prompt)
                 await turn.done.wait()
             except DirectoryUnavailable as exc:
+                self._taken = None
                 await self._fail(turn, exc.message)
             except Exception as exc:  # a failed turn must not stop the channel's queue
+                self._taken = None
                 logger.error("turn failed in %s: %s", self.channel_id, type(exc).__name__)
                 if turn in self._sent:
                     self._sent.remove(turn)
@@ -562,7 +585,14 @@ class ChannelSession:
             changed, effort = effort_change(result.result or "")
             if changed:
                 self.effort = effort
-            await self._close_reply(active.renderer, await self._footer(result))
+            try:
+                footer = await self._footer(result)
+            except Exception as exc:  # the reply still ends, with no footer
+                logger.warning(
+                    "could not build the footer in %s: %s", self.channel_id, describe(exc)
+                )
+                footer = None
+            await self._close_reply(active.renderer, footer)
         finally:
             await self._settle(active.turn, result)
 
@@ -611,8 +641,12 @@ class ChannelSession:
     async def _footer(self, result: ResultMessage) -> str | None:
         context: dict[str, Any] = {}
         if self._client is not None:
-            with contextlib.suppress(Exception):
+            try:
                 context = dict(await self._client.get_context_usage())
+            except Exception as exc:  # model and context are left out of the footer
+                logger.warning(
+                    "could not read the context usage in %s: %s", self.channel_id, describe(exc)
+                )
         data = FooterData(
             bypass=self.bypass,
             branch=await git_branch(self.directory),
@@ -645,10 +679,18 @@ class ChannelSession:
             else approval_blocks(approval_id, tool_name, tool_input, context)
         )
         try:
-            posted = await self._deps.slack.chat_postMessage(
-                channel=self.channel_id, text=title, blocks=blocks
-            )
-            pending.message_ts = str(posted["ts"])
+            try:
+                posted = await self._deps.slack.chat_postMessage(
+                    channel=self.channel_id, text=title, blocks=blocks
+                )
+            except Exception as exc:
+                # Nobody can answer a request that was never shown: deny it, and say why.
+                logger.error(
+                    "could not post an approval request in %s: %s", self.channel_id, describe(exc)
+                )
+                return PermissionResultDeny(message=texts.APPROVAL_UNPOSTED)
+            if not self._deps.approvals.posted(approval_id, str(posted["ts"])):
+                await self._delete_request(str(posted["ts"]))  # decided while it was posted
             decision = await pending.future
         finally:
             self._deps.approvals.discard(approval_id)

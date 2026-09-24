@@ -4,6 +4,7 @@ Every inbound path calls these on its own: a button is never trusted because of 
 sits on, and the channel is re-read from Slack each time, since membership can change.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -11,6 +12,8 @@ from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
 from code_with_slack import texts
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -57,7 +60,12 @@ class ChannelGuard:
         try:
             info = (await self._slack.conversations_info(channel=channel_id))["channel"]
             members = await self._slack.conversations_members(channel=channel_id, limit=10)
-        except SlackApiError:
+        except Exception as exc:  # a network failure too: an unread channel is never trusted
+            logger.warning(
+                "could not read channel %s: %s",
+                channel_id,
+                exc.response.get("error") if isinstance(exc, SlackApiError) else type(exc).__name__,
+            )
             return texts.REASON_UNREADABLE
         if not info.get("is_private") or info.get("is_im") or info.get("is_mpim"):
             return texts.REASON_NOT_PRIVATE

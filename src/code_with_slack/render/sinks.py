@@ -21,6 +21,9 @@ from code_with_slack.render.renderer import STOPPED, TaskUpdate
 logger = logging.getLogger(__name__)
 
 DEBOUNCE_SECONDS = 1.0
+# The final write has no next rewrite to fix it: one that fails for any reason but its content
+# is tried once more after this pause (slack-sdk has already retried a rate limit by then).
+FINAL_RETRY_SECONDS = 10.0
 # A markdown block holds at most 12,000 characters; the margin keeps a tool line that grows in
 # place from pushing a full message over the limit.
 MESSAGE_LIMIT = 11_000
@@ -156,8 +159,8 @@ class ReplySink:
     """One reply in the channel, written in the order things happen: text, then a line per tool
     where it ran, updated in place. The last line shows a status (Claude is writing, or waiting
     for the previous reply) until a divider and the footer replace it. A reply past MESSAGE_LIMIT
-    continues in a new message. Never raises: a write Slack refuses is retried with the whole
-    reply at the next flush, and the session goes on."""
+    continues in a new message. Never raises: a write that fails is retried with the whole reply
+    at the next flush, the final one after FINAL_RETRY_SECONDS, and the session goes on."""
 
     def __init__(self, slack: AsyncWebClient, *, channel: str) -> None:
         self._slack = slack
@@ -167,6 +170,7 @@ class ReplySink:
         self._messages: list[str] = []  # ts of each message this reply has posted
         self._shown: list[list[dict[str, Any]]] = []  # the blocks each message shows now
         self._pending: asyncio.Task[None] | None = None
+        self._retry: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
         self._status = texts.WRITING
         self._finished = False
@@ -226,7 +230,12 @@ class ReplySink:
         if self._pending is not None:
             self._pending.cancel()
         self._finished, self._footer = True, footer
-        await self._flush(final=True, footer=footer)
+        if not await self._flush(final=True, footer=footer):
+            self._retry = asyncio.create_task(self._retry_final())
+
+    async def _retry_final(self) -> None:
+        await asyncio.sleep(FINAL_RETRY_SECONDS)
+        await self._flush(final=True, footer=self._footer)
 
     async def _changed(self) -> None:
         if self._finished:
@@ -242,7 +251,9 @@ class ReplySink:
 
     async def _later(self) -> None:
         await asyncio.sleep(DEBOUNCE_SECONDS)
-        await self._flush(final=False, footer=None)
+        # Shielded: `finish` cancels a pending rewrite, and a write cancelled after Slack took it
+        # would lose the message's ts. `finish` waits for the lock instead.
+        await asyncio.shield(self._flush(final=False, footer=None))
 
     def _blocks(self, final: bool) -> list[dict[str, Any]]:
         """The reply's body in order: Claude's text as markdown, each run of tool lines as
@@ -308,8 +319,11 @@ class ReplySink:
         self._shown[index] = []
         return True
 
-    async def _flush(self, *, final: bool, footer: str | None) -> None:
+    async def _flush(self, *, final: bool, footer: str | None) -> bool:
+        """Write what changed; False when a write failed and the reply is not as rendered."""
         async with self._lock:
+            if self._finished and not final:
+                return True  # a draft that waited for the lock must not undo the final form
             rendered = self._render(final, footer)
             if rendered == [[]]:
                 rendered = []  # nothing left to show: the extra-message removal below takes it
@@ -343,13 +357,14 @@ class ReplySink:
                         and await self._write_plain(index, blocks)
                     ):
                         continue  # the later messages still need their final form
-                    return
+                    return False
             # Folding at the end can make the reply shorter: a message it no longer needs goes.
             while len(self._messages) > len(rendered):
                 try:
                     await self._slack.chat_delete(channel=self._channel, ts=self._messages[-1])
                 except Exception as exc:
                     logger.warning("could not remove a reply's extra message: %s", describe(exc))
-                    return
+                    return False
                 self._messages.pop()
                 self._shown.pop()
+        return True

@@ -107,11 +107,11 @@ def terminal_status(status: str) -> tuple[TaskStatus, str | None]:
 class TurnRenderer:
     def __init__(self, sink: Sink) -> None:
         self._sink = sink
-        self._cards: dict[str, TaskUpdate] = {}
+        self._lines: dict[str, TaskUpdate] = {}
         self._root_of: dict[str, str] = {}
         self._children: dict[str, list[str]] = {}
-        self._card_of_task: dict[str, str] = {}
-        # Tasks started and not yet ended (task_id -> card id). Only the lifecycle frames say
+        self._line_of_task: dict[str, str] = {}
+        # Tasks started and not yet ended (task_id -> entry id). Only the lifecycle frames say
         # this reliably: a subagent can move to the background without a second task_started.
         self._running: dict[str, str] = {}
         self._wrote_text = False
@@ -132,10 +132,10 @@ class TurnRenderer:
             case TaskStartedMessage():
                 await self._task_started(message)
             case TaskProgressMessage():
-                card = self._cards.get(self._card_of_task.get(message.task_id, ""))
-                if card is not None:
+                entry = self._lines.get(self._line_of_task.get(message.task_id, ""))
+                if entry is not None:
                     await self._set(
-                        replace(card, details=one_line(message.description, OUTPUT_LIMIT))
+                        replace(entry, details=one_line(message.description, OUTPUT_LIMIT))
                     )
             case TaskNotificationMessage():
                 await self._task_ended(message.task_id, message.status, message.summary)
@@ -157,29 +157,29 @@ class TurnRenderer:
 
     def task_title(self, task_id: str) -> str | None:
         """The line title of a task this reply shows, running or ended."""
-        card = self._cards.get(self._card_of_task.get(task_id, ""))
-        return card.title if card else None
+        entry = self._lines.get(self._line_of_task.get(task_id, ""))
+        return entry.title if entry else None
 
     def owns(self, tool_use_id: str) -> bool:
         """Whether this reply holds the line of that tool call, or of the subagent it runs in."""
-        return tool_use_id in self._cards or tool_use_id in self._root_of
+        return tool_use_id in self._lines or tool_use_id in self._root_of
 
     async def close(self, footer: str | None) -> None:
         """End the reply: every open tool line is closed, except a task still running, whose line
         stays open until its own end arrives through `feed` or `stop_running`."""
         interrupted = self.result is not None and self.result.terminal_reason in INTERRUPTED
-        if not self._wrote_text and not self._cards:
+        if not self._wrote_text and not self._lines:
             # A command that prints nothing (a local one, say) still gets a visible answer.
             await self._text(texts.STOPPED if interrupted else texts.NO_OUTPUT)
         running = set(self._running.values())
         closing = [
-            replace(card, status="in_progress", details=BACKGROUND)
-            if card.id in running
-            else replace(card, status="complete", output=STOPPED if interrupted else card.output)
-            for card in self._cards.values()
-            if card.id in running or card.status in ("pending", "in_progress")
+            replace(entry, status="in_progress", details=BACKGROUND)
+            if entry.id in running
+            else replace(entry, status="complete", output=STOPPED if interrupted else entry.output)
+            for entry in self._lines.values()
+            if entry.id in running or entry.status in ("pending", "in_progress")
         ]
-        self._cards.update((card.id, card) for card in closing)
+        self._lines.update((entry.id, entry) for entry in closing)
         await self._sink.finish(closing, footer)
 
     async def stop_running(self) -> None:
@@ -220,45 +220,45 @@ class TurnRenderer:
         if isinstance(block, ToolUseBlock | ServerToolUseBlock):
             title = task_title(block.name, block.input)
             root = self._root_of.get(parent, parent) if parent else None
-            if root is None or root not in self._cards:
+            if root is None or root not in self._lines:
                 await self._set(TaskUpdate(block.id, title, "in_progress", name=block.name))
             else:
                 self._root_of[block.id] = root
                 await self._child(root, title)
         elif isinstance(block, ToolResultBlock | ServerToolResultBlock):
-            card = self._cards.get(block.tool_use_id)
-            if card is not None and card.id in self._running.values():
+            entry = self._lines.get(block.tool_use_id)
+            if entry is not None and entry.id in self._running.values():
                 # The call only launched a task, which is still running: its line stays open.
-                await self._set(replace(card, output=result_summary(block.content)))
-            elif card is not None:
+                await self._set(replace(entry, output=result_summary(block.content)))
+            elif entry is not None:
                 failed = isinstance(block, ToolResultBlock) and bool(block.is_error)
                 await self._set(
                     replace(
-                        card,
+                        entry,
                         status="error" if failed else "complete",
                         output=result_summary(block.content),
                     )
                 )
 
     async def _task_started(self, message: TaskStartedMessage) -> None:
-        if message.tool_use_id and message.tool_use_id in self._cards:
-            self._card_of_task[message.task_id] = message.tool_use_id
+        if message.tool_use_id and message.tool_use_id in self._lines:
+            self._line_of_task[message.task_id] = message.tool_use_id
             self._running[message.task_id] = message.tool_use_id
-            card = self._cards[message.tool_use_id]
-            await self._set(replace(card, details=BACKGROUND, task=True))
+            entry = self._lines[message.tool_use_id]
+            await self._set(replace(entry, details=BACKGROUND, task=True))
             return
-        card_id = f"task-{message.task_id}"
-        self._card_of_task[message.task_id] = card_id
-        self._running[message.task_id] = card_id
+        line_id = f"task-{message.task_id}"
+        self._line_of_task[message.task_id] = line_id
+        self._running[message.task_id] = line_id
         title = one_line(message.description, TITLE_LIMIT)
         name = message.task_type or "task"
-        await self._set(TaskUpdate(card_id, title, "in_progress", name=name, task=True))
+        await self._set(TaskUpdate(line_id, title, "in_progress", name=name, task=True))
 
     async def _task_ended(self, task_id: str, status: str, summary: str | None) -> None:
         self._running.pop(task_id, None)
-        card_id = self._card_of_task.get(task_id, f"task-{task_id}")
-        card = self._cards.get(card_id) or TaskUpdate(
-            card_id,
+        line_id = self._line_of_task.get(task_id, f"task-{task_id}")
+        entry = self._lines.get(line_id) or TaskUpdate(
+            line_id,
             one_line(summary or task_id, TITLE_LIMIT),
             "in_progress",
             name="task",
@@ -267,7 +267,7 @@ class TurnRenderer:
         final, stopped = terminal_status(status)
         await self._set(
             replace(
-                card,
+                entry,
                 status=final,
                 details=None,
                 output=stopped or (one_line(summary, OUTPUT_LIMIT) if summary else None),
@@ -278,10 +278,10 @@ class TurnRenderer:
         lines = self._children.setdefault(root, [])
         lines.append(line)
         del lines[:-CHILD_LINES]
-        await self._set(replace(self._cards[root], details="\n".join(lines)))
+        await self._set(replace(self._lines[root], details="\n".join(lines)))
 
     async def _set(self, update: TaskUpdate) -> None:
-        self._cards[update.id] = update
+        self._lines[update.id] = update
         await self._sink.task(update)
 
     async def _text(self, markdown: str) -> None:

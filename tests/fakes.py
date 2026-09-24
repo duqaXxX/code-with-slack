@@ -86,6 +86,10 @@ class FakeClaudeClient:
         server_info: dict[str, Any] | None = None,
         context_usage: dict[str, Any] | None = None,
         connect_error: Exception | None = None,
+        connect_gate: asyncio.Event | None = None,
+        server_info_error: Exception | None = None,
+        context_usage_error: Exception | None = None,
+        disconnect_error: Exception | None = None,
     ) -> None:
         self.options = options
         self._turns = list(turns or [])
@@ -98,6 +102,11 @@ class FakeClaudeClient:
         }
         self._context_usage = context_usage or sdk_json("context-usage")
         self._connect_error = connect_error
+        # A connect that waits for the test, as a CLI does while it starts.
+        self._connect_gate = connect_gate
+        self._server_info_error = server_info_error
+        self._context_usage_error = context_usage_error
+        self._disconnect_error = disconnect_error
         self.connected = False
         self.queries: list[str] = []
         self.modes: list[str] = []
@@ -105,12 +114,16 @@ class FakeClaudeClient:
         self.permission_results: list[PermissionResult] = []
 
     async def connect(self) -> None:
+        if self._connect_gate is not None:
+            await self._connect_gate.wait()
         if self._connect_error is not None:
             raise self._connect_error
         self.connected = True
 
     async def disconnect(self) -> None:
         self.connected = False
+        if self._disconnect_error is not None:
+            raise self._disconnect_error
 
     async def query(self, prompt: str) -> None:
         self.queries.append(prompt)
@@ -149,9 +162,13 @@ class FakeClaudeClient:
         self.interrupts += 1
 
     async def get_server_info(self) -> dict[str, Any]:
+        if self._server_info_error is not None:
+            raise self._server_info_error
         return self._server_info
 
     async def get_context_usage(self) -> dict[str, Any]:
+        if self._context_usage_error is not None:
+            raise self._context_usage_error
         return self._context_usage
 
 

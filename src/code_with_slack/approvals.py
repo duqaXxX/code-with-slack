@@ -88,6 +88,15 @@ class Approvals:
                 denied.append(pending)
         return denied
 
+    def posted(self, approval_id: str, message_ts: str) -> bool:
+        """Record the message that shows a request, so it can be removed once decided; False
+        when the request was decided before its message was known (`!stop` while posting)."""
+        pending = self._pending.get(approval_id)
+        if pending is None:
+            return False
+        pending.message_ts = message_ts
+        return True
+
     def discard(self, approval_id: str) -> None:
         self._pending.pop(approval_id, None)
 

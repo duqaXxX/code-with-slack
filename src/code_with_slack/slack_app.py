@@ -1,6 +1,7 @@
 """The Slack side: every inbound path, each checked on its own before it reaches a session."""
 
 import logging
+import re
 from collections.abc import Awaitable
 from dataclasses import replace
 from typing import Any
@@ -27,12 +28,12 @@ from code_with_slack.approvals import (
 from code_with_slack.commands import (
     Bind,
     Bypass,
-    Command,
     Help,
     Invalid,
     Passthrough,
     Status,
     Stop,
+    Word,
     help_text,
     parse_bang,
 )
@@ -52,7 +53,24 @@ logger = logging.getLogger(__name__)
 DECISION_ACTIONS = ("approval_allow", "approval_deny", "question_skip")
 
 
+# Slack sends a link as <url|label> or <url> (message formatting reference, read 2026-09-25).
+# Mentions (<@U…>, <#C…>) stay as sent: naming them would need a scope the app does not have.
+LINK = re.compile(r"<((?:https?|mailto):[^|>]+)(?:\|([^>]+))?>")
+SCHEME = re.compile(r"^(?:https?://|mailto:)")
+
+
+def _link(match: re.Match[str]) -> str:
+    url, label = match[1], match[2]
+    if label is None:
+        return url
+    # A link Slack made from a typed name carries that name as its label; one the owner named
+    # keeps its address, which Claude needs to open it.
+    return label if SCHEME.sub("", url) == label else f"{label} ({url})"
+
+
 def slack_unescape(text: str) -> str:
+    """The text as the owner typed it, with the address of any link the owner named."""
+    text = LINK.sub(_link, text)
     return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
 
@@ -144,7 +162,7 @@ def build_app(
         else:
             await handle_word(channel, command)
 
-    async def handle_word(channel: str, command: Command) -> None:
+    async def handle_word(channel: str, command: Word) -> None:
         match command:
             case Help() | Invalid():
                 # A mistyped word gets the full list, which shows how each word is written.

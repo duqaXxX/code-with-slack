@@ -850,3 +850,120 @@ async def test_an_effort_set_before_a_restart_is_not_carried_over(
     await h.manager.close_all()
     await asyncio.wait_for((await h.session().submit("next")).done.wait(), 2)
     assert "effort medium" in statuses(h)[-1]
+
+
+async def test_an_approval_slack_refuses_to_show_is_denied_and_logged(
+    harness_for: Callable[..., Harness], caplog: pytest.LogCaptureFixture
+) -> None:
+    from slack_sdk.errors import SlackApiError
+
+    refused = SlackApiError("ratelimited", {"ok": False, "error": "ratelimited"})
+    # The reply's message posts, the approval request does not, later messages do.
+    h = harness_for(
+        {"turns": [[CanUseToolCall("Bash", {"command": "ls"}), *sdk_messages("tools")]]}
+    )
+    h.slack.responses["chat.postMessage"] = [
+        {"ok": True, "ts": "1790000000.000001"},
+        refused,
+        {"ok": True, "ts": "1790000000.000003"},
+    ]
+    turn = await h.session().submit("list the files")
+    await asyncio.wait_for(turn.done.wait(), 2)
+    result = h.clients[0].permission_results[0]
+    assert isinstance(result, PermissionResultDeny)
+    assert result.message == texts.APPROVAL_UNPOSTED
+    assert "could not post an approval request" in caplog.text and "ratelimited" in caplog.text
+
+
+async def test_a_footer_that_fails_to_build_still_ends_the_reply(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def broken(cwd: Path) -> str | None:
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    monkeypatch.setattr(sessions, "git_branch", broken)
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    turn = await h.session().submit("list the files")
+    await asyncio.wait_for(turn.done.wait(), 2)
+    last = [a for m, a in h.slack.calls if m in ("chat.postMessage", "chat.update")][-1]
+    assert texts.WRITING not in json.dumps(last, ensure_ascii=False)
+
+
+async def test_a_usage_entry_without_a_token_count_still_gets_a_footer(
+    harness_for: Callable[..., Harness],
+) -> None:
+    messages = sdk_messages("tools")
+    result = messages[-1]
+    assert isinstance(result, ResultMessage) and result.model_usage
+    model = next(iter(result.model_usage))
+    trimmed = dataclasses.replace(
+        result, model_usage={model: {"inputTokens": 1000, "outputTokens": 500}}
+    )
+    h = harness_for({"turns": [[*messages[:-1], trimmed]]})
+    turn = await h.session().submit("list the files")
+    await asyncio.wait_for(turn.done.wait(), 2)
+    assert "1.5k tok" in statuses(h)[-1]
+
+
+async def test_a_context_usage_failure_is_logged(
+    harness_for: Callable[..., Harness], caplog: pytest.LogCaptureFixture
+) -> None:
+    h = harness_for({"turns": [sdk_messages("tools")], "context_usage_error": RuntimeError("x")})
+    turn = await h.session().submit("list the files")
+    await asyncio.wait_for(turn.done.wait(), 2)
+    assert "could not read the context usage" in caplog.text
+
+
+async def test_a_failed_disconnect_is_logged(
+    harness_for: Callable[..., Harness], caplog: pytest.LogCaptureFixture
+) -> None:
+    h = harness_for({"disconnect_error": BrokenPipeError()})
+    await h.session().ensure_connected()
+    await h.session().close()
+    assert "could not close Claude Code" in caplog.text and "BrokenPipeError" in caplog.text
+
+
+async def test_a_turn_taken_while_claude_code_starts_is_ended_on_close(
+    harness_for: Callable[..., Harness],
+) -> None:
+    gate = asyncio.Event()
+    h = harness_for({"connect_gate": gate})
+    session = h.session()
+    turn = await session.submit("hello")
+    await asyncio.sleep(0.05)  # the worker has taken the turn and waits for the CLI
+    await session.close()
+    assert turn.done.is_set()
+    assert texts.ENDED.format(reason=texts.ENDED_SHUTDOWN) in h.written_text()
+
+
+async def test_a_setup_failure_after_connect_closes_the_client(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"server_info_error": RuntimeError("x")}, {})
+    with pytest.raises(RuntimeError):
+        await h.session().ensure_connected()
+    assert h.clients[0].connected is False
+    await h.session().ensure_connected()  # the next attempt starts one process, not two
+    assert len(h.clients) == 2 and h.clients[1].connected
+
+
+async def test_a_rebind_never_records_the_old_directory_s_session(
+    harness_for: Callable[..., Harness], tmp_path: Path
+) -> None:
+    messages = sdk_messages("tools")
+    h = harness_for({"turns": [messages[:-1]]})
+    await h.session().submit("list the files")
+    await until(lambda: len(h.clients) == 1 and h.clients[0].queries == ["list the files"])
+    await asyncio.sleep(0.05)
+    other = tmp_path / "other"
+    other.mkdir()
+    h.clients[0].inject([messages[-1]])  # the old turn's result is waiting to be read
+    await h.manager.bind(CHANNEL, other)
+    stored = h.state.get(CHANNEL)
+    assert stored is not None and stored.directory == other and stored.session_id is None
+
+
+def test_a_relative_bind_path_is_read_under_the_allowed_root(tmp_path: Path) -> None:
+    (tmp_path / "app").mkdir()
+    assert resolve_directory("app", tmp_path) == (tmp_path / "app").resolve()
+    assert resolve_directory("../", tmp_path / "app") is None

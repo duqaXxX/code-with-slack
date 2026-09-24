@@ -180,3 +180,13 @@ def test_to_permission_matches_the_documented_shapes() -> None:
 def test_the_draft_keeps_non_latin_text_as_one_character_each() -> None:
     text = Draft("a", "c", typed={0: "日本語"}).dump()
     assert "日本語" in text  # not \\u-escaped: Slack counts characters, not bytes
+
+
+async def test_a_request_decided_before_its_message_is_known_says_so() -> None:
+    approvals = Approvals()
+    approval_id, _ = approvals.open("C000CHAN", "Bash: ls")
+    approvals.deny_all("C000CHAN")  # !stop while the request was being posted
+    assert approvals.posted(approval_id, "1790000000.000001") is False
+    live_id, pending = approvals.open("C000CHAN", "Bash: ls")
+    assert approvals.posted(live_id, "1790000000.000002") is True
+    assert pending.message_ts == "1790000000.000002"
