@@ -1,0 +1,89 @@
+{
+  "type": "block_actions",
+  "user": {
+    "id": "U000ALICE",
+    "username": "alice",
+    "name": "alice",
+    "team_id": "T000TEAM"
+  },
+  "api_app_id": "A000APP",
+  "container": {
+    "type": "message",
+    "message_ts": "1790285951.735939",
+    "channel_id": "C000CHAN",
+    "is_ephemeral": false
+  },
+  "team": {
+    "id": "T000TEAM",
+    "domain": "alice"
+  },
+  "channel": {
+    "id": "C000CHAN",
+    "name": "alice"
+  },
+  "message": {
+    "user": "U000BOT",
+    "type": "message",
+    "ts": "1790285951.735939",
+    "bot_id": "B000BOT",
+    "app_id": "A000APP",
+    "text": "Recording",
+    "team": "T000TEAM",
+    "blocks": [
+      {
+        "type": "section",
+        "block_id": "0AJYo",
+        "text": {
+          "type": "mrkdwn",
+          "text": "Claude Code has 2 questions: *Colour* \u00b7 *Sizes*",
+          "verbatim": false
+        }
+      },
+      {
+        "type": "actions",
+        "block_id": "Vhwbq",
+        "elements": [
+          {
+            "type": "button",
+            "action_id": "question_open",
+            "text": {
+              "type": "plain_text",
+              "text": "Answer",
+              "emoji": true
+            },
+            "style": "primary",
+            "value": "rec-q"
+          },
+          {
+            "type": "button",
+            "action_id": "question_skip",
+            "text": {
+              "type": "plain_text",
+              "text": "Skip",
+              "emoji": true
+            },
+            "value": "rec-q"
+          }
+        ]
+      }
+    ]
+  },
+  "state": {
+    "values": {}
+  },
+  "actions": [
+    {
+      "action_id": "question_open",
+      "block_id": "Vhwbq",
+      "text": {
+        "type": "plain_text",
+        "text": "Answer",
+        "emoji": true
+      },
+      "value": "rec-q",
+      "style": "primary",
+      "type": "button",
+      "action_ts": "1790285957.937307"
+    }
+  ]
+}

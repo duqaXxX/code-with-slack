@@ -8,18 +8,6 @@
     "bot_user": {
       "display_name": "code-with-slack",
       "always_online": true
-    },
-    "slash_commands": [
-      {
-        "command": "/cc",
-        "description": "Run a Claude Code command in this channel's session",
-        "usage_hint": "[command] [args] | bind <path> | bypass on|off",
-        "should_escape": false
-      }
-    ],
-    "agent_view": {
-      "agent_description": "Drives the Claude Code sessions on your own machine from private Slack channels.",
-      "suggested_prompts": []
     }
   },
   "oauth_config": {
@@ -27,9 +15,7 @@
       "bot": [
         "groups:history",
         "groups:read",
-        "chat:write",
-        "commands",
-        "assistant:write"
+        "chat:write"
       ]
     },
     "pkce_enabled": false

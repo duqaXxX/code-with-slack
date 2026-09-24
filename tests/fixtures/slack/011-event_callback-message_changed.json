@@ -1,0 +1,84 @@
+{
+  "team_id": "T000TEAM",
+  "context_team_id": "T000TEAM",
+  "context_enterprise_id": null,
+  "api_app_id": "A000APP",
+  "event": {
+    "type": "message",
+    "subtype": "message_changed",
+    "message": {
+      "user": "U000ALICE",
+      "type": "message",
+      "edited": {
+        "user": "U000ALICE",
+        "ts": "1790192214.000000"
+      },
+      "client_msg_id": "f277b2db-28b3-4f5f-bb06-efec7e89886c",
+      "text": "ciao !compact ciao",
+      "team": "T000TEAM",
+      "blocks": [
+        {
+          "type": "rich_text",
+          "block_id": "St/Zw",
+          "elements": [
+            {
+              "type": "rich_text_section",
+              "elements": [
+                {
+                  "type": "text",
+                  "text": "ciao !compact ciao"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "ts": "1790192170.462399",
+      "source_team": "T000TEAM",
+      "user_team": "T000TEAM"
+    },
+    "previous_message": {
+      "user": "U000ALICE",
+      "type": "message",
+      "ts": "1790192170.462399",
+      "client_msg_id": "f277b2db-28b3-4f5f-bb06-efec7e89886c",
+      "text": "ciao !compact",
+      "team": "T000TEAM",
+      "blocks": [
+        {
+          "type": "rich_text",
+          "block_id": "sCx+y",
+          "elements": [
+            {
+              "type": "rich_text_section",
+              "elements": [
+                {
+                  "type": "text",
+                  "text": "ciao !compact"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "channel": "C000CHAN",
+    "hidden": true,
+    "ts": "1790192214.003700",
+    "event_ts": "1790192214.003700",
+    "channel_type": "group"
+  },
+  "type": "event_callback",
+  "event_id": "Ev0C40805Z0S",
+  "event_time": 1790192214,
+  "authorizations": [
+    {
+      "enterprise_id": null,
+      "team_id": "T000TEAM",
+      "user_id": "U000BOT",
+      "is_bot": true
+    }
+  ],
+  "is_ext_shared_channel": false,
+  "event_context": "4-eyJldCI6Im1lc3NhZ2UiLCJ0aWQiOiJUMDlKUVNGQTBISiIsImFpZCI6IkEwQzQxQVozU041IiwiY2lkIjoiQzBDM1Q5WVNFNEIifQ"
+}

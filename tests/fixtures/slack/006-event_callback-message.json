@@ -1,0 +1,47 @@
+{
+  "team_id": "T000TEAM",
+  "context_team_id": "T000TEAM",
+  "context_enterprise_id": null,
+  "api_app_id": "A000APP",
+  "event": {
+    "type": "message",
+    "user": "U000ALICE",
+    "ts": "1790192108.208759",
+    "client_msg_id": "5e17ecef-bbf5-4033-b2e3-4aabb8e31e8a",
+    "text": "ciao",
+    "team": "T000TEAM",
+    "blocks": [
+      {
+        "type": "rich_text",
+        "block_id": "pHDTI",
+        "elements": [
+          {
+            "type": "rich_text_section",
+            "elements": [
+              {
+                "type": "text",
+                "text": "ciao"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "channel": "C000CHAN",
+    "event_ts": "1790192108.208759",
+    "channel_type": "group"
+  },
+  "type": "event_callback",
+  "event_id": "Ev0C429805PT",
+  "event_time": 1790192108,
+  "authorizations": [
+    {
+      "enterprise_id": null,
+      "team_id": "T000TEAM",
+      "user_id": "U000BOT",
+      "is_bot": true
+    }
+  ],
+  "is_ext_shared_channel": false,
+  "event_context": "4-eyJldCI6Im1lc3NhZ2UiLCJ0aWQiOiJUMDlKUVNGQTBISiIsImFpZCI6IkEwQzQxQVozU041IiwiY2lkIjoiQzBDM1Q5WVNFNEIifQ"
+}
