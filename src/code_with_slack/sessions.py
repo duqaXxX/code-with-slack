@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import time
 from collections import deque
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
@@ -53,7 +54,7 @@ from code_with_slack.footer import (
     session_tokens,
 )
 from code_with_slack.guards import Identity
-from code_with_slack.render.renderer import TurnRenderer, task_title
+from code_with_slack.render.renderer import TurnRenderer, ended_line, one_line, task_title
 from code_with_slack.render.sinks import ReplySink, describe
 from code_with_slack.state import StateStore
 
@@ -185,6 +186,10 @@ class ChannelSession:
         self._task_replies: dict[str, TurnRenderer] = {}
         # The channel's newest reply: the only one that shows what is still running.
         self._latest: ReplySink | None = None
+        # When each task started (monotonic), and the end lines that open Claude Code's next
+        # turn of its own, the one that reports them.
+        self._started_at: dict[str, float] = {}
+        self._ended: list[str] = []
         # Clear while a background notification's own turn is expected or running: the owner's
         # next query waits, so the two replies never share a thread.
         self._settled = asyncio.Event()
@@ -356,6 +361,12 @@ class ChannelSession:
             return
         if isinstance(message, SystemMessage) and message.subtype == "init":
             self.cli_version = message.data.get("claude_code_version")
+        if isinstance(message, TaskStartedMessage):
+            self._started_at[message.task_id] = time.monotonic()
+        if isinstance(message, TaskNotificationMessage):
+            line = self._ended_line(message)  # also forgets when the task started
+            if self._active is None and not self._sent:
+                self._ended.append(line)
         if isinstance(message, TASK_MESSAGES) and message.task_id in self._task_replies:
             # A task that outlived its turn shows only on its own line, wherever it started.
             await self._task_replies[message.task_id].feed(message)
@@ -384,6 +395,20 @@ class ChannelSession:
             self._active = None
             await self._finish(active, message)
 
+    def _ended_line(self, message: TaskNotificationMessage) -> str:
+        origin = self._task_replies.get(message.task_id)
+        title = (origin.task_title(message.task_id) if origin else None) or one_line(
+            message.summary or message.task_id, 80
+        )
+        started = self._started_at.pop(message.task_id, None)
+        seconds = None if started is None else time.monotonic() - started
+        return ended_line(title, message.status, seconds)
+
+    def _opening(self) -> str:
+        """What opens a reply of Claude Code's own turn: the end of each task it reports."""
+        lines, self._ended = self._ended, []
+        return "\n".join(lines) or texts.BACKGROUND_NOTICE
+
     def _notified(self) -> None:
         """A task ended while no turn runs. Claude Code starts a turn to report it, unless an
         owner query already sits in its queue: that turn comes first and carries the report
@@ -404,6 +429,8 @@ class ChannelSession:
         logger.warning("no turn followed a task notification in %s", self.channel_id)
         self._injected_expected = False
         held, self._held = self._held, []
+        if not held:
+            self._ended.clear()  # those tasks already show their end on their own lines
         try:
             await self._standalone(held)
         except Exception as exc:
@@ -421,7 +448,7 @@ class ChannelSession:
         turn = None if injected else self._sent.popleft()
         if turn is None:
             renderer = TurnRenderer(await self._sink())
-            await renderer.feed_notice(texts.BACKGROUND_NOTICE)
+            await renderer.feed_notice(self._opening())
         else:
             renderer = TurnRenderer(turn.sink)
             await turn.sink.announce(texts.WRITING)
@@ -437,7 +464,7 @@ class ChannelSession:
         if not messages:
             return
         renderer = TurnRenderer(await self._sink())
-        await renderer.feed_notice(texts.BACKGROUND_NOTICE)
+        await renderer.feed_notice(self._opening())
         for message in messages:
             await renderer.feed(message)
         await self._close_reply(renderer, None)
@@ -456,6 +483,8 @@ class ChannelSession:
         """The Claude Code process is going away with its tasks: no reply keeps showing one."""
         renderers = set(self._task_replies.values())
         self._task_replies.clear()
+        self._started_at.clear()
+        self._ended.clear()
         for renderer in renderers:
             with contextlib.suppress(Exception):
                 await renderer.stop_running()

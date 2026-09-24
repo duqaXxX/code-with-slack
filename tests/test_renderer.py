@@ -13,6 +13,7 @@ from code_with_slack.render.renderer import (
     STOPPED,
     TaskUpdate,
     TurnRenderer,
+    ended_line,
     task_title,
 )
 from tests.fakes import sdk_messages, split_turns
@@ -236,3 +237,26 @@ async def test_a_notice_does_not_hide_a_local_command_s_result() -> None:
         await renderer.feed(message)
     assert renderer.result is not None and renderer.result.result
     assert renderer.result.result in "".join(sink.texts)
+
+
+@pytest.mark.parametrize(
+    ("status", "seconds", "expected"),
+    [
+        ("completed", 40, "✓ `Bash: sleep 40` finished · 40s"),
+        ("completed", 239, "✓ `Bash: sleep 40` finished · 3m 59s"),
+        ("failed", 3725, "✗ `Bash: sleep 40` failed · 1h 2m"),
+        ("killed", 0, "✓ `Bash: sleep 40` stopped · 0s"),
+    ],
+)
+def test_ended_line_names_the_task_and_its_duration(
+    status: str, seconds: float, expected: str
+) -> None:
+    assert ended_line("Bash: sleep 40", status, seconds) == expected
+
+
+async def test_tool_and_task_lines_carry_their_name_and_kind() -> None:
+    first = split_turns(sdk_messages("background"))[0]
+    sink, _ = await render(first)
+    last = {t.id: t for t in sink.tasks + sink.finished[0]}  # type: ignore[index]
+    assert all(t.name for t in last.values())
+    assert any(t.task for t in last.values())

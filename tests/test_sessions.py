@@ -2,6 +2,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import re
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
@@ -245,8 +246,8 @@ async def test_injected_turn_gets_its_own_reply(harness_for: Callable[..., Harne
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
     for later in turns[1:]:
         h.clients[0].inject(later)
-    await until(lambda: any(texts.BACKGROUND_NOTICE in r for r in h.replies()))
-    assert texts.BACKGROUND_NOTICE not in h.replies()[0]
+    await until(lambda: any(is_report(r) for r in h.replies()))
+    assert not is_report(h.replies()[0])
 
 
 async def test_rate_limit_event_invalidates_usage(harness_for: Callable[..., Harness]) -> None:
@@ -335,6 +336,54 @@ def test_resolve_directory(tmp_path: Path) -> None:
     assert resolve_directory(str(root / "missing"), root) is None
 
 
+REPORT = re.compile(r"^[✓✗] `.+` (finished|failed|stopped) · ", re.MULTILINE)
+
+
+def is_report(reply: str) -> bool:
+    """A reply of Claude Code's own turn about a background task (not the owner's)."""
+    return bool(REPORT.search(reply)) or texts.BACKGROUND_NOTICE in reply
+
+
+async def test_a_report_opens_with_the_task_s_name_and_duration(
+    harness_for: Callable[..., Harness],
+) -> None:
+    first, notice, injected = split_background()
+    h = harness_for({"turns": [first]})
+    await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
+    h.clients[0].inject(notice + injected)
+    await until(lambda: len(h.replies()) == 2 and bool(h.replies()[1]))
+    await asyncio.sleep(0.05)
+    report = h.replies()[1]
+    assert re.match(r"✓ `Bash: sleep 5; echo done` finished · \d+s", report)
+    assert texts.BACKGROUND_NOTICE not in report
+
+
+async def test_a_report_line_never_outlives_its_chance(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.05)
+    first, notice, _ = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    h.clients[0].inject(notice)  # and Claude Code starts no turn of its own
+    await asyncio.sleep(0.2)
+    assert session._ended == [] and session._started_at == {}
+
+
+async def test_the_task_bookkeeping_goes_with_the_process(
+    harness_for: Callable[..., Harness],
+) -> None:
+    first, _, _ = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    assert session._started_at
+    h.clients[0].inject([EndOfStream()])
+    await until(lambda: session._client is None)
+    assert session._started_at == {} and session._ended == []
+
+
 def split_background() -> tuple[list[Any], list[Any], list[Any]]:
     """The recorded background run: the owner's turn, the notification that arrives while idle,
     and the turn the CLI injects to report it."""
@@ -365,7 +414,7 @@ async def test_owner_query_waits_for_an_expected_background_turn(
     h.clients[0].inject(injected)
     await asyncio.wait_for(second.done.wait(), 2)
     assert h.clients[0].queries == ["start it", "next"]
-    background = [texts.BACKGROUND_NOTICE in r for r in h.replies()]
+    background = [is_report(r) for r in h.replies()]
     # The second reply appeared (waiting) when it was sent, before the background report began.
     assert background == [False, False, True]
 
@@ -395,7 +444,7 @@ async def test_the_running_list_follows_the_latest_reply(
     assert running_block(shown[0]) is None  # moved to the latest reply
     assert running_block(shown[1]) is not None
     h.clients[0].inject(notice + injected)
-    await until(lambda: any(texts.BACKGROUND_NOTICE in r for r in h.replies()))
+    await until(lambda: any(is_report(r) for r in h.replies()))
     await asyncio.sleep(0.05)
     assert all(running_block(blocks) is None for blocks in h.slack.message_blocks())
     assert h.replies()[0].startswith("✓")  # the line where the task started
@@ -408,9 +457,9 @@ async def test_a_background_task_frame_stays_out_of_other_replies(
     h = harness_for({"turns": [first]})
     await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
     h.clients[0].inject(notice + injected)
-    await until(lambda: any(texts.BACKGROUND_NOTICE in r for r in h.replies()))
+    await until(lambda: any(is_report(r) for r in h.replies()))
     await asyncio.sleep(0.05)
-    report = next(r for r in h.replies() if texts.BACKGROUND_NOTICE in r)
+    report = next(r for r in h.replies() if is_report(r))
     task_id = next(m.task_id for m in notice if isinstance(m, TaskNotificationMessage))
     assert task_id not in report
 
@@ -445,7 +494,7 @@ async def test_ended_tasks_are_forgotten_past_the_limit(
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
     h.clients[0].inject(notice + injected)
-    await until(lambda: any(texts.BACKGROUND_NOTICE in r for r in h.replies()))
+    await until(lambda: any(is_report(r) for r in h.replies()))
     await asyncio.wait_for((await session.submit("again")).done.wait(), 2)
     assert list(session._task_replies) == ["other"]
 
@@ -465,7 +514,7 @@ async def test_a_failed_background_task_shows_why_in_the_reply_that_started_it(
     h = harness_for({"turns": [first]})
     await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
     h.clients[0].inject(failed + injected)
-    await until(lambda: any(texts.BACKGROUND_NOTICE in r for r in h.replies()))
+    await until(lambda: any(is_report(r) for r in h.replies()))
     started = h.replies()[0]
     assert "✗" in started and " ".join(summary.split())[:40] in started
 
@@ -497,7 +546,7 @@ async def test_a_notification_with_no_turn_updates_its_line_and_releases_the_que
     await asyncio.wait_for(second.done.wait(), 2)
     # The task is known: its end shows on the line where it started, not in a post of its own.
     assert h.replies()[0].startswith("✓")
-    assert not any(texts.BACKGROUND_NOTICE in r for r in h.replies())
+    assert not any(is_report(r) for r in h.replies())
     assert h.clients[0].queries == ["start it", "next"]
 
 
@@ -534,7 +583,7 @@ async def test_a_notification_after_the_owner_query_was_sent_leaves_the_turn_to_
     await asyncio.wait_for(second.done.wait(), 2)
     replies = h.replies()
     assert texts.REPLY_ABOVE not in replies[1]
-    assert not any(texts.BACKGROUND_NOTICE in r for r in replies)
+    assert not any(is_report(r) for r in replies)
 
 
 async def test_a_slack_network_error_does_not_stop_the_session(

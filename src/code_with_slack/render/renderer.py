@@ -44,6 +44,8 @@ class TaskUpdate:
     status: TaskStatus
     details: str | None = None
     output: str | None = None
+    name: str = ""  # the tool's name, for a line folded into a summary
+    task: bool = False  # a task's line (a subagent, a background command): never folded
 
 
 class Sink(Protocol):
@@ -76,6 +78,24 @@ def result_summary(content: object) -> str | None:
         return None
     first = next((line for line in text.splitlines() if line.strip()), "")
     return one_line(first, OUTPUT_LIMIT) or None
+
+
+def format_duration(seconds: float) -> str:
+    whole = int(seconds)
+    if whole < 60:
+        return f"{whole}s"
+    if whole < 3600:
+        return f"{whole // 60}m {whole % 60}s"
+    return f"{whole // 3600}h {whole % 3600 // 60}m"
+
+
+def ended_line(title: str, status: str, seconds: float | None) -> str:
+    """How a task's end opens Claude Code's report of it, as the terminal shows
+    `Agent "..." finished · 3m 59s`. No duration when the task's start was not seen."""
+    outcomes = {"failed": "failed", "stopped": "stopped", "killed": "stopped"}
+    outcome = outcomes.get(status, "finished")
+    line = f"{'✗' if outcome == 'failed' else '✓'} `{title}` {outcome}"
+    return line if seconds is None else f"{line} · {format_duration(seconds)}"
 
 
 def terminal_status(status: str) -> tuple[TaskStatus, str | None]:
@@ -142,6 +162,11 @@ class TurnRenderer:
         card_id = self._running.get(task_id)
         return self._cards[card_id].title if card_id in self._cards else None
 
+    def task_title(self, task_id: str) -> str | None:
+        """The line title of a task this reply shows, running or ended."""
+        card = self._cards.get(self._card_of_task.get(task_id, ""))
+        return card.title if card else None
+
     def owns(self, tool_use_id: str) -> bool:
         """Whether this reply holds the line of that tool call, or of the subagent it runs in."""
         return tool_use_id in self._cards or tool_use_id in self._root_of
@@ -203,7 +228,7 @@ class TurnRenderer:
             title = task_title(block.name, block.input)
             root = self._root_of.get(parent, parent) if parent else None
             if root is None or root not in self._cards:
-                await self._set(TaskUpdate(block.id, title, "in_progress"))
+                await self._set(TaskUpdate(block.id, title, "in_progress", name=block.name))
             else:
                 self._root_of[block.id] = root
                 await self._child(root, title)
@@ -226,20 +251,25 @@ class TurnRenderer:
         if message.tool_use_id and message.tool_use_id in self._cards:
             self._card_of_task[message.task_id] = message.tool_use_id
             self._running[message.task_id] = message.tool_use_id
-            await self._set(replace(self._cards[message.tool_use_id], details=BACKGROUND))
+            card = self._cards[message.tool_use_id]
+            await self._set(replace(card, details=BACKGROUND, task=True))
             return
         card_id = f"task-{message.task_id}"
         self._card_of_task[message.task_id] = card_id
         self._running[message.task_id] = card_id
-        await self._set(
-            TaskUpdate(card_id, one_line(message.description, TITLE_LIMIT), "in_progress")
-        )
+        title = one_line(message.description, TITLE_LIMIT)
+        name = message.task_type or "task"
+        await self._set(TaskUpdate(card_id, title, "in_progress", name=name, task=True))
 
     async def _task_ended(self, task_id: str, status: str, summary: str | None) -> None:
         self._running.pop(task_id, None)
         card_id = self._card_of_task.get(task_id, f"task-{task_id}")
         card = self._cards.get(card_id) or TaskUpdate(
-            card_id, one_line(summary or task_id, TITLE_LIMIT), "in_progress"
+            card_id,
+            one_line(summary or task_id, TITLE_LIMIT),
+            "in_progress",
+            name="task",
+            task=True,
         )
         final, stopped = terminal_status(status)
         await self._set(

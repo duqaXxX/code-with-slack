@@ -7,6 +7,7 @@ whole instead, at most once per DEBOUNCE_SECONDS: chat.update allows "50+ per mi
 """
 
 import asyncio
+import itertools
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -56,6 +57,35 @@ class _Tool:
         elif update.status == "in_progress" and update.details:
             line += f" · {update.details.splitlines()[-1]}"
         return line
+
+
+def tool_lines(tools: list[_Tool]) -> list[str]:
+    """A run of tool lines as shown: calls that ended well fold into one summary line of tool
+    names and counts, whatever the tool; a running or failed call, a task and a stopped line stay
+    whole, since they carry something to read."""
+    lines: list[str] = []
+    folded: dict[str, int] = {}
+
+    def fold() -> None:
+        if folded:
+            names = (name if n == 1 else f"{name} \u00d7{n}" for name, n in folded.items())
+            lines.append(f"{ICONS['complete']} " + " · ".join(names))
+            folded.clear()
+
+    for tool in tools:
+        update = tool.update
+        if (
+            update.status == "complete"
+            and update.name
+            and not update.task
+            and update.output != STOPPED
+        ):
+            folded[update.name] = folded.get(update.name, 0) + 1
+        else:
+            fold()
+            lines.append(tool.line())
+    fold()
+    return lines
 
 
 def split(body: str) -> list[str]:
@@ -157,18 +187,14 @@ class ReplySink:
 
     def _body(self) -> str:
         # A blank line between text and a run of tool lines makes them separate markdown
-        # paragraphs; consecutive tool lines stay one compact paragraph.
-        body = ""
-        previous: _Text | _Tool | None = None
-        for part in self._parts:
-            if previous is not None and type(part) is not type(previous):
-                body = body.rstrip("\n") + "\n\n"
-            if isinstance(part, _Text):
-                body += part.text.lstrip("\n") if isinstance(previous, _Tool) else part.text
+        # paragraphs; a run of tool lines stays one compact paragraph.
+        paragraphs: list[str] = []
+        for is_text, run in itertools.groupby(self._parts, key=lambda p: isinstance(p, _Text)):
+            if is_text:
+                paragraphs.append("".join(p.text for p in run if isinstance(p, _Text)).strip("\n"))
             else:
-                body += part.line() + "\n"
-            previous = part
-        return body.rstrip("\n")
+                paragraphs.append("\n".join(tool_lines([p for p in run if isinstance(p, _Tool)])))
+        return "\n\n".join(p for p in paragraphs if p)
 
     def _render(self, final: bool, footer: str | None) -> list[list[dict[str, Any]]]:
         chunks = split(self._body())
