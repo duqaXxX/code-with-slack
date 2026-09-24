@@ -102,13 +102,13 @@ When Claude Code asks for permission, the SDK calls `can_use_tool`. The session 
 request as a message of its own, below the reply, with **Approve** and **Deny** buttons, and waits, for as long as it
 takes. A clarifying question (Claude Code's `AskUserQuestion` tool, 1 to 4 questions) arrives the
 same way and is posted as one line naming the questions, with **Answer** and **Skip**. Answer
-opens a modal (`approvals.question_view`): Slack has no tabs, so buttons named after the
-questions stand in for them, the active one highlighted and an answered one ticked; below, the
-active question as radio buttons, or checkboxes when several may be picked, each option with its
-description, and an **Other** field, as the terminal offers. What was filled travels in the
-view's `private_metadata` (`approvals.Draft`, under Slack's 3,000 characters) from one tab to
-the next. Submit checks every question: one left unanswered on screen gets an error
-(`response_action: errors`); one on another tab is shown instead (`response_action: update`).
+opens a modal (`approvals.question_view`) that shows one question at a time, since Slack has
+no tabs: radio buttons, or checkboxes when several may be picked, each option with its
+description, and an **Other** field, as the terminal offers. The modal's own button reads
+`Next (1/3)` and moves on (`response_action: update`) only once the question has an answer,
+otherwise the question gets an error (`response_action: errors`); it reads `Submit` on the last.
+What was filled travels in the view's `private_metadata` (`approvals.Draft`, under Slack's
+3,000 characters) from one question to the next.
 The picked labels, with the text typed under Other as the answer itself, go back as the tool's
 answers. The modal carries no channel: each click in it is checked against the owner, the
 workspace, and the channel its request was posted in. Each request has a random id that only its buttons carry; a click resolves it
@@ -191,7 +191,7 @@ restart brings every channel back to Claude Code's own mode. That matches Claude
 ## Slack handlers
 
 `code_with_slack.slack_app.build_app` registers one listener per inbound path: `message`
-events, the Approve, Deny, Answer and Skip buttons, and the question form's tabs and Submit. The app registers no slash command. Each
+events, the Approve, Deny, Answer and Skip buttons, and the question form's Next and Submit. The app registers no slash command. Each
 acknowledges Slack first, then checks the owner, the workspace and the channel itself. A
 failure after the checks reaches the owner as an ephemeral error line.
 `code_with_slack.commands.parse_bang` reads a message starting with `!`: `help`, `bind`,

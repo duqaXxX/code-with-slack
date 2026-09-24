@@ -46,9 +46,9 @@ All notable changes to this project are documented here. The format follows
   shows the footer, which counts the tasks still running (`⏳ 1 shell · 1 agent`). Tool lines
   are small grey text, and calls that succeed fold into one line of tool names and counts once
   the reply is finished, as in the terminal.
-- A clarifying question is one line with Answer and Skip; Answer opens a form with a tab per
-  question, radio buttons or checkboxes with each option's description, and an Other field,
-  and Submit requires an answer to every question.
+- A clarifying question is one line with Answer and Skip; Answer opens a form with one question
+  at a time, radio buttons or checkboxes with each option's description, and an Other field;
+  Next moves on only once the question has an answer, and Submit ends on the last.
 - Shutting down or rebinding a channel ends every waiting reply with the reason, and a message
   sent during a bind no longer opens a session on the old directory.
 - The footer's `/usage` probe gives up after 60 seconds instead of stopping the limits for good.

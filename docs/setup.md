@@ -232,7 +232,7 @@ The bot answers one person, and the rest of this list protects what that person 
 | `!bypass on` / `off` | Switches the channel's session to `bypassPermissions` and back; a restart turns it off |
 | `!status` | Shows the channel's directory, session and mode |
 | `!stop` | Stops the turn that is running and denies its pending approvals |
-| a question from Claude | Appears as one line with **Answer** and **Skip**; Answer opens a form with a tab per question, the options (one or several) and an **Other** field; **Submit** accepts it only once every question has an answer |
+| a question from Claude | Appears as one line with **Answer** and **Skip**; Answer opens a form with one question at a time, the options (one or several) and an **Other** field; **Next** moves on once the question has an answer, **Submit** on the last |
 
 Slack does not pass a Claude Code command typed with its own slash: `/compact` alone makes Slack
 answer that it is not a valid command. Type `!compact`. A `!word` that is not a command the

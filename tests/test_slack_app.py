@@ -292,17 +292,12 @@ QUESTIONS = [
 
 
 def form_body(kind: str, draft: Draft, values: dict[str, Any], **user: Any) -> dict[str, Any]:
-    """The form's recorded Submit (view_submission, 2026-09-24), carrying this draft and state;
-    as `block_actions`, a click on the Sizes tab of the same view (the shape Slack documents:
-    the view with its state, plus the action)."""
+    """The form's recorded Submit (view_submission, 2026-09-24), carrying this draft and state."""
     body = recorded("submit")
     body["type"] = kind
     body["user"].update(user)
     body["view"]["private_metadata"] = draft.dump()
     body["view"]["state"] = {"values": values}
-    if kind == "block_actions":
-        body["trigger_id"] = "0000000000.0000000000.fake"  # the scrub drops the real one
-        body["actions"] = [{"action_id": "question_tab_1", "value": "1", "type": "button"}]
     return body
 
 
@@ -329,15 +324,6 @@ async def test_nobody_else_can_open_the_form(world: World) -> None:
     assert not world.slack.calls_to("views.open") and not world.posted_anything()
 
 
-async def test_a_tab_keeps_the_picks_and_shows_its_question(world: World) -> None:
-    approval_id, _ = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
-    await world.dispatch(form_body("block_actions", Draft(approval_id, CHANNEL), picked(0, "1")))
-    (updated,) = world.slack.calls_to("views.update")
-    assert updated["view_id"] == recorded("submit")["view"]["id"]
-    view = json.loads(updated["view"]) if isinstance(updated["view"], str) else updated["view"]
-    assert Draft.load(view["private_metadata"]) == Draft(approval_id, CHANNEL, 1, {0: [1]})
-
-
 async def test_submit_with_the_open_question_unanswered_shows_an_error(world: World) -> None:
     approval_id, pending = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
     response = await world.dispatch(form_body("view_submission", Draft(approval_id, CHANNEL), {}))
@@ -348,14 +334,16 @@ async def test_submit_with_the_open_question_unanswered_shows_an_error(world: Wo
     assert not pending.future.done()
 
 
-async def test_submit_with_another_question_unanswered_moves_to_it(world: World) -> None:
+async def test_next_with_an_answer_moves_to_the_next_question(world: World) -> None:
     approval_id, pending = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
     response = await world.dispatch(
         form_body("view_submission", Draft(approval_id, CHANNEL), picked(0, "0"))
     )
     answer = json.loads(response.body)
     assert answer["response_action"] == "update"
-    assert Draft.load(answer["view"]["private_metadata"]).active == 1
+    assert Draft.load(answer["view"]["private_metadata"]) == Draft(
+        approval_id, CHANNEL, 1, {0: [0]}
+    )
     assert not pending.future.done()
 
 
@@ -393,13 +381,6 @@ async def test_a_form_that_cannot_open_tells_the_owner(world: World) -> None:
     body["trigger_id"] = "0000000000.0000000000.fake"
     await world.dispatch(body)
     assert world.ephemerals() == [texts.QUESTION_NOT_OPENED.format(error="expired_trigger_id")]
-
-
-async def test_a_tab_click_never_loses_to_an_older_view(world: World) -> None:
-    approval_id, _ = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
-    await world.dispatch(form_body("block_actions", Draft(approval_id, CHANNEL), picked(0, "1")))
-    (updated,) = world.slack.calls_to("views.update")
-    assert "hash" not in updated  # the last click wins instead of failing on a hash_conflict
 
 
 async def test_a_submit_that_needs_more_answers_makes_no_slack_call_first(world: World) -> None:

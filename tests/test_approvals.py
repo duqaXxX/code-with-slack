@@ -99,29 +99,26 @@ TWO = [
 ]
 
 
-def tab_labels(view: dict[str, Any]) -> list[str]:
-    tabs = next(b for b in view["blocks"] if b.get("block_id") == "tabs")
-    return [e["text"]["text"] for e in tabs["elements"]]
-
-
-def test_the_form_shows_the_active_question_under_tabs() -> None:
+def test_the_form_shows_one_question_with_next_until_the_last() -> None:
     view = question_view(Draft("abc", "C1"), TWO)
     assert view["type"] == "modal" and view["callback_id"] == "question_form"
     assert Draft.load(view["private_metadata"]) == Draft("abc", "C1")
-    assert tab_labels(view) == ["Colour", "Sizes"]
-    tabs = next(b for b in view["blocks"] if b.get("block_id") == "tabs")
-    assert tabs["elements"][0].get("style") == "primary" and "style" not in tabs["elements"][1]
+    assert view["submit"]["text"] == "Next (1/2)"
+    assert view["blocks"][0]["elements"][0]["text"] == "Colour · 1 of 2"
     inputs = [b for b in view["blocks"] if b["type"] == "input"]
     assert [b["block_id"] for b in inputs] == ["q0", "o0"]
     assert inputs[0]["element"]["type"] == "radio_buttons"
     assert inputs[0]["element"]["options"][0]["description"]["text"] == "Warm"
     assert inputs[1]["element"]["type"] == "plain_text_input"
     assert inputs[1]["element"]["max_length"] == TYPED_LIMIT
+    assert all(b["type"] != "actions" for b in view["blocks"])  # no buttons above the question
 
 
-def test_the_second_tab_holds_checkboxes_and_restores_its_picks() -> None:
+def test_the_last_question_holds_checkboxes_and_submit() -> None:
     draft = Draft("abc", "C1", active=1, picks={1: [0, 1]}, typed={1: "xl"})
-    inputs = [b for b in question_view(draft, TWO)["blocks"] if b["type"] == "input"]
+    view = question_view(draft, TWO)
+    assert view["submit"]["text"] == "Submit"
+    inputs = [b for b in view["blocks"] if b["type"] == "input"]
     assert [b["block_id"] for b in inputs] == ["q1", "o1"]
     element = inputs[0]["element"]
     assert element["type"] == "checkboxes"
@@ -129,19 +126,13 @@ def test_the_second_tab_holds_checkboxes_and_restores_its_picks() -> None:
     assert inputs[1]["element"]["initial_value"] == "xl"
 
 
-def test_an_answered_tab_is_ticked() -> None:
-    assert tab_labels(question_view(Draft("abc", "C1", picks={0: [1]}), TWO)) == [
-        "✓ Colour",
-        "Sizes",
-    ]
-
-
-def test_a_single_question_has_no_tabs() -> None:
+def test_a_single_question_has_no_counter() -> None:
     view = question_view(Draft("abc", "C1"), TWO[:1])
-    assert all(b.get("block_id") != "tabs" for b in view["blocks"])
+    assert view["submit"]["text"] == "Submit"
+    assert view["blocks"][0]["type"] == "input"
 
 
-def test_absorb_keeps_what_the_active_tab_shows() -> None:
+def test_absorb_keeps_what_the_question_on_screen_shows() -> None:
     state = {
         "q1": {"answer": {"type": "checkboxes", "selected_options": [{"value": "1"}]}},
         "o1": {"other": {"type": "plain_text_input", "value": " xl "}},
