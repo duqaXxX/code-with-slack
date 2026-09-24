@@ -143,10 +143,10 @@ left out.
   built and the reply closed.
 - A background task that finishes between turns sends its notification while the session is
   idle, then Claude Code starts a turn of its own to report it. That turn gets a reply of its own
-  that opens with one line per task it reports (`renderer.ended_line`: the task's title, its
-  outcome, and how long it ran, timed by the session from its `TaskStartedMessage`), and the
-  next queued message waits for it to finish. `Background task update` opens it only when no
-  task end was seen.
+  that opens with one line per task it reports (`renderer.ended_line`: the notification's own
+  `summary`, as the terminal prints it, with `usage.duration_ms` when the task reports it), and
+  has no footer: the footer belongs to the owner's replies. The next queued message waits for
+  it to finish. `Background task update` opens it only when no task end was seen.
   When a message was already sent and waits for its turn, that turn comes first and Claude Code
   reports the task inside it, with no turn of its own (measured on Claude Code 2.1.280), so
   nothing waits.
@@ -158,9 +158,10 @@ left out.
   another reply. A background subagent's own calls (`parent_tool_use_id` pointing at a line of
   an ended turn) go under its line the same way and never open a reply. A notification for such
   a task still makes the next queued message wait for the turn Claude Code starts to report it.
-- The channel's latest reply ends with the list of what is still running (`⏳ N running`, one
-  line per task, at most 10), above its status or footer. A new reply takes the list over and
-  the previous one drops it, so the list stays at the bottom of the channel.
+- The channel's latest reply counts what is still running at the end of its footer, or of its
+  status line while Claude writes: `⏳ 1 shell · 1 agent`, by each task's `task_type`
+  (`sessions.TASK_KINDS`; a type not listed counts as a task). A new reply takes the counts
+  over and the previous one drops them; they disappear when nothing runs.
 - When the Claude Code process goes away (shutdown, rebinding, a process that exits), its tasks
   go with it: their lines close with `Stopped` and the list empties. The map lives in memory only.
 - Shutting down or binding the channel to another directory closes the session: every reply

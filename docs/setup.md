@@ -256,11 +256,11 @@ the tool's line in the reply records the call.
 
 Messages sent while a turn is running wait their turn; each gets its own reply. When a background
 task finishes while nothing runs, Claude Code starts a turn of its own to report it, as it does
-in the terminal: that reply opens with the task's end, such as
-`✓ Agent: review finished · 3m 59s`. While tasks run, the channel's latest reply lists them
-above its footer.
+in the terminal: that reply opens with Claude Code's own line for the task's end, such as
+`✓ Agent "review" finished · 3m 59s`, and has no footer. While tasks run, the footer of the
+channel's latest reply counts them, such as `⏳ 1 shell · 1 agent`.
 
-Every reply ends with a footer: `⚡ bypass` when bypass is on, the git branch, the model, the
+Every reply to your messages ends with a footer: `⚡ bypass` when bypass is on, the git branch, the model, the
 effort level, the context used, the session's tokens, and the 5-hour and weekly limits
 (`5h N% ↻ 2h · 7d N%`), which exist only with a claude.ai subscription. The effort level is the
 one last set in the session with `!effort` (or `!model`), otherwise

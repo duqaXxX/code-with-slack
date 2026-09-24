@@ -26,7 +26,6 @@ DEBOUNCE_SECONDS = 1.0
 MESSAGE_LIMIT = 11_000
 FALLBACK_LIMIT = 3_000
 ICONS = {"pending": "·", "in_progress": "…", "complete": "✓", "error": "✗"}
-RUNNING_LINES = 10  # a context block's text holds at most 3,000 characters
 
 
 def describe(exc: Exception) -> str:
@@ -122,7 +121,7 @@ class ReplySink:
         self._status = texts.WRITING
         self._finished = False
         self._footer: str | None = None
-        self._running: list[str] = []
+        self._running = ""
 
     async def open(self, status: str) -> None:
         """Post the reply at once, showing only its status: the owner sees an answer is coming."""
@@ -150,12 +149,12 @@ class ReplySink:
             tool.update = update
         await self._changed()
 
-    async def set_running(self, lines: list[str]) -> None:
-        """Show what still runs in the channel at the end of this reply, above its status or
-        footer; an empty list removes it. Only the channel's latest reply shows one."""
-        if lines == self._running:
+    async def set_running(self, counts: str) -> None:
+        """Show what still runs in the channel (`⏳ 1 shell · 1 agent`) after this reply's status
+        or footer, or on a line of its own; empty removes it. Only the latest reply shows one."""
+        if counts == self._running:
             return
-        self._running = lines
+        self._running = counts
         if self._finished or self._messages:
             await self._changed()
 
@@ -185,7 +184,7 @@ class ReplySink:
         await asyncio.sleep(DEBOUNCE_SECONDS)
         await self._flush(final=False, footer=None)
 
-    def _body(self) -> str:
+    def _body(self, final: bool) -> str:
         # A blank line between text and a run of tool lines makes them separate markdown
         # paragraphs; a run of tool lines stays one compact paragraph.
         paragraphs: list[str] = []
@@ -193,24 +192,25 @@ class ReplySink:
             if is_text:
                 paragraphs.append("".join(p.text for p in run if isinstance(p, _Text)).strip("\n"))
             else:
-                paragraphs.append("\n".join(tool_lines([p for p in run if isinstance(p, _Tool)])))
+                tools = [p for p in run if isinstance(p, _Tool)]
+                # Folded only once the reply is finished: while Claude works, nothing moves.
+                paragraphs.append(
+                    "\n".join(tool_lines(tools) if final else (t.line() for t in tools))
+                )
         return "\n\n".join(p for p in paragraphs if p)
 
     def _render(self, final: bool, footer: str | None) -> list[list[dict[str, Any]]]:
-        chunks = split(self._body())
+        chunks = split(self._body(final))
         messages: list[list[dict[str, Any]]] = [
             [{"type": "markdown", "text": chunk}] if chunk else [] for chunk in chunks
         ]
-        if self._running:
-            shown = self._running[:RUNNING_LINES]
-            if len(self._running) > len(shown):
-                shown.append(texts.RUNNING_MORE.format(count=len(self._running) - len(shown)))
-            header = texts.RUNNING.format(count=len(self._running))
-            messages[-1].append(context_block("\n".join([header, *shown])))
         if not final:
-            messages[-1].append(context_block(self._status))
-        elif footer:
-            messages[-1] += [{"type": "divider"}, context_block(footer)]
+            status = " · ".join(filter(None, (self._status, self._running)))
+            messages[-1].append(context_block(status))
+            return messages
+        last_line = " · ".join(filter(None, (footer, self._running)))
+        if last_line:
+            messages[-1] += [{"type": "divider"}, context_block(last_line)]
         return messages
 
     async def _flush(self, *, final: bool, footer: str | None) -> None:

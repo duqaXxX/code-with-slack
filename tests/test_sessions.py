@@ -336,7 +336,9 @@ def test_resolve_directory(tmp_path: Path) -> None:
     assert resolve_directory(str(root / "missing"), root) is None
 
 
-REPORT = re.compile(r"^[✓✗] `.+` (finished|failed|stopped) · ", re.MULTILINE)
+# A report opens with Claude Code's notification summary (recorded: `Background command "..."
+# completed (exit code 0)`, `Agent "..." finished`), never with a tool line.
+REPORT = re.compile(r'^[✓✗] (Background command|Agent) "', re.MULTILINE)
 
 
 def is_report(reply: str) -> bool:
@@ -344,7 +346,7 @@ def is_report(reply: str) -> bool:
     return bool(REPORT.search(reply)) or texts.BACKGROUND_NOTICE in reply
 
 
-async def test_a_report_opens_with_the_task_s_name_and_duration(
+async def test_a_report_opens_with_claude_code_s_summary_and_has_no_footer(
     harness_for: Callable[..., Harness],
 ) -> None:
     first, notice, injected = split_background()
@@ -354,8 +356,10 @@ async def test_a_report_opens_with_the_task_s_name_and_duration(
     await until(lambda: len(h.replies()) == 2 and bool(h.replies()[1]))
     await asyncio.sleep(0.05)
     report = h.replies()[1]
-    assert re.match(r"✓ `Bash: sleep 5; echo done` finished · \d+s", report)
+    summary = next(m.summary for m in notice if isinstance(m, TaskNotificationMessage))
+    assert report.startswith(f"✓ {summary}")  # Claude Code's own words, as in the terminal
     assert texts.BACKGROUND_NOTICE not in report
+    assert {"type": "divider"} not in h.slack.message_blocks()[1]  # no footer: not the owner's
 
 
 async def test_a_report_line_never_outlives_its_chance(
@@ -368,7 +372,7 @@ async def test_a_report_line_never_outlives_its_chance(
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
     h.clients[0].inject(notice)  # and Claude Code starts no turn of its own
     await asyncio.sleep(0.2)
-    assert session._ended == [] and session._started_at == {}
+    assert session._ended == []
 
 
 async def test_the_task_bookkeeping_goes_with_the_process(
@@ -378,10 +382,10 @@ async def test_the_task_bookkeeping_goes_with_the_process(
     h = harness_for({"turns": [first]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    assert session._started_at
+    assert session._task_types
     h.clients[0].inject([EndOfStream()])
     await until(lambda: session._client is None)
-    assert session._started_at == {} and session._ended == []
+    assert session._task_types == {} and session._ended == []
 
 
 def split_background() -> tuple[list[Any], list[Any], list[Any]]:
@@ -420,17 +424,13 @@ async def test_owner_query_waits_for_an_expected_background_turn(
 
 
 def running_block(blocks: list[dict[str, Any]]) -> str | None:
-    """The running list a message shows, if any."""
-    running = texts.RUNNING.split("{")[0]
-    for block in blocks:
-        if block.get("type") == "context":
-            text = str(block["elements"][0]["text"])
-            if text.startswith(running):
-                return text
-    return None
+    """The running counts a message's footer shows, if any."""
+    footer = blocks[-1] if blocks and blocks[-1].get("type") == "context" else None
+    text = str(footer["elements"][0]["text"]) if footer else ""
+    return text[text.index("⏳") :] if "⏳" in text else None
 
 
-async def test_the_running_list_follows_the_latest_reply(
+async def test_running_counts_follow_the_latest_reply(
     harness_for: Callable[..., Harness],
 ) -> None:
     first, notice, injected = split_background()
@@ -438,7 +438,7 @@ async def test_the_running_list_follows_the_latest_reply(
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
     shown = h.slack.message_blocks()
-    assert running_block(shown[0]) is not None
+    assert running_block(shown[0]) == "⏳ 1 shell"  # task_type local_bash in the recording
     await asyncio.wait_for((await session.submit("next")).done.wait(), 2)
     shown = h.slack.message_blocks()
     assert running_block(shown[0]) is None  # moved to the latest reply

@@ -152,35 +152,41 @@ async def test_opening_shows_the_status_before_any_content(slack: FakeSlack) -> 
     assert len(slack.calls_to("chat.postMessage")) == 1
 
 
-async def test_the_running_list_sits_at_the_end_of_a_finished_reply(slack: FakeSlack) -> None:
+async def test_running_counts_join_the_footer_of_a_finished_reply(slack: FakeSlack) -> None:
     sink = reply(slack)
     await sink.text("Started it.")
     await sink.finish([], "footer")
-    await sink.set_running(["… `Bash: sleep 60`"])
+    await sink.set_running("⏳ 1 shell")
     shown = last_blocks(slack)  # written at once: no rewrite is scheduled after the end
-    assert [b["type"] for b in shown] == ["markdown", "context", "divider", "context"]
-    assert shown[1] == sinks.context_block(texts.RUNNING.format(count=1) + "\n… `Bash: sleep 60`")
-    await sink.set_running([])
-    assert [b["type"] for b in last_blocks(slack)] == ["markdown", "divider", "context"]
+    assert [b["type"] for b in shown] == ["markdown", "divider", "context"]
+    assert shown[-1] == sinks.context_block("footer · ⏳ 1 shell")
+    await sink.set_running("")
+    assert last_blocks(slack)[-1] == sinks.context_block("footer")
     assert len(slack.calls_to("chat.postMessage")) == 1
 
 
-async def test_the_running_list_sits_above_the_status_while_writing(slack: FakeSlack) -> None:
+async def test_running_counts_stand_alone_when_a_reply_has_no_footer(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.text("The command finished.")
+    await sink.finish([], None)
+    assert [b["type"] for b in last_blocks(slack)] == ["markdown"]
+    await sink.set_running("⏳ 1 agent")
+    assert last_blocks(slack)[1:] == [{"type": "divider"}, sinks.context_block("⏳ 1 agent")]
+
+
+async def test_running_counts_follow_the_status_while_writing(slack: FakeSlack) -> None:
     sink = reply(slack)
     await sink.text("Working.")
-    await sink.set_running(["… `Agent: review`", "… `Bash: sleep 60`"])
+    await sink.set_running("⏳ 2 agents")
     await asyncio.sleep(0.05)
-    shown = last_blocks(slack)
-    assert [b["type"] for b in shown] == ["markdown", "context", "context"]
-    assert shown[1]["elements"][0]["text"].startswith(texts.RUNNING.format(count=2))
-    assert shown[2] == sinks.context_block(texts.WRITING)
+    assert last_blocks(slack)[-1] == sinks.context_block(f"{texts.WRITING} · ⏳ 2 agents")
 
 
-async def test_an_unchanged_running_list_writes_nothing(slack: FakeSlack) -> None:
+async def test_unchanged_running_counts_write_nothing(slack: FakeSlack) -> None:
     sink = reply(slack)
     await sink.finish([], "footer")
     before = len(writes(slack))
-    await sink.set_running([])
+    await sink.set_running("")
     assert len(writes(slack)) == before
 
 
@@ -226,7 +232,17 @@ async def test_running_failed_and_task_lines_stay_whole(slack: FakeSlack) -> Non
     await sink.task(tool("c", "Edit", "error", output="old_string not found"))
     await sink.task(tool("d", "Agent", task=True))
     await sink.task(tool("e", "Read"))
-    await asyncio.sleep(0.05)
+    await sink.finish([], None)
     assert slack.message_texts() == [
         "✓ Bash\n… `Bash: b`\n✗ `Edit: c` · old_string not found\n✓ `Agent: d`\n✓ Read"
     ]
+
+
+async def test_lines_fold_only_once_the_reply_is_finished(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.task(tool("a", "Read"))
+    await sink.task(tool("b", "Read"))
+    await asyncio.sleep(0.05)
+    assert slack.message_texts() == ["✓ `Read: a`\n✓ `Read: b`"]  # nothing moves while it works
+    await sink.finish([], None)
+    assert slack.message_texts() == ["✓ Read \u00d72"]

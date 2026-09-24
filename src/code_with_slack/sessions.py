@@ -5,7 +5,6 @@ import asyncio
 import contextlib
 import logging
 import os
-import time
 from collections import deque
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
@@ -73,6 +72,10 @@ QUESTION_TOOL = "AskUserQuestion"
 # After a background task's notification, the CLI starts a turn of its own to report it
 # (measured on Claude Code 2.1.280). If that turn never comes, the owner's queue moves on.
 INJECTED_TURN_WAIT = 30.0
+# How the footer counts a running task, by its task_type (measured on Claude Code 2.1.280:
+# `local_bash` for a background command, `local_agent` for a subagent). A type not listed here
+# counts as a task, so a new kind shows with no change.
+TASK_KINDS = {"local_bash": "shell", "local_agent": "agent"}
 # Tasks whose reply the session remembers. An ended task stays a while, since an agent can
 # report again after its notification; past this many, the oldest ended ones are forgotten.
 TASK_REPLIES_KEPT = 100
@@ -186,9 +189,9 @@ class ChannelSession:
         self._task_replies: dict[str, TurnRenderer] = {}
         # The channel's newest reply: the only one that shows what is still running.
         self._latest: ReplySink | None = None
-        # When each task started (monotonic), and the end lines that open Claude Code's next
-        # turn of its own, the one that reports them.
-        self._started_at: dict[str, float] = {}
+        # Each task's type, for the footer's counts, and the end lines that open Claude Code's
+        # next turn of its own, the one that reports them.
+        self._task_types: dict[str, str] = {}
         self._ended: list[str] = []
         # Clear while a background notification's own turn is expected or running: the owner's
         # next query waits, so the two replies never share a thread.
@@ -362,11 +365,9 @@ class ChannelSession:
         if isinstance(message, SystemMessage) and message.subtype == "init":
             self.cli_version = message.data.get("claude_code_version")
         if isinstance(message, TaskStartedMessage):
-            self._started_at[message.task_id] = time.monotonic()
-        if isinstance(message, TaskNotificationMessage):
-            line = self._ended_line(message)  # also forgets when the task started
-            if self._active is None and not self._sent:
-                self._ended.append(line)
+            self._task_types[message.task_id] = message.task_type or ""
+        if isinstance(message, TaskNotificationMessage) and self._active is None and not self._sent:
+            self._ended.append(self._ended_line(message))
         if isinstance(message, TASK_MESSAGES) and message.task_id in self._task_replies:
             # A task that outlived its turn shows only on its own line, wherever it started.
             await self._task_replies[message.task_id].feed(message)
@@ -397,12 +398,12 @@ class ChannelSession:
 
     def _ended_line(self, message: TaskNotificationMessage) -> str:
         origin = self._task_replies.get(message.task_id)
-        title = (origin.task_title(message.task_id) if origin else None) or one_line(
-            message.summary or message.task_id, 80
+        title = origin.task_title(message.task_id) if origin else None
+        summary = (
+            one_line(message.summary, 200) if message.summary else f"`{title or message.task_id}`"
         )
-        started = self._started_at.pop(message.task_id, None)
-        seconds = None if started is None else time.monotonic() - started
-        return ended_line(title, message.status, seconds)
+        duration = message.usage["duration_ms"] if message.usage else None
+        return ended_line(summary, message.status, duration)
 
     def _opening(self) -> str:
         """What opens a reply of Claude Code's own turn: the end of each task it reports."""
@@ -483,7 +484,7 @@ class ChannelSession:
         """The Claude Code process is going away with its tasks: no reply keeps showing one."""
         renderers = set(self._task_replies.values())
         self._task_replies.clear()
-        self._started_at.clear()
+        self._task_types.clear()
         self._ended.clear()
         for renderer in renderers:
             with contextlib.suppress(Exception):
@@ -493,21 +494,30 @@ class ChannelSession:
     def _origin_of(self, tool_use_id: str) -> TurnRenderer | None:
         return next((r for r in self._task_replies.values() if r.owns(tool_use_id)), None)
 
-    def _running_lines(self) -> list[str]:
-        titles = (r.running_title(task_id) for task_id, r in self._task_replies.items())
-        return [f"… `{title}`" for title in titles if title is not None]
+    def _running_counts(self) -> str:
+        """`⏳ 1 shell · 2 agents`: the tasks that outlived their turn and still run."""
+        counts: dict[str, int] = {}
+        for task_id, renderer in self._task_replies.items():
+            if task_id in renderer.running_tasks:
+                kind = TASK_KINDS.get(self._task_types.get(task_id, ""), "task")
+                counts[kind] = counts.get(kind, 0) + 1
+        if not counts:
+            return ""
+        return texts.RUNNING.format(
+            counts=" · ".join(f"{n} {kind}{'s' if n > 1 else ''}" for kind, n in counts.items())
+        )
 
     async def _show_running(self) -> None:
         if self._latest is not None:
-            await self._latest.set_running(self._running_lines())
+            await self._latest.set_running(self._running_counts())
 
     async def _sink(self) -> ReplySink:
         """A new reply, which becomes the channel's latest and takes over the running list."""
         sink = ReplySink(self._deps.slack, channel=self.channel_id)
         previous, self._latest = self._latest, sink
-        await sink.set_running(self._running_lines())
+        await sink.set_running(self._running_counts())
         if previous is not None:
-            await previous.set_running([])
+            await previous.set_running("")
         return sink
 
     async def _finish(self, active: ActiveTurn, result: ResultMessage) -> None:
@@ -517,7 +527,9 @@ class ChannelSession:
             changed, effort = effort_change(result.result or "")
             if changed:
                 self.effort = effort
-            await self._close_reply(active.renderer, await self._footer(result))
+            # The footer goes under the owner's replies; Claude Code's own reports have none.
+            footer = await self._footer(result) if active.turn is not None else None
+            await self._close_reply(active.renderer, footer)
         finally:
             await self._settle(active.turn, result)
 

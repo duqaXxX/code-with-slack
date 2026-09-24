@@ -51,8 +51,7 @@ STATUS = (
     "Claude Code: `{version}`\nNow: {activity}"
 )
 ACTIVITY_IDLE = "idle"
-RUNNING = "⏳ {count} running"
-RUNNING_MORE = "and {count} more"
+RUNNING = "⏳ {counts}"
 ACTIVITY_BUSY = "running a turn, {queued} queued"
 HELP_OWN = "*code-with-slack*"
 HELP_WORDS = (
