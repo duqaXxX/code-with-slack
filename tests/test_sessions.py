@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from claude_agent_sdk import ClaudeAgentOptions, RateLimitEvent, ResultError, ResultMessage
+from claude_agent_sdk import ClaudeAgentOptions, Message, RateLimitEvent, ResultError, ResultMessage
+from claude_agent_sdk._internal.message_parser import parse_message
 from claude_agent_sdk.types import (
     PermissionResultAllow,
     PermissionResultDeny,
@@ -346,7 +347,7 @@ def is_report(reply: str) -> bool:
     return bool(REPORT.search(reply)) or texts.BACKGROUND_NOTICE in reply
 
 
-async def test_a_report_opens_with_claude_code_s_summary_and_has_no_footer(
+async def test_a_report_opens_with_claude_code_s_summary_and_takes_the_footer(
     harness_for: Callable[..., Harness],
 ) -> None:
     first, notice, injected = split_background()
@@ -359,7 +360,8 @@ async def test_a_report_opens_with_claude_code_s_summary_and_has_no_footer(
     summary = next(m.summary for m in notice if isinstance(m, TaskNotificationMessage))
     assert report.startswith(f"✓ {summary}")  # Claude Code's own words, as in the terminal
     assert texts.BACKGROUND_NOTICE not in report
-    assert {"type": "divider"} not in h.slack.message_blocks()[1]  # no footer: not the owner's
+    shown = h.slack.message_blocks()
+    assert {"type": "divider"} in shown[1] and {"type": "divider"} not in shown[0]  # latest only
 
 
 async def test_an_owner_answer_behind_a_wrong_guess_keeps_its_footer(
@@ -383,10 +385,45 @@ async def test_a_task_type_is_forgotten_when_the_task_ends(
     h = harness_for({"turns": [first]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    assert session._task_types
+    assert session._tasks
     h.clients[0].inject(notice + injected)
     await until(lambda: len(h.replies()) == 2)
-    assert session._task_types == {}
+    assert session._tasks == {}
+
+
+# A background agent's end, as the SDK delivered it (recorded 2026-09-24 by
+# actions/scripts/2026-09-24-task-notification-summary-probe.py): its summary is the agent's
+# result, not a status line.
+def agent_end(task_id: str, tool_use_id: str) -> Message:
+    return parse_message(
+        {
+            "type": "system",
+            "subtype": "task_notification",
+            "task_id": task_id,
+            "tool_use_id": tool_use_id,
+            "status": "completed",
+            "output_file": "/home/dev/tasks/out",
+            "summary": "| File | Lines |\n|---|---|\n| README.md | 3 |",
+            "usage": {"total_tokens": 11181, "tool_uses": 0, "duration_ms": 10400},
+            "session_id": "00000000-0000-0000-0000-000000000001",
+            "uuid": "00000000-0000-0000-0000-000000000002",
+        }
+    )
+
+
+async def test_a_background_agent_s_end_reads_as_in_the_terminal(
+    harness_for: Callable[..., Harness],
+) -> None:
+    recorded = sdk_messages("subagent")
+    started = next(m for m in recorded if isinstance(m, TaskStartedMessage))
+    h = harness_for({"turns": [recorded]})
+    await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
+    assert started.tool_use_id is not None
+    h.clients[0].inject([agent_end(started.task_id, started.tool_use_id), *sdk_messages("tools")])
+    await until(lambda: len(h.replies()) == 2 and bool(h.replies()[1]))
+    await asyncio.sleep(0.05)
+    assert h.replies()[1].startswith(f'✓ Agent "{started.description}" finished · 10s')
+    assert "README.md" not in h.replies()[1].splitlines()[0]
 
 
 async def test_a_report_line_never_outlives_its_chance(
@@ -409,10 +446,10 @@ async def test_the_task_bookkeeping_goes_with_the_process(
     h = harness_for({"turns": [first]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    assert session._task_types
+    assert session._tasks
     h.clients[0].inject([EndOfStream()])
     await until(lambda: session._client is None)
-    assert session._task_types == {} and session._ended == []
+    assert session._tasks == {} and session._ended == []
 
 
 def split_background() -> tuple[list[Any], list[Any], list[Any]]:
@@ -553,9 +590,8 @@ async def test_closing_the_session_stops_the_lines_of_running_tasks(
     h = harness_for({"turns": [first]})
     await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
     await h.manager.close_all()
-    started = h.slack.message_blocks()[0]
-    assert running_block(started) is None
-    assert "Stopped" in started[0]["text"]
+    assert running_block(h.slack.message_blocks()[0]) is None
+    assert "Stopped" in h.replies()[0]
 
 
 async def test_a_notification_with_no_turn_updates_its_line_and_releases_the_queue(

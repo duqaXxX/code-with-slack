@@ -80,13 +80,16 @@ window, below the message that asked for it. The message is rewritten with `chat
 once a second (Slack allows `chat.update` 50 or more times a minute), in the order things happen:
 text as Claude writes it, and a line per tool call where the call happens, updated in place
 (`…` while it runs, `✓` when it succeeds, `✗` and the first line of its output when it fails).
-Consecutive tool lines form one paragraph; a blank line separates them from the text around them.
+Claude's text is a `markdown` block; each run of tool lines is a `context` block (small, grey
+text, as the terminal dims them), escaped for mrkdwn and marked with a `tools-` block id.
 `sinks.tool_lines` folds the calls in such a run that ended well into one line of tool names and
 counts (`✓ Bash · Read ×2`), by the tool's name whatever the tool; a call that runs or failed, a
 task's line (`TaskUpdate.task`: a subagent, a background command) and a stopped line stay whole.
 The reply is posted as soon as the owner's message is queued, showing only a status line:
 `Claude is writing…`, or `Waiting for the previous reply…` behind another turn. While the turn
-runs the status stays last; when it ends, a divider and the footer replace it. A reply longer than about 11,000 characters continues in a new message.
+runs the status stays last; when it ends, a divider and the footer replace it. Only the
+channel's latest reply shows the footer: a new reply takes it over (`ReplySink.set_latest`), so
+it stays at the bottom of the channel as the terminal's status line. A reply longer than about 11,000 characters continues in a new message.
 
 Slack's native streaming API (`chat.startStream`) is not used: in an ordinary channel it works
 only inside a thread, and replies belong in the main window. A write Slack refuses, or cannot
@@ -143,10 +146,12 @@ left out.
   built and the reply closed.
 - A background task that finishes between turns sends its notification while the session is
   idle, then Claude Code starts a turn of its own to report it. That turn gets a reply of its own
-  that opens with one line per task it reports (`renderer.ended_line`: the notification's own
-  `summary`, as the terminal prints it, with `usage.duration_ms` when the task reports it), and
-  has no footer: the footer belongs to the owner's replies. The next queued message waits for
-  it to finish. `Background task update` opens it only when no task end was seen.
+  that opens with one line per task it reports, as the terminal prints it
+  (`ChannelSession._ended_line`): a command's notification `summary`, which already reads
+  `Background command "..." completed (exit code 0)`, or `Agent "<description>" finished` built
+  from the task's `TaskStartedMessage`, since an agent's `summary` is its result; plus
+  `usage.duration_ms` when the task reports it (`sessions.TASK_KINDS`, `SUMMARY_IS_END_LINE`).
+  The next queued message waits for it to finish. `Background task update` opens it only when no task end was seen.
   When a message was already sent and waits for its turn, that turn comes first and Claude Code
   reports the task inside it, with no turn of its own (measured on Claude Code 2.1.280), so
   nothing waits.

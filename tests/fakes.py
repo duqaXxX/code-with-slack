@@ -190,7 +190,8 @@ class FakeSlack(AsyncWebClient):
         ).validate()
 
     def message_texts(self) -> list[str]:
-        """The markdown each posted message shows last, in the order the messages were posted."""
+        """The body each posted message shows last (Claude's text and tool lines, as paragraphs),
+        in the order the messages were posted."""
         posted = iter(self.posted_ts)
         order: list[str] = []
         shown: dict[str, str] = {}
@@ -202,8 +203,12 @@ class FakeSlack(AsyncWebClient):
                 ts = args["ts"]
             else:
                 continue
-            markdown = [b["text"] for b in args.get("blocks") or [] if b.get("type") == "markdown"]
-            shown[ts] = markdown[0] if markdown else shown.get(ts, "")
+            body = [
+                b["text"] if b.get("type") == "markdown" else b["elements"][0]["text"]
+                for b in args.get("blocks") or []
+                if b.get("type") == "markdown" or str(b.get("block_id", "")).startswith("tools-")
+            ]
+            shown[ts] = "\n\n".join(body) if body else shown.get(ts, "")
         return [shown[ts] for ts in order]
 
     def message_blocks(self) -> list[list[dict[str, Any]]]:

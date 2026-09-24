@@ -41,10 +41,10 @@ All notable changes to this project are documented here. The format follows
   session's Claude Code commands, filtered by the text when one is given, and `!bind`, `!bypass`, `!status` and `!stop` replace the `/cc`
   subcommands. The `/cc` slash command, its command picker and the `commands` scope are gone.
 - Claude Code's report of a background task opens with Claude Code's own line for the task's
-  end (`✓ Agent "review" finished · 3m 59s`) instead of a generic label, and has no footer. The
-  latest reply's footer counts the tasks still running (`⏳ 1 shell · 1 agent`). Tool calls
-  that succeed fold into one line of tool names and counts once the reply is finished, as in
-  the terminal.
+  end (`✓ Agent "review" finished · 3m 59s`) instead of a generic label. Only the latest reply
+  shows the footer, which counts the tasks still running (`⏳ 1 shell · 1 agent`). Tool lines
+  are small grey text, and calls that succeed fold into one line of tool names and counts once
+  the reply is finished, as in the terminal.
 - Shutting down or rebinding a channel ends every waiting reply with the reason, and a message
   sent during a bind no longer opens a session on the old directory.
 - The footer's `/usage` probe gives up after 60 seconds instead of stopping the limits for good.

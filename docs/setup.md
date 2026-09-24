@@ -246,10 +246,9 @@ A reply is one message in the channel. It appears as soon as you send your messa
 `Claude is writing…`, or `Waiting for the previous reply…` when another turn is still running.
 It is then rewritten about once a second while Claude works: text in the order it is written,
 and a line per tool call where it happens (`…` while it runs, `✗` with its output when it
-fails). Calls that succeed fold into one line of tool names and counts, such as
-`✓ Bash · Read ×2`; a subagent or a background task keeps a line of its own. When the reply is
-complete, a divider and the footer replace the status
-line. A reply longer than one Slack message continues in the next one.
+fails), in small grey text. Once the reply is complete, calls that succeeded fold into one line
+of tool names and counts, such as `✓ Bash · Read ×2`; a subagent or a background task keeps a
+line of its own, and a divider and the footer replace the status line. A reply longer than one Slack message continues in the next one.
 
 An approval request is a message of its own below the reply; once you decide, it disappears and
 the tool's line in the reply records the call.
@@ -257,10 +256,10 @@ the tool's line in the reply records the call.
 Messages sent while a turn is running wait their turn; each gets its own reply. When a background
 task finishes while nothing runs, Claude Code starts a turn of its own to report it, as it does
 in the terminal: that reply opens with Claude Code's own line for the task's end, such as
-`✓ Agent "review" finished · 3m 59s`, and has no footer. While tasks run, the footer of the
-channel's latest reply counts them, such as `⏳ 1 shell · 1 agent`.
+`✓ Agent "review" finished · 3m 59s`. While tasks run, the footer counts them, such as
+`⏳ 1 shell · 1 agent`.
 
-Every reply to your messages ends with a footer: `⚡ bypass` when bypass is on, the git branch, the model, the
+The channel's latest reply ends with a footer, which moves to each new reply: `⚡ bypass` when bypass is on, the git branch, the model, the
 effort level, the context used, the session's tokens, and the 5-hour and weekly limits
 (`5h N% ↻ 2h · 7d N%`), which exist only with a claude.ai subscription. The effort level is the
 one last set in the session with `!effort` (or `!model`), otherwise
