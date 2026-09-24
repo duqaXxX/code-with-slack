@@ -505,7 +505,7 @@ async def test_owner_query_waits_for_an_expected_background_turn(
 
 def running_block(blocks: list[dict[str, Any]]) -> str | None:
     """The running counts a message's footer shows, if any."""
-    blocks = [b for b in blocks if b.get("block_id") != "spacer"]
+    blocks = [b for b in blocks if not str(b.get("block_id", "")).startswith("spacer")]
     footer = blocks[-1] if blocks and blocks[-1].get("type") == "context" else None
     text = str(footer["elements"][0]["text"]) if footer else ""
     return text[text.index("⏳") :] if "⏳" in text else None
@@ -749,7 +749,9 @@ def statuses(h: Harness) -> list[str]:
     """The status line or footer (last context block but the spacer) of every write, in order."""
     lasts = []
     for m, a in h.slack.calls:
-        blocks = [b for b in a.get("blocks") or [] if b.get("block_id") != "spacer"]
+        blocks = [
+            b for b in a.get("blocks") or [] if not str(b.get("block_id", "")).startswith("spacer")
+        ]
         if m in ("chat.postMessage", "chat.update") and blocks and blocks[-1]["type"] == "context":
             lasts.append(blocks[-1]["elements"][0]["text"])
     return lasts
