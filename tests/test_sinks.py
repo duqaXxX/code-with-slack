@@ -39,7 +39,7 @@ async def test_a_reply_is_one_message_in_the_main_window(slack: FakeSlack) -> No
     posts = slack.calls_to("chat.postMessage")
     assert len(posts) == 1 and posts[0].get("thread_ts") is None
     assert all(a["ts"] == slack.posted_ts[0] for a in slack.calls_to("chat.update"))
-    assert last_blocks(slack)[-1] == {
+    assert last_blocks(slack)[-2] == {
         "type": "context",
         "elements": [{"type": "mrkdwn", "text": "main · ctx 6%"}],
     }
@@ -112,7 +112,7 @@ async def test_a_long_reply_continues_in_a_new_message(slack: FakeSlack) -> None
     chunks = [next(b["text"] for b in p["blocks"] if b["type"] == "markdown") for p in posts]
     assert all(len(c) <= sinks.MESSAGE_LIMIT for c in chunks)
     assert "\n".join(chunks) == text
-    assert last_blocks(slack)[-1]["elements"][0]["text"] == "footer"
+    assert last_blocks(slack)[-2]["elements"][0]["text"] == "footer"
 
 
 async def test_updates_are_debounced(slack: FakeSlack, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -138,8 +138,9 @@ async def test_a_divider_separates_the_reply_from_its_footer(slack: FakeSlack) -
     sink = reply(slack)
     await sink.text("Done.")
     await sink.finish([], "main · ctx 6%")
-    assert [b["type"] for b in last_blocks(slack)] == ["markdown", "context", "divider", "context"]
-    assert last_blocks(slack)[1] == sinks.SPACER  # an empty line before the footer's divider
+    blocks = last_blocks(slack)
+    assert [b["type"] for b in blocks] == ["markdown", "context", "divider", "context", "context"]
+    assert blocks[1] == blocks[-1] == sinks.SPACER  # an empty line before and after the footer
 
 
 async def test_opening_shows_the_status_before_any_content(slack: FakeSlack) -> None:
@@ -159,10 +160,10 @@ async def test_running_counts_join_the_footer_of_a_finished_reply(slack: FakeSla
     await sink.finish([], "footer")
     await sink.set_running("⏳ 1 shell")
     shown = last_blocks(slack)  # written at once: no rewrite is scheduled after the end
-    assert [b["type"] for b in shown] == ["markdown", "context", "divider", "context"]
-    assert shown[-1] == sinks.context_block("footer · ⏳ 1 shell")
+    assert [b["type"] for b in shown] == ["markdown", "context", "divider", "context", "context"]
+    assert shown[-2] == sinks.context_block("footer · ⏳ 1 shell")
     await sink.set_running("")
-    assert last_blocks(slack)[-1] == sinks.context_block("footer")
+    assert last_blocks(slack)[-2] == sinks.context_block("footer")
     assert len(slack.calls_to("chat.postMessage")) == 1
 
 
@@ -176,6 +177,7 @@ async def test_running_counts_stand_alone_when_a_reply_has_no_footer(slack: Fake
         sinks.SPACER,
         {"type": "divider"},
         sinks.context_block("⏳ 1 agent"),
+        sinks.SPACER,
     ]
 
 
@@ -214,7 +216,7 @@ async def test_text_after_the_end_keeps_the_footer(slack: FakeSlack) -> None:
     await asyncio.sleep(0.05)
     shown = last_blocks(slack)
     assert "A late error." in shown[0]["text"]
-    assert shown[-1] == sinks.context_block("footer")
+    assert shown[-2] == sinks.context_block("footer")
 
 
 def tool(id: str, name: str, status: str = "complete", **fields: Any) -> TaskUpdate:

@@ -31,7 +31,8 @@ All notable changes to this project are documented here. The format follows
   Native streaming in threads is gone, and so are the `assistant:write` scope and the agent view.
 - A reply appears as soon as the owner's message arrives, with a writing or waiting status; a
   divider separates it from the footer; the footer shows the effort level.
-- A blank line separates a reply's tool lines from its text, and the reply from its footer.
+- A blank line separates a reply's tool lines from its text, and the footer from the reply
+  above and the next message below.
 - A background task keeps its line in progress in the reply that started it until it ends or
   its Claude Code process goes away; a stopped line says `Stopped`. A background subagent's
   calls update its line instead of opening a reply.
