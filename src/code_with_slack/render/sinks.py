@@ -42,8 +42,8 @@ def context_block(text: str) -> dict[str, Any]:
     return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
 
 
-# An empty line between a reply and its footer's divider: Slack blocks have no margin setting,
-# so a context block holding only a zero-width space makes the gap.
+# An empty line before the footer's divider and after the footer, so replies stand apart: Slack
+# blocks have no margin setting, so a context block holding only a zero-width space makes the gap.
 SPACER: dict[str, Any] = {
     "type": "context",
     "block_id": "spacer",
@@ -266,7 +266,7 @@ class ReplySink:
             return messages
         last_line = " · ".join(filter(None, (footer, self._running))) if self._latest else ""
         if last_line:
-            messages[-1] += [SPACER, {"type": "divider"}, context_block(last_line)]
+            messages[-1] += [SPACER, {"type": "divider"}, context_block(last_line), SPACER]
         return messages
 
     async def _flush(self, *, final: bool, footer: str | None) -> None:
