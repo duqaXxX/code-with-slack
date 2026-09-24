@@ -5,13 +5,15 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
-from claude_agent_sdk import ResultMessage
+from claude_agent_sdk import ClaudeAgentOptions, ResultMessage
 
+from code_with_slack import footer
 from code_with_slack.footer import (
     FooterData,
     Limit,
     Usage,
     UsageCache,
+    UsageProbe,
     effort_change,
     effort_from_settings,
     format_footer,
@@ -19,7 +21,7 @@ from code_with_slack.footer import (
     parse_usage,
     session_tokens,
 )
-from tests.fakes import sdk_messages
+from tests.fakes import FakeClaudeClient, sdk_messages
 
 NOW = datetime(2026, 9, 23, 21, 0, tzinfo=ZoneInfo("Europe/Berlin"))
 
@@ -189,3 +191,19 @@ def test_the_footer_shows_the_effort_after_the_model() -> None:
         effort="high",
     )
     assert format_footer(data, NOW) == "main · claude-opus-5-5 · effort high"
+
+
+async def test_a_usage_probe_with_no_answer_gives_up_and_closes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(footer, "USAGE_TIMEOUT", 0.05)
+    clients: list[FakeClaudeClient] = []
+
+    def factory(options: ClaudeAgentOptions) -> FakeClaudeClient:
+        clients.append(FakeClaudeClient(options))  # no scripted turn: /usage never answers
+        return clients[-1]
+
+    probe = UsageProbe(tmp_path, factory)
+    with pytest.raises(TimeoutError):
+        await probe()
+    assert clients[0].connected is False  # the next refresh starts from a clean client
