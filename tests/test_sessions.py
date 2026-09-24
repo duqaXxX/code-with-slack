@@ -288,6 +288,39 @@ async def test_rebinding_closes_the_client_and_forgets_the_session(
     assert h.session().directory == other
 
 
+async def test_rebinding_ends_the_waiting_replies_and_says_why(
+    harness_for: Callable[..., Harness], tmp_path: Path
+) -> None:
+    h = harness_for({})  # no scripted turn: the first query never answers
+    session = h.session()
+    first = await session.submit("one")
+    second = await session.submit("two")
+    await until(lambda: h.clients and h.clients[0].queries == ["one"])
+    other = tmp_path / "other"
+    other.mkdir()
+    await h.manager.bind(CHANNEL, other)
+    await asyncio.wait_for(asyncio.gather(first.done.wait(), second.done.wait()), 2)
+    ended = texts.ENDED.format(reason=texts.ENDED_REBOUND)
+    assert all(ended in r for r in h.replies())
+    shown = [blocks[-1] for blocks in h.slack.message_blocks()]
+    assert all(texts.WRITING not in str(b) and texts.WAITING not in str(b) for b in shown)
+
+
+async def test_a_message_during_a_bind_gets_the_new_directory(
+    harness_for: Callable[..., Harness], tmp_path: Path
+) -> None:
+    h = harness_for({}, {})
+    await h.session().ensure_connected()
+    other = tmp_path / "other"
+    other.mkdir()
+    binding = asyncio.create_task(h.manager.bind(CHANNEL, other))
+    await asyncio.sleep(0)  # the bind is closing the old session
+    during = h.manager.get(CHANNEL)
+    await binding
+    assert during is not None and during.directory == other
+    assert h.manager.get(CHANNEL) is during
+
+
 def test_resolve_directory(tmp_path: Path) -> None:
     root = tmp_path / "root"
     (root / "app").mkdir(parents=True)
