@@ -215,7 +215,8 @@ class ReplySink:
 
     async def _flush(self, *, final: bool, footer: str | None) -> None:
         async with self._lock:
-            for index, blocks in enumerate(self._render(final, footer)):
+            rendered = self._render(final, footer)
+            for index, blocks in enumerate(rendered):
                 if not blocks:
                     continue
                 if index < len(self._shown) and self._shown[index] == blocks:
@@ -240,3 +241,12 @@ class ReplySink:
                 except Exception as exc:
                     logger.warning("could not write a reply to Slack: %s", describe(exc))
                     return
+            # Folding at the end can make the reply shorter: a message it no longer needs goes.
+            while len(self._messages) > len(rendered):
+                try:
+                    await self._slack.chat_delete(channel=self._channel, ts=self._messages[-1])
+                except Exception as exc:
+                    logger.warning("could not remove a reply's extra message: %s", describe(exc))
+                    return
+                self._messages.pop()
+                self._shown.pop()
