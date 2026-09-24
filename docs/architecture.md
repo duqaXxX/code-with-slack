@@ -157,6 +157,10 @@ left out.
   the previous one drops it, so the list stays at the bottom of the channel.
 - When the Claude Code process goes away (shutdown, rebinding, a process that exits), its tasks
   go with it: their lines close with `Stopped` and the list empties. The map lives in memory only.
+- Shutting down or binding the channel to another directory closes the session: every reply
+  still waiting (running, sent or queued) ends with `This reply ended before an answer:` and the
+  reason. A bind stores the new directory before the old session closes, so a message that
+  arrives meanwhile opens the new session.
 - Logs carry channel ids and exception type names, never prompt or reply text.
 
 Bypass is a field of the in-memory session and nothing else: `state.json` never holds it, and a

@@ -278,14 +278,23 @@ class ChannelSession:
             activity=activity,
         )
 
-    async def close(self) -> None:
+    async def close(self, reason: str = texts.ENDED_SHUTDOWN) -> None:
+        """Stop the session. Every reply still waiting (running, sent or queued) ends with a line
+        saying why, so none is left showing that Claude is writing."""
         for task in (self._worker, self._reader, self._expiry):
             if task is not None:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
         self._deps.approvals.deny_all(self.channel_id)
-        await self._stop_task_replies()
+        queued: list[Turn] = []
+        while not self._queue.empty():
+            queued.append(self._queue.get_nowait())
+        line = texts.ENDED.format(reason=reason)
+        await self._abandon(line)
+        for turn in queued:
+            with contextlib.suppress(Exception):
+                await self._fail(turn, line)
         if self._client is not None:
             client, self._client = self._client, None
             with contextlib.suppress(Exception):
@@ -336,7 +345,7 @@ class ChannelSession:
         if self._client is client:
             self._client = None
         try:
-            await self._abandon(reason)
+            await self._abandon(texts.ERROR_REPLY.format(error=reason))
         finally:
             with contextlib.suppress(Exception):
                 await client.disconnect()
@@ -506,8 +515,9 @@ class ChannelSession:
         else:
             self._settled.set()
 
-    async def _abandon(self, error: str) -> None:
-        """The client is gone: end the reply that was open and release every waiting turn."""
+    async def _abandon(self, line: str) -> None:
+        """The client is gone: end the reply that was open, and every sent turn's, with `line`,
+        and release whoever waits on them."""
         active, self._active = self._active, None
         sent, self._sent = list(self._sent), deque()
         waiting = ([active.turn] if active and active.turn else []) + sent
@@ -515,11 +525,11 @@ class ChannelSession:
         try:
             if active is not None:
                 with contextlib.suppress(Exception):
-                    await active.renderer.feed_error(texts.ERROR_REPLY.format(error=error))
+                    await active.renderer.feed_error(line)
                     await self._close_reply(active.renderer, None)
             await self._stop_task_replies()
             for turn in sent:
-                await self._fail(turn, texts.ERROR_REPLY.format(error=error))
+                await self._fail(turn, line)
         finally:
             for turn in waiting:
                 turn.done.set()
@@ -604,9 +614,11 @@ class SessionManager:
     async def bind(self, channel_id: str, directory: Path) -> None:
         """Claude Code keeps sessions per directory, so a new directory means a new session."""
         old = self._sessions.pop(channel_id, None)
-        if old is not None:
-            await old.close()
+        # The new directory is stored first: a message that arrives while the old session closes
+        # then opens the new one, never a second session on the old directory.
         self._deps.state.bind(channel_id, directory)
+        if old is not None:
+            await old.close(texts.ENDED_REBOUND)
 
     async def close_all(self) -> None:
         for session in list(self._sessions.values()):
