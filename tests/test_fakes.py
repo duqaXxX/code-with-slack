@@ -3,7 +3,7 @@
 from claude_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, UserMessage
 from claude_agent_sdk.types import ConversationResetMessage, ToolResultBlock, ToolUseBlock
 
-from tests.fakes import FakeSlack, sdk_json, sdk_messages, slack_payload, split_turns
+from tests.fakes import FakeSlack, sdk_json, sdk_messages, split_turns
 
 
 def test_tools_stream_has_partial_text_tool_use_and_result() -> None:
@@ -37,11 +37,6 @@ def test_auth_failed_is_flagged_on_the_assistant_message() -> None:
 def test_server_info_lists_commands_with_names() -> None:
     commands = sdk_json("server-info")["commands"]
     assert commands and {"name", "description"} <= set(commands[0])
-
-
-def test_slack_command_payload_has_the_ids_the_guard_reads() -> None:
-    body = slack_payload(next_named("command"))
-    assert body["user_id"] == "U000ALICE" and body["team_id"] == "T000TEAM"
 
 
 async def test_fake_slack_returns_recorded_responses() -> None:

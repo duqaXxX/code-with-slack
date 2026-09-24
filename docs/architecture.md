@@ -33,8 +33,7 @@ a crash leaves no stale lock and no lock file.
 
 ## Who may talk to it
 
-Every inbound path that acts (a message, `/cc`, a button, a command picked from the picker)
-runs two checks of its own before anything reaches Claude Code:
+Every inbound path that acts (a message, including a `!word`, and a button) runs two checks of its own before anything reaches Claude Code:
 
 1. `code_with_slack.guards.is_owner`: the Slack user is the configured owner AND the workspace is
    the one `auth.test` reported at startup. A click from a user whose home workspace differs is
@@ -42,9 +41,6 @@ runs two checks of its own before anything reaches Claude Code:
 2. `code_with_slack.guards.ChannelGuard.refusal`: the channel is private, not shared with another
    workspace, and its members are exactly the owner and the bot. It is read from Slack every
    time, so inviting a third person stops the bot in that channel at once.
-
-The picker's list of commands, which Slack requests while the owner types, runs the owner check
-only: it returns command names and changes nothing.
 
 Messages with a subtype (edits, deletions, joins) and messages from bots are ignored. A refusal
 reaches the owner as an ephemeral message; everyone else gets nothing.
@@ -100,7 +96,7 @@ posted as one menu per question with **Submit** and **Skip**; the picked labels 
 tool's answers. Each request has a random id that only its buttons carry; a click resolves it
 once, only from the channel it was posted in, and only after the identity and channel guards.
 Once decided, the request message is deleted: the tool's line in the reply records the call.
-`/cc stop` denies every request still pending in the channel and deletes its message.
+`!stop` denies every request still pending in the channel and deletes its message.
 
 ## Footer
 
@@ -122,10 +118,10 @@ left out.
 - The Claude Agent SDK client is created on first use, with the channel's directory as its
   working directory, `resume` set to the stored session id, the owner's own settings
   (`setting_sources` user, project and local), streaming of partial messages, the approval
-  callback, and `--allow-dangerously-skip-permissions`, which makes `/cc bypass on` possible
+  callback, and `--allow-dangerously-skip-permissions`, which makes `!bypass on` possible
   without turning it on.
-- After connecting, `get_server_info()` gives the commands the session offers (for the picker
-  and `!`) and the permission mode that `/cc bypass off` returns to.
+- After connecting, `get_server_info()` gives the commands the session offers (for `!help` and
+  `!`) and the permission mode that `!bypass off` returns to.
 - If the stored session cannot be resumed (its transcript was deleted), the session id is
   cleared, a new session starts, and the reply opens with a line saying so. If the channel's
   directory no longer exists, nothing starts and the reply asks to bind the channel again. If
@@ -135,7 +131,7 @@ left out.
   every waiting message is told, and the next message starts a new process. A Slack failure
   while a reply is written never stops the session or the running turn.
 - Messages are queued and run one at a time; each gets its own reply in the channel.
-  `/cc stop` interrupts the running turn and denies its pending approvals.
+  `!stop` interrupts the running turn and denies its pending approvals.
 - One reader task follows the SDK's message stream for the life of the client. On each result
   the session id is stored (so `/clear`, which starts a new session, is recorded), the footer is
   built and the reply closed.
@@ -167,10 +163,13 @@ restart brings every channel back to Claude Code's own mode. That matches Claude
 ## Slack handlers
 
 `code_with_slack.slack_app.build_app` registers one listener per inbound path: `message`
-events, the `/cc` command, the Approve, Deny, Submit and Skip buttons, and the command picker
-(an `external_select` whose options come from the session's `get_server_info()["commands"]`).
-Each acknowledges Slack first, then checks the owner, the workspace and the channel itself. A
-failure after the checks reaches the owner as an ephemeral error line. A
-message starting with `!` runs a Claude Code command when the word after it is one the session
-offers, and is sent as a normal prompt otherwise. Bolt's per-request authorization returns the
+events and the Approve, Deny, Submit and Skip buttons. The app registers no slash command. Each
+acknowledges Slack first, then checks the owner, the workspace and the channel itself. A
+failure after the checks reaches the owner as an ephemeral error line.
+`code_with_slack.commands.parse_bang` reads a message starting with `!`: `help`, `bind`,
+`bypass`, `status` and `stop` are the daemon's own words, answered with a message in the
+channel (`!help` and `!bind` also work before the channel is bound); any other `!name args` runs
+that Claude Code command when the session offers `name`, and is sent as a normal prompt
+otherwise. `commands.help_text` builds `!help` from `get_server_info()["commands"]` at the time
+of asking, so a command a new Claude Code release adds needs no change here. Bolt's per-request authorization returns the
 identity `auth.test` gave at startup, so no request costs an extra API call.

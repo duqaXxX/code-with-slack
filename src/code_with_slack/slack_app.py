@@ -20,50 +20,33 @@ from code_with_slack.approvals import (
 from code_with_slack.commands import (
     Bind,
     Bypass,
+    Command,
+    Help,
     Invalid,
     Passthrough,
-    Picker,
     Status,
     Stop,
-    bang_command,
-    parse_cc,
+    help_text,
+    parse_bang,
 )
 from code_with_slack.config import Config
 from code_with_slack.guards import (
     ChannelGuard,
     Identity,
-    command_actor,
     interaction_actor,
     is_owner,
     is_prompt_message,
     message_actor,
 )
-from code_with_slack.render.renderer import one_line
-from code_with_slack.render.sinks import describe
+from code_with_slack.render.sinks import FALLBACK_LIMIT, describe, split
 from code_with_slack.sessions import DirectoryUnavailable, SessionManager, resolve_directory
 
 logger = logging.getLogger(__name__)
-MAX_OPTIONS = 100
 DECISION_ACTIONS = ("approval_allow", "approval_deny", "question_submit", "question_skip")
 
 
 def slack_unescape(text: str) -> str:
     return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
-
-
-def picker_blocks() -> list[dict[str, Any]]:
-    return [
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": texts.PICKER_PROMPT},
-            "accessory": {
-                "type": "external_select",
-                "action_id": "picker_select",
-                "min_query_length": 0,
-                "placeholder": {"type": "plain_text", "text": texts.PICKER_PLACEHOLDER},
-            },
-        }
-    ]
 
 
 def build_app(
@@ -112,14 +95,15 @@ def build_app(
             return False
         return True
 
-    async def run_command(channel: str, text: str) -> None:
-        session = sessions.get(channel)
-        if session is None:
-            await tell_owner(channel, texts.UNBOUND)
-            return
-        # A slash command leaves no message in the channel: echo it, so the reply has a question.
-        await slack.chat_postMessage(channel=channel, text=texts.COMMAND_ROOT.format(command=text))
-        await session.submit(f"/{text}")
+    async def say(channel: str, text: str) -> None:
+        """An answer to one of the daemon's own words, as messages in the channel: a long
+        `!help` continues in a new message past a markdown block's limit."""
+        for chunk in split(text):
+            await slack.chat_postMessage(
+                channel=channel,
+                text=chunk[:FALLBACK_LIMIT],
+                blocks=[{"type": "markdown", "text": chunk}],
+            )
 
     @app.event("message")
     async def on_message(event: dict[str, Any]) -> None:
@@ -133,106 +117,62 @@ def build_app(
         await reply_on_failure(channel, handle_message(channel, event))
 
     async def handle_message(channel: str, event: dict[str, Any]) -> None:
+        text = slack_unescape(event["text"])
+        command = parse_bang(text)
+        if isinstance(command, Help | Bind):
+            await handle_word(channel, command)
+            return
         session = sessions.get(channel)
         if session is None:
             await tell_owner(channel, texts.UNBOUND)
             return
-        text = slack_unescape(event["text"])
-        prompt = text
-        if text.lstrip().startswith("!"):
+        if command is None:
+            # Every reply goes to the main window, even for a message written inside a thread.
+            await session.submit(text)
+        elif isinstance(command, Passthrough):
             await session.ensure_connected()
-            command = bang_command(text, {str(c.get("name")) for c in session.commands})
-            prompt = f"/{command}" if command else text
-        # Every reply goes to the main window, even for a message written inside a thread.
-        await session.submit(prompt)
+            known = {str(c.get("name")) for c in session.commands}
+            name = command.text.split(" ", 1)[0]
+            await session.submit(f"/{command.text}" if name in known else text)
+        else:
+            await handle_word(channel, command)
 
-    @app.command("/cc")
-    async def on_cc(ack: AsyncAck, body: dict[str, Any]) -> None:
-        await ack()
-        user, team = command_actor(body)
-        channel = body.get("channel_id")
-        if not await admitted(user, team, channel):
-            return
-        assert channel is not None
-        await reply_on_failure(channel, handle_cc(channel, body.get("text") or ""))
-
-    async def handle_cc(channel: str, text: str) -> None:
-        match parse_cc(text):
+    async def handle_word(channel: str, command: Command) -> None:
+        match command:
+            case Help() | Invalid():
+                # A mistyped word gets the full list, which shows how each word is written.
+                session = sessions.get(channel)
+                if session is not None:
+                    await session.ensure_connected()
+                await say(channel, help_text(session.commands if session else None))
             case Bind(path=path):
                 directory = resolve_directory(path, config.allowed_root)
                 if directory is None:
-                    await tell_owner(
+                    await say(
                         channel, texts.BIND_OUTSIDE.format(path=path, root=config.allowed_root)
                     )
                 else:
                     await sessions.bind(channel, directory)
-                    await tell_owner(channel, texts.BIND_OK.format(directory=directory))
-            case Invalid():
-                await tell_owner(channel, texts.USAGE)
-            case Passthrough(text=command):
-                await run_command(channel, command)
-            case parsed:
+                    await say(channel, texts.BIND_OK.format(directory=directory))
+            case _:
                 session = sessions.get(channel)
-                if session is None:
-                    await tell_owner(channel, texts.UNBOUND)
-                    return
-                match parsed:
+                assert session is not None
+                match command:
                     case Bypass(on=on):
                         await session.set_bypass(on)
-                        await tell_owner(
+                        await say(
                             channel,
                             texts.BYPASS_ON
                             if on
                             else texts.BYPASS_OFF.format(mode=session.native_mode),
                         )
                     case Status():
-                        await tell_owner(channel, session.status())
+                        await say(channel, session.status())
                     case Stop():
-                        await tell_owner(
+                        await say(
                             channel,
                             texts.STOPPED if await session.stop() else texts.NOTHING_TO_STOP,
                         )
-                    case Picker():
-                        await session.ensure_connected()
-                        await slack.chat_postEphemeral(
-                            channel=channel,
-                            user=identity.owner_user_id,
-                            text=texts.PICKER_PROMPT,
-                            blocks=picker_blocks(),
-                        )
-
-    @app.options("picker_select")
-    async def on_picker_options(ack: AsyncAck, body: dict[str, Any]) -> None:
-        user, team = interaction_actor(body)
-        channel = (body.get("channel") or {}).get("id")
-        session = sessions.get(channel) if channel and is_owner(identity, user, team) else None
-        if session is None:
-            await ack(options=[])
-            return
-        query = str(body.get("value") or "").lower()
-        matches = [c for c in session.commands if query in str(c.get("name", "")).lower()][
-            :MAX_OPTIONS
-        ]
-        await ack(
-            options=[
-                {
-                    "text": {"type": "plain_text", "text": one_line(f"/{c['name']}", 75)},
-                    "value": str(c["name"])[:150],
-                }
-                for c in matches
-            ]
-        )
-
-    @app.action("picker_select")
-    async def on_picker(ack: AsyncAck, body: dict[str, Any]) -> None:
-        await ack()
-        user, team = interaction_actor(body)
-        channel = (body.get("channel") or {}).get("id")
-        if not await admitted(user, team, channel):
-            return
-        assert channel is not None
-        command = str(body["actions"][0]["selected_option"]["value"])
-        await reply_on_failure(channel, run_command(channel, command))
 
     @app.action("answer")
     async def on_answer(ack: AsyncAck) -> None:

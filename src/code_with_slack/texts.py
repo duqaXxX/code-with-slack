@@ -1,8 +1,8 @@
 """Every sentence the owner can read in Slack. English only; one place to review the wording."""
 
 UNBOUND = (
-    "This channel is not bound to a directory yet. Run `/cc bind <path>` with a path under "
-    "the allowed root."
+    "This channel is not bound to a directory yet. Send `!bind <path>` with a path under "
+    "the allowed root, or `!help` for every command."
 )
 AUTH_FAILED = (
     "Claude Code is not logged in on the host. On that machine, run `claude`, then `/login`. "
@@ -17,7 +17,7 @@ REASON_SHARED = "it is shared with another workspace"
 REASON_MEMBERS = "it has members other than you and the bot"
 REASON_UNREADABLE = "the bot cannot read its details"
 DIRECTORY_MISSING = (
-    "The directory `{directory}` no longer exists. Bind this channel again with `/cc bind <path>`."
+    "The directory `{directory}` no longer exists. Bind this channel again with `!bind <path>`."
 )
 DIRECTORY_UNREADABLE = (
     "macOS does not let code-with-slack read `{directory}`. Grant access in System Settings, "
@@ -31,12 +31,11 @@ WRITING = "_Claude is writing…_"
 WAITING = "_Waiting for the previous reply…_"
 REPLY_ABOVE = "_This reply appeared in the background update above._"
 BACKGROUND_NOTICE = "_Background task update_"
-COMMAND_ROOT = "`/{command}`"
 BIND_OK = "Bound this channel to `{directory}`. The next message starts a new session there."
 BIND_OUTSIDE = "`{path}` is not a directory under the allowed root `{root}`."
 BYPASS_ON = (
     "Bypass is on in this channel: Claude Code runs every tool without asking, until "
-    "`/cc bypass off` or a restart of code-with-slack."
+    "`!bypass off` or a restart of code-with-slack."
 )
 BYPASS_OFF = "Bypass is off. Claude Code is back in its `{mode}` mode."
 STOPPED = "Stopped the current turn."
@@ -49,12 +48,19 @@ ACTIVITY_IDLE = "idle"
 RUNNING = "⏳ {count} running"
 RUNNING_MORE = "and {count} more"
 ACTIVITY_BUSY = "running a turn, {queued} queued"
-USAGE = (
-    "Usage: `/cc <command> [args]`, `/cc bind <path>`, `/cc bypass on|off`, `/cc status`, "
-    "`/cc stop`, or `/cc` alone to choose a command."
+HELP_OWN = (
+    "*code-with-slack*\n"
+    "`!help` this list\n"
+    "`!status` the channel's directory, session and mode\n"
+    "`!stop` stop the running turn and deny its pending approvals\n"
+    "`!bind <path>` bind this channel to a directory under the allowed root\n"
+    "`!bypass on|off` run every tool without asking, until off or a restart"
 )
-PICKER_PROMPT = "Choose a Claude Code command to run in this channel's session."
-PICKER_PLACEHOLDER = "Type to filter commands"
+HELP_CLAUDE = (
+    "\n*Claude Code* (this session, now). Any other `!name args` runs that command; "
+    "these words above come first."
+)
+HELP_UNBOUND = "\nClaude Code's own commands are listed here once the channel is bound."
 APPROVAL_PROMPT = "Claude Code asks to use *{tool}*"
 DENY_MESSAGE = "The owner denied this from Slack."
 SKIP_MESSAGE = "The owner dismissed the question without answering."

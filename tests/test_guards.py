@@ -7,7 +7,6 @@ from code_with_slack import texts
 from code_with_slack.guards import (
     ChannelGuard,
     Identity,
-    command_actor,
     interaction_actor,
     is_owner,
     is_prompt_message,
@@ -52,7 +51,6 @@ def test_is_owner_checks_user_and_team_separately(
 
 def test_actors_read_the_recorded_payloads() -> None:
     assert message_actor(recorded("event_callback-message")["event"]) == (OWNER, TEAM)
-    assert command_actor(recorded("command")) == (OWNER, TEAM)
     assert interaction_actor(recorded("block_actions")) == (OWNER, TEAM)
 
 

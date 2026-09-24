@@ -8,23 +8,14 @@
     "bot_user": {
       "display_name": "code-with-slack",
       "always_online": true
-    },
-    "slash_commands": [
-      {
-        "command": "/cc",
-        "description": "Run a Claude Code command in this channel's session",
-        "usage_hint": "[command] [args] | bind <path> | bypass on|off",
-        "should_escape": false
-      }
-    ]
+    }
   },
   "oauth_config": {
     "scopes": {
       "bot": [
         "groups:history",
         "groups:read",
-        "chat:write",
-        "commands"
+        "chat:write"
       ]
     },
     "pkce_enabled": false
