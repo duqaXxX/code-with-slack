@@ -94,7 +94,10 @@ it stays at the bottom of the channel as the terminal's status line. A reply lon
 Slack's native streaming API (`chat.startStream`) is not used: in an ordinary channel it works
 only inside a thread, and replies belong in the main window. A write Slack refuses, or cannot
 receive because the network is down, is retried with the whole reply at the next rewrite; it never
-stops the Claude Code session.
+stops the Claude Code session. The final rewrite has no next one: when Slack refuses its content
+(`invalid_blocks`, `msg_too_long` and the like, not a rate limit), that message is written once
+more as plain text, its text and the footer with no blocks, and the rewrite goes on to the next
+messages, so none keeps saying `Claude is writing…`.
 
 ## Approvals
 

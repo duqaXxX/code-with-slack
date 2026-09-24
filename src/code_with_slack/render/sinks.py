@@ -28,6 +28,9 @@ FALLBACK_LIMIT = 3_000
 # A context block's text holds at most 3,000 characters; a message, at most 50 blocks.
 CONTEXT_LIMIT = 2_900
 BLOCKS_LIMIT = 45
+# chat.update errors that refuse the content itself (reference, read 2026-09-25): a plain retry
+# can pass where the blocks did not. A transient error such as `ratelimited` is not one.
+REFUSED_CONTENT = {"invalid_blocks", "invalid_blocks_format", "msg_too_long", "invalid_arguments"}
 ICONS = {"pending": "·", "in_progress": "…", "complete": "✓", "error": "✗"}
 
 
@@ -73,6 +76,17 @@ def block_text(block: dict[str, Any]) -> str:
     if block["type"] == "markdown":
         return str(block["text"])
     return "".join(str(e.get("text", "")) for e in block.get("elements") or [])
+
+
+def plain_text(blocks: list[dict[str, Any]]) -> str:
+    """A message's text and footer with no block: what a refused final write is retried with.
+    Slack caps a text-only message at 4,000 characters (chat.update reference, 2026-09-25)."""
+    body = "\n\n".join(str(b["text"]) for b in blocks if b["type"] == "markdown")
+    if len(body) > FALLBACK_LIMIT:
+        body = body[:FALLBACK_LIMIT] + "…"
+    types = [b["type"] for b in blocks]
+    footer = block_text(blocks[types.index("divider") + 1]) if "divider" in types else ""
+    return "\n\n".join(filter(None, (body, footer))) or "…"
 
 
 @dataclass
@@ -280,6 +294,20 @@ class ReplySink:
             ]
         return messages
 
+    async def _write_plain(self, index: int, blocks: list[dict[str, Any]]) -> bool:
+        """Slack refused the final form of a message: without this one retry it would keep
+        saying Claude is writing. An empty `blocks` makes Slack drop the old ones and render
+        the text (chat.update reference, 2026-09-25)."""
+        try:
+            await self._slack.chat_update(
+                channel=self._channel, ts=self._messages[index], text=plain_text(blocks), blocks=[]
+            )
+        except Exception as exc:
+            logger.warning("could not write a reply to Slack as plain text: %s", describe(exc))
+            return False
+        self._shown[index] = []
+        return True
+
     async def _flush(self, *, final: bool, footer: str | None) -> None:
         async with self._lock:
             rendered = self._render(final, footer)
@@ -308,6 +336,13 @@ class ReplySink:
                         self._shown.append(blocks)
                 except Exception as exc:
                     logger.warning("could not write a reply to Slack: %s", describe(exc))
+                    refused = final and describe(exc) in REFUSED_CONTENT
+                    if (
+                        refused
+                        and index < len(self._messages)
+                        and await self._write_plain(index, blocks)
+                    ):
+                        continue  # the later messages still need their final form
                     return
             # Folding at the end can make the reply shorter: a message it no longer needs goes.
             while len(self._messages) > len(rendered):
