@@ -3,6 +3,7 @@ from typing import Any
 
 import aiohttp
 import pytest
+from slack_sdk.errors import SlackApiError
 
 from code_with_slack import texts
 from code_with_slack.render import sinks
@@ -326,3 +327,64 @@ async def test_every_block_id_in_a_message_is_unique(slack: FakeSlack) -> None:
     for _, args in slack.calls:
         ids = [b["block_id"] for b in args.get("blocks") or [] if "block_id" in b]
         assert len(ids) == len(set(ids)), ids
+
+
+def rejected(error: str) -> SlackApiError:
+    """Slack's answer to a refused write: the envelope of the chat.update reference (read
+    2026-09-25), `ok` false and an error code."""
+    return SlackApiError(error, {"ok": False, "error": error})
+
+
+async def test_a_refused_final_write_is_retried_as_plain_text(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.open(texts.WRITING)
+    await sink.text("All **done**.")
+    await sink.task(TaskUpdate("t1", "Bash: ls", "complete"))
+    slack.responses["chat.update"] = [rejected("invalid_blocks"), {"ok": True}]
+    await sink.finish([], "main · ctx 6%")
+    final = writes(slack)[-1]
+    # No blocks: Slack then renders the text and drops the old ones, "Claude is writing…" too.
+    assert final["blocks"] == []
+    assert final["text"] == "All **done**.\n\nmain · ctx 6%"
+
+
+async def test_a_refused_draft_write_is_not_retried(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.open(texts.WRITING)
+    slack.responses["chat.update"] = rejected("invalid_blocks")
+    await sink.text("partial")
+    await asyncio.sleep(0.05)
+    assert all(w.get("blocks") != [] for w in writes(slack))
+
+
+async def test_a_network_failure_on_the_final_write_is_not_retried(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.open(texts.WRITING)
+    await sink.text("Done.")
+    slack.responses["chat.update"] = aiohttp.ClientConnectionError("network down")
+    await sink.finish([], "footer")
+    assert all(w.get("blocks") != [] for w in writes(slack))
+
+
+async def test_a_plain_retry_still_finishes_the_reply_s_later_messages(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.task(TaskUpdate("t1", "Read: notes.md", "complete", name="Read"))
+    await sink.text("x" * 15_000)  # the status line ends up on a later message
+    await asyncio.sleep(0.05)
+    assert len(slack.posted_ts) > 1
+    # Folding changes the first message only; Slack refuses that write once.
+    slack.responses["chat.update"] = [rejected("invalid_blocks"), {"ok": True}]
+    await sink.finish([], "main · ctx 6%")
+    last_write = {w.get("ts") or w.get("channel"): w for w in slack.calls_to("chat.update")}
+    final = last_write[slack.posted_ts[-1]]
+    assert texts.WRITING not in str(final)
+    assert "main · ctx 6%" in str(final)
+
+
+async def test_a_rate_limited_final_write_is_not_turned_into_plain_text(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.open(texts.WRITING)
+    await sink.text("Done.")
+    slack.responses["chat.update"] = rejected("ratelimited")
+    await sink.finish([], "footer")
+    assert all(w.get("blocks") != [] for w in writes(slack))
