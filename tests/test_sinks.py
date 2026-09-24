@@ -246,3 +246,15 @@ async def test_lines_fold_only_once_the_reply_is_finished(slack: FakeSlack) -> N
     assert slack.message_texts() == ["✓ `Read: a`\n✓ `Read: b`"]  # nothing moves while it works
     await sink.finish([], None)
     assert slack.message_texts() == ["✓ Read \u00d72"]
+
+
+async def test_a_reply_that_shrinks_on_folding_removes_its_extra_message(slack: FakeSlack) -> None:
+    slack.responses["chat.postMessage"] = [{"ok": True, "ts": "1.1"}, {"ok": True, "ts": "2.2"}]
+    sink = reply(slack)
+    for i in range(400):  # over one message while whole, one line once folded
+        await sink.task(TaskUpdate(f"t{i}", f"Read: {'x' * 40}{i}", "complete", name="Read"))
+    await asyncio.sleep(0.05)
+    assert len(slack.calls_to("chat.postMessage")) == 2
+    await sink.finish([], "footer")
+    assert [a["ts"] for a in slack.calls_to("chat.delete")] == ["2.2"]
+    assert slack.message_texts()[0] == "✓ Read \u00d7400"

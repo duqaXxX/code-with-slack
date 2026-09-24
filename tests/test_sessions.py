@@ -362,6 +362,33 @@ async def test_a_report_opens_with_claude_code_s_summary_and_has_no_footer(
     assert {"type": "divider"} not in h.slack.message_blocks()[1]  # no footer: not the owner's
 
 
+async def test_an_owner_answer_behind_a_wrong_guess_keeps_its_footer(
+    harness_for: Callable[..., Harness],
+) -> None:
+    first, notice, _ = split_background()
+    h = harness_for({"turns": [first]})
+    await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
+    h.clients[0].inject(notice)  # the session now expects Claude Code's own turn
+    await asyncio.sleep(0.05)
+    h.clients[0].inject(sdk_messages("tools"))  # but the result says a person asked for it
+    await until(lambda: len(h.slack.message_blocks()) == 2)
+    await asyncio.sleep(0.1)
+    assert {"type": "divider"} in h.slack.message_blocks()[1]
+
+
+async def test_a_task_type_is_forgotten_when_the_task_ends(
+    harness_for: Callable[..., Harness],
+) -> None:
+    first, notice, injected = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    assert session._task_types
+    h.clients[0].inject(notice + injected)
+    await until(lambda: len(h.replies()) == 2)
+    assert session._task_types == {}
+
+
 async def test_a_report_line_never_outlives_its_chance(
     harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
 ) -> None:

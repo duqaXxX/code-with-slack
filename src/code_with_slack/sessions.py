@@ -23,6 +23,7 @@ from claude_agent_sdk import (
     UserMessage,
 )
 from claude_agent_sdk.types import (
+    TERMINAL_TASK_STATUSES,
     CanUseTool,
     PermissionMode,
     PermissionResult,
@@ -119,6 +120,13 @@ ClientFactory = Callable[[ClaudeAgentOptions], ClaudeClient]
 
 def default_client_factory(options: ClaudeAgentOptions) -> ClaudeClient:
     return ClaudeSDKClient(options)
+
+
+def injected_turn(result: ResultMessage) -> bool:
+    """Whether Claude Code started this turn itself (a task notification, say), from the
+    result's origin: None or `human` is the owner's own prompt."""
+    kind = result.origin.get("kind") if result.origin else None
+    return kind not in (None, "human")
 
 
 def client_options(
@@ -366,6 +374,11 @@ class ChannelSession:
             self.cli_version = message.data.get("claude_code_version")
         if isinstance(message, TaskStartedMessage):
             self._task_types[message.task_id] = message.task_type or ""
+        elif isinstance(message, TaskNotificationMessage) or (
+            isinstance(message, TaskUpdatedMessage) and message.status in TERMINAL_TASK_STATUSES
+        ):
+            # The type only serves the counts of tasks still running.
+            self._task_types.pop(message.task_id, None)
         if isinstance(message, TaskNotificationMessage) and self._active is None and not self._sent:
             self._ended.append(self._ended_line(message))
         if isinstance(message, TASK_MESSAGES) and message.task_id in self._task_replies:
@@ -527,8 +540,9 @@ class ChannelSession:
             changed, effort = effort_change(result.result or "")
             if changed:
                 self.effort = effort
-            # The footer goes under the owner's replies; Claude Code's own reports have none.
-            footer = await self._footer(result) if active.turn is not None else None
+            # The footer goes under the owner's replies; Claude Code's own reports have none. The
+            # result's origin says whose turn it was, which the guess at its start can miss.
+            footer = None if injected_turn(result) else await self._footer(result)
             await self._close_reply(active.renderer, footer)
         finally:
             await self._settle(active.turn, result)
@@ -537,8 +551,7 @@ class ChannelSession:
         """Release whoever waits on this turn. The result's origin says whose turn it really was:
         when an owner query and a task notification cross, the guess made at the turn's start can
         be wrong; this puts the queue back in order (that one reply carries the other's text)."""
-        kind = result.origin.get("kind") if result.origin else None
-        injected = kind not in (None, "human")
+        injected = injected_turn(result)
         if turn is None and not injected and self._sent:
             logger.warning("an owner reply in %s went to a background reply", self.channel_id)
             owner = self._sent.popleft()
