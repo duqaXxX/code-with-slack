@@ -89,13 +89,11 @@ def format_duration(seconds: float) -> str:
     return f"{whole // 3600}h {whole % 3600 // 60}m"
 
 
-def ended_line(title: str, status: str, seconds: float | None) -> str:
-    """How a task's end opens Claude Code's report of it, as the terminal shows
-    `Agent "..." finished · 3m 59s`. No duration when the task's start was not seen."""
-    outcomes = {"failed": "failed", "stopped": "stopped", "killed": "stopped"}
-    outcome = outcomes.get(status, "finished")
-    line = f"{'✗' if outcome == 'failed' else '✓'} `{title}` {outcome}"
-    return line if seconds is None else f"{line} · {format_duration(seconds)}"
+def ended_line(summary: str, status: str, duration_ms: int | None) -> str:
+    """How a task's end opens Claude Code's report of it: the notification's own summary, as
+    the terminal prints it (`Agent "..." finished · 10s`), with the duration when there is one."""
+    line = f"{'✗' if status == 'failed' else '✓'} {summary}"
+    return line if duration_ms is None else f"{line} · {format_duration(duration_ms / 1000)}"
 
 
 def terminal_status(status: str) -> tuple[TaskStatus, str | None]:
@@ -156,11 +154,6 @@ class TurnRenderer:
     def running_tasks(self) -> list[str]:
         """Ids of the tasks that outlive the turn; a later task frame fed here updates them."""
         return list(self._running)
-
-    def running_title(self, task_id: str) -> str | None:
-        """The line title of a task still running, or None once it ended."""
-        card_id = self._running.get(task_id)
-        return self._cards[card_id].title if card_id in self._cards else None
 
     def task_title(self, task_id: str) -> str | None:
         """The line title of a task this reply shows, running or ended."""

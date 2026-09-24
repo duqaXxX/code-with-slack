@@ -240,18 +240,23 @@ async def test_a_notice_does_not_hide_a_local_command_s_result() -> None:
 
 
 @pytest.mark.parametrize(
-    ("status", "seconds", "expected"),
+    ("summary", "status", "duration_ms", "expected"),
     [
-        ("completed", 40, "✓ `Bash: sleep 40` finished · 40s"),
-        ("completed", 239, "✓ `Bash: sleep 40` finished · 3m 59s"),
-        ("failed", 3725, "✗ `Bash: sleep 40` failed · 1h 2m"),
-        ("killed", 0, "✓ `Bash: sleep 40` stopped · 0s"),
+        ('Agent "Scan" finished', "completed", 10_400, '✓ Agent "Scan" finished · 10s'),
+        ('Agent "Scan" finished', "completed", 239_000, '✓ Agent "Scan" finished · 3m 59s'),
+        (
+            'Background command "Wait" completed (exit code 0)',
+            "completed",
+            None,
+            '✓ Background command "Wait" completed (exit code 0)',
+        ),
+        ('Background command "Wait" failed', "failed", None, '✗ Background command "Wait" failed'),
     ],
 )
-def test_ended_line_names_the_task_and_its_duration(
-    status: str, seconds: float, expected: str
+def test_ended_line_is_claude_code_s_own_summary(
+    summary: str, status: str, duration_ms: int | None, expected: str
 ) -> None:
-    assert ended_line("Bash: sleep 40", status, seconds) == expected
+    assert ended_line(summary, status, duration_ms) == expected
 
 
 async def test_tool_and_task_lines_carry_their_name_and_kind() -> None:

@@ -33,17 +33,18 @@ All notable changes to this project are documented here. The format follows
   divider separates it from the footer; the footer shows the effort level.
 - A blank line separates a reply's tool lines from its text.
 - A background task keeps its line in progress in the reply that started it until it ends or
-  its Claude Code process goes away; a stopped line says `Stopped`. The channel's latest reply
-  lists what is still running above its footer. A background subagent's calls update its line
-  instead of opening a reply.
+  its Claude Code process goes away; a stopped line says `Stopped`. A background subagent's
+  calls update its line instead of opening a reply.
 - A task that ends just after the owner's message was sent no longer takes over that message's
   reply.
 - Commands are typed as `!word` messages: `!help [text]` lists the daemon's words and the
   session's Claude Code commands, filtered by the text when one is given, and `!bind`, `!bypass`, `!status` and `!stop` replace the `/cc`
   subcommands. The `/cc` slash command, its command picker and the `commands` scope are gone.
-- Claude Code's report of a background task opens with the task's end (`✓ Agent: review
-  finished · 3m 59s`) instead of a generic label, and tool calls that succeed fold into one line
-  of tool names and counts, as in the terminal.
+- Claude Code's report of a background task opens with Claude Code's own line for the task's
+  end (`✓ Agent "review" finished · 3m 59s`) instead of a generic label, and has no footer. The
+  latest reply's footer counts the tasks still running (`⏳ 1 shell · 1 agent`). Tool calls
+  that succeed fold into one line of tool names and counts once the reply is finished, as in
+  the terminal.
 - Shutting down or rebinding a channel ends every waiting reply with the reason, and a message
   sent during a bind no longer opens a session on the old directory.
 - The footer's `/usage` probe gives up after 60 seconds instead of stopping the limits for good.
