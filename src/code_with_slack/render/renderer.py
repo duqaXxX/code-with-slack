@@ -5,7 +5,14 @@ Code adds tomorrow renders with no change here."""
 from dataclasses import dataclass, replace
 from typing import Any, Literal, Protocol
 
-from claude_agent_sdk import AssistantMessage, Message, ResultMessage, StreamEvent, UserMessage
+from claude_agent_sdk import (
+    AssistantMessage,
+    Message,
+    ResultMessage,
+    StreamEvent,
+    SystemMessage,
+    UserMessage,
+)
 from claude_agent_sdk.types import (
     TERMINAL_TASK_STATUSES,
     ServerToolResultBlock,
@@ -19,6 +26,7 @@ from claude_agent_sdk.types import (
 )
 
 from code_with_slack import texts
+from code_with_slack.footer import format_tokens
 
 TaskStatus = Literal["pending", "in_progress", "complete", "error"]
 TITLE_LIMIT = 80
@@ -115,6 +123,8 @@ class TurnRenderer:
                 await self._task_ended(message.task_id, message.status, message.summary)
             case TaskUpdatedMessage(status=str() as status) if status in TERMINAL_TASK_STATUSES:
                 await self._task_ended(message.task_id, status, None)
+            case SystemMessage(subtype="compact_boundary", data=data):
+                await self._compacted(data.get("compact_metadata") or {})
             case ResultMessage():
                 self.result = message
                 if not self._wrote_text and message.result:
@@ -140,6 +150,9 @@ class TurnRenderer:
         """End the reply: every open tool line is closed, except a task still running, whose line
         stays open until its own end arrives through `feed` or `stop_running`."""
         interrupted = self.result is not None and self.result.terminal_reason in INTERRUPTED
+        if not self._wrote_text and not self._cards:
+            # A command that prints nothing (a local one, say) still gets a visible answer.
+            await self._text(texts.STOPPED if interrupted else texts.NO_OUTPUT)
         running = set(self._running.values())
         closing = [
             replace(card, status="in_progress", details=BACKGROUND)
@@ -163,6 +176,15 @@ class TurnRenderer:
     async def feed_error(self, text: str) -> None:
         """A failure outside the SDK stream (the client died): say so in the reply."""
         await self._text("\n\n" + text)
+
+    async def _compacted(self, metadata: dict[str, Any]) -> None:
+        """Claude Code compacted the conversation, on request or on its own: say by how much."""
+        before, after = metadata.get("pre_tokens"), metadata.get("post_tokens")
+        if isinstance(before, int) and isinstance(after, int):
+            line = texts.COMPACTED.format(before=format_tokens(before), after=format_tokens(after))
+        else:
+            line = texts.COMPACTED_PLAIN
+        await self._text(("\n\n" if self._wrote_text else "") + line + "\n\n")
 
     async def _assistant(self, message: AssistantMessage) -> None:
         if message.error == "authentication_failed":
