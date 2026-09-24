@@ -171,5 +171,5 @@ failure after the checks reaches the owner as an ephemeral error line.
 channel (`!help` and `!bind` also work before the channel is bound); any other `!name args` runs
 that Claude Code command when the session offers `name`, and is sent as a normal prompt
 otherwise. `commands.help_text` builds `!help` from `get_server_info()["commands"]` at the time
-of asking, so a command a new Claude Code release adds needs no change here. Bolt's per-request authorization returns the
+of asking, keeping only the lines that contain the text after `!help` when there is one, so a command a new Claude Code release adds needs no change here. Bolt's per-request authorization returns the
 identity `auth.test` gave at startup, so no request costs an extra API call.

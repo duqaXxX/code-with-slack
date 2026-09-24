@@ -141,10 +141,11 @@ def build_app(
         match command:
             case Help() | Invalid():
                 # A mistyped word gets the full list, which shows how each word is written.
+                query = command.query if isinstance(command, Help) else ""
                 session = sessions.get(channel)
                 if session is not None:
                     await session.ensure_connected()
-                await say(channel, help_text(session.commands if session else None))
+                await say(channel, help_text(session.commands if session else None, query))
             case Bind(path=path):
                 directory = resolve_directory(path, config.allowed_root)
                 if directory is None:

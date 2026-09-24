@@ -191,6 +191,12 @@ async def test_bang_help_lists_the_session_commands(world: World) -> None:
     assert world.queries() == []
 
 
+async def test_bang_help_with_a_filter_lists_only_matches(world: World) -> None:
+    await world.dispatch(message("!help compact"))
+    (text,) = said(world)
+    assert "`!compact" in text and "`!bypass" not in text
+
+
 async def test_bang_help_works_in_an_unbound_channel(slack: FakeSlack, tmp_path: Path) -> None:
     world = World(slack, tmp_path, bound=False)
     await world.dispatch(message("!help"))

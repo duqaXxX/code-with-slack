@@ -226,7 +226,7 @@ The bot answers one person, and the rest of this list protects what that person 
 | In Slack | What it does |
 |---|---|
 | a message | Sends a prompt to the channel's session; the reply appears below it in the channel and grows as Claude works |
-| `!help` | Lists code-with-slack's own words and every command the channel's session offers now |
+| `!help [text]` | Lists code-with-slack's own words and every command the channel's session offers now; with a text, only the lines whose name or description contains it, for example `!help model` |
 | `!bind <path>` | Binds this channel to a directory under `ALLOWED_ROOT`. A new channel does nothing else until bound |
 | `!<command> [args]` | Runs a Claude Code command, for example `!compact` or `!model opus` |
 | `!bypass on` / `off` | Switches the channel's session to `bypassPermissions` and back; a restart turns it off |
