@@ -8,6 +8,7 @@ from claude_agent_sdk.types import (
 )
 
 from code_with_slack.approvals import (
+    TYPED_LIMIT,
     Answer,
     Approvals,
     Approve,
@@ -115,7 +116,7 @@ def test_the_form_shows_the_active_question_under_tabs() -> None:
     assert inputs[0]["element"]["type"] == "radio_buttons"
     assert inputs[0]["element"]["options"][0]["description"]["text"] == "Warm"
     assert inputs[1]["element"]["type"] == "plain_text_input"
-    assert inputs[1]["element"]["max_length"] == 500
+    assert inputs[1]["element"]["max_length"] == TYPED_LIMIT
 
 
 def test_the_second_tab_holds_checkboxes_and_restores_its_picks() -> None:
@@ -167,7 +168,7 @@ def test_the_draft_round_trips_under_slack_s_limit() -> None:
         "C1",
         active=3,
         picks={i: [0, 1, 2, 3] for i in range(4)},
-        typed={i: "x" * 500 for i in range(4)},
+        typed={i: '"' * TYPED_LIMIT for i in range(4)},  # the worst case: every char escaped
     )
     text = draft.dump()
     assert len(text) <= 3000 and Draft.load(text) == draft
@@ -183,3 +184,8 @@ def test_to_permission_matches_the_documented_shapes() -> None:
     answered = to_permission(Answer({"Q": "A"}), {"questions": questions}, questions)
     assert isinstance(answered, PermissionResultAllow)
     assert answered.updated_input == {"questions": questions, "answers": {"Q": "A"}}
+
+
+def test_the_draft_keeps_non_latin_text_as_one_character_each() -> None:
+    text = Draft("a", "c", typed={0: "日本語"}).dump()
+    assert "日本語" in text  # not \\u-escaped: Slack counts characters, not bytes
