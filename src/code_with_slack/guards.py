@@ -29,10 +29,6 @@ def message_actor(event: dict[str, Any]) -> tuple[str | None, str | None]:
     return event.get("user"), event.get("team")
 
 
-def command_actor(body: dict[str, Any]) -> tuple[str | None, str | None]:
-    return body.get("user_id"), body.get("team_id")
-
-
 def interaction_actor(body: dict[str, Any]) -> tuple[str | None, str | None]:
     """The user and the workspace of a click; a user whose home team differs counts as foreign."""
     user = body.get("user") or {}

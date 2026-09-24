@@ -16,9 +16,8 @@ Powered by Claude, through the
   works, with a line per tool call, subagent and background task, and a footer with the branch,
   the model, the context used and the usage limits.
 - Whatever Claude Code asks approval for arrives as **Approve** and **Deny** buttons.
-- `/cc <command>` or `!<command>` runs a Claude Code command; `/cc` alone lists them.
-- `/cc bypass on` switches the channel to `bypassPermissions` until `/cc bypass off` or a
-  restart.
+- `!<command>` runs a Claude Code command; `!help` lists them, read from the session.
+- `!bypass on` switches the channel to `bypassPermissions` until `!bypass off` or a restart.
 
 ## Security model
 

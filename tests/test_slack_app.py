@@ -1,6 +1,5 @@
 import asyncio
 import copy
-import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -165,56 +164,66 @@ async def test_slack_escapes_are_undone() -> None:
     assert slack_unescape("a &lt;b&gt; &amp;&amp; c") == "a <b> && c"
 
 
-def command(text: str, **fields: Any) -> dict[str, Any]:
-    body = recorded("command")
-    body.update({"text": text, **fields})
-    return body
+def said(world: World) -> list[str]:
+    """What the bot posted in the channel (not ephemeral), in order."""
+    return [a["text"] for a in world.slack.calls_to("chat.postMessage")]
 
 
-async def test_cc_from_anyone_else_does_nothing(world: World) -> None:
-    await world.dispatch(command("bypass on", user_id=STRANGER))
-    await world.dispatch(command("bypass on", team_id=OTHER_TEAM))
-    assert world.clients == [] and not world.ephemerals()
-
-
-async def test_cc_bind_inside_and_outside_the_root(world: World) -> None:
-    await world.dispatch(command(f"bind {world.root / 'app'}"))
+async def test_bang_bind_inside_and_outside_the_root(world: World) -> None:
+    await world.dispatch(message(f"!bind {world.root / 'app'}"))
     assert world.state.get(CHANNEL).directory == (world.root / "app").resolve()
-    await world.dispatch(command("bind /"))
-    assert world.ephemerals()[-1].startswith("`/` is not a directory under")
+    await world.dispatch(message("!bind /"))
+    assert said(world)[-1].startswith("`/` is not a directory under")
 
 
-async def test_cc_passthrough_posts_a_root_and_runs_the_command(world: World) -> None:
-    await world.dispatch(command("compact"))
-    assert world.slack.calls_to("chat.postMessage")[0]["text"] == texts.COMMAND_ROOT.format(
-        command="compact"
-    )
-    assert world.queries() == ["/compact"]
+async def test_bang_bind_works_in_an_unbound_channel(slack: FakeSlack, tmp_path: Path) -> None:
+    world = World(slack, tmp_path, bound=False)
+    await world.dispatch(message(f"!bind {world.root / 'app'}"))
+    assert world.state.get(CHANNEL).directory == (world.root / "app").resolve()
+    assert world.queries() == []
+    await world.sessions.close_all()
 
 
-async def test_cc_bypass_on_switches_the_live_client(world: World) -> None:
-    await world.dispatch(command("bypass on"))
+async def test_bang_help_lists_the_session_commands(world: World) -> None:
+    await world.dispatch(message("!help"))
+    (text,) = said(world)
+    assert "`!compact" in text and "`!bypass" in text
+    assert world.queries() == []
+
+
+async def test_bang_help_works_in_an_unbound_channel(slack: FakeSlack, tmp_path: Path) -> None:
+    world = World(slack, tmp_path, bound=False)
+    await world.dispatch(message("!help"))
+    (text,) = said(world)
+    assert "`!bind" in text
+    assert world.clients == []
+
+
+async def test_bang_bypass_on_switches_the_live_client(world: World) -> None:
+    await world.dispatch(message("!bypass on"))
     assert world.clients[0].modes == ["bypassPermissions"]
-    assert world.ephemerals() == [texts.BYPASS_ON]
+    assert said(world) == [texts.BYPASS_ON]
 
 
-async def test_cc_picker_offers_the_session_commands(world: World) -> None:
-    await world.dispatch(command(""))
-    blocks = world.slack.calls_to("chat.postEphemeral")[0]["blocks"]
-    assert blocks[0]["accessory"]["action_id"] == "picker_select"
-    suggestion = recorded("block_suggestion")
-    suggestion["value"] = "comp"
-    response = await world.dispatch(suggestion)
-    names = [o["value"] for o in json.loads(response.body)["options"]]
-    assert names and all("comp" in n for n in names)
+async def test_bang_status_and_stop_answer_in_the_channel(world: World) -> None:
+    await world.dispatch(message("!stop"))
+    await world.dispatch(message("!status"))
+    assert said(world)[0] == texts.NOTHING_TO_STOP
+    assert said(world)[1].startswith("Directory:")
+    assert world.queries() == []
 
 
-async def test_the_picker_offers_nothing_to_anyone_else(world: World) -> None:
-    await world.dispatch(command(""))
-    suggestion = recorded("block_suggestion")
-    suggestion["user"]["id"] = STRANGER
-    response = await world.dispatch(suggestion)
-    assert json.loads(response.body)["options"] == []
+async def test_a_malformed_daemon_word_shows_the_help(world: World) -> None:
+    await world.dispatch(message("!bypass maybe"))
+    text = said(world)[-1]
+    assert "`!bypass" in text and "`!compact" in text
+    assert texts.HELP_UNBOUND not in text
+    assert world.queries() == []
+
+
+async def test_bang_from_anyone_else_does_nothing(world: World) -> None:
+    await world.dispatch(message("!bypass on", user=STRANGER))
+    assert world.clients == [] and not world.posted_anything()
 
 
 def click(action_id: str, value: str, **user: Any) -> dict[str, Any]:
@@ -274,22 +283,5 @@ async def test_an_incomplete_answer_is_refused(world: World) -> None:
 
 async def test_a_failing_command_tells_the_owner(world: World) -> None:
     (world.root / "app").rmdir()
-    await world.dispatch(command("bypass on"))
+    await world.dispatch(message("!bypass on"))
     assert world.ephemerals() == [texts.DIRECTORY_MISSING.format(directory=world.root / "app")]
-
-
-async def test_the_picker_action_from_anyone_else_does_nothing(world: World) -> None:
-    body = recorded("block_actions")
-    body["actions"] = [
-        {
-            "action_id": "picker_select",
-            "type": "external_select",
-            "selected_option": {
-                "text": {"type": "plain_text", "text": "/compact"},
-                "value": "compact",
-            },
-        }
-    ]
-    body["user"]["id"] = STRANGER
-    await world.dispatch(body)
-    assert world.queries() == [] and not world.posted_anything()

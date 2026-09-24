@@ -126,7 +126,7 @@ def client_options(
         setting_sources=["user", "project", "local"],
         include_partial_messages=True,
         can_use_tool=can_use_tool,
-        # Makes bypass possible, not active: `/cc bypass on` switches it on the live client.
+        # Makes bypass possible, not active: `!bypass on` switches it on the live client.
         extra_args={"allow-dangerously-skip-permissions": None},
         # CLI stderr may quote the conversation: keep it out of the log unless debugging.
         stderr=lambda line: logger.debug("claude stderr: %d chars", len(line)),
