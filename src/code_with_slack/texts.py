@@ -48,14 +48,15 @@ ACTIVITY_IDLE = "idle"
 RUNNING = "⏳ {count} running"
 RUNNING_MORE = "and {count} more"
 ACTIVITY_BUSY = "running a turn, {queued} queued"
-HELP_OWN = (
-    "*code-with-slack*\n"
-    "`!help` this list\n"
-    "`!status` the channel's directory, session and mode\n"
-    "`!stop` stop the running turn and deny its pending approvals\n"
-    "`!bind <path>` bind this channel to a directory under the allowed root\n"
-    "`!bypass on|off` run every tool without asking, until off or a restart"
+HELP_OWN = "*code-with-slack*"
+HELP_WORDS = (
+    "`!help [text]` this list, or only the lines that contain the text",
+    "`!status` the channel's directory, session and mode",
+    "`!stop` stop the running turn and deny its pending approvals",
+    "`!bind <path>` bind this channel to a directory under the allowed root",
+    "`!bypass on|off` run every tool without asking, until off or a restart",
 )
+HELP_NO_MATCH = "No command matches `{query}`."
 HELP_CLAUDE = (
     "\n*Claude Code* (this session, now). Any other `!name args` runs that command; "
     "these words above come first."

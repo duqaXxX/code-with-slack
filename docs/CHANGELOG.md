@@ -38,6 +38,6 @@ All notable changes to this project are documented here. The format follows
   instead of opening a reply.
 - A task that ends just after the owner's message was sent no longer takes over that message's
   reply.
-- Commands are typed as `!word` messages: `!help` lists the daemon's words and the session's
-  Claude Code commands, and `!bind`, `!bypass`, `!status` and `!stop` replace the `/cc`
+- Commands are typed as `!word` messages: `!help [text]` lists the daemon's words and the
+  session's Claude Code commands, filtered by the text when one is given, and `!bind`, `!bypass`, `!status` and `!stop` replace the `/cc`
   subcommands. The `/cc` slash command, its command picker and the `commands` scope are gone.

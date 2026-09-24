@@ -14,7 +14,7 @@ from code_with_slack import texts
 
 @dataclass(frozen=True)
 class Help:
-    pass
+    query: str = ""  # lowercase; empty lists everything
 
 
 @dataclass(frozen=True)
@@ -63,8 +63,8 @@ def parse_bang(text: str) -> Command | None:
         return None
     rest = rest.strip()
     match word.lower():
-        case "help" if not rest:
-            return Help()
+        case "help":
+            return Help(rest.lower())
         case "bind":
             return Bind(rest) if rest else Invalid()
         case "bypass":
@@ -76,19 +76,37 @@ def parse_bang(text: str) -> Command | None:
     return Passthrough(body)
 
 
-def help_text(commands: list[dict[str, Any]] | None) -> str:
-    """The daemon's words, then every command the session offers now (None: not bound yet)."""
-    lines = [texts.HELP_OWN]
+def help_text(commands: list[dict[str, Any]] | None, query: str = "") -> str:
+    """The daemon's words, then every command the session offers now (None: not bound yet),
+    keeping only the lines whose name or description contains `query`, ignoring case."""
+
+    def keep(line: str) -> bool:
+        return query.lower() in line.lower()
+
+    own = [line for line in texts.HELP_WORDS if keep(line)]
+    session = [
+        line for line in map(command_line, sorted(commands or [], key=command_name)) if keep(line)
+    ]
+    lines = [texts.HELP_OWN, *own]
     if commands is None:
         lines.append(texts.HELP_UNBOUND)
-        return "\n".join(lines)
-    lines.append(texts.HELP_CLAUDE)
-    for command in sorted(commands, key=lambda c: str(c.get("name", ""))):
-        name = str(command.get("name", ""))
-        hint = str(command.get("argumentHint") or "")
-        usage = f"`!{name} {hint}`" if hint else f"`!{name}`"
-        description = " ".join(str(command.get("description") or "").split())
-        if len(description) > DESCRIPTION_LIMIT:
-            description = description[: DESCRIPTION_LIMIT - 1] + "…"
-        lines.append(f"{usage} {description}".rstrip())
+    else:
+        lines += [texts.HELP_CLAUDE, *session]
+    if query and not own and not session:
+        lines.append(texts.HELP_NO_MATCH.format(query=query))
     return "\n".join(lines)
+
+
+def command_name(command: dict[str, Any]) -> str:
+    return str(command.get("name", ""))
+
+
+def command_line(command: dict[str, Any]) -> str:
+    """`!name hint` and the description, cut to one short line."""
+    name = command_name(command)
+    hint = str(command.get("argumentHint") or "")
+    usage = f"`!{name} {hint}`" if hint else f"`!{name}`"
+    description = " ".join(str(command.get("description") or "").split())
+    if len(description) > DESCRIPTION_LIMIT:
+        description = description[: DESCRIPTION_LIMIT - 1] + "…"
+    return f"{usage} {description}".rstrip()
