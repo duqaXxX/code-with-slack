@@ -138,7 +138,8 @@ async def test_a_divider_separates_the_reply_from_its_footer(slack: FakeSlack) -
     sink = reply(slack)
     await sink.text("Done.")
     await sink.finish([], "main · ctx 6%")
-    assert [b["type"] for b in last_blocks(slack)] == ["markdown", "divider", "context"]
+    assert [b["type"] for b in last_blocks(slack)] == ["markdown", "context", "divider", "context"]
+    assert last_blocks(slack)[1] == sinks.SPACER  # an empty line before the footer's divider
 
 
 async def test_opening_shows_the_status_before_any_content(slack: FakeSlack) -> None:
@@ -158,7 +159,7 @@ async def test_running_counts_join_the_footer_of_a_finished_reply(slack: FakeSla
     await sink.finish([], "footer")
     await sink.set_running("⏳ 1 shell")
     shown = last_blocks(slack)  # written at once: no rewrite is scheduled after the end
-    assert [b["type"] for b in shown] == ["markdown", "divider", "context"]
+    assert [b["type"] for b in shown] == ["markdown", "context", "divider", "context"]
     assert shown[-1] == sinks.context_block("footer · ⏳ 1 shell")
     await sink.set_running("")
     assert last_blocks(slack)[-1] == sinks.context_block("footer")
@@ -171,7 +172,11 @@ async def test_running_counts_stand_alone_when_a_reply_has_no_footer(slack: Fake
     await sink.finish([], None)
     assert [b["type"] for b in last_blocks(slack)] == ["markdown"]
     await sink.set_running("⏳ 1 agent")
-    assert last_blocks(slack)[1:] == [{"type": "divider"}, sinks.context_block("⏳ 1 agent")]
+    assert last_blocks(slack)[1:] == [
+        sinks.SPACER,
+        {"type": "divider"},
+        sinks.context_block("⏳ 1 agent"),
+    ]
 
 
 async def test_running_counts_follow_the_status_while_writing(slack: FakeSlack) -> None:
