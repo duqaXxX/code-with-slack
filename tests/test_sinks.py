@@ -140,7 +140,9 @@ async def test_a_divider_separates_the_reply_from_its_footer(slack: FakeSlack) -
     await sink.finish([], "main · ctx 6%")
     blocks = last_blocks(slack)
     assert [b["type"] for b in blocks] == ["markdown", "context", "divider", "context", "context"]
-    assert blocks[1] == blocks[-1] == sinks.SPACER  # an empty line before and after the footer
+    assert (
+        blocks[1] == sinks.SPACER_ABOVE and blocks[-1] == sinks.SPACER_BELOW
+    )  # an empty line before and after the footer
 
 
 async def test_opening_shows_the_status_before_any_content(slack: FakeSlack) -> None:
@@ -174,10 +176,10 @@ async def test_running_counts_stand_alone_when_a_reply_has_no_footer(slack: Fake
     assert [b["type"] for b in last_blocks(slack)] == ["markdown"]
     await sink.set_running("⏳ 1 agent")
     assert last_blocks(slack)[1:] == [
-        sinks.SPACER,
+        sinks.SPACER_ABOVE,
         {"type": "divider"},
         sinks.context_block("⏳ 1 agent"),
-        sinks.SPACER,
+        sinks.SPACER_BELOW,
     ]
 
 
@@ -311,3 +313,16 @@ async def test_an_empty_finished_reply_that_is_no_longer_latest_goes(slack: Fake
     await sink.finish([], "footer")
     await sink.set_latest(False)
     assert [a["ts"] for a in slack.calls_to("chat.delete")] == [slack.posted_ts[0]]
+
+
+async def test_every_block_id_in_a_message_is_unique(slack: FakeSlack) -> None:
+    # Slack refuses a message whose blocks repeat a block_id (invalid_blocks, seen live).
+    sink = reply(slack)
+    await sink.text("Text.")
+    await sink.task(tool("a", "Read"))
+    await sink.text("More text.")
+    await sink.task(tool("b", "Bash", "error", output="boom"))
+    await sink.finish([], "footer")
+    for _, args in slack.calls:
+        ids = [b["block_id"] for b in args.get("blocks") or [] if "block_id" in b]
+        assert len(ids) == len(set(ids)), ids
