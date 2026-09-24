@@ -75,11 +75,11 @@ async def test_a_running_tool_and_the_writing_line_show_until_the_end(slack: Fak
     await sink.task(TaskUpdate("t1", "Bash: pytest", "in_progress"))
     await asyncio.sleep(0.05)
     shown = last_blocks(slack)
-    assert "… `Bash: pytest`" in shown[0]["text"]
+    assert "… `Bash: pytest`" in slack.message_texts()[0]
     assert shown[-1]["elements"][0]["text"] == texts.WRITING
     await sink.finish([TaskUpdate("t1", "Bash: pytest", "complete")], "footer")
     final = last_blocks(slack)
-    assert "✓ `Bash: pytest`" in final[0]["text"]
+    assert "✓ `Bash: pytest`" in slack.message_texts()[0]
     assert all(texts.WRITING not in str(b) for b in final)
 
 
@@ -251,10 +251,37 @@ async def test_lines_fold_only_once_the_reply_is_finished(slack: FakeSlack) -> N
 async def test_a_reply_that_shrinks_on_folding_removes_its_extra_message(slack: FakeSlack) -> None:
     slack.responses["chat.postMessage"] = [{"ok": True, "ts": "1.1"}, {"ok": True, "ts": "2.2"}]
     sink = reply(slack)
-    for i in range(400):  # over one message while whole, one line once folded
+    for i in range(300):  # two messages while whole, one line once folded
         await sink.task(TaskUpdate(f"t{i}", f"Read: {'x' * 40}{i}", "complete", name="Read"))
     await asyncio.sleep(0.05)
     assert len(slack.calls_to("chat.postMessage")) == 2
     await sink.finish([], "footer")
     assert [a["ts"] for a in slack.calls_to("chat.delete")] == ["2.2"]
-    assert slack.message_texts()[0] == "✓ Read \u00d7400"
+    assert slack.message_texts()[0] == "✓ Read \u00d7300"
+
+
+async def test_tool_lines_are_secondary_text_and_claude_s_words_are_not(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.text("Looking.")
+    await sink.task(tool("a", "Read"))
+    await sink.text("Found it.")
+    await sink.finish([], None)
+    blocks = last_blocks(slack)
+    assert [b["type"] for b in blocks] == ["markdown", "context", "markdown"]
+    assert blocks[1]["elements"][0]["text"] == "✓ Read"
+
+
+async def test_tool_lines_escape_what_slack_mrkdwn_reads_as_markup(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.task(TaskUpdate("t", "Bash: a < b && c > d", "in_progress", name="Bash"))
+    await sink.finish([], None)
+    assert last_blocks(slack)[0]["elements"][0]["text"] == "… `Bash: a &lt; b &amp;&amp; c &gt; d`"
+
+
+async def test_a_reply_that_is_no_longer_the_latest_drops_its_footer(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.text("Done.")
+    await sink.finish([], "footer")
+    await sink.set_running("⏳ 1 shell")
+    await sink.set_latest(False)
+    assert [b["type"] for b in last_blocks(slack)] == ["markdown"]

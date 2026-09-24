@@ -23,7 +23,6 @@ from claude_agent_sdk import (
     UserMessage,
 )
 from claude_agent_sdk.types import (
-    TERMINAL_TASK_STATUSES,
     CanUseTool,
     PermissionMode,
     PermissionResult,
@@ -73,10 +72,15 @@ QUESTION_TOOL = "AskUserQuestion"
 # After a background task's notification, the CLI starts a turn of its own to report it
 # (measured on Claude Code 2.1.280). If that turn never comes, the owner's queue moves on.
 INJECTED_TURN_WAIT = 30.0
-# How the footer counts a running task, by its task_type (measured on Claude Code 2.1.280:
-# `local_bash` for a background command, `local_agent` for a subagent). A type not listed here
-# counts as a task, so a new kind shows with no change.
-TASK_KINDS = {"local_bash": "shell", "local_agent": "agent"}
+# Each task_type (measured on Claude Code 2.1.280: `local_bash` for a background command,
+# `local_agent` for a subagent) as the footer counts it and as its end line names it, the way
+# the terminal prints `Agent "..." finished`. A type not listed counts and reads as a task, so a
+# new kind shows with no change.
+TASK_KINDS = {"local_bash": ("shell", "Background command"), "local_agent": ("agent", "Agent")}
+UNKNOWN_KIND = ("task", "Task")
+# The task types whose notification summary is already the terminal's end line (measured: a
+# command's reads `Background command "..." completed (exit code 0)`; an agent's is its result).
+SUMMARY_IS_END_LINE = {"local_bash"}
 # Tasks whose reply the session remembers. An ended task stays a while, since an agent can
 # report again after its notification; past this many, the oldest ended ones are forgotten.
 TASK_REPLIES_KEPT = 100
@@ -197,9 +201,9 @@ class ChannelSession:
         self._task_replies: dict[str, TurnRenderer] = {}
         # The channel's newest reply: the only one that shows what is still running.
         self._latest: ReplySink | None = None
-        # Each task's type, for the footer's counts, and the end lines that open Claude Code's
-        # next turn of its own, the one that reports them.
-        self._task_types: dict[str, str] = {}
+        # Each task's type and description, for the footer's counts and its end line, and the
+        # end lines that open Claude Code's next turn of its own, the one that reports them.
+        self._tasks: dict[str, tuple[str, str]] = {}
         self._ended: list[str] = []
         # Clear while a background notification's own turn is expected or running: the owner's
         # next query waits, so the two replies never share a thread.
@@ -373,14 +377,13 @@ class ChannelSession:
         if isinstance(message, SystemMessage) and message.subtype == "init":
             self.cli_version = message.data.get("claude_code_version")
         if isinstance(message, TaskStartedMessage):
-            self._task_types[message.task_id] = message.task_type or ""
-        elif isinstance(message, TaskNotificationMessage) or (
-            isinstance(message, TaskUpdatedMessage) and message.status in TERMINAL_TASK_STATUSES
-        ):
-            # The type only serves the counts of tasks still running.
-            self._task_types.pop(message.task_id, None)
+            self._tasks[message.task_id] = (message.task_type or "", message.description)
         if isinstance(message, TaskNotificationMessage) and self._active is None and not self._sent:
             self._ended.append(self._ended_line(message))
+        if isinstance(message, TaskNotificationMessage):
+            # Read above for the end line, which comes after the terminal task_updated (recorded
+            # order); a task whose notification never comes goes with the process.
+            self._tasks.pop(message.task_id, None)
         if isinstance(message, TASK_MESSAGES) and message.task_id in self._task_replies:
             # A task that outlived its turn shows only on its own line, wherever it started.
             await self._task_replies[message.task_id].feed(message)
@@ -410,13 +413,19 @@ class ChannelSession:
             await self._finish(active, message)
 
     def _ended_line(self, message: TaskNotificationMessage) -> str:
-        origin = self._task_replies.get(message.task_id)
-        title = origin.task_title(message.task_id) if origin else None
-        summary = (
-            one_line(message.summary, 200) if message.summary else f"`{title or message.task_id}`"
-        )
+        """The terminal's line for a task's end: a command's own summary, or `Agent "..."
+        finished` from the task's description, plus the duration when the task reports one."""
+        task_type, description = self._tasks.get(message.task_id, ("", ""))
+        if task_type in SUMMARY_IS_END_LINE and message.summary:
+            text = one_line(message.summary, 200)
+        else:
+            origin = self._task_replies.get(message.task_id)
+            label = description or (origin.task_title(message.task_id) if origin else None)
+            name = TASK_KINDS.get(task_type, UNKNOWN_KIND)[1]
+            outcome = {"completed": "finished"}.get(message.status, message.status)
+            text = f'{name} "{one_line(label or message.task_id, 120)}" {outcome}'
         duration = message.usage["duration_ms"] if message.usage else None
-        return ended_line(summary, message.status, duration)
+        return ended_line(text, message.status, duration)
 
     def _opening(self) -> str:
         """What opens a reply of Claude Code's own turn: the end of each task it reports."""
@@ -497,7 +506,7 @@ class ChannelSession:
         """The Claude Code process is going away with its tasks: no reply keeps showing one."""
         renderers = set(self._task_replies.values())
         self._task_replies.clear()
-        self._task_types.clear()
+        self._tasks.clear()
         self._ended.clear()
         for renderer in renderers:
             with contextlib.suppress(Exception):
@@ -512,7 +521,7 @@ class ChannelSession:
         counts: dict[str, int] = {}
         for task_id, renderer in self._task_replies.items():
             if task_id in renderer.running_tasks:
-                kind = TASK_KINDS.get(self._task_types.get(task_id, ""), "task")
+                kind = TASK_KINDS.get(self._tasks.get(task_id, ("", ""))[0], UNKNOWN_KIND)[0]
                 counts[kind] = counts.get(kind, 0) + 1
         if not counts:
             return ""
@@ -531,6 +540,7 @@ class ChannelSession:
         await sink.set_running(self._running_counts())
         if previous is not None:
             await previous.set_running("")
+            await previous.set_latest(False)
         return sink
 
     async def _finish(self, active: ActiveTurn, result: ResultMessage) -> None:
@@ -540,10 +550,7 @@ class ChannelSession:
             changed, effort = effort_change(result.result or "")
             if changed:
                 self.effort = effort
-            # The footer goes under the owner's replies; Claude Code's own reports have none. The
-            # result's origin says whose turn it was, which the guess at its start can miss.
-            footer = None if injected_turn(result) else await self._footer(result)
-            await self._close_reply(active.renderer, footer)
+            await self._close_reply(active.renderer, await self._footer(result))
         finally:
             await self._settle(active.turn, result)
 

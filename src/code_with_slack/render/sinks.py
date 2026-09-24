@@ -25,6 +25,9 @@ DEBOUNCE_SECONDS = 1.0
 # place from pushing a full message over the limit.
 MESSAGE_LIMIT = 11_000
 FALLBACK_LIMIT = 3_000
+# A context block's text holds at most 3,000 characters; a message, at most 50 blocks.
+CONTEXT_LIMIT = 2_900
+BLOCKS_LIMIT = 45
 ICONS = {"pending": "·", "in_progress": "…", "complete": "✓", "error": "✗"}
 
 
@@ -37,6 +40,24 @@ def describe(exc: Exception) -> str:
 
 def context_block(text: str) -> dict[str, Any]:
     return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
+
+
+def mrkdwn_escape(text: str) -> str:
+    """Slack's mrkdwn reads `&`, `<` and `>` as markup; a tool's title is shown as written."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def tools_block(lines: list[str], index: int) -> dict[str, Any]:
+    """Tool lines as secondary text, small and grey like the footer, as the terminal dims them.
+    The block_id marks the reply's body, as opposed to its status or footer."""
+    block = context_block("\n".join(mrkdwn_escape(line) for line in lines))
+    return {**block, "block_id": f"tools-{index}"}
+
+
+def block_text(block: dict[str, Any]) -> str:
+    if block["type"] == "markdown":
+        return str(block["text"])
+    return "".join(str(e.get("text", "")) for e in block.get("elements") or [])
 
 
 @dataclass
@@ -122,6 +143,7 @@ class ReplySink:
         self._finished = False
         self._footer: str | None = None
         self._running = ""
+        self._latest = True
 
     async def open(self, status: str) -> None:
         """Post the reply at once, showing only its status: the owner sees an answer is coming."""
@@ -158,6 +180,15 @@ class ReplySink:
         if self._finished or self._messages:
             await self._changed()
 
+    async def set_latest(self, latest: bool) -> None:
+        """Only the channel's latest reply shows the footer and the running counts, at the
+        bottom of the channel as the terminal's status line; an older one drops them."""
+        if latest == self._latest:
+            return
+        self._latest = latest
+        if self._finished:
+            await self._changed()
+
     async def finish(self, closing: list[TaskUpdate], footer: str | None) -> None:
         """End the reply. A line still in progress is a task that outlives the turn: `task`
         keeps updating it after the end."""
@@ -184,31 +215,45 @@ class ReplySink:
         await asyncio.sleep(DEBOUNCE_SECONDS)
         await self._flush(final=False, footer=None)
 
-    def _body(self, final: bool) -> str:
-        # A blank line between text and a run of tool lines makes them separate markdown
-        # paragraphs; a run of tool lines stays one compact paragraph.
-        paragraphs: list[str] = []
+    def _blocks(self, final: bool) -> list[dict[str, Any]]:
+        """The reply's body in order: Claude's text as markdown, each run of tool lines as
+        secondary text. Tool lines fold only once the reply is finished: nothing moves while
+        Claude works."""
+        blocks: list[dict[str, Any]] = []
         for is_text, run in itertools.groupby(self._parts, key=lambda p: isinstance(p, _Text)):
             if is_text:
-                paragraphs.append("".join(p.text for p in run if isinstance(p, _Text)).strip("\n"))
+                text = "".join(p.text for p in run if isinstance(p, _Text)).strip("\n")
+                blocks += [{"type": "markdown", "text": c} for c in split(text) if c]
             else:
                 tools = [p for p in run if isinstance(p, _Tool)]
-                # Folded only once the reply is finished: while Claude works, nothing moves.
-                paragraphs.append(
-                    "\n".join(tool_lines(tools) if final else (t.line() for t in tools))
-                )
-        return "\n\n".join(p for p in paragraphs if p)
+                lines = tool_lines(tools) if final else [t.line() for t in tools]
+                chunk: list[str] = []
+                for line in lines:
+                    if chunk and sum(len(x) + 1 for x in chunk) + len(line) > CONTEXT_LIMIT:
+                        blocks.append(tools_block(chunk, len(blocks)))
+                        chunk = []
+                    chunk.append(line[:CONTEXT_LIMIT])
+                if chunk:
+                    blocks.append(tools_block(chunk, len(blocks)))
+        return blocks
 
     def _render(self, final: bool, footer: str | None) -> list[list[dict[str, Any]]]:
-        chunks = split(self._body(final))
-        messages: list[list[dict[str, Any]]] = [
-            [{"type": "markdown", "text": chunk}] if chunk else [] for chunk in chunks
-        ]
+        messages: list[list[dict[str, Any]]] = [[]]
+        size = 0
+        for block in self._blocks(final):
+            length = len(block_text(block))
+            if messages[-1] and (
+                size + length > MESSAGE_LIMIT or len(messages[-1]) >= BLOCKS_LIMIT
+            ):
+                messages.append([])
+                size = 0
+            messages[-1].append(block)
+            size += length
         if not final:
             status = " · ".join(filter(None, (self._status, self._running)))
             messages[-1].append(context_block(status))
             return messages
-        last_line = " · ".join(filter(None, (footer, self._running)))
+        last_line = " · ".join(filter(None, (footer, self._running))) if self._latest else ""
         if last_line:
             messages[-1] += [{"type": "divider"}, context_block(last_line)]
         return messages
@@ -221,8 +266,7 @@ class ReplySink:
                     continue
                 if index < len(self._shown) and self._shown[index] == blocks:
                     continue
-                markdown = next((b["text"] for b in blocks if b["type"] == "markdown"), "")
-                fallback = markdown[:FALLBACK_LIMIT] or "…"
+                fallback = block_text(blocks[0])[:FALLBACK_LIMIT] or "…"
                 try:
                     if index < len(self._messages):
                         await self._slack.chat_update(
