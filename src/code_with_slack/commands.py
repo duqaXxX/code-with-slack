@@ -47,7 +47,9 @@ class Invalid:
     pass
 
 
-Command = Help | Bind | Bypass | Status | Stop | Passthrough | Invalid
+# The daemon's own words, answered without Claude Code; a Passthrough goes to the session.
+Word = Help | Bind | Bypass | Status | Stop | Invalid
+Command = Word | Passthrough
 DESCRIPTION_LIMIT = 100
 
 

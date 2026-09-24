@@ -9,10 +9,13 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage
+
+if TYPE_CHECKING:  # sessions imports this module
+    from code_with_slack.sessions import ClaudeClient
 
 logger = logging.getLogger(__name__)
 
@@ -115,10 +118,12 @@ class UsageProbe:
     """A long-lived client whose only job is `/usage`: the limits belong to the account, and a
     probe inside a channel's session would add to that session's transcript."""
 
-    def __init__(self, cwd: Path, client_factory: Callable[[ClaudeAgentOptions], Any]) -> None:
+    def __init__(
+        self, cwd: Path, client_factory: Callable[[ClaudeAgentOptions], "ClaudeClient"]
+    ) -> None:
         self._options = ClaudeAgentOptions(cwd=str(cwd), setting_sources=[])
         self._factory = client_factory
-        self._client: Any = None
+        self._client: ClaudeClient | None = None
 
     async def __call__(self) -> str:
         try:
@@ -163,7 +168,7 @@ async def git_branch(cwd: Path) -> str | None:
         proc.kill()
         await proc.wait()
         return None
-    branch = out.decode().strip()
+    branch = out.decode(errors="replace").strip()
     return branch if proc.returncode == 0 and branch else None
 
 
@@ -187,10 +192,11 @@ def session_tokens(result: ResultMessage) -> int | None:
     if not result.model_usage:
         return None
     return sum(
-        u["inputTokens"]
-        + u["outputTokens"]
-        + u["cacheReadInputTokens"]
-        + u["cacheCreationInputTokens"]
+        # A count a model does not report (no cache, say) counts as none.
+        u.get("inputTokens", 0)
+        + u.get("outputTokens", 0)
+        + u.get("cacheReadInputTokens", 0)
+        + u.get("cacheCreationInputTokens", 0)
         for u in result.model_usage.values()
     )
 

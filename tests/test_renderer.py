@@ -58,7 +58,7 @@ def top_level_tool_ids(messages: list[Message]) -> list[str]:
     ]
 
 
-async def test_tools_turn_streams_text_and_one_card_per_tool() -> None:
+async def test_tools_turn_streams_text_and_one_line_per_tool() -> None:
     messages = sdk_messages("tools")
     sink, renderer = await render(messages)
     assert "".join(sink.texts).strip()
@@ -70,12 +70,12 @@ async def test_tools_turn_streams_text_and_one_card_per_tool() -> None:
     assert renderer.result is not None
 
 
-async def test_a_failed_tool_is_an_error_card() -> None:
+async def test_a_failed_tool_is_an_error_line() -> None:
     sink, _ = await render(sdk_messages("tool-error"))
     assert "error" in {t.status for t in sink.tasks}
 
 
-async def test_subagent_calls_nest_in_the_parent_card() -> None:
+async def test_subagent_calls_nest_in_the_parent_line() -> None:
     messages = sdk_messages("subagent")
     sink, _ = await render(messages)
     parents = top_level_tool_ids(messages)
@@ -96,14 +96,14 @@ async def test_logged_out_cli_gets_the_login_instructions() -> None:
     assert texts.AUTH_FAILED in "".join(sink.texts)
 
 
-async def test_an_interrupted_turn_closes_every_open_card_without_error() -> None:
+async def test_an_interrupted_turn_closes_every_open_line_without_error() -> None:
     sink, _ = await render(sdk_messages("interrupt"))
     assert sink.finished is not None
     closing, _ = sink.finished
     assert all(t.status == "complete" for t in closing)
 
 
-async def test_background_notification_in_a_later_turn_gets_a_card() -> None:
+async def test_background_notification_in_a_later_turn_gets_a_line() -> None:
     turns = split_turns(sdk_messages("background"))
     assert len(turns) >= 2, "the recording holds the injected notification turn"
     sink, _ = await render(turns[1])

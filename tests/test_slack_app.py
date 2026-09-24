@@ -250,7 +250,7 @@ async def test_the_owner_approves(world: World) -> None:
     body = click("approval_allow", approval_id)
     await world.dispatch(body)
     assert pending.future.done()
-    # The tool's card in the reply records the call: the request message goes away.
+    # The tool's line in the reply records the call: the request message goes away.
     deleted = [(a["channel"], a["ts"]) for a in world.slack.calls_to("chat.delete")]
     assert deleted == [(CHANNEL, body["message"]["ts"])]
     assert not world.slack.calls_to("chat.update")
@@ -387,3 +387,17 @@ async def test_a_submit_that_needs_more_answers_makes_no_slack_call_first(world:
     approval_id, _ = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
     await world.dispatch(form_body("view_submission", Draft(approval_id, CHANNEL), {}))
     assert not [m for m, _ in world.slack.calls if m.startswith("conversations.")]
+
+
+def test_slack_links_reach_claude_as_typed() -> None:
+    # Message formatting reference (read 2026-09-25): Slack sends a link as <url|label> or <url>.
+    assert slack_unescape("open <http://main.py|main.py> now") == "open main.py now"
+    assert slack_unescape("see <https://example.com/a?b=1&amp;c=2>") == (
+        "see https://example.com/a?b=1&c=2"
+    )
+    assert slack_unescape("mail <mailto:bob@example.com|bob@example.com>") == "mail bob@example.com"
+    assert slack_unescape("hi <@U000BOB>") == "hi <@U000BOB>"  # a mention stays as Slack sent it
+    # A link the owner named keeps its address: Claude could not open the label alone.
+    assert slack_unescape("read <https://example.com/x|the docs>") == (
+        "read the docs (https://example.com/x)"
+    )

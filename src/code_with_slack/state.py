@@ -34,8 +34,9 @@ class StateStore:
         self._save()
 
     def set_session(self, channel_id: str, session_id: str | None) -> None:
-        current = self._channels[channel_id]
-        if current.session_id != session_id:
+        """Record a bound channel's session; a channel with no directory has none to record."""
+        current = self._channels.get(channel_id)
+        if current is not None and current.session_id != session_id:
             self._channels[channel_id] = replace(current, session_id=session_id)
             self._save()
 

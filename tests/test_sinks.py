@@ -388,3 +388,73 @@ async def test_a_rate_limited_final_write_is_not_turned_into_plain_text(slack: F
     slack.responses["chat.update"] = rejected("ratelimited")
     await sink.finish([], "footer")
     assert all(w.get("blocks") != [] for w in writes(slack))
+
+
+async def test_a_final_write_lost_to_the_network_is_tried_again(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.01)
+    sink = reply(slack)
+    await sink.open(texts.WRITING)
+    await sink.text("Done.")
+    slack.responses["chat.update"] = [aiohttp.ClientConnectionError("network down"), {"ok": True}]
+    await sink.finish([], "main · ctx 6%")
+    await asyncio.sleep(0.05)
+    final = writes(slack)[-1]
+    assert texts.WRITING not in str(final) and "main · ctx 6%" in str(final)
+
+
+async def test_an_extra_message_that_cannot_be_removed_is_tried_again(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.01)
+    slack.responses["chat.postMessage"] = [{"ok": True, "ts": "1.1"}, {"ok": True, "ts": "2.2"}]
+    slack.responses["chat.delete"] = [aiohttp.ClientConnectionError("network down"), {"ok": True}]
+    sink = reply(slack)
+    for i in range(300):  # two messages while whole, one line once folded
+        await sink.task(TaskUpdate(f"t{i}", f"Read: {'x' * 40}{i}", "complete", name="Read"))
+    await asyncio.sleep(0.05)
+    await sink.finish([], "footer")
+    await asyncio.sleep(0.05)
+    assert [a["ts"] for a in slack.calls_to("chat.delete")] == ["2.2", "2.2"]
+
+
+async def test_ending_a_reply_during_a_write_loses_no_message(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gate = asyncio.Event()
+    original = slack.api_call
+
+    async def slow(api_method: str, **kwargs: Any) -> Any:
+        answer = await original(api_method, **kwargs)
+        if api_method == "chat.postMessage" and len(slack.posted_ts) == 2:
+            await gate.wait()  # Slack has the message; its answer is still on the way
+        return answer
+
+    monkeypatch.setattr(slack, "api_call", slow)
+    sink = reply(slack)
+    await sink.open(texts.WRITING)
+    await sink.text("x" * 15_000)  # the draft write posts a continuation message
+    await until_posted(slack, 2)
+    ending = asyncio.create_task(sink.finish([], "footer"))
+    await asyncio.sleep(0.02)
+    gate.set()
+    await ending
+    assert len(slack.posted_ts) == 2
+    assert all(texts.WRITING not in text for text in slack.message_texts())
+
+
+async def until_posted(slack: FakeSlack, count: int) -> None:
+    async with asyncio.timeout(2):
+        while len(slack.posted_ts) < count:  # noqa: ASYNC110
+            await asyncio.sleep(0.005)
+
+
+async def test_a_draft_rewrite_that_lands_after_the_end_changes_nothing(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.open(texts.WRITING)
+    await sink.text("Done.")
+    await sink.finish([], "main · ctx 6%")
+    before = len(writes(slack))
+    await sink._flush(final=False, footer=None)  # a debounced rewrite that was already running
+    assert len(writes(slack)) == before

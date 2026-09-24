@@ -227,7 +227,7 @@ The bot answers one person, and the rest of this list protects what that person 
 |---|---|
 | a message | Sends a prompt to the channel's session; the reply appears below it in the channel and grows as Claude works |
 | `!help [text]` | Lists code-with-slack's own words and every command the channel's session offers now; with a text, only the lines whose name or description contains it, for example `!help model` |
-| `!bind <path>` | Binds this channel to a directory under `ALLOWED_ROOT`. A new channel does nothing else until bound |
+| `!bind <path>` | Binds this channel to a directory under `ALLOWED_ROOT`; a relative path is read from `ALLOWED_ROOT`. A new channel does nothing else until bound |
 | `!<command> [args]` | Runs a Claude Code command, for example `!compact` or `!model opus` |
 | `!bypass on` / `off` | Switches the channel's session to `bypassPermissions` and back; a restart turns it off |
 | `!status` | Shows the channel's directory, session and mode |
@@ -251,7 +251,8 @@ of tool names and counts, such as `✓ Bash · Read ×2`; a subagent or a backgr
 line of its own, and a divider and the footer replace the status line. A reply longer than one Slack message continues in the next one.
 
 An approval request is a message of its own below the reply; once you decide, it disappears and
-the tool's line in the reply records the call.
+the tool's line in the reply records the call. If Slack does not accept the request, Claude Code
+is told it was denied because it could not be shown.
 
 Messages sent while a turn is running wait their turn; each gets its own reply. When a background
 task finishes while nothing runs, Claude Code starts a turn of its own to report it, as it does

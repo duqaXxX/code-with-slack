@@ -45,4 +45,8 @@ First release.
 - A Slack network failure drops a write without stopping the session; a final write Slack
   refuses for its content is written again as plain text. A Claude Code process that exits
   releases the channel; a missing directory asks to bind again; a directory macOS privacy
-  protection denies gets a message that says how to grant access.
+  protection denies gets a message that says how to grant access. A final write lost to the
+  network is tried again once. An approval request Slack does not accept is denied, with the
+  reason. A failure reading the channel's members refuses the event and tells the owner.
+- `!bind` reads a relative path from `ALLOWED_ROOT`; a link Slack made in a message reaches
+  Claude Code as typed.

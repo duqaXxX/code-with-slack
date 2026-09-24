@@ -97,7 +97,9 @@ receive because the network is down, is retried with the whole reply at the next
 stops the Claude Code session. The final rewrite has no next one: when Slack refuses its content
 (`invalid_blocks`, `msg_too_long` and the like, not a rate limit), that message is written once
 more as plain text, its text and the footer with no blocks, and the rewrite goes on to the next
-messages, so none keeps saying `Claude is writing…`.
+messages, so none keeps saying `Claude is writing…`. A final rewrite that fails for any other
+reason (the network, or a rate limit slack-sdk has already retried) is tried once more after
+`FINAL_RETRY_SECONDS`.
 
 ## Approvals
 
@@ -117,7 +119,9 @@ answers. The modal carries no channel: each click in it is checked against the o
 workspace, and the channel its request was posted in. Each request has a random id that only its buttons carry; a click resolves it
 once, only from the channel it was posted in, and only after the identity and channel guards.
 Once decided, the request message is deleted: the tool's line in the reply records the call.
-`!stop` denies every request still pending in the channel and deletes its message.
+`!stop` denies every request still pending in the channel and deletes its message. A request
+Slack does not accept is denied at once, with a message telling Claude Code that it could not be
+shown, and the tool's line records the denial.
 
 ## Footer
 
@@ -198,6 +202,9 @@ restart brings every channel back to Claude Code's own mode. That matches Claude
 events, the Approve, Deny, Answer and Skip buttons, and the question form's Next and Submit. The app registers no slash command. Each
 acknowledges Slack first, then checks the owner, the workspace and the channel itself. A
 failure after the checks reaches the owner as an ephemeral error line.
+A link Slack made from a typed address (`<url|label>`, `<url>`) reaches Claude Code as typed; a
+link the owner named reaches it as `label (url)`, so the address is not lost; a mention stays in Slack's form (`<@U…>`), since naming the user would need a
+scope the app does not have.
 `code_with_slack.commands.parse_bang` reads a message starting with `!`: `help`, `bind`,
 `bypass`, `status` and `stop` are the daemon's own words, answered with a message in the
 channel (`!help` and `!bind` also work before the channel is bound); any other `!name args` runs
