@@ -78,6 +78,9 @@ INJECTED_TURN_WAIT = 30.0
 # new kind shows with no change.
 TASK_KINDS = {"local_bash": ("shell", "Background command"), "local_agent": ("agent", "Agent")}
 UNKNOWN_KIND = ("task", "Task")
+# Tasks whose type and description the session keeps. A task can end with a terminal
+# task_updated and no notification (SDK docstring), so past this many the oldest are dropped.
+TASKS_KEPT = 200
 # The task types whose notification summary is already the terminal's end line (measured: a
 # command's reads `Background command "..." completed (exit code 0)`; an agent's is its result).
 SUMMARY_IS_END_LINE = {"local_bash"}
@@ -378,6 +381,8 @@ class ChannelSession:
             self.cli_version = message.data.get("claude_code_version")
         if isinstance(message, TaskStartedMessage):
             self._tasks[message.task_id] = (message.task_type or "", message.description)
+            while len(self._tasks) > TASKS_KEPT:
+                del self._tasks[next(iter(self._tasks))]
         if isinstance(message, TaskNotificationMessage) and self._active is None and not self._sent:
             self._ended.append(self._ended_line(message))
         if isinstance(message, TaskNotificationMessage):

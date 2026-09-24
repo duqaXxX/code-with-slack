@@ -48,9 +48,9 @@ def mrkdwn_escape(text: str) -> str:
 
 
 def tools_block(lines: list[str], index: int) -> dict[str, Any]:
-    """Tool lines as secondary text, small and grey like the footer, as the terminal dims them.
-    The block_id marks the reply's body, as opposed to its status or footer."""
-    block = context_block("\n".join(mrkdwn_escape(line) for line in lines))
+    """Tool lines, already escaped, as secondary text, small and grey like the footer, as the
+    terminal dims them. The block_id marks the reply's body, as opposed to its status or footer."""
+    block = context_block("\n".join(lines))
     return {**block, "block_id": f"tools-{index}"}
 
 
@@ -227,6 +227,8 @@ class ReplySink:
             else:
                 tools = [p for p in run if isinstance(p, _Tool)]
                 lines = tool_lines(tools) if final else [t.line() for t in tools]
+                # Escaped first: Slack's limit counts the text it receives.
+                lines = [mrkdwn_escape(line) for line in lines]
                 chunk: list[str] = []
                 for line in lines:
                     if chunk and sum(len(x) + 1 for x in chunk) + len(line) > CONTEXT_LIMIT:
@@ -261,6 +263,8 @@ class ReplySink:
     async def _flush(self, *, final: bool, footer: str | None) -> None:
         async with self._lock:
             rendered = self._render(final, footer)
+            if rendered == [[]]:
+                rendered = []  # nothing left to show: the extra-message removal below takes it
             for index, blocks in enumerate(rendered):
                 if not blocks:
                     continue

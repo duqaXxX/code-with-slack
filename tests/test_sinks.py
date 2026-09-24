@@ -285,3 +285,22 @@ async def test_a_reply_that_is_no_longer_the_latest_drops_its_footer(slack: Fake
     await sink.set_running("⏳ 1 shell")
     await sink.set_latest(False)
     assert [b["type"] for b in last_blocks(slack)] == ["markdown"]
+
+
+async def test_a_tool_block_stays_under_slack_s_limit_once_escaped(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    for i in range(60):
+        await sink.task(
+            TaskUpdate(f"t{i}", f"Bash: {i} 2>&1 && a <b> & c" * 2, "error", name="Bash")
+        )
+    await sink.finish([], None)
+    contexts = [b for b in last_blocks(slack) if b["type"] == "context"]
+    assert contexts and all(len(b["elements"][0]["text"]) <= 3000 for b in contexts)
+
+
+async def test_an_empty_finished_reply_that_is_no_longer_latest_goes(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.open(texts.WRITING)
+    await sink.finish([], "footer")
+    await sink.set_latest(False)
+    assert [a["ts"] for a in slack.calls_to("chat.delete")] == [slack.posted_ts[0]]

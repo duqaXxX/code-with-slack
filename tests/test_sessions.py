@@ -426,6 +426,22 @@ async def test_a_background_agent_s_end_reads_as_in_the_terminal(
     assert "README.md" not in h.replies()[1].splitlines()[0]
 
 
+async def test_the_task_record_is_bounded(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "TASKS_KEPT", 1)
+    first, _, _ = split_background()
+    renamed = [
+        dataclasses.replace(m, task_id="other") if isinstance(m, TaskStartedMessage) else m
+        for m in first
+    ]
+    h = harness_for({"turns": [first, renamed]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("one")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("two")).done.wait(), 2)
+    assert list(session._tasks) == ["other"]
+
+
 async def test_a_report_line_never_outlives_its_chance(
     harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
 ) -> None:
