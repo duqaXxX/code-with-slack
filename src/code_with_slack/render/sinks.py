@@ -42,6 +42,15 @@ def context_block(text: str) -> dict[str, Any]:
     return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
 
 
+# An empty line between a reply and its footer's divider: Slack blocks have no margin setting,
+# so a context block holding only a zero-width space makes the gap.
+SPACER: dict[str, Any] = {
+    "type": "context",
+    "block_id": "spacer",
+    "elements": [{"type": "mrkdwn", "text": "\u200b"}],
+}
+
+
 def mrkdwn_escape(text: str) -> str:
     """Slack's mrkdwn reads `&`, `<` and `>` as markup; a tool's title is shown as written."""
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -257,7 +266,7 @@ class ReplySink:
             return messages
         last_line = " · ".join(filter(None, (footer, self._running))) if self._latest else ""
         if last_line:
-            messages[-1] += [{"type": "divider"}, context_block(last_line)]
+            messages[-1] += [SPACER, {"type": "divider"}, context_block(last_line)]
         return messages
 
     async def _flush(self, *, final: bool, footer: str | None) -> None:
