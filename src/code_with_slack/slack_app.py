@@ -238,7 +238,10 @@ def build_app(
             return
         # trigger_id lives 3 seconds: the checks above are the only work before this call.
         view = question_view(Draft(approval_id, channel), pending.questions)
-        await slack.views_open(trigger_id=body["trigger_id"], view=view)
+        try:
+            await slack.views_open(trigger_id=body["trigger_id"], view=view)
+        except Exception as exc:  # an expired trigger_id, say: the turn must not wait unseen
+            await tell_owner(channel, texts.QUESTION_NOT_OPENED.format(error=describe(exc)))
 
     async def form_of(body: dict[str, Any]) -> tuple[Draft, Pending, list[dict[str, Any]]] | None:
         """The form's draft and its request, after the owner, workspace and channel checks. A
@@ -265,30 +268,45 @@ def build_app(
             return
         draft, _, questions = form
         draft = replace(draft, active=int(body["actions"][0]["value"]) % len(questions))
-        view = body["view"]
-        await slack.views_update(
-            view_id=view["id"], hash=view["hash"], view=question_view(draft, questions)
-        )
+        # No hash: after two quick clicks the last one wins, instead of a hash_conflict.
+        await slack.views_update(view_id=body["view"]["id"], view=question_view(draft, questions))
 
     @app.view(QUESTION_FORM)
     async def on_question_submit(ack: AsyncAck, body: dict[str, Any]) -> None:
-        form = await form_of(body)
-        if form is None:
+        # Slack wants the answer within 3 seconds, and a missing answer can only be shown in
+        # it: the checks before it make no network call. The channel is checked before acting.
+        user, team = interaction_actor(body)
+        view = body.get("view") or {}
+        try:
+            draft = Draft.load(str(view.get("private_metadata")))
+        except (ValueError, KeyError, TypeError):
             await ack()
             return
-        draft, pending, questions = form
+        if not is_owner(identity, user, team):
+            await ack()
+            logger.info("ignored an inbound event from someone other than the owner")
+            return
+        pending = approvals.get(draft.approval_id)
+        if pending is None or pending.channel_id != draft.channel_id or not pending.questions:
+            await ack()
+            await tell_owner(draft.channel_id, texts.APPROVAL_GONE)
+            return
+        questions = pending.questions
+        draft = absorb(draft, (view.get("state") or {}).get("values") or {})
         missing = first_unanswered(draft, questions)
         if missing == draft.active:
             await ack(response_action="errors", errors={f"q{missing}": texts.QUESTION_MISSING})
             return
         if missing is not None:
             # Slack ties an error to a block on screen only: show the unanswered question.
-            view = question_view(
+            shown = question_view(
                 replace(draft, active=missing), questions, texts.QUESTION_MISSING_TAB
             )
-            await ack(response_action="update", view=view)
+            await ack(response_action="update", view=shown)
             return
         await ack()
+        if not await admitted(user, team, draft.channel_id):
+            return
         answers = draft_answers(draft, questions)
         assert answers is not None
         if approvals.resolve(draft.approval_id, draft.channel_id, Answer(answers)) is None:

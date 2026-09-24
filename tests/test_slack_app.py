@@ -333,8 +333,7 @@ async def test_a_tab_keeps_the_picks_and_shows_its_question(world: World) -> Non
     approval_id, _ = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
     await world.dispatch(form_body("block_actions", Draft(approval_id, CHANNEL), picked(0, "1")))
     (updated,) = world.slack.calls_to("views.update")
-    recorded_view = recorded("submit")["view"]
-    assert updated["view_id"] == recorded_view["id"] and updated["hash"] == recorded_view["hash"]
+    assert updated["view_id"] == recorded("submit")["view"]["id"]
     view = json.loads(updated["view"]) if isinstance(updated["view"], str) else updated["view"]
     assert Draft.load(view["private_metadata"]) == Draft(approval_id, CHANNEL, 1, {0: [1]})
 
@@ -384,3 +383,26 @@ async def test_a_failing_command_tells_the_owner(world: World) -> None:
     (world.root / "app").rmdir()
     await world.dispatch(message("!bypass on"))
     assert world.ephemerals() == [texts.DIRECTORY_MISSING.format(directory=world.root / "app")]
+
+
+async def test_a_form_that_cannot_open_tells_the_owner(world: World) -> None:
+    approval_id, _ = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
+    world.slack.responses["views.open"] = {"ok": False, "error": "expired_trigger_id"}
+    body = recorded("open-click")
+    body["actions"][0]["value"] = approval_id
+    body["trigger_id"] = "0000000000.0000000000.fake"
+    await world.dispatch(body)
+    assert world.ephemerals() == [texts.QUESTION_NOT_OPENED.format(error="expired_trigger_id")]
+
+
+async def test_a_tab_click_never_loses_to_an_older_view(world: World) -> None:
+    approval_id, _ = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
+    await world.dispatch(form_body("block_actions", Draft(approval_id, CHANNEL), picked(0, "1")))
+    (updated,) = world.slack.calls_to("views.update")
+    assert "hash" not in updated  # the last click wins instead of failing on a hash_conflict
+
+
+async def test_a_submit_that_needs_more_answers_makes_no_slack_call_first(world: World) -> None:
+    approval_id, _ = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
+    await world.dispatch(form_body("view_submission", Draft(approval_id, CHANNEL), {}))
+    assert not [m for m, _ in world.slack.calls if m.startswith("conversations.")]

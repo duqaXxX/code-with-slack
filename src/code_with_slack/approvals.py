@@ -135,7 +135,9 @@ def approval_blocks(
 
 QUESTION_FORM = "question_form"
 TAB_ACTION = "question_tab_"  # + the question's index: action ids must differ within a block
-TYPED_LIMIT = 500  # per question: four of them keep the draft under private_metadata's 3,000
+# Text typed under Other, per question: four at the worst (every character escaped, `"` becoming
+# `\"`) still keep the draft under private_metadata's 3,000 characters.
+TYPED_LIMIT = 300
 
 
 def question_blocks(approval_id: str, questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -183,6 +185,7 @@ class Draft:
                 "t": {str(k): v for k, v in self.typed.items()},
             },
             separators=(",", ":"),
+            ensure_ascii=False,  # Slack counts characters: keep non-Latin text as it is
         )
 
     @classmethod
