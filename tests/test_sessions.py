@@ -34,6 +34,7 @@ from tests.fakes import (
     EndOfStream,
     FakeClaudeClient,
     FakeSlack,
+    StopHook,
     sdk_json,
     sdk_messages,
     split_turns,
@@ -797,3 +798,55 @@ async def test_the_footer_follows_an_effort_set_from_slack(
     await asyncio.wait_for((await session.submit("/effort high")).done.wait(), 2)
     await asyncio.wait_for((await session.submit("next")).done.wait(), 2)
     assert "effort high" in statuses(h)[-1]
+
+
+def with_stop_hook(turn: list[Message], hook_input: dict[str, Any]) -> list[Any]:
+    """A recorded turn with the CLI's Stop hook call where the CLI makes it: before the result."""
+    return [*turn[:-1], StopHook(hook_input), turn[-1]]
+
+
+async def test_the_footer_shows_the_effort_claude_code_reports(
+    harness_for: Callable[..., Harness], tmp_path: Path
+) -> None:
+    # A top-level effortLevel in the settings does not decide the level (Opus 5.5 ignores the
+    # user's): the level Claude Code runs at is the one its Stop hook reports.
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text('{"effortLevel": "high"}')
+    hook_input = sdk_json("stop-hook")
+    h = harness_for({"turns": [with_stop_hook(sdk_messages("tools"), hook_input)]})
+    await asyncio.wait_for((await h.session().submit("list the files")).done.wait(), 2)
+    assert "effort medium" in statuses(h)[-1]
+
+
+async def test_the_footer_says_default_when_claude_code_reports_no_effort(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # Claude Code leaves the field out when the model takes no effort parameter.
+    hook_input = {k: v for k, v in sdk_json("stop-hook").items() if k != "effort"}
+    h = harness_for({"turns": [with_stop_hook(sdk_messages("tools"), hook_input)]})
+    await asyncio.wait_for((await h.session().submit("list the files")).done.wait(), 2)
+    assert "effort default" in statuses(h)[-1]
+
+
+async def test_an_effort_set_before_a_restart_is_not_carried_over(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # Measured 2026-09-25: a resumed session runs at the settings' level, not the `/effort` one.
+    import dataclasses
+
+    turn = sdk_messages("usage")
+    result = turn[-1]
+    assert isinstance(result, ResultMessage)
+    effort_turn = [
+        *turn[:-1],
+        dataclasses.replace(result, result="Set effort level to low (this session only): Quick"),
+    ]
+    h = harness_for(
+        {"turns": [effort_turn]},
+        {"turns": [with_stop_hook(sdk_messages("tools"), sdk_json("stop-hook"))]},
+    )
+    await asyncio.wait_for((await h.session().submit("/effort low")).done.wait(), 2)
+    assert "effort low" in statuses(h)[-1]
+    await h.manager.close_all()
+    await asyncio.wait_for((await h.session().submit("next")).done.wait(), 2)
+    assert "effort medium" in statuses(h)[-1]

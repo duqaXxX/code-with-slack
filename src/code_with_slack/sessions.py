@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -24,6 +24,11 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import (
     CanUseTool,
+    HookCallback,
+    HookContext,
+    HookInput,
+    HookJSONOutput,
+    HookMatcher,
     PermissionMode,
     PermissionResult,
     RateLimitEvent,
@@ -47,7 +52,6 @@ from code_with_slack.footer import (
     FooterData,
     UsageCache,
     effort_change,
-    effort_from_settings,
     format_footer,
     git_branch,
     session_tokens,
@@ -137,7 +141,7 @@ def injected_turn(result: ResultMessage) -> bool:
 
 
 def client_options(
-    directory: Path, session_id: str | None, can_use_tool: CanUseTool
+    directory: Path, session_id: str | None, can_use_tool: CanUseTool, on_stop: HookCallback
 ) -> ClaudeAgentOptions:
     return ClaudeAgentOptions(
         cwd=str(directory),
@@ -145,6 +149,9 @@ def client_options(
         setting_sources=["user", "project", "local"],
         include_partial_messages=True,
         can_use_tool=can_use_tool,
+        # The Stop hook's input carries the effort level Claude Code runs at: the footer's
+        # only source for it, since no message reports it.
+        hooks={"Stop": [HookMatcher(hooks=[on_stop])]},
         # Makes bypass possible, not active: `!bypass on` switches it on the live client.
         extra_args={"allow-dangerously-skip-permissions": None},
         # CLI stderr may quote the conversation: keep it out of the log unless debugging.
@@ -218,8 +225,8 @@ class ChannelSession:
         self.native_mode = "default"
         self.cli_version: str | None = None
         self.bypass = False
-        # The effort level set in this session, as its command output reported it (the SDK
-        # reports none); None falls back to the settings.
+        # The effort level Claude Code last reported: its Stop hook, or the output of `/effort`
+        # and `/model`, which run no hook. None until then, or for a model without effort.
         self.effort: str | None = None
 
     @property
@@ -267,7 +274,7 @@ class ChannelSession:
             if self.bypass:
                 await client.set_permission_mode("bypassPermissions")
             self._client = client
-            self.effort = None  # a new Claude Code process starts from the settings' level
+            self.effort = None  # a resumed session runs at the settings' level (measured)
             self._reader = asyncio.create_task(self._read(client), name=f"reader-{self.channel_id}")
             return client
 
@@ -324,7 +331,7 @@ class ChannelSession:
                 await client.disconnect()
 
     async def _connect(self, session_id: str | None) -> ClaudeClient:
-        options = client_options(self.directory, session_id, self._can_use_tool)
+        options = client_options(self.directory, session_id, self._can_use_tool, self._on_stop)
         client = self._deps.client_factory(options)
         await client.connect()
         return client
@@ -613,9 +620,18 @@ class ChannelSession:
             context_percent=context.get("percentage"),
             session_tokens=session_tokens(result),
             usage=self._deps.usage.current,
-            effort=self.effort or effort_from_settings(self.directory) or "default",
+            effort=self.effort or "default",
         )
         return format_footer(data, datetime.now().astimezone()) or None
+
+    async def _on_stop(
+        self, hook_input: HookInput, tool_use_id: str | None, context: HookContext
+    ) -> HookJSONOutput:
+        # `effort` is in the CLI's Stop input (Claude Code 2.1.280) though not in the SDK's
+        # StopHookInput; absent when the model takes no effort parameter.
+        effort = cast(dict[str, Any], hook_input).get("effort")
+        self.effort = effort.get("level") if isinstance(effort, dict) else None
+        return {}
 
     async def _can_use_tool(
         self, tool_name: str, tool_input: dict[str, Any], context: ToolPermissionContext

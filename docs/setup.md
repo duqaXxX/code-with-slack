@@ -262,10 +262,10 @@ in the terminal: that reply opens with Claude Code's own line for the task's end
 The channel's latest reply ends with a footer, which moves to each new reply: `⚡ bypass` when bypass is on, the git branch, the model, the
 effort level, the context used, the session's tokens, and the 5-hour and weekly limits
 (`5h N% ↻ 2h · 7d N%`), which exist only with a claude.ai subscription. The effort level is the
-one last set in the session with `!effort` (or `!model`), otherwise
-`effortLevel` from your Claude Code settings, otherwise `default`: Claude Code does not report
-the level it uses to programs, so a change made from the terminal in the same session is not
-seen.
+one Claude Code reported at the end of the last turn, or the one set since with `!effort` (or
+`!model`); it reads `default` on a model that takes no effort level, and after a restart until a
+turn ends normally (an interrupted turn or an API error reports no level). A level set with `!effort` lasts until the daemon restarts: the resumed session
+runs at the level your Claude Code settings give the model.
 
 ## Troubleshooting
 
