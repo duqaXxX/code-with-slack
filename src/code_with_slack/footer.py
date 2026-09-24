@@ -2,7 +2,6 @@
 
 import asyncio
 import calendar
-import json
 import logging
 import re
 import time
@@ -171,8 +170,8 @@ async def git_branch(cwd: Path) -> str | None:
 def effort_change(output: str) -> tuple[bool, str | None]:
     """Whether a command's output changes the effort level, and to what (None: back to unknown).
 
-    The SDK reports no effort level (Claude Code 2.1.280): like ccstatusline, the footer follows
-    the output of `/effort` and `/model`. A model change without an effort clears the level.
+    `/effort` and `/model` run no Stop hook, the footer's other source (Claude Code 2.1.280), so
+    the footer follows their output. A model change without an effort clears the level.
     """
     text = output.strip()
     match = EFFORT_OUTPUT.match(text)
@@ -182,25 +181,6 @@ def effort_change(output: str) -> tuple[bool, str | None]:
     if match:
         return True, match[1].lower() if match[1] else None
     return False, None
-
-
-def effort_from_settings(directory: Path, home: Path | None = None) -> str | None:
-    """`effortLevel` from the settings Claude Code reads, the later file winning."""
-    home = home or Path.home()
-    level: str | None = None
-    for path in (
-        home / ".claude" / "settings.json",
-        directory / ".claude" / "settings.json",
-        directory / ".claude" / "settings.local.json",
-    ):
-        try:
-            data = json.loads(path.read_text())
-        except (OSError, ValueError):
-            continue
-        value = data.get("effortLevel") if isinstance(data, dict) else None
-        if isinstance(value, str) and value:
-            level = value.lower()
-    return level
 
 
 def session_tokens(result: ResultMessage) -> int | None:

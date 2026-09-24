@@ -15,7 +15,6 @@ from code_with_slack.footer import (
     UsageCache,
     UsageProbe,
     effort_change,
-    effort_from_settings,
     format_footer,
     git_branch,
     parse_usage,
@@ -163,21 +162,6 @@ async def test_git_branch(repo: Path) -> None:
 )
 def test_effort_change(output: str, expected: tuple[bool, str | None]) -> None:
     assert effort_change(output) == expected
-
-
-def test_effort_from_settings_follows_the_settings_precedence(tmp_path: Path) -> None:
-    home, project = tmp_path / "home", tmp_path / "project"
-    (home / ".claude").mkdir(parents=True)
-    (project / ".claude").mkdir(parents=True)
-    assert effort_from_settings(project, home) is None
-    (home / ".claude" / "settings.json").write_text('{"effortLevel": "high"}')
-    assert effort_from_settings(project, home) == "high"
-    (project / ".claude" / "settings.json").write_text('{"effortLevel": "medium"}')
-    assert effort_from_settings(project, home) == "medium"
-    (project / ".claude" / "settings.local.json").write_text("{not json")
-    assert effort_from_settings(project, home) == "medium"
-    (project / ".claude" / "settings.local.json").write_text('{"effortLevel": "max"}')
-    assert effort_from_settings(project, home) == "max"
 
 
 def test_the_footer_shows_the_effort_after_the_model() -> None:

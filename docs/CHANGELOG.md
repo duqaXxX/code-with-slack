@@ -55,3 +55,6 @@ All notable changes to this project are documented here. The format follows
 - A daemon notice no longer hides the result of a local command in the same reply.
 - A compaction shows the tokens before and after, and a turn with no text says it is done
   instead of leaving the reply empty.
+- The footer's effort level is the one Claude Code reports to a `Stop` hook. It used to be read
+  from the top-level `effortLevel` in the settings, which is wrong for a per-model level and for
+  Opus 5.5.

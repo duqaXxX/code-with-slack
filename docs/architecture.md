@@ -121,9 +121,10 @@ Once decided, the request message is deleted: the tool's line in the reply recor
 Every reply ends with one context line: `⚡ bypass` when bypass is on, the git branch of the
 channel's directory, the model and the context percentage from the SDK's
 `get_context_usage()`, the effort level, the session's tokens from the turn's `ResultMessage.model_usage`, and the
-5-hour and weekly limits. The SDK reports no effort level, so, as ccstatusline does, the
-footer follows the output of `/effort` and `/model` in the session (`Set effort level to ...`),
-then `effortLevel` in the user, project and local settings, then shows `default`. The limits
+5-hour and weekly limits. The effort level is the one Claude Code reports in the input of a
+`Stop` hook the daemon registers on each client (`effort.level`); `/effort` and `/model` run no
+hook, so after one of them the footer follows its output (`Set effort level to ...`). Until a
+level is known, or when the model takes no effort parameter, the footer shows `default`. The limits
 come from Claude Code's `/usage`, sent on a separate
 long-lived client and cached for five minutes; a rate-limit event from the SDK invalidates the
 cache. The limit fields exist only with a claude.ai subscription. A field that cannot be read is
