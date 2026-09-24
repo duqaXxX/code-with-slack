@@ -18,6 +18,8 @@ from claude_agent_sdk import ClaudeAgentOptions, ResultMessage
 logger = logging.getLogger(__name__)
 
 USAGE_TTL = 300.0
+# `/usage` answers in seconds; past this the probe gives up, so the footer never stops refreshing.
+USAGE_TIMEOUT = 60.0
 GIT_TIMEOUT = 5.0
 # Wording measured on Claude Code 2.1.280 (2026-09-23). A change hides the field, nothing more.
 SESSION_LINE = re.compile(r"^Current session: (\d+)% used(?: · resets (.+))?$", re.M)
@@ -120,19 +122,20 @@ class UsageProbe:
         self._client: Any = None
 
     async def __call__(self) -> str:
-        if self._client is None:
-            client = self._factory(self._options)
-            await client.connect()
-            self._client = client
         try:
-            await self._client.query("/usage")
-            text = ""
-            async for message in self._client.receive_messages():
-                if isinstance(message, ResultMessage):
-                    text = message.result or ""
-                    break
-            return text
+            async with asyncio.timeout(USAGE_TIMEOUT):
+                if self._client is None:
+                    self._client = self._factory(self._options)
+                    await self._client.connect()
+                await self._client.query("/usage")
+                text = ""
+                async for message in self._client.receive_messages():
+                    if isinstance(message, ResultMessage):
+                        text = message.result or ""
+                        break
+                return text
         except Exception:
+            # Includes the timeout: a client left mid-query would answer the next one late.
             await self.close()
             raise
 
