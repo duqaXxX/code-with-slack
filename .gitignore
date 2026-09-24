@@ -1,3 +1,20 @@
+# Python and tool output. The tools' caches (.pytest_cache, .ruff_cache, .mypy_cache) also carry
+# an ignore file of their own.
 __pycache__/
 *.py[cod]
+/.venv/
 /dist/
+/build/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Secrets. code-with-slack reads its configuration from ~/.config/code-with-slack/, never from
+# the repository; these lines only catch a copy made here by mistake.
+.env
+.env.*
+
+# Files a machine or an agent creates while working in the checkout.
+.DS_Store
+/.claude/settings.local.json
+/.superpowers/

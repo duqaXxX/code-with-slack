@@ -1,0 +1,31 @@
+# Every action is pinned to a commit SHA, and every Python dependency to an exact version: the cost
+# is a frozen dependency. This file opens the pull requests that move them. For the SDK it also
+# moves the Claude Code CLI the daemon runs, which the SDK bundles.
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    assignees:
+      - duqaXxX
+    groups:
+      actions:
+        patterns:
+          - '*'
+
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    assignees:
+      - duqaXxX
+    # The SDK gets a pull request of its own: its bump changes the bundled CLI and so the message
+    # shapes the fixtures record. The rest travels together.
+    groups:
+      python:
+        patterns:
+          - '*'
+        exclude-patterns:
+          - claude-agent-sdk

@@ -4,9 +4,7 @@ This guide takes a Mac from nothing to a Slack channel that drives a local Claud
 It covers the Slack app, the configuration code-with-slack reads, how it starts on macOS, and the
 security settings the design relies on.
 
-Status: code-with-slack is under development. Part 1 (the Slack app) works today. Parts 2 to 5
-describe the configuration and the service the first release reads; the implementation keeps
-this file true as it lands.
+Status: first release. Every part below describes what the code does.
 
 ## Requirements
 
@@ -16,6 +14,21 @@ this file true as it lands.
 - [uv](https://docs.astral.sh/uv/) and Python 3.12 or later.
 - A Slack workspace where you are the only member. On the free plan Slack allows one workspace;
   use it only if nobody else is in it (see Part 5).
+
+## Part 0: install
+
+```bash
+git clone https://github.com/duqaXxX/code-with-slack.git
+cd code-with-slack
+uv tool install .
+```
+
+This puts the `code-with-slack` command in `~/.local/bin`, where the LaunchAgent of Part 4 runs
+it. To update, pull and run `uv tool install --reinstall .`.
+
+code-with-slack runs the Claude Code CLI that ships inside the Claude Agent SDK it depends on,
+not the `claude` on your `PATH`. Both read the same login, so logging in once with `claude` and
+`/login` covers both.
 
 ## Part 1: the Slack app
 
@@ -28,21 +41,13 @@ this file true as it lands.
 4. Check the summary and choose **Create**.
 
 The manifest asks for private channels only (`groups:history`, `groups:read`,
-`message.groups`), `chat:write`, `commands` for `/cc`, and `assistant:write` for the agent
-features. Socket Mode is on, so the app needs no public URL and your machine opens
-no inbound port.
+`message.groups`) and `chat:write`. It registers no slash command: commands are typed as
+`!word` messages. Socket Mode is on, so the app needs no public URL and your machine opens no
+inbound port.
 
-### Turn on the agent experience
-
-In the app settings, open **Agents** and turn on **Agent experience**. Without it, Slack accepts
-the task updates code-with-slack streams but does not draw them: a reply shows its text and none
-of the tool, subagent or background-task cards.
-
-Leave **Slack Model Context Protocol (MCP) Server** off. It lets an app act on behalf of Slack
-users, which code-with-slack never needs.
-
-If Slack asks for a description, any short sentence will do. For **Suggested Prompts**, choose
-**Fixed** and leave the list empty.
+code-with-slack needs none of the app's agent features: leave **Agent experience** and the
+**Slack Model Context Protocol (MCP) Server** off in the app settings. The MCP server lets an app
+act on behalf of Slack users, which code-with-slack never needs.
 
 ### Install it and collect two tokens
 
@@ -78,8 +83,15 @@ code-with-slack keeps its files in `~/.config/code-with-slack/`:
 | `.env` | you | the tokens and the settings below |
 | `state.json` | code-with-slack | for each channel, its directory and its Claude Code session id |
 
+`state.json` looks like this; you never need to edit it:
+
+```json
+{"version": 1, "channels": {"C0123456789": {"directory": "/home/dev/code/project", "session_id": "..."}}}
+```
+
 Create the directory and the file, readable by you only. code-with-slack refuses to start when
-`.env` is readable by anyone else.
+`.env` is readable by anyone else, is a symbolic link, or belongs to another user, and when a
+token is of the wrong kind (`xoxb-` for the bot token, `xapp-` for the app-level token).
 
 ```bash
 mkdir -p ~/.config/code-with-slack
@@ -92,12 +104,12 @@ chmod 600 ~/.config/code-with-slack/.env
 | `SLACK_BOT_TOKEN` | the `xoxb-…` token |
 | `SLACK_APP_TOKEN` | the `xapp-…` token |
 | `SLACK_OWNER_USER_ID` | your member ID, the only person the bot answers |
-| `ALLOWED_ROOT` | the directory `/cc bind` accepts paths under, for example `~/code` |
+| `ALLOWED_ROOT` | the directory `!bind` accepts paths under, for example `~/code` |
 
 The workspace ID is not configured: code-with-slack reads it from Slack at startup with the bot
 token and rejects events from any other workspace.
 
-`ALLOWED_ROOT` guards against a typo such as `/cc bind /`. It is not a security boundary:
+`ALLOWED_ROOT` guards against a typo such as `!bind /`. It is not a security boundary:
 Claude Code can read and run outside its working directory once you approve it.
 
 ## Part 3: Claude Code
@@ -167,6 +179,31 @@ launchctl print gui/$(id -u)/local.code-with-slack
 
 The log holds what the service did, never the content of your messages.
 
+### Folders macOS protects
+
+macOS keeps `~/Documents`, `~/Desktop`, `~/Downloads` and a few other folders private to the
+apps you allowed. A program started from Terminal uses Terminal's permission; code-with-slack,
+started by launchd, has none, and Claude Code fails to start in a directory there. If your
+projects live in one of those folders, give Full Disk Access to the Python interpreter that runs
+code-with-slack:
+
+1. Show the interpreter in Finder (it sits in a hidden folder, so this is the simplest way to
+   reach it):
+
+   ```bash
+   open -R "$(readlink -f "$(head -1 ~/.local/share/uv/tools/code-with-slack/bin/code-with-slack | cut -c3-)")"
+   ```
+
+2. Open **System Settings**, **Privacy & Security**, **Full Disk Access**, and drag the selected
+   file (`python3.12` or similar) from Finder into the list. Alternatively choose **+** and press
+   **⌘⇧.** in the file picker to show hidden folders.
+3. Check that the new entry is turned on, then restart the service:
+   `launchctl kickstart -k gui/$(id -u)/local.code-with-slack`.
+
+The permission belongs to that interpreter, which uv shares between the tools that use the same
+Python version: any of them started outside Terminal gets the same access. Projects outside the
+protected folders need no permission at all.
+
 ## Part 5: security checklist
 
 The bot answers one person, and the rest of this list protects what that person sees.
@@ -188,22 +225,57 @@ The bot answers one person, and the rest of this list protects what that person 
 
 | In Slack | What it does |
 |---|---|
-| `/cc bind <path>` | Binds this channel to a directory under `ALLOWED_ROOT`. A new channel does nothing until bound |
-| a message | Sends a prompt to the channel's session; the reply streams in a thread under it |
-| `/cc <command> [args]` | Runs a Claude Code command, for example `/cc compact` or `/cc model opus` |
-| `/cc` | Lists the commands the session offers |
-| `!<command>` | The same as `/cc <command>`, for use inside a thread, where Slack runs no slash command |
-| `/cc bypass on` / `off` | Switches the channel's session to `bypassPermissions` and back; a restart turns it off |
-| `/cc status` | Shows the channel's directory, session and mode |
+| a message | Sends a prompt to the channel's session; the reply appears below it in the channel and grows as Claude works |
+| `!help [text]` | Lists code-with-slack's own words and every command the channel's session offers now; with a text, only the lines whose name or description contains it, for example `!help model` |
+| `!bind <path>` | Binds this channel to a directory under `ALLOWED_ROOT`; a relative path is read from `ALLOWED_ROOT`. A new channel does nothing else until bound |
+| `!<command> [args]` | Runs a Claude Code command, for example `!compact` or `!model opus` |
+| `!bypass on` / `off` | Switches the channel's session to `bypassPermissions` and back; a restart turns it off |
+| `!status` | Shows the channel's directory, session and mode |
+| `!stop` | Stops the turn that is running and denies its pending approvals |
+| a question from Claude | Appears as one line with **Answer** and **Skip**; Answer opens a form with one question at a time, the options (one or several) and an **Other** field; **Next** moves on once the question has an answer, **Submit** on the last |
 
 Slack does not pass a Claude Code command typed with its own slash: `/compact` alone makes Slack
-answer that it is not a valid command. Use `/cc compact` or `!compact`.
+answer that it is not a valid command. Type `!compact`. A `!word` that is not a command the
+session offers is sent as a normal prompt, so `!important: …` reaches Claude as written.
+
+`!help`, `!bind`, `!bypass`, `!status` and `!stop` are code-with-slack's own and come first.
+Claude Code has no command with those names today; `!help` lists what the session offers. The
+answers to these words are messages in the channel.
+
+A reply is one message in the channel. It appears as soon as you send your message, reading
+`Claude is writing…`, or `Waiting for the previous reply…` when another turn is still running.
+It is then rewritten about once a second while Claude works: text in the order it is written,
+and a line per tool call where it happens (`…` while it runs, `✗` with its output when it
+fails), in small grey text. Once the reply is complete, calls that succeeded fold into one line
+of tool names and counts, such as `✓ Bash · Read ×2`; a subagent or a background task keeps a
+line of its own, and a divider and the footer replace the status line. A reply longer than one Slack message continues in the next one.
+
+An approval request is a message of its own below the reply; once you decide, it disappears and
+the tool's line in the reply records the call. If Slack does not accept the request, Claude Code
+is told it was denied because it could not be shown.
+
+Messages sent while a turn is running wait their turn; each gets its own reply. When a background
+task finishes while nothing runs, Claude Code starts a turn of its own to report it, as it does
+in the terminal: that reply opens with Claude Code's own line for the task's end, such as
+`✓ Agent "review" finished · 3m 59s`. While tasks run, the footer counts them, such as
+`⏳ 1 shell · 1 agent`.
+
+The channel's latest reply ends with a footer, which moves to each new reply: `⚡ bypass` when bypass is on, the git branch, the model, the
+effort level, the context used, the session's tokens, and the 5-hour and weekly limits
+(`5h N% ↻ 2h · 7d N%`), which exist only with a claude.ai subscription. The effort level is the
+one Claude Code reported at the end of the last turn, or the one set since with `!effort` (or
+`!model`); it reads `default` on a model that takes no effort level, and after a restart until a
+turn ends normally (an interrupted turn or an API error reports no level). A level set with `!effort` lasts until the daemon restarts: the resumed session
+runs at the level your Claude Code settings give the model.
 
 ## Troubleshooting
 
 | Symptom | Cause |
 |---|---|
 | The bot does not see a channel | The channel is public, or the bot was not invited |
-| Replies show text but no task cards | **Agent experience** is off in the app settings |
-| `Not logged in · Please run /login` | Claude Code on the machine is logged out: run `claude`, then `/login` |
+| `Claude Code is not logged in on the host` | Claude Code on the machine is logged out: run `claude`, then `/login` |
 | Some messages get no reply | A second instance is running and receiving part of the events |
+| `The previous session could not be resumed` | The stored session no longer exists (its transcript was deleted); the reply runs in a new session |
+| `The directory ... no longer exists` | The channel's directory was moved or deleted: bind the channel again with `!bind <path>` |
+| `macOS does not let code-with-slack read ...` | The directory is in a folder macOS protects: see Part 4, "Folders macOS protects" |
+| `another code-with-slack is running` in the log | A second instance tried to start; only one may run |

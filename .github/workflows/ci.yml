@@ -1,0 +1,61 @@
+# Runs on every push to main and every pull request. Two jobs, kept separate: a leak is not a
+# reason to stop reporting a broken test, nor the reverse, so a red check names what broke.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: Sensitive-data scan
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: the scan diffs against a base commit, which a shallow clone does not have.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The refs arrive through the environment, never interpolated into the script: a branch name
+      # on a pull request from a fork is attacker-controlled text.
+      - name: Scan the pushed changes
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            git fetch --no-tags origin "$BASE_REF"
+            git diff "origin/$BASE_REF...HEAD"
+          elif [ -n "${BEFORE:-}" ] && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            git diff "$BEFORE..$SHA"
+          else
+            git show "$SHA"
+          fi | bash .github/scripts/scan-sensitive-diff.sh
+
+  check:
+    name: Tests, types, lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - run: uv sync --locked
+      - run: uv run pytest -q
+      # Tests do not type-check, so a type error survives a green suite.
+      - run: uv run mypy src
+      # Reports rather than rewrites: CI never edits the code under review.
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .

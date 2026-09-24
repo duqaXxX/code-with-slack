@@ -1,0 +1,173 @@
+{
+  "type": "view_submission",
+  "team": {
+    "id": "T000TEAM",
+    "domain": "alice"
+  },
+  "user": {
+    "id": "U000ALICE",
+    "username": "alice",
+    "name": "alice",
+    "team_id": "T000TEAM"
+  },
+  "api_app_id": "A000APP",
+  "view": {
+    "id": "V0C4EV4V476",
+    "team_id": "T000TEAM",
+    "type": "modal",
+    "blocks": [
+      {
+        "type": "actions",
+        "block_id": "tabs",
+        "elements": [
+          {
+            "type": "button",
+            "action_id": "question_tab_0",
+            "text": {
+              "type": "plain_text",
+              "text": "Colour",
+              "emoji": true
+            },
+            "style": "primary",
+            "value": "0"
+          },
+          {
+            "type": "button",
+            "action_id": "question_tab_1",
+            "text": {
+              "type": "plain_text",
+              "text": "Sizes",
+              "emoji": true
+            },
+            "value": "1"
+          }
+        ]
+      },
+      {
+        "type": "input",
+        "block_id": "q0",
+        "label": {
+          "type": "plain_text",
+          "text": "Which colour do you prefer?",
+          "emoji": true
+        },
+        "optional": true,
+        "dispatch_action": false,
+        "element": {
+          "type": "radio_buttons",
+          "action_id": "answer",
+          "options": [
+            {
+              "text": {
+                "type": "plain_text",
+                "text": "red",
+                "emoji": true
+              },
+              "value": "0",
+              "description": {
+                "type": "plain_text",
+                "text": "Warm and bold",
+                "emoji": true
+              }
+            },
+            {
+              "text": {
+                "type": "plain_text",
+                "text": "green",
+                "emoji": true
+              },
+              "value": "1",
+              "description": {
+                "type": "plain_text",
+                "text": "Calm",
+                "emoji": true
+              }
+            },
+            {
+              "text": {
+                "type": "plain_text",
+                "text": "blue",
+                "emoji": true
+              },
+              "value": "2",
+              "description": {
+                "type": "plain_text",
+                "text": "Cool",
+                "emoji": true
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "input",
+        "block_id": "o0",
+        "label": {
+          "type": "plain_text",
+          "text": "Other",
+          "emoji": true
+        },
+        "optional": true,
+        "dispatch_action": false,
+        "element": {
+          "type": "plain_text_input",
+          "action_id": "other",
+          "placeholder": {
+            "type": "plain_text",
+            "text": "Or type your own answer",
+            "emoji": true
+          },
+          "max_length": 500,
+          "dispatch_action_config": {
+            "trigger_actions_on": [
+              "on_enter_pressed"
+            ]
+          }
+        }
+      }
+    ],
+    "private_metadata": "{\"a\":\"rec-q\",\"c\":\"C000CHAN\",\"n\":0,\"p\":{},\"t\":{}}",
+    "callback_id": "question_form",
+    "state": {
+      "values": {
+        "q0": {
+          "answer": {
+            "type": "radio_buttons",
+            "selected_option": null
+          }
+        },
+        "o0": {
+          "other": {
+            "type": "plain_text_input",
+            "value": null
+          }
+        }
+      }
+    },
+    "hash": "1790285958.RuEDXatP",
+    "title": {
+      "type": "plain_text",
+      "text": "Claude Code asks",
+      "emoji": true
+    },
+    "clear_on_close": false,
+    "notify_on_close": false,
+    "close": {
+      "type": "plain_text",
+      "text": "Later",
+      "emoji": true
+    },
+    "submit": {
+      "type": "plain_text",
+      "text": "Submit",
+      "emoji": true
+    },
+    "previous_view_id": null,
+    "root_view_id": "V0C4EV4V476",
+    "app_id": "A000APP",
+    "external_id": "",
+    "app_installed_team_id": "T000TEAM",
+    "bot_id": "B000BOT"
+  },
+  "response_urls": []
+}

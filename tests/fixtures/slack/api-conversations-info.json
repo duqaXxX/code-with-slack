@@ -1,0 +1,43 @@
+{
+  "ok": true,
+  "channel": {
+    "id": "C000CHAN",
+    "created": 1790186444,
+    "creator": "alice",
+    "is_org_shared": false,
+    "is_im": false,
+    "context_team_id": "T000TEAM",
+    "updated": 1790186444028,
+    "name": "alice",
+    "name_normalized": "cc-project",
+    "is_channel": true,
+    "is_group": false,
+    "is_mpim": false,
+    "is_private": true,
+    "is_archived": false,
+    "is_general": false,
+    "is_shared": false,
+    "is_ext_shared": false,
+    "unlinked": 0,
+    "is_pending_ext_shared": false,
+    "pending_shared": [],
+    "parent_conversation": null,
+    "purpose": {
+      "value": "",
+      "creator": "alice",
+      "last_set": 0
+    },
+    "topic": {
+      "value": "",
+      "creator": "alice",
+      "last_set": 0
+    },
+    "shared_team_ids": [
+      "T000TEAM"
+    ],
+    "pending_connected_team_ids": [],
+    "is_member": true,
+    "is_open": true,
+    "last_read": "1790186444.280519"
+  }
+}
