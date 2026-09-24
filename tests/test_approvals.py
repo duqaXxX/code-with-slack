@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 from claude_agent_sdk.types import (
@@ -11,12 +12,16 @@ from code_with_slack.approvals import (
     Approvals,
     Approve,
     Deny,
+    Draft,
+    absorb,
     approval_blocks,
+    draft_answers,
+    first_unanswered,
     question_blocks,
-    read_answers,
+    question_view,
     to_permission,
 )
-from tests.fakes import FIXTURES, sdk_json, slack_payload
+from tests.fakes import sdk_json
 
 
 def action_ids(blocks: list[dict[str, Any]]) -> list[str]:
@@ -68,49 +73,105 @@ def recorded_questions() -> list[dict[str, Any]]:
     return questions
 
 
-def test_question_blocks_follow_the_recorded_questions() -> None:
+def test_the_channel_shows_one_line_with_answer_and_skip() -> None:
     questions = recorded_questions()
     blocks = question_blocks("abc", questions)
-    selects = [b["accessory"] for b in blocks if "accessory" in b]
-    assert len(selects) == len(questions)
-    for select, q in zip(selects, questions, strict=True):
-        assert select["type"] == (
-            "multi_static_select" if q.get("multiSelect") else "static_select"
-        )
-        assert [o["value"] for o in select["options"]] == [str(i) for i in range(len(q["options"]))]
-    assert "question_submit" in action_ids(blocks) and "question_skip" in action_ids(blocks)
+    assert len(blocks) == 2
+    assert all(q["header"] in blocks[0]["text"]["text"] for q in questions)
+    assert action_ids(blocks) == ["question_open", "question_skip"]
+    assert all(e["value"] == "abc" for e in blocks[1]["elements"])
 
 
-def recorded_state() -> dict[str, Any]:
-    # The Submit click: its state holds what the owner picked in both menus.
-    name = next(
-        p.stem
-        for p in sorted((FIXTURES / "slack").glob("*-block_actions.json"))
-        if slack_payload(p.stem)["actions"][0]["action_id"] == "question_submit"
-    )
-    values: dict[str, Any] = slack_payload(name)["state"]["values"]
-    return values
+TWO = [
+    {
+        "question": "Colour?",
+        "header": "Colour",
+        "options": [{"label": "red", "description": "Warm"}, {"label": "blue"}],
+        "multiSelect": False,
+    },
+    {
+        "question": "Sizes?",
+        "header": "Sizes",
+        "options": [{"label": "s"}, {"label": "l"}],
+        "multiSelect": True,
+    },
+]
 
 
-def test_read_answers_from_the_recorded_state() -> None:
-    questions = [
-        {
-            "question": "Colour?",
-            "options": [{"label": "red"}, {"label": "blue"}],
-            "multiSelect": False,
-        },
-        {
-            "question": "Also?",
-            "options": [{"label": "a"}, {"label": "b"}, {"label": "c"}],
-            "multiSelect": True,
-        },
+def tab_labels(view: dict[str, Any]) -> list[str]:
+    tabs = next(b for b in view["blocks"] if b.get("block_id") == "tabs")
+    return [e["text"]["text"] for e in tabs["elements"]]
+
+
+def test_the_form_shows_the_active_question_under_tabs() -> None:
+    view = question_view(Draft("abc", "C1"), TWO)
+    assert view["type"] == "modal" and view["callback_id"] == "question_form"
+    assert Draft.load(view["private_metadata"]) == Draft("abc", "C1")
+    assert tab_labels(view) == ["Colour", "Sizes"]
+    tabs = next(b for b in view["blocks"] if b.get("block_id") == "tabs")
+    assert tabs["elements"][0].get("style") == "primary" and "style" not in tabs["elements"][1]
+    inputs = [b for b in view["blocks"] if b["type"] == "input"]
+    assert [b["block_id"] for b in inputs] == ["q0", "o0"]
+    assert inputs[0]["element"]["type"] == "radio_buttons"
+    assert inputs[0]["element"]["options"][0]["description"]["text"] == "Warm"
+    assert inputs[1]["element"]["type"] == "plain_text_input"
+    assert inputs[1]["element"]["max_length"] == 500
+
+
+def test_the_second_tab_holds_checkboxes_and_restores_its_picks() -> None:
+    draft = Draft("abc", "C1", active=1, picks={1: [0, 1]}, typed={1: "xl"})
+    inputs = [b for b in question_view(draft, TWO)["blocks"] if b["type"] == "input"]
+    assert [b["block_id"] for b in inputs] == ["q1", "o1"]
+    element = inputs[0]["element"]
+    assert element["type"] == "checkboxes"
+    assert [o["value"] for o in element["initial_options"]] == ["0", "1"]
+    assert inputs[1]["element"]["initial_value"] == "xl"
+
+
+def test_an_answered_tab_is_ticked() -> None:
+    assert tab_labels(question_view(Draft("abc", "C1", picks={0: [1]}), TWO)) == [
+        "✓ Colour",
+        "Sizes",
     ]
-    assert read_answers(questions, recorded_state()) == {"Colour?": "blue", "Also?": ["a", "b"]}
 
 
-def test_read_answers_is_none_until_every_question_is_answered() -> None:
-    questions = [{"question": "Colour?", "options": [{"label": "red"}], "multiSelect": False}]
-    assert read_answers(questions, {}) is None
+def test_a_single_question_has_no_tabs() -> None:
+    view = question_view(Draft("abc", "C1"), TWO[:1])
+    assert all(b.get("block_id") != "tabs" for b in view["blocks"])
+
+
+def test_absorb_keeps_what_the_active_tab_shows() -> None:
+    state = {
+        "q1": {"answer": {"type": "checkboxes", "selected_options": [{"value": "1"}]}},
+        "o1": {"other": {"type": "plain_text_input", "value": " xl "}},
+    }
+    draft = absorb(Draft("abc", "C1", active=1, picks={0: [0]}), state)
+    assert draft.picks == {0: [0], 1: [1]} and draft.typed == {1: "xl"}
+
+
+def test_answers_are_the_labels_and_the_typed_text() -> None:
+    draft = Draft("abc", "C1", picks={1: [0]}, typed={0: "purple", 1: "xl"})
+    assert draft_answers(draft, TWO) == {"Colour?": "purple", "Sizes?": ["s", "xl"]}
+    assert first_unanswered(draft, TWO) is None
+
+
+def test_the_first_unanswered_question_is_found() -> None:
+    draft = Draft("abc", "C1", picks={0: [1]})
+    assert first_unanswered(draft, TWO) == 1
+    assert draft_answers(draft, TWO) is None
+
+
+def test_the_draft_round_trips_under_slack_s_limit() -> None:
+    draft = Draft(
+        "abc",
+        "C1",
+        active=3,
+        picks={i: [0, 1, 2, 3] for i in range(4)},
+        typed={i: "x" * 500 for i in range(4)},
+    )
+    text = draft.dump()
+    assert len(text) <= 3000 and Draft.load(text) == draft
+    assert json.loads(text)["a"] == "abc"
 
 
 def test_to_permission_matches_the_documented_shapes() -> None:
