@@ -134,7 +134,6 @@ def approval_blocks(
 
 
 QUESTION_FORM = "question_form"
-TAB_ACTION = "question_tab_"  # + the question's index: action ids must differ within a block
 # Text typed under Other, per question: four at the worst (every character escaped, `"` becoming
 # `\"`) still keep the draft under private_metadata's 3,000 characters.
 TYPED_LIMIT = 300
@@ -167,7 +166,7 @@ def question_blocks(approval_id: str, questions: list[dict[str, Any]]) -> list[d
 @dataclass
 class Draft:
     """What the owner filled in the form so far, carried by the form itself (private_metadata)
-    from one tab to the next: option indexes picked and text typed, per question."""
+    from one question to the next: option indexes picked and text typed, per question."""
 
     approval_id: str
     channel_id: str
@@ -201,8 +200,8 @@ class Draft:
 
 
 def absorb(draft: Draft, state_values: dict[str, Any]) -> Draft:
-    """The draft with what the active tab shows now: Slack sends the form's state with every
-    click and with Submit, but only for the blocks on screen."""
+    """The draft with what the question on screen shows now: Slack sends the form's state with
+    Next and Submit, but only for the blocks on screen."""
     index = draft.active
     picked = (state_values.get(f"q{index}") or {}).get("answer") or {}
     chosen = picked.get("selected_options") or (
@@ -231,6 +230,10 @@ def _answer(draft: Draft, questions: list[dict[str, Any]], index: int) -> str | 
     return labels if question.get("multiSelect") else labels[0]
 
 
+def is_answered(draft: Draft, questions: list[dict[str, Any]], index: int) -> bool:
+    return _answer(draft, questions, index) is not None
+
+
 def first_unanswered(draft: Draft, questions: list[dict[str, Any]]) -> int | None:
     return next((i for i in range(len(questions)) if _answer(draft, questions, i) is None), None)
 
@@ -256,25 +259,20 @@ def _option(index: int, option: dict[str, Any]) -> dict[str, Any]:
     return entry
 
 
-def question_view(
-    draft: Draft, questions: list[dict[str, Any]], notice: str | None = None
-) -> dict[str, Any]:
-    """The form, as close to the terminal as Slack allows: Slack has no tabs, so buttons named
-    after the questions stand in for them, the active one highlighted and an answered one ticked.
-    Below, the active question: radio buttons, or checkboxes when several may be picked, each
-    with its description, and an Other field (tools reference: "type your own text through the
-    Other row"). Both are optional in Slack's eyes: Submit checks that each question has one."""
+def question_view(draft: Draft, questions: list[dict[str, Any]]) -> dict[str, Any]:
+    """The form, one question at a time: Slack has no tabs, so the modal's own button reads
+    `Next (1/3)` and leads to the next question, and `Submit` on the last; each needs an answer
+    before the next. The question shows as radio buttons, or checkboxes when several may be
+    picked, each option with its description, and an Other field (tools reference: "type your
+    own text through the Other row"). Both are optional in Slack's eyes: Next checks that the
+    question has one."""
     blocks: list[dict[str, Any]] = []
-    if len(questions) > 1:
-        tabs = []
-        for i, question in enumerate(questions):
-            header = question.get("header") or f"{i + 1}"
-            label = f"✓ {header}" if _answer(draft, questions, i) is not None else header
-            style = "primary" if i == draft.active else None
-            tabs.append(_button(f"{TAB_ACTION}{i}", label, str(i), style))
-        blocks.append({"type": "actions", "block_id": "tabs", "elements": tabs})
-    if notice:
-        blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": notice}]})
+    count = len(questions)
+    if count > 1:
+        header = questions[draft.active].get("header") or ""
+        where = texts.QUESTION_WHERE.format(number=draft.active + 1, count=count)
+        line = f"{header} · {where}" if header else where
+        blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": line}]})
     index = draft.active
     question = questions[index]
     options = [_option(i, o) for i, o in enumerate(question["options"])]
@@ -317,7 +315,12 @@ def question_view(
         "callback_id": QUESTION_FORM,
         "private_metadata": draft.dump(),
         "title": {"type": "plain_text", "text": texts.QUESTION_TITLE},
-        "submit": {"type": "plain_text", "text": "Submit"},
+        "submit": {
+            "type": "plain_text",
+            "text": texts.QUESTION_NEXT.format(number=draft.active + 1, count=count)
+            if draft.active < count - 1
+            else "Submit",
+        },
         "close": {"type": "plain_text", "text": texts.QUESTION_CLOSE},
         "blocks": blocks,
     }
