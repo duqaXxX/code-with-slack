@@ -204,3 +204,29 @@ async def test_text_after_the_end_keeps_the_footer(slack: FakeSlack) -> None:
     shown = last_blocks(slack)
     assert "A late error." in shown[0]["text"]
     assert shown[-1] == sinks.context_block("footer")
+
+
+def tool(id: str, name: str, status: str = "complete", **fields: Any) -> TaskUpdate:
+    return TaskUpdate(id, f"{name}: {id}", status, name=name, **fields)  # type: ignore[arg-type]
+
+
+async def test_finished_tool_lines_collapse_into_one(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    for update in [tool("a", "Bash"), tool("b", "Read"), tool("c", "Read"), tool("d", "Grep")]:
+        await sink.task(update)
+    await sink.text("Done.")
+    await sink.finish([], None)
+    assert slack.message_texts() == ["✓ Bash · Read \u00d72 · Grep\n\nDone."]
+
+
+async def test_running_failed_and_task_lines_stay_whole(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.task(tool("a", "Bash"))
+    await sink.task(tool("b", "Bash", "in_progress"))
+    await sink.task(tool("c", "Edit", "error", output="old_string not found"))
+    await sink.task(tool("d", "Agent", task=True))
+    await sink.task(tool("e", "Read"))
+    await asyncio.sleep(0.05)
+    assert slack.message_texts() == [
+        "✓ Bash\n… `Bash: b`\n✗ `Edit: c` · old_string not found\n✓ `Agent: d`\n✓ Read"
+    ]
