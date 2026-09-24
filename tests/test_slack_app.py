@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -9,7 +10,7 @@ from claude_agent_sdk import ClaudeAgentOptions
 from slack_bolt.request.async_request import AsyncBoltRequest
 
 from code_with_slack import texts
-from code_with_slack.approvals import Approvals
+from code_with_slack.approvals import Answer, Approvals, Draft
 from code_with_slack.config import Config
 from code_with_slack.footer import UsageCache
 from code_with_slack.guards import ChannelGuard, Identity
@@ -274,17 +275,109 @@ async def test_a_request_from_another_channel_cannot_be_answered_here(world: Wor
     assert world.ephemerals() == [texts.APPROVAL_GONE]
 
 
-async def test_an_incomplete_answer_is_refused(world: World) -> None:
-    approval_id, pending = world.approvals.open(
-        CHANNEL,
-        "Colour",
-        [{"question": "Colour?", "options": [{"label": "red"}], "multiSelect": False}],
-    )
-    body = click("question_submit", approval_id)
-    body["state"] = {"values": {}}
+QUESTIONS = [
+    {
+        "question": "Colour?",
+        "header": "Colour",
+        "options": [{"label": "red"}, {"label": "blue"}],
+        "multiSelect": False,
+    },
+    {
+        "question": "Sizes?",
+        "header": "Sizes",
+        "options": [{"label": "s"}, {"label": "l"}],
+        "multiSelect": True,
+    },
+]
+
+
+def form_body(kind: str, draft: Draft, values: dict[str, Any], **user: Any) -> dict[str, Any]:
+    """The form's recorded Submit (view_submission, 2026-09-24), carrying this draft and state;
+    as `block_actions`, a click on the Sizes tab of the same view (the shape Slack documents:
+    the view with its state, plus the action)."""
+    body = recorded("submit")
+    body["type"] = kind
+    body["user"].update(user)
+    body["view"]["private_metadata"] = draft.dump()
+    body["view"]["state"] = {"values": values}
+    if kind == "block_actions":
+        body["trigger_id"] = "0000000000.0000000000.fake"  # the scrub drops the real one
+        body["actions"] = [{"action_id": "question_tab_1", "value": "1", "type": "button"}]
+    return body
+
+
+def picked(index: int, value: str) -> dict[str, Any]:
+    return {f"q{index}": {"answer": {"type": "radio_buttons", "selected_option": {"value": value}}}}
+
+
+async def test_answer_opens_the_form(world: World) -> None:
+    approval_id, _ = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
+    body = recorded("open-click")  # the Answer click, recorded 2026-09-24
+    body["actions"][0]["value"] = approval_id
+    body["trigger_id"] = "0000000000.0000000000.fake"  # real clicks carry one; the scrub drops it
     await world.dispatch(body)
+    (opened,) = world.slack.calls_to("views.open")
+    assert opened["trigger_id"] == body["trigger_id"]
+    view = json.loads(opened["view"]) if isinstance(opened["view"], str) else opened["view"]
+    assert view["callback_id"] == "question_form"
+    assert Draft.load(view["private_metadata"]) == Draft(approval_id, CHANNEL)
+
+
+async def test_nobody_else_can_open_the_form(world: World) -> None:
+    approval_id, _ = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
+    await world.dispatch(click("question_open", approval_id, id=STRANGER))
+    assert not world.slack.calls_to("views.open") and not world.posted_anything()
+
+
+async def test_a_tab_keeps_the_picks_and_shows_its_question(world: World) -> None:
+    approval_id, _ = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
+    await world.dispatch(form_body("block_actions", Draft(approval_id, CHANNEL), picked(0, "1")))
+    (updated,) = world.slack.calls_to("views.update")
+    recorded_view = recorded("submit")["view"]
+    assert updated["view_id"] == recorded_view["id"] and updated["hash"] == recorded_view["hash"]
+    view = json.loads(updated["view"]) if isinstance(updated["view"], str) else updated["view"]
+    assert Draft.load(view["private_metadata"]) == Draft(approval_id, CHANNEL, 1, {0: [1]})
+
+
+async def test_submit_with_the_open_question_unanswered_shows_an_error(world: World) -> None:
+    approval_id, pending = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
+    response = await world.dispatch(form_body("view_submission", Draft(approval_id, CHANNEL), {}))
+    assert json.loads(response.body) == {
+        "response_action": "errors",
+        "errors": {"q0": texts.QUESTION_MISSING},
+    }
     assert not pending.future.done()
-    assert world.ephemerals() == [texts.QUESTION_INCOMPLETE]
+
+
+async def test_submit_with_another_question_unanswered_moves_to_it(world: World) -> None:
+    approval_id, pending = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
+    response = await world.dispatch(
+        form_body("view_submission", Draft(approval_id, CHANNEL), picked(0, "0"))
+    )
+    answer = json.loads(response.body)
+    assert answer["response_action"] == "update"
+    assert Draft.load(answer["view"]["private_metadata"]).active == 1
+    assert not pending.future.done()
+
+
+async def test_a_complete_submit_answers_claude_and_removes_the_request(world: World) -> None:
+    approval_id, pending = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
+    pending.message_ts = "1790000000.000009"
+    draft = Draft(approval_id, CHANNEL, active=1, picks={0: [1]})
+    values = {
+        "q1": {"answer": {"type": "checkboxes", "selected_options": [{"value": "0"}]}},
+        "o1": {"other": {"type": "plain_text_input", "value": "xl"}},
+    }
+    await world.dispatch(form_body("view_submission", draft, values))
+    assert pending.future.result() == Answer({"Colour?": "blue", "Sizes?": ["s", "xl"]})
+    assert [a["ts"] for a in world.slack.calls_to("chat.delete")] == ["1790000000.000009"]
+
+
+async def test_nobody_else_can_submit_the_form(world: World) -> None:
+    approval_id, pending = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
+    draft = Draft(approval_id, CHANNEL, picks={0: [0], 1: [0]})
+    await world.dispatch(form_body("view_submission", draft, {}, id=STRANGER))
+    assert not pending.future.done()
 
 
 async def test_a_failing_command_tells_the_owner(world: World) -> None:

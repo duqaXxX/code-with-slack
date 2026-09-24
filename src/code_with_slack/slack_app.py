@@ -1,7 +1,9 @@
 """The Slack side: every inbound path, each checked on its own before it reaches a session."""
 
 import logging
+import re
 from collections.abc import Awaitable
+from dataclasses import replace
 from typing import Any
 
 from slack_bolt.async_app import AsyncAck, AsyncApp
@@ -10,12 +12,19 @@ from slack_sdk.web.async_client import AsyncWebClient
 
 from code_with_slack import texts
 from code_with_slack.approvals import (
+    QUESTION_FORM,
+    TAB_ACTION,
     Answer,
     Approvals,
     Approve,
     Decision,
     Deny,
-    read_answers,
+    Draft,
+    Pending,
+    absorb,
+    draft_answers,
+    first_unanswered,
+    question_view,
 )
 from code_with_slack.commands import (
     Bind,
@@ -42,7 +51,7 @@ from code_with_slack.render.sinks import FALLBACK_LIMIT, describe, split
 from code_with_slack.sessions import DirectoryUnavailable, SessionManager, resolve_directory
 
 logger = logging.getLogger(__name__)
-DECISION_ACTIONS = ("approval_allow", "approval_deny", "question_submit", "question_skip")
+DECISION_ACTIONS = ("approval_allow", "approval_deny", "question_skip")
 
 
 def slack_unescape(text: str) -> str:
@@ -195,27 +204,97 @@ def build_app(
         match action["action_id"]:
             case "approval_allow":
                 decision = Approve()
-            case "question_submit":
-                answers = read_answers(
-                    pending.questions or [], (body.get("state") or {}).get("values") or {}
-                )
-                if answers is None:
-                    await tell_owner(channel, texts.QUESTION_INCOMPLETE)
-                    return
-                decision = Answer(answers)
             case _:
                 decision = Deny()
         if approvals.resolve(str(action["value"]), channel, decision) is None:
             await tell_owner(channel, texts.APPROVAL_GONE)
             return
-        # The tool's line in the reply records the call: the request message has done its job.
-        try:
-            await slack.chat_delete(channel=channel, ts=body["message"]["ts"])
-        except Exception as exc:
-            logger.warning("could not remove a request in %s: %s", channel, describe(exc))
+        await remove_request(channel, body["message"]["ts"])
 
     for action_id in DECISION_ACTIONS:
         app.action(action_id)(on_decision)
+
+    async def remove_request(channel: str, ts: str | None) -> None:
+        # The tool's line in the reply records the call: the request message has done its job.
+        if ts is None:
+            return
+        try:
+            await slack.chat_delete(channel=channel, ts=ts)
+        except Exception as exc:
+            logger.warning("could not remove a request in %s: %s", channel, describe(exc))
+
+    @app.action("question_open")
+    async def on_question_open(ack: AsyncAck, body: dict[str, Any]) -> None:
+        await ack()
+        user, team = interaction_actor(body)
+        channel = (body.get("channel") or {}).get("id")
+        if not await admitted(user, team, channel):
+            return
+        assert channel is not None
+        approval_id = str(body["actions"][0].get("value"))
+        pending = approvals.get(approval_id)
+        if pending is None or pending.channel_id != channel or not pending.questions:
+            await tell_owner(channel, texts.APPROVAL_GONE)
+            return
+        # trigger_id lives 3 seconds: the checks above are the only work before this call.
+        view = question_view(Draft(approval_id, channel), pending.questions)
+        await slack.views_open(trigger_id=body["trigger_id"], view=view)
+
+    async def form_of(body: dict[str, Any]) -> tuple[Draft, Pending, list[dict[str, Any]]] | None:
+        """The form's draft and its request, after the owner, workspace and channel checks. A
+        form carries no channel of its own: the one its request was posted in is checked."""
+        user, team = interaction_actor(body)
+        try:
+            draft = Draft.load(str((body.get("view") or {}).get("private_metadata")))
+        except (ValueError, KeyError, TypeError):
+            return None
+        if not await admitted(user, team, draft.channel_id):
+            return None
+        pending = approvals.get(draft.approval_id)
+        if pending is None or pending.channel_id != draft.channel_id or not pending.questions:
+            await tell_owner(draft.channel_id, texts.APPROVAL_GONE)
+            return None
+        values = ((body.get("view") or {}).get("state") or {}).get("values") or {}
+        return absorb(draft, values), pending, pending.questions
+
+    @app.action(re.compile(rf"^{TAB_ACTION}\d+$"))
+    async def on_question_tab(ack: AsyncAck, body: dict[str, Any]) -> None:
+        await ack()
+        form = await form_of(body)
+        if form is None:
+            return
+        draft, _, questions = form
+        draft = replace(draft, active=int(body["actions"][0]["value"]) % len(questions))
+        view = body["view"]
+        await slack.views_update(
+            view_id=view["id"], hash=view["hash"], view=question_view(draft, questions)
+        )
+
+    @app.view(QUESTION_FORM)
+    async def on_question_submit(ack: AsyncAck, body: dict[str, Any]) -> None:
+        form = await form_of(body)
+        if form is None:
+            await ack()
+            return
+        draft, pending, questions = form
+        missing = first_unanswered(draft, questions)
+        if missing == draft.active:
+            await ack(response_action="errors", errors={f"q{missing}": texts.QUESTION_MISSING})
+            return
+        if missing is not None:
+            # Slack ties an error to a block on screen only: show the unanswered question.
+            view = question_view(
+                replace(draft, active=missing), questions, texts.QUESTION_MISSING_TAB
+            )
+            await ack(response_action="update", view=view)
+            return
+        await ack()
+        answers = draft_answers(draft, questions)
+        assert answers is not None
+        if approvals.resolve(draft.approval_id, draft.channel_id, Answer(answers)) is None:
+            await tell_owner(draft.channel_id, texts.APPROVAL_GONE)
+            return
+        await remove_request(draft.channel_id, pending.message_ts)
 
     @app.error
     async def on_error(error: Exception) -> None:
