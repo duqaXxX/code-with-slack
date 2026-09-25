@@ -6,7 +6,7 @@ import contextlib
 import logging
 import os
 from collections import deque
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -61,6 +61,7 @@ from code_with_slack.guards import Identity
 from code_with_slack.render.renderer import TurnRenderer, ended_line, one_line, task_title
 from code_with_slack.render.sinks import ReplySink, describe
 from code_with_slack.state import StateStore
+from code_with_slack.trust import workspace_trusted
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,14 @@ class DirectoryUnavailable(Exception):
 class DirectoryMissing(DirectoryUnavailable):
     def __init__(self, directory: Path) -> None:
         super().__init__(directory, texts.DIRECTORY_MISSING.format(directory=directory))
+
+
+class DirectoryUntrusted(DirectoryUnavailable):
+    """The owner has not trusted the folder in Claude Code: a session would run its hooks and
+    apply its settings with no trust dialog (see `code_with_slack.trust`)."""
+
+    def __init__(self, directory: Path) -> None:
+        super().__init__(directory, texts.DIRECTORY_UNTRUSTED.format(directory=directory))
 
 
 class DirectoryUnreadable(DirectoryUnavailable):
@@ -178,6 +187,7 @@ class SessionDeps:
     approvals: Approvals
     usage: UsageCache
     client_factory: ClientFactory = default_client_factory
+    workspace_trusted: Callable[[Path], Awaitable[bool]] = workspace_trusted
 
 
 @dataclass
@@ -259,6 +269,8 @@ class ChannelSession:
                     pass
             except PermissionError:
                 raise DirectoryUnreadable(self.directory) from None
+            if not await self._deps.workspace_trusted(self.directory):
+                raise DirectoryUntrusted(self.directory)
             stored = self._deps.state.get(self.channel_id)
             session_id = stored.session_id if stored else None
             try:
@@ -289,6 +301,10 @@ class ChannelSession:
 
     async def set_bypass(self, on: bool) -> None:
         client = await self.ensure_connected()
+        # Off means asking again, even when the folder's own settings started it in bypass: from
+        # then on this process's mode to return to is `default`, which the footer and !status show.
+        if not on and self.native_mode == "bypassPermissions":
+            self.native_mode = "default"
         mode = "bypassPermissions" if on else self.native_mode
         await client.set_permission_mode(mode)  # type: ignore[arg-type]
         self.bypass = on
@@ -648,7 +664,7 @@ class ChannelSession:
                     "could not read the context usage in %s: %s", self.channel_id, describe(exc)
                 )
         data = FooterData(
-            bypass=self.bypass,
+            bypass=self.bypass or self.native_mode == "bypassPermissions",
             branch=await git_branch(self.directory),
             model=context.get("model"),
             context_percent=context.get("percentage"),
@@ -681,7 +697,11 @@ class ChannelSession:
         try:
             try:
                 posted = await self._deps.slack.chat_postMessage(
-                    channel=self.channel_id, text=title, blocks=blocks
+                    channel=self.channel_id,
+                    text=title,
+                    blocks=blocks,
+                    unfurl_links=False,
+                    unfurl_media=False,
                 )
             except Exception as exc:
                 # Nobody can answer a request that was never shown: deny it, and say why.
@@ -706,7 +726,9 @@ class ChannelSession:
 
     async def _post(self, text: str) -> None:
         try:
-            await self._deps.slack.chat_postMessage(channel=self.channel_id, text=text)
+            await self._deps.slack.chat_postMessage(
+                channel=self.channel_id, text=text, unfurl_links=False, unfurl_media=False
+            )
         except Exception as exc:
             logger.error("could not post in %s: %s", self.channel_id, describe(exc))
 

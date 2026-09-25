@@ -343,8 +343,14 @@ class ReplySink:
                         )
                         self._shown[index] = blocks
                     else:
+                        # Claude's text can carry a link built to leak data when Slack fetches
+                        # it for a preview: no previews for anything the daemon posts.
                         posted = await self._slack.chat_postMessage(
-                            channel=self._channel, text=fallback, blocks=blocks
+                            channel=self._channel,
+                            text=fallback,
+                            blocks=blocks,
+                            unfurl_links=False,
+                            unfurl_media=False,
                         )
                         self._messages.append(str(posted["ts"]))
                         self._shown.append(blocks)

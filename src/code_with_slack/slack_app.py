@@ -128,6 +128,8 @@ def build_app(
                 channel=channel,
                 text=chunk[:FALLBACK_LIMIT],
                 blocks=[{"type": "markdown", "text": chunk}],
+                unfurl_links=False,
+                unfurl_media=False,
             )
 
     @app.event("message")
