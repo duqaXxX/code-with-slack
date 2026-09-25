@@ -7,6 +7,8 @@ repository: its subfolders belong to that one project.
 """
 
 import asyncio
+import logging
+import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -14,6 +16,7 @@ from typing import Any
 from code_with_slack import texts
 from code_with_slack.render.escape import shown_as_written
 
+logger = logging.getLogger(__name__)
 FOLDER_ROWS = 20
 FOLDER_DEPTH = 2
 BIND_ACTION = "folder_bind"
@@ -42,13 +45,18 @@ def _descends(folder: Path) -> bool:
 def _children(folder: Path) -> list[Path]:
     try:
         entries = sorted(folder.iterdir())
-    except OSError:
+    except OSError as exc:
+        # A subfolder the daemon may not open (macOS privacy, permissions) lists nothing.
+        logger.debug("skipped an unreadable folder: %s", type(exc).__name__)
         return []
     return [p for p in entries if _is_folder(p)]
 
 
 def _candidates(root: Path) -> list[Path]:
     """The root, then its folders, then theirs: the higher levels come first."""
+    # An unreadable root raises: an empty list would send the owner to trust folders instead.
+    with os.scandir(root):
+        pass
     levels = [[root]]
     for _ in range(FOLDER_DEPTH):
         levels.append([c for f in levels[-1] if _descends(f) for c in _children(f)])

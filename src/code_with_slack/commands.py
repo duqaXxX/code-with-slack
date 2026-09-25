@@ -127,8 +127,9 @@ def command_name(command: dict[str, Any]) -> str:
 
 
 def command_parts(command: dict[str, Any]) -> tuple[str, str]:
-    """`!name hint` and the description as written, cut to one short line. The description is
-    third-party text: shown, it is escaped, since a cut can fall inside its own code span."""
+    """`!name hint` and the description as written, cut to one short line; not escaped. The
+    description is third-party text, and a cut can fall inside its own code span: the caller
+    escapes it before showing it (`help_text`)."""
     name = command_name(command)
     hint = str(command.get("argumentHint") or "")
     usage = f"!{name} {hint}".rstrip()

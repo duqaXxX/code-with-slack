@@ -195,7 +195,7 @@ async def test_a_usage_probe_with_no_answer_gives_up_and_closes(
 
 @pytest.mark.parametrize(
     ("directory", "shown"),
-    [("/srv/alice/code/app", "code/app"), ("/app", "app"), ("/", None)],
+    [("/srv/alice/code/app", "code/app"), ("/app", "app"), ("/", None), ("code/app", "code/app")],
 )
 def test_the_footer_ends_with_the_folder_s_last_two_names(directory: str, shown: str) -> None:
     # As the owner's terminal status line shows it (ccstatusline current-working-dir, 2 segments;

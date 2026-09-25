@@ -227,3 +227,30 @@ def test_other_files_are_refused_with_their_type(mimetype: str) -> None:
     assert refusal(shared("snippet", mimetype=mimetype)) == texts.UPLOAD_FILE_TYPE.format(
         mimetype=shown
     )
+
+
+async def test_a_file_that_cannot_be_written_says_why(tmp_path: Path) -> None:
+    folder = tmp_path / "uploads"
+    folder.mkdir(mode=0o500)  # private, but not writable
+    try:
+        with pytest.raises(DownloadFailed, match="could not be saved"):
+            await save(folder, {"id": "F1", "name": "a.txt"}, b"x")
+    finally:
+        folder.chmod(0o700)
+
+
+async def test_a_network_failure_keeps_its_detail() -> None:
+    # Port 9 on localhost refuses the connection: the owner sees why, not a class name alone.
+    with pytest.raises(DownloadFailed, match=r"ClientConnectorError: .+"):
+        await download("http://127.0.0.1:9/file", "xox" + "b-fake", "text/plain", 100, origin=LOCAL)
+
+
+def test_a_folder_that_is_not_private_is_logged_at_start(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    folder = tmp_path / "uploads"
+    folder.mkdir(mode=0o777)
+    folder.chmod(0o777)
+    with caplog.at_level("WARNING"):
+        prepare_uploads(folder)
+    assert "not private" in caplog.text

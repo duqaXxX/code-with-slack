@@ -1,7 +1,8 @@
 """Files the owner attaches to a message: checked, downloaded, and handed to Claude.
 
 A message with files arrives as `subtype: file_share` with a `files` array (measured 2026-09-25,
-although Slack's reference calls that subtype legacy). An image Claude can read goes into the
+although Slack's reference page for the `file_share` message subtype, read 2026-09-25, calls it
+legacy and no longer served). An image Claude can read goes into the
 prompt as an image block, as an image pasted into the terminal does (Agent SDK "Streaming Input",
 read 2026-09-25); any other file is saved to a private folder and its path joins the prompt, as a
 file dropped into the terminal does. A file past a limit, or one that fails to download, stops
@@ -11,6 +12,7 @@ the whole message: a prompt without its attachment would mislead Claude.
 import asyncio
 import base64
 import contextlib
+import logging
 import os
 import stat
 import tempfile
@@ -22,6 +24,7 @@ from urllib.parse import urlsplit
 import aiohttp
 
 from code_with_slack import texts
+from code_with_slack.prompt import ContentBlock, Prompt
 
 # Claude's vision limits (platform.claude.com, "Vision", read 2026-09-25): JPEG, PNG, GIF and
 # WebP, 10 MB base64-encoded per image through the API, 8000x8000 px.
@@ -56,6 +59,9 @@ KEEP_SECONDS = 3 * 24 * 3600
 FILE_HOST = "files.slack.com"
 ORIGIN = ("https", FILE_HOST)
 DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=120)
+
+
+logger = logging.getLogger(__name__)
 
 
 class DownloadFailed(Exception):
@@ -145,7 +151,8 @@ async def download(
                     raise DownloadFailed(f"larger than {_megabytes(limit)}")
             return bytes(data)
     except (aiohttp.ClientError, TimeoutError) as exc:
-        raise DownloadFailed(type(exc).__name__) from exc
+        detail = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+        raise DownloadFailed(detail[:200]) from exc
 
 
 def saved_name(file: dict[str, Any]) -> str:
@@ -172,7 +179,9 @@ def prepare_uploads(folder: Path) -> None:
     """Remove the saved files older than KEEP_SECONDS, from a folder only the owner can read."""
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
     if not _private(folder):
-        return  # never touched: `save` refuses to write there and says so
+        # Never touched: `save` refuses to write there, and old files are not removed.
+        logger.warning("the uploads folder %s is not private: it is left untouched", folder)
+        return
     cutoff = time.time() - KEEP_SECONDS
     for path in folder.iterdir():
         with contextlib.suppress(OSError):
@@ -184,9 +193,12 @@ def _write(folder: Path, name: str, data: bytes) -> Path:
     # macOS may clean the temporary folder while the daemon runs.
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
     if not _private(folder):
-        raise DownloadFailed(f"the uploads folder {folder} is not private to this user")
+        raise DownloadFailed(f"could not be saved (the uploads folder {folder} is not private)")
     path = folder / name
-    path.write_bytes(data)
+    try:
+        path.write_bytes(data)
+    except OSError as exc:
+        raise DownloadFailed(f"could not be saved ({type(exc).__name__})") from exc
     return path
 
 
@@ -194,17 +206,17 @@ async def save(folder: Path, file: dict[str, Any], data: bytes) -> Path:
     return await asyncio.to_thread(_write, folder, saved_name(file), data)
 
 
-def prompt_for(
-    text: str, images: list[tuple[str, bytes]], paths: list[Path]
-) -> str | list[dict[str, Any]]:
+def prompt_for(text: str, images: list[tuple[str, bytes]], paths: list[Path]) -> Prompt:
     """The owner's text with the saved files' paths; with images, one message of content blocks."""
     if paths:
         listed = "\n".join(f"- {path}" for path in paths)
         text = f"{text}\n\nAttached files:\n{listed}" if text else f"Attached files:\n{listed}"
     if not images:
         return text
-    blocks: list[dict[str, Any]] = [{"type": "text", "text": text}] if text else []
+    blocks: list[ContentBlock] = [{"type": "text", "text": text}] if text else []
     for mimetype, data in images:
-        source = {"type": "base64", "media_type": mimetype, "data": base64.b64encode(data).decode()}
-        blocks.append({"type": "image", "source": source})
+        encoded = base64.b64encode(data).decode()
+        blocks.append(
+            {"type": "image", "source": {"type": "base64", "media_type": mimetype, "data": encoded}}
+        )
     return blocks

@@ -254,7 +254,7 @@ def format_footer(data: FooterData, now: datetime) -> str:
         parts.append(f"7d {data.usage.week.percent}%")
     if data.directory is not None:
         # Last, and its last two names, as the owner's terminal status line shows the folder.
-        names = data.directory.parts[1:][-2:]
+        names = [part for part in data.directory.parts if part != data.directory.anchor][-2:]
         if names:
             parts.append(mrkdwn_escape("/".join(names)))
     return " · ".join(parts)
