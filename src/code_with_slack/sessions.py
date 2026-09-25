@@ -6,7 +6,7 @@ import contextlib
 import logging
 import os
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -19,8 +19,10 @@ from claude_agent_sdk import (
     Message,
     ResultError,
     ResultMessage,
+    SDKSessionInfo,
     StreamEvent,
     UserMessage,
+    list_sessions,
 )
 from claude_agent_sdk.types import (
     CanUseTool,
@@ -49,6 +51,7 @@ from code_with_slack.approvals import (
     question_blocks,
     to_permission,
 )
+from code_with_slack.folders import bindable_folders
 from code_with_slack.footer import (
     FooterData,
     UsageCache,
@@ -58,8 +61,10 @@ from code_with_slack.footer import (
     session_tokens,
 )
 from code_with_slack.guards import Identity
+from code_with_slack.prompt import Prompt, user_message
 from code_with_slack.render.renderer import TurnRenderer, ended_line, one_line, task_title
 from code_with_slack.render.sinks import ReplySink, describe
+from code_with_slack.resume import by_last_activity
 from code_with_slack.state import StateStore
 from code_with_slack.trust import workspace_trusted
 
@@ -128,7 +133,8 @@ class DirectoryUnreadable(DirectoryUnavailable):
 class ClaudeClient(Protocol):
     async def connect(self) -> None: ...
     async def disconnect(self) -> None: ...
-    async def query(self, prompt: str) -> None: ...
+    # The SDK's own signature; a turn sends text or prompt.user_message(), exactly one message.
+    async def query(self, prompt: str | AsyncIterable[dict[str, Any]]) -> None: ...
     def receive_messages(self) -> AsyncIterator[Message]: ...
     async def set_permission_mode(self, mode: PermissionMode) -> None: ...
     async def interrupt(self) -> None: ...
@@ -179,6 +185,12 @@ def resolve_directory(raw: str, root: Path) -> Path | None:
     return path if path == root or root in path.parents else None
 
 
+def directory_sessions(directory: Path) -> list[SDKSessionInfo]:
+    """The sessions of `directory` alone, newest first: the terminal's picker also starts from
+    the current worktree (sessions reference, read 2026-09-25)."""
+    return list_sessions(directory=str(directory), include_worktrees=False)
+
+
 @dataclass
 class SessionDeps:
     slack: AsyncWebClient
@@ -188,11 +200,12 @@ class SessionDeps:
     usage: UsageCache
     client_factory: ClientFactory = default_client_factory
     workspace_trusted: Callable[[Path], Awaitable[bool]] = workspace_trusted
+    sessions_of: Callable[[Path], list[SDKSessionInfo]] = directory_sessions
 
 
 @dataclass
 class Turn:
-    prompt: str
+    prompt: Prompt
     sink: ReplySink
     done: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -247,7 +260,19 @@ class ChannelSession:
     def busy(self) -> bool:
         return self._active is not None or bool(self._sent)
 
-    async def submit(self, prompt: str) -> Turn:
+    @property
+    def idle(self) -> bool:
+        """Nothing running, sent, taken or queued, and no background task still working: the
+        session can be swapped without a loss (closing it ends its Claude Code process)."""
+        return (
+            not self.busy
+            and not self._running_counts()
+            and self._taken is None
+            and self._queue.empty()
+            and self._settled.is_set()
+        )
+
+    async def submit(self, prompt: Prompt) -> Turn:
         """Queue a prompt; its reply appears at once, saying Claude is writing or waiting."""
         waiting = self.busy or not self._queue.empty() or not self._settled.is_set()
         sink = await self._sink()
@@ -383,7 +408,8 @@ class ChannelSession:
                 await self._settled.wait()
                 self._sent.append(turn)
                 self._taken = None
-                await client.query(turn.prompt)
+                prompt = turn.prompt
+                await client.query(prompt if isinstance(prompt, str) else user_message(prompt))
                 await turn.done.wait()
             except DirectoryUnavailable as exc:
                 self._taken = None
@@ -671,6 +697,7 @@ class ChannelSession:
             session_tokens=session_tokens(result),
             usage=self._deps.usage.current,
             effort=self.effort or "default",
+            directory=self.directory,
         )
         return format_footer(data, datetime.now().astimezone()) or None
 
@@ -765,6 +792,42 @@ class SessionManager:
         self._deps.state.bind(channel_id, directory)
         if old is not None:
             await old.close(texts.ENDED_REBOUND)
+
+    async def bind_when_idle(self, channel_id: str, directory: Path) -> bool:
+        """`bind`, unless the channel has work in flight: then False, and nothing changed."""
+        session = self._sessions.get(channel_id)
+        if session is not None and not session.idle:
+            return False
+        await self.bind(channel_id, directory)
+        return True
+
+    async def resume(self, channel_id: str, session_id: str) -> bool:
+        """Point the channel at another session of its directory, which the next message
+        resumes; False, and nothing changed, while the channel has work in flight."""
+        session = self._sessions.get(channel_id)
+        if session is not None and not session.idle:
+            return False
+        self._sessions.pop(channel_id, None)
+        self._deps.state.set_session(channel_id, session_id)
+        if session is not None:
+            await session.close(texts.ENDED_RESUMED)
+        return True
+
+    def current_session(self, channel_id: str) -> str | None:
+        stored = self._deps.state.get(channel_id)
+        return stored.session_id if stored else None
+
+    async def sessions_in(self, directory: Path, *, dated: bool = False) -> list[SDKSessionInfo]:
+        """Every session of `directory`, the one the caller read for its channel; `dated`, by
+        their last message, newest first, as the terminal's picker shows them."""
+        found = await asyncio.to_thread(self._deps.sessions_of, directory)
+        if dated:
+            found = await asyncio.to_thread(by_last_activity, directory, found)
+        return found
+
+    async def folders_in(self, root: Path) -> list[Path]:
+        """The folders under `root` where a session can start, as `bindable_folders` finds them."""
+        return await bindable_folders(root, self._deps.workspace_trusted)
 
     async def close_all(self) -> None:
         for session in list(self._sessions.values()):

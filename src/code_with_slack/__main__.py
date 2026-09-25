@@ -11,6 +11,7 @@ from slack_sdk.http_retry.builtin_async_handlers import AsyncRateLimitErrorRetry
 from slack_sdk.web.async_client import AsyncWebClient
 
 from code_with_slack.approvals import Approvals
+from code_with_slack.attachments import prepare_uploads, uploads_dir
 from code_with_slack.config import CONFIG_DIR, ConfigError, load_config
 from code_with_slack.footer import UsageCache, UsageProbe
 from code_with_slack.guards import ChannelGuard, Identity
@@ -26,6 +27,8 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
     config = load_config(config_dir)
     with single_instance(config_dir):
         state = StateStore(config_dir / "state.json")
+        uploads = uploads_dir()
+        prepare_uploads(uploads)
         slack = AsyncWebClient(token=config.bot_token)
         slack.retry_handlers.append(AsyncRateLimitErrorRetryHandler(max_retry_count=3))
         auth = await slack.auth_test()
@@ -49,6 +52,7 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
             sessions=sessions,
             approvals=approvals,
             guard=ChannelGuard(slack, identity),
+            uploads=uploads,
         )
         handler = AsyncSocketModeHandler(app, config.app_token)
 

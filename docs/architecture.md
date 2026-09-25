@@ -42,8 +42,34 @@ Every inbound path that acts (a message, including a `!word`, and a button) runs
    workspace, and its members are exactly the owner and the bot. It is read from Slack every
    time, so inviting a third person stops the bot in that channel at once.
 
-Messages with a subtype (edits, deletions, joins) and messages from bots are ignored. A refusal
-reaches the owner as an ephemeral message; everyone else gets nothing.
+Messages with a subtype (edits, deletions, joins) and messages from bots are ignored, except
+`file_share`, a message carrying files. A `file_share` event has no `team` field (measured
+2026-09-25): `guards.message_actor` takes the workspace from the files' `user_team`, which must be
+the same for every file, or the message is refused. A refusal reaches the owner as an ephemeral
+message; everyone else gets nothing.
+
+## Attached files
+
+`code_with_slack.attachments` handles the files of a `file_share` message before anything reaches
+Claude Code. Every file is checked first (`attachments.refusal`): its download URL must be
+`https://files.slack.com/...`, the only host that receives the bot token, and an image must be
+JPEG, PNG, GIF or WebP, at most 7.5 MB (10 MB once base64-encoded) and 8000x8000 px, the limits of
+Claude's vision API; any other image type is refused. A file that is not an image must be a
+`text/*` type (which covers source code) or one of `attachments.FILE_TYPES` (PDF, JSON, XML,
+YAML, JavaScript, shell, SQL, TOML, Jupyter notebook), at most 100 MB; any other type is refused. One message takes at most 5 images and 15 MB
+of images in all: images stay in the conversation and are sent again at every turn, and a request
+is capped at 32 MB. Then the files are downloaded together, with the bot token and no redirect
+followed; `attachments.download` checks the host again beside the header. Slack answers 302 when
+the app lacks `files:read` (measured 2026-09-25). An image becomes an image block, and the turn's
+prompt one user message of content blocks, sent through the SDK's streaming input; any other file
+is saved to `$TMPDIR/code-with-slack/` and its path is appended to the prompt, but only once every
+file arrived, so a failed message leaves no copy. The folder must be a directory of this user with
+mode 700, or nothing is written there; at each start the files older than 3 days are removed, so a
+conversation resumed after a restart still finds its files. A refused file or a failed download
+sends nothing and tells the owner which file and why. Prompts, messages with files and Claude Code
+commands enter the queue in the order they were sent, although downloads take a while. A message
+that waited for its turn is sent to the channel's session as it is then; if a `!bind` moved the
+channel to another folder meanwhile, nothing is sent and the owner is told.
 
 ## Rendering
 
@@ -134,8 +160,9 @@ shown, and the tool's line records the denial.
 
 Every reply ends with one context line: `⚡ bypass` when bypass is on, the git branch of the
 channel's directory, the model and the context percentage from the SDK's
-`get_context_usage()`, the effort level, the session's tokens from the turn's `ResultMessage.model_usage`, and the
-5-hour and weekly limits. The effort level is the one Claude Code reports in the input of a
+`get_context_usage()`, the effort level, the session's tokens from the turn's `ResultMessage.model_usage`, the
+5-hour and weekly limits, and last the last two names of the channel's directory, as a terminal
+status line such as ccstatusline shows the working directory. The effort level is the one Claude Code reports in the input of a
 `Stop` hook the daemon registers on each client (`effort.level`); `/effort` and `/model` run no
 hook, so after one of them the footer follows its output (`Set effort level to ...`). Until a
 level is known, or when the model takes no effort parameter, the footer shows `default`. The limits
@@ -224,9 +251,29 @@ A link Slack made from a typed address (`<url|label>`, `<url>`) reaches Claude C
 link the owner named reaches it as `label (url)`, so the address is not lost; a mention stays in Slack's form (`<@U…>`), since naming the user would need a
 scope the app does not have.
 `code_with_slack.commands.parse_bang` reads a message starting with `!`: `help`, `bind`,
-`bypass`, `status` and `stop` are the daemon's own words, answered with a message in the
-channel (`!help` and `!bind` also work before the channel is bound); any other `!name args` runs
+`bypass`, `status`, `stop`, `resume` and `guide` are the daemon's own words, answered with a message in the
+channel (`!help`, `!guide` and `!bind` also work before the channel is bound); any other `!name args` runs
 that Claude Code command when the session offers `name`, and is sent as a normal prompt
-otherwise. `commands.help_text` builds `!help` from `get_server_info()["commands"]` at the time
+otherwise. `!resume` stands in for Claude Code's interactive `/resume`, which an SDK session
+does not offer: `code_with_slack.resume` lists the directory's sessions from the SDK's
+`list_sessions` with the columns of the terminal's picker (name or title, time since the last
+activity, git branch, size) and a Resume button each, or matches `!resume <id or name>`.
+The list holds the directory's own sessions, not other worktrees', as the terminal's picker
+starts. Resuming stores the session id for the channel and closes the channel's client, only
+when no turn or background task is running or waiting; the next message starts Claude Code with `resume` set to it. A Resume click is
+checked like any other button, and the session must still be one of the directory's.
+`!bind` alone lists, through `code_with_slack.folders`, the folders where a session can start:
+`ALLOWED_ROOT`, then its folders, then theirs, skipping hidden folders and symlinks and never
+descending into a git repository (a `.git` directory or file). A folder is kept when
+`code_with_slack.trust` accepts it. The checks run eight at a time and stop once one more than
+the 20 rows shown is found, so the higher levels fill the rows, which are then shown in path
+order. The trust record is parsed again only
+when its mtime or size changes. A Bind click is checked like any other button, its folder goes
+through the same `resolve_directory` check as a typed `!bind <folder>`, a click on the channel's
+own folder changes nothing, and a click while work is in flight is refused, as a Resume click is.
+The `!resume` list reads the last message of a session's transcript only while that session can
+still be among the 20 shown: a file's mtime bounds its last message from above. Resuming the
+channel's own session changes nothing, and a resume whose listing overlapped a `!bind` is refused.
+`commands.help_text` builds `!help` from `get_server_info()["commands"]` at the time
 of asking, keeping only the lines that contain the text after `!help` when there is one, so a command a new Claude Code release adds needs no change here. Bolt's per-request authorization returns the
 identity `auth.test` gave at startup, so no request costs an extra API call.

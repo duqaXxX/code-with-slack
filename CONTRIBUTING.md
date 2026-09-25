@@ -11,6 +11,10 @@ Slack ids, and paths from your machine.
 2. Run the checks below; CI runs the same ones.
 3. Update the doc a change makes false in the same commit, and add a line under `## Unreleased`
    in [docs/CHANGELOG.md](docs/CHANGELOG.md) for a change in behaviour.
+4. A new `!word` of the daemon is a class in the `Word` union of `code_with_slack.commands` with
+   its `WORD`, and needs a line in `texts.GUIDE` (the `!guide` text) and in `texts.HELP_WORDS`:
+   `tests/test_commands.py` fails until both explain it. Change the guide whenever a behaviour
+   it describes changes.
 
 ## Checks
 

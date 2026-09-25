@@ -1015,3 +1015,58 @@ async def test_every_message_is_posted_without_link_previews(
     posts = h.slack.calls_to("chat.postMessage")
     assert len(posts) >= 2
     assert all(p.get("unfurl_links") is False and p.get("unfurl_media") is False for p in posts)
+
+
+async def test_resume_points_the_channel_at_another_session_of_its_directory(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"turns": [sdk_messages("tools")]}, {})
+    await asyncio.wait_for((await h.session().submit("list the files")).done.wait(), 2)
+    other = "68da9311-0000-4000-8000-00000000abcd"
+    assert await h.manager.resume(CHANNEL, other)
+    assert h.state.get(CHANNEL).session_id == other
+    await h.session().ensure_connected()  # the next message starts Claude Code on that session
+    assert h.clients[-1].options.resume == other
+
+
+async def test_resume_waits_for_an_idle_channel(harness_for: Callable[..., Harness]) -> None:
+    ask = CanUseToolCall("Bash", {"command": "ls"})
+    h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
+    await h.session().submit("list the files")
+    await until(lambda: len(h.approvals._pending) == 1)
+    before = h.state.get(CHANNEL).session_id
+    assert not await h.manager.resume(CHANNEL, "68da9311-0000-4000-8000-00000000abcd")
+    assert h.state.get(CHANNEL).session_id == before and h.session().busy
+
+
+async def test_resume_waits_for_background_tasks_to_end(
+    harness_for: Callable[..., Harness],
+) -> None:
+    first, _, _ = split_background()
+    h = harness_for({"turns": [first]})
+    await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
+    assert h.session()._running_counts()  # the recorded background shell still runs
+    assert not await h.manager.resume(CHANNEL, "68da9311-0000-4000-8000-00000000abcd")
+
+
+def test_the_list_holds_only_this_directory_s_worktree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The terminal's picker shows "sessions from the current worktree" (sessions reference,
+    # read 2026-09-25); list_sessions includes every worktree unless told not to.
+    calls: list[dict[str, Any]] = []
+
+    def spy(**kwargs: Any) -> list[Any]:
+        calls.append(kwargs)
+        return []
+
+    monkeypatch.setattr(sessions, "list_sessions", spy)
+    sessions.directory_sessions(tmp_path)
+    assert calls == [{"directory": str(tmp_path), "include_worktrees": False}]
+
+
+async def test_the_footer_names_the_bound_folder(harness_for: Callable[..., Harness]) -> None:
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    await asyncio.wait_for((await h.session().submit("list the files")).done.wait(), 2)
+    folder = h.tmp_path.resolve()
+    assert statuses(h)[-1].endswith(f" · {folder.parent.name}/{folder.name}")
