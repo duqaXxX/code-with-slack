@@ -19,6 +19,11 @@ REASON_UNREADABLE = "the bot cannot read its details"
 DIRECTORY_MISSING = (
     "The directory `{directory}` no longer exists. Bind this channel again with `!bind <path>`."
 )
+DIRECTORY_UNTRUSTED = (
+    "Claude Code has not been trusted in `{directory}`, so its hooks and settings would run "
+    "without asking. Open `claude` there in the terminal once and accept the trust dialog, then "
+    "send your message again."
+)
 DIRECTORY_UNREADABLE = (
     "macOS does not let code-with-slack read `{directory}`. Grant access in System Settings, "
     "Privacy & Security, Full Disk Access (see docs/setup.md, Part 4)."
@@ -81,5 +86,6 @@ QUESTION_WHERE = "{number} of {count}"
 QUESTION_NEXT = "Next ({number}/{count})"
 QUESTION_OTHER = "Other"
 QUESTION_OTHER_HINT = "Or type your own answer"
+APPROVAL_CUT = "_{count} characters of this request are not shown: Deny it unless you know them._"
 APPROVAL_UNPOSTED = "code-with-slack could not show this request in Slack, so nobody approved it."
 APPROVAL_GONE = "This request is no longer pending: the turn ended or code-with-slack restarted."

@@ -49,9 +49,9 @@ The full list is in [docs/setup.md](docs/setup.md#using-it).
 ## Security model
 
 The bot answers one Slack user in one workspace, and only in private channels whose members are
-that user and the bot. Every message, button and form submission is checked on its own. The
-tokens live in a mode-600 file, and nothing else is stored except which directory and which
-session each channel uses. Whoever controls the owner's Slack account controls the machine: see
+that user and the bot. Every message, button and form submission is checked on its own, and a
+session starts only in a folder you have trusted in Claude Code. The tokens live in a mode-600
+file, and nothing else is stored except which directory and which session each channel uses. Whoever controls the owner's Slack account controls the machine: see
 [SECURITY.md](SECURITY.md) and the checklist in [docs/setup.md](docs/setup.md).
 
 ## Contributing

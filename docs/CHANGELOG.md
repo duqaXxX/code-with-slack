@@ -48,5 +48,11 @@ First release.
   protection denies gets a message that says how to grant access. A final write lost to the
   network is tried again once. An approval request Slack does not accept is denied, with the
   reason. A failure reading the channel's members refuses the event and tells the owner.
+- A session starts only in a folder the owner has trusted in Claude Code, by Claude Code's own
+  record and rules; an untrusted folder gets a reply saying how to trust it.
+- An approval request shows the tool's whole input, or says how much it leaves out, and every
+  model-written text in it is escaped for Slack. The footer shows `⚡ bypass` when the folder's
+  own settings start the session in bypass, and `!bypass off` then returns to `default`. Nothing
+  the daemon posts gets a link or media preview.
 - `!bind` reads a relative path from `ALLOWED_ROOT`; a link Slack made in a message reaches
   Claude Code as typed.

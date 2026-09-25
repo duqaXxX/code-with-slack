@@ -36,6 +36,10 @@ def recorded(kind: str) -> dict[str, Any]:
     return copy.deepcopy(slack_payload(name))
 
 
+async def always_trusted(directory: Path) -> bool:
+    return True  # code_with_slack.trust has tests of its own
+
+
 class World:
     def __init__(self, slack: FakeSlack, tmp_path: Path, *, bound: bool = True) -> None:
         self.slack = slack
@@ -64,6 +68,7 @@ class World:
                 approvals=self.approvals,
                 usage=UsageCache(no_usage),
                 client_factory=factory,
+                workspace_trusted=always_trusted,
             )
         )
         config = Config(
