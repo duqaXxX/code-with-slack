@@ -37,13 +37,20 @@ not the `claude` on your `PATH`. Both read the same login, so logging in once wi
 1. Open <https://api.slack.com/apps> and choose **Create New App**, then **From a manifest**.
 2. Pick your workspace and choose **Next**.
 3. On the **JSON** tab, replace the example with the contents of
-   [`slack-app-manifest.json`](../slack-app-manifest.json) and choose **Next**.
+   [`slack-app-manifest.json`](../slack-app-manifest.json). To give the bot a name of your own,
+   change `features.bot_user.display_name`: it is the name Slack shows on every reply and at the
+   top of the bot's profile. Leave `display_information.name`, the app's name, as
+   `code-with-slack`. Choose **Next**.
 4. Check the summary and choose **Create**.
 
 The manifest asks for private channels only (`groups:history`, `groups:read`,
-`message.groups`) and `chat:write`. It registers no slash command: commands are typed as
-`!word` messages. Socket Mode is on, so the app needs no public URL and your machine opens no
-inbound port.
+`message.groups`), `chat:write`, and `files:read` to download the files you attach to a message.
+The app registers no slash command: commands are typed as `!word` messages. Socket Mode is on,
+so the app needs no public URL and your machine opens no inbound port.
+
+An app created before `files:read` was added needs the scope too: on the app's **OAuth &
+Permissions** page add the bot scope `files:read`, then reinstall the app to the workspace.
+Without it, every attached file is refused with `HTTP 302`.
 
 code-with-slack needs none of the app's agent features: leave **Agent experience** and the
 **Slack Model Context Protocol (MCP) Server** off in the app settings. The MCP server lets an app
@@ -223,6 +230,8 @@ The bot answers one person, and the rest of this list protects what that person 
 - The app stays undistributed: never turn on public distribution under **Manage Distribution**.
 - The Slack MCP server stays off.
 - `~/.config/code-with-slack/.env` is mode `600`.
+- Files you attach are copied to `$TMPDIR/code-with-slack/` (mode `700`) and stay there for 3
+  days, so a conversation resumed after a restart still finds them.
 - Trust a folder in Claude Code only after reading its `.claude/` settings and hooks: trusting it
   is what lets a session from Slack start there.
 - With a static public IP, you can also restrict the tokens to it under **OAuth & Permissions**,
@@ -233,21 +242,31 @@ The bot answers one person, and the rest of this list protects what that person 
 
 | In Slack | What it does |
 |---|---|
+| `!guide` | Explains in a few lines how to use the channel: binding, prompts, commands, approvals, sessions, bypass |
 | a message | Sends a prompt to the channel's session; the reply appears below it in the channel and grows as Claude works |
+| a message with files | Claude sees a JPEG, PNG, GIF or WebP image (up to 7.5 MB and 8000x8000 px; at most 5 images and 15 MB of images per message) as an image. Any other image type (SVG, HEIC, TIFF...) is refused. A text, source code, PDF, JSON, XML, YAML or Jupyter notebook file, up to 100 MB, reaches Claude as the path of a copy in `$TMPDIR/code-with-slack/`, kept 3 days; any other file (archives, Office documents, binaries) is refused. A file past a limit, or one that fails to download, stops the whole message, and the reply says which file and why |
 | `!help [text]` | Lists code-with-slack's own words and every command the channel's session offers now; with a text, only the lines whose name or description contains it, for example `!help model` |
-| `!bind <path>` | Binds this channel to a directory under `ALLOWED_ROOT`; a relative path is read from `ALLOWED_ROOT`. A new channel does nothing else until bound |
+| `!bind` | Lists `ALLOWED_ROOT` itself (shown as `.`) and the folders up to two levels below it, never inside a git repository, that Claude Code trusts, with a **Bind** button each; the channel's own folder is marked when it is listed. At most 20 are shown, in path order; when there are more, the higher levels fill the list first. A click never ends a running turn: it is refused until the channel is idle |
+| `!bind <folder>` | Binds this channel to a folder under `ALLOWED_ROOT`, given relative to it (`!bind my-project`); an absolute path inside it works too. A new channel does nothing else until bound |
 | `!<command> [args]` | Runs a Claude Code command, for example `!compact` or `!model opus` |
 | `!bypass on` / `off` | Switches the channel's session to `bypassPermissions` and back; a restart turns it off |
 | `!status` | Shows the channel's directory, session and mode |
 | `!stop` | Stops the turn that is running and denies its pending approvals |
+| `!resume` | Lists the twenty newest sessions of the channel's directory (not of other worktrees), terminal and Slack alike, with a **Resume** button each; the channel's own is marked `current` |
+| `!resume <id or name>` | Resumes that session directly; the name is the session's title, set with `/rename` or generated by Claude Code, and must match one session |
 | a question from Claude | Appears as one line with **Answer** and **Skip**; Answer opens a form with one question at a time, the options (one or several) and an **Other** field; **Next** moves on once the question has an answer, **Submit** on the last |
 
 Slack does not pass a Claude Code command typed with its own slash: `/compact` alone makes Slack
 answer that it is not a valid command. Type `!compact`. A `!word` that is not a command the
 session offers is sent as a normal prompt, so `!important: …` reaches Claude as written.
 
-`!help`, `!bind`, `!bypass`, `!status` and `!stop` are code-with-slack's own and come first.
-Claude Code has no command with those names today; `!help` lists what the session offers. The
+`!help`, `!guide`, `!bind`, `!bypass`, `!status`, `!stop` and `!resume` are code-with-slack's own
+and come first. Claude Code's own `/resume` is interactive and not offered to an SDK session, so
+`!resume` does its job: the next message continues the chosen session, in a new Claude Code
+process, with bypass off. It refuses while a turn or a background task is running or waiting in
+the channel, since resuming ends the channel's Claude Code process. If the session is still open in a
+terminal, close it there first: Claude Code interleaves the messages of two processes resuming
+the same session into one transcript. Claude Code has no other command with these names today; `!help` lists what the session offers. The
 answers to these words are messages in the channel.
 
 A reply is one message in the channel. It appears as soon as you send your message, reading
@@ -270,7 +289,8 @@ in the terminal: that reply opens with Claude Code's own line for the task's end
 
 The channel's latest reply ends with a footer, which moves to each new reply: `⚡ bypass` when bypass is on, the git branch, the model, the
 effort level, the context used, the session's tokens, and the 5-hour and weekly limits
-(`5h N% ↻ 2h · 7d N%`), which exist only with a claude.ai subscription. The effort level is the
+(`5h N% ↻ 2h · 7d N%`), which exist only with a claude.ai subscription, and last the channel's
+folder by its last two names (`code/my-project`). The effort level is the
 one Claude Code reported at the end of the last turn, or the one set since with `!effort` (or
 `!model`); it reads `default` on a model that takes no effort level, and after a restart until a
 turn ends normally (an interrupted turn or an API error reports no level). A level set with `!effort` lasts until the daemon restarts: the resumed session

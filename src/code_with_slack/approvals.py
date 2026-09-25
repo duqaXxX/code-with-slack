@@ -19,8 +19,8 @@ from claude_agent_sdk.types import (
 )
 
 from code_with_slack import texts
+from code_with_slack.render.escape import shown_as_written
 from code_with_slack.render.renderer import one_line
-from code_with_slack.render.sinks import mrkdwn_escape
 
 SECTION_LIMIT = 3000
 MESSAGE_BLOCKS = 50  # Slack's limit on blocks in one message
@@ -113,13 +113,6 @@ def _button(action_id: str, label: str, value: str, style: str | None = None) ->
     if style:
         button["style"] = style
     return button
-
-
-def shown_as_written(text: str) -> str:
-    """Model-written text for mrkdwn, shown as written: `&`, `<` and `>` escaped, so no
-    `<url|label>` can hide what it links, and a zero-width space after each backtick, so no
-    run of three can close a code block."""
-    return mrkdwn_escape(text).replace("`", "`\u200b")
 
 
 def _code_chunks(text: str, limit: int) -> list[str]:
