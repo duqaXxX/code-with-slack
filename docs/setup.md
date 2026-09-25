@@ -117,7 +117,13 @@ Claude Code can read and run outside its working directory once you approve it.
 code-with-slack drives Claude Code through the Claude Agent SDK, with the login already on the
 machine. Your own Claude Code settings apply: `~/.claude/settings.json`, the project's
 `.claude/settings.json`, and `.claude/settings.local.json`. Whatever Claude Code asks your
-approval for reaches Slack as **Approve** and **Deny** buttons.
+approval for reaches Slack as **Approve** and **Deny** buttons, with the tool's whole input.
+
+A session starts only in a folder you have trusted in Claude Code. Claude Code shows its trust
+dialog only in the terminal, and a session started from Slack would otherwise run a
+repository's own hooks and apply its settings without asking. Before you bind a channel to a
+repository, open `claude` at its root in the terminal once and accept the dialog. A trusted
+parent folder does not cover a git repository inside it, such as a clone.
 
 When Claude Code is logged out, a message in Slack replies with a note asking you to run `claude`
 and `/login` on the machine; the login is never done from Slack.
@@ -217,6 +223,8 @@ The bot answers one person, and the rest of this list protects what that person 
 - The app stays undistributed: never turn on public distribution under **Manage Distribution**.
 - The Slack MCP server stays off.
 - `~/.config/code-with-slack/.env` is mode `600`.
+- Trust a folder in Claude Code only after reading its `.claude/` settings and hooks: trusting it
+  is what lets a session from Slack start there.
 - With a static public IP, you can also restrict the tokens to it under **OAuth & Permissions**,
   **Restrict API Token Usage**. With a dynamic IP, the first address change stops the bot with
   `invalid_auth`.
@@ -276,6 +284,7 @@ runs at the level your Claude Code settings give the model.
 | `Claude Code is not logged in on the host` | Claude Code on the machine is logged out: run `claude`, then `/login` |
 | Some messages get no reply | A second instance is running and receiving part of the events |
 | `The previous session could not be resumed` | The stored session no longer exists (its transcript was deleted); the reply runs in a new session |
+| `Claude Code has not been trusted in ...` | Open `claude` in that folder (the repository root) in the terminal, accept the trust dialog, and send the message again |
 | `The directory ... no longer exists` | The channel's directory was moved or deleted: bind the channel again with `!bind <path>` |
 | `macOS does not let code-with-slack read ...` | The directory is in a folder macOS protects: see Part 4, "Folders macOS protects" |
 | `another code-with-slack is running` in the log | A second instance tried to start; only one may run |
