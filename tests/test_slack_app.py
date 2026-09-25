@@ -245,6 +245,7 @@ async def test_bang_status_and_stop_answer_in_the_channel(world: World) -> None:
     assert said(world)[0] == texts.NOTHING_TO_STOP
     assert said(world)[1].startswith("Directory:")
     assert world.queries() == []
+    assert "\nContext: `7%`" in said(world)[1]
 
 
 async def test_a_malformed_daemon_word_shows_the_help(world: World) -> None:

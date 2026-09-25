@@ -16,6 +16,7 @@ from code_with_slack.footer import (
     UsageProbe,
     effort_change,
     format_footer,
+    format_status_fields,
     git_branch,
     parse_usage,
     session_tokens,
@@ -84,6 +85,53 @@ def test_minimal_footer_hides_what_it_does_not_know() -> None:
         bypass=False, branch=None, model=None, context_percent=None, session_tokens=None, usage=None
     )
     assert format_footer(data, NOW) == ""
+
+
+def test_status_fields_list_the_footer_s_values_one_per_line() -> None:
+    usage = Usage(Limit(3, NOW + timedelta(hours=2, minutes=10)), Limit(25, None))
+    data = FooterData(
+        bypass=True,
+        branch="main",
+        model="claude-opus-5-5",
+        context_percent=6.4,
+        session_tokens=12_345,
+        usage=usage,
+        effort="high",
+        directory=Path("/work/personal/app"),
+    )
+    # Bypass and the folder are left out: the status's Mode and Directory lines show them.
+    assert format_status_fields(data, NOW) == [
+        "Branch: `main`",
+        "Model: `claude-opus-5-5`",
+        "Effort: `high`",
+        "Context: `6%`",
+        "Session tokens: `12.3k`",
+        "5h limit: `3% ↻ 2h`",
+        "7d limit: `25%`",
+    ]
+
+
+def test_status_fields_hold_the_values_the_footer_shows() -> None:
+    usage = Usage(Limit(3, NOW + timedelta(hours=2, minutes=10)), Limit(25, None))
+    data = FooterData(
+        bypass=False,
+        branch="main",
+        model="claude-opus-5-5",
+        context_percent=6.4,
+        session_tokens=12_345,
+        usage=usage,
+        effort="high",
+    )
+    shown = format_footer(data, NOW)
+    for line in format_status_fields(data, NOW):
+        assert line.split("`")[1] in shown
+
+
+def test_status_fields_leave_out_what_is_not_known() -> None:
+    data = FooterData(
+        bypass=False, branch=None, model=None, context_percent=None, session_tokens=None, usage=None
+    )
+    assert format_status_fields(data, NOW) == []
 
 
 def test_session_tokens_sum_every_model() -> None:
