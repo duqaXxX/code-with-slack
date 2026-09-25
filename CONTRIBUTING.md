@@ -31,3 +31,13 @@ uv run ruff format --check .
 
 Test fixtures are synthetic in content (ids such as `U000ALICE`) and recorded in shape. Never
 write the shape of an SDK message or a Slack payload by hand.
+
+## SDK releases
+
+code-with-slack pins `claude-agent-sdk` and runs the Claude Code CLI it bundles. Every day the
+**SDK release watch** workflow (`.github/workflows/sdk-release-watch.yml`) reads the latest release
+from PyPI, runs the test suite on it, and keeps one issue labelled `sdk release` with the versions,
+the outcome and the checks left to do by hand. The body is rewritten on each run; a comment is
+added once per new version and whenever the suite does not pass. Close the issue once the release
+is checked: a closed issue with the same title is not opened again. Dependabot's weekly pull
+request still moves the pin.

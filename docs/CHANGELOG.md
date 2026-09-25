@@ -60,6 +60,8 @@ First release.
 - `!resume` lists the twenty newest sessions of the channel's directory (terminal and Slack)
   with a Resume button each, and says when more exist, and `!resume <id or name>` resumes one, as Claude Code's `/resume` does in the
   terminal.
+- A daily workflow runs the tests on the latest `claude-agent-sdk` release and keeps one issue
+  with the versions, the outcome and the checks left to do by hand.
 - Issue forms for bug reports and feature requests; blank issues are off, and security reports
   are pointed to private vulnerability reporting.
 - Files attached to a message: JPEG, PNG, GIF and WebP images (up to 7.5 MB and 8000x8000 px,
