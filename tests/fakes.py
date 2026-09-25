@@ -8,7 +8,7 @@ shape the SDK would not produce. If a SDK release moves the parser, this import 
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -108,7 +108,8 @@ class FakeClaudeClient:
         self._context_usage_error = context_usage_error
         self._disconnect_error = disconnect_error
         self.connected = False
-        self.queries: list[str] = []
+        # A prompt as sent: text, or the user messages of an image prompt (streaming input).
+        self.queries: list[Any] = []
         self.modes: list[str] = []
         self.interrupts = 0
         self.permission_results: list[PermissionResult] = []
@@ -125,8 +126,8 @@ class FakeClaudeClient:
         if self._disconnect_error is not None:
             raise self._disconnect_error
 
-    async def query(self, prompt: str) -> None:
-        self.queries.append(prompt)
+    async def query(self, prompt: str | AsyncIterable[dict[str, Any]]) -> None:
+        self.queries.append(prompt if isinstance(prompt, str) else [m async for m in prompt])
         if self._turns:
             self._feed.put_nowait(self._turns.pop(0))
 

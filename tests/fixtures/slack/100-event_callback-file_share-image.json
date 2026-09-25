@@ -1,0 +1,104 @@
+{
+  "team_id": "T000TEAM",
+  "context_team_id": "T000TEAM",
+  "context_enterprise_id": null,
+  "api_app_id": "A000APP",
+  "event": {
+    "type": "message",
+    "text": "What is in this image?",
+    "files": [
+      {
+        "id": "F000FILE",
+        "created": 1790349156,
+        "timestamp": 1790349156,
+        "mimetype": "image/png",
+        "filetype": "png",
+        "pretty_type": "PNG",
+        "user": "U000ALICE",
+        "user_team": "T000TEAM",
+        "editable": false,
+        "size": 387098,
+        "mode": "hosted",
+        "is_external": false,
+        "external_type": "",
+        "is_public": false,
+        "public_url_shared": false,
+        "display_as_bot": false,
+        "username": "",
+        "name": "photo.png",
+        "title": "photo.png",
+        "is_modified_by_ai": false,
+        "url_private": "https://files.slack.com/files-pri/T000TEAM-F000FILE/photo.png",
+        "url_private_download": "https://files.slack.com/files-pri/T000TEAM-F000FILE/download/photo.png",
+        "media_display_type": "unknown",
+        "thumb_64": "https://files.slack.com/files-tmb/T000TEAM-F000FILE-0000000000/thumb_64.png",
+        "thumb_80": "https://files.slack.com/files-tmb/T000TEAM-F000FILE-0000000000/thumb_80.png",
+        "thumb_360": "https://files.slack.com/files-tmb/T000TEAM-F000FILE-0000000000/thumb_360.png",
+        "thumb_360_w": 360,
+        "thumb_360_h": 295,
+        "thumb_480": "https://files.slack.com/files-tmb/T000TEAM-F000FILE-0000000000/thumb_480.png",
+        "thumb_480_w": 480,
+        "thumb_480_h": 393,
+        "thumb_160": "https://files.slack.com/files-tmb/T000TEAM-F000FILE-0000000000/thumb_160.png",
+        "thumb_720": "https://files.slack.com/files-tmb/T000TEAM-F000FILE-0000000000/thumb_720.png",
+        "thumb_720_w": 720,
+        "thumb_720_h": 589,
+        "thumb_800": "https://files.slack.com/files-tmb/T000TEAM-F000FILE-0000000000/thumb_800.png",
+        "thumb_800_w": 800,
+        "thumb_800_h": 655,
+        "thumb_960": "https://files.slack.com/files-tmb/T000TEAM-F000FILE-0000000000/thumb_960.png",
+        "thumb_960_w": 960,
+        "thumb_960_h": 786,
+        "thumb_1024": "https://files.slack.com/files-tmb/T000TEAM-F000FILE-0000000000/thumb_1024.png",
+        "thumb_1024_w": 1024,
+        "thumb_1024_h": 838,
+        "original_w": 2360,
+        "original_h": 1932,
+        "permalink": "https://example.slack.com/files/U000ALICE/F000FILE/photo.png",
+        "permalink_public": "https://slack-files.com/T000TEAM-F000FILE-0000000000",
+        "skipped_shares": true,
+        "has_rich_preview": false,
+        "file_access": "visible"
+      }
+    ],
+    "upload": false,
+    "user": "U000ALICE",
+    "display_as_bot": false,
+    "blocks": [
+      {
+        "type": "rich_text",
+        "block_id": "b0000",
+        "elements": [
+          {
+            "type": "rich_text_section",
+            "elements": [
+              {
+                "type": "text",
+                "text": "What is in this image?"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "ts": "1790350212.125979",
+    "client_msg_id": "00000000-0000-4000-8000-000000000001",
+    "channel": "C000CHAN",
+    "subtype": "file_share",
+    "event_ts": "1790350212.125979",
+    "channel_type": "group"
+  },
+  "type": "event_callback",
+  "event_id": "Ev000EVENT",
+  "event_time": 1790350212,
+  "authorizations": [
+    {
+      "enterprise_id": null,
+      "team_id": "T000TEAM",
+      "user_id": "U000BOT",
+      "is_bot": true,
+      "is_enterprise_install": false
+    }
+  ],
+  "is_ext_shared_channel": false
+}

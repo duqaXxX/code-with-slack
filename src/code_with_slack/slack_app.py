@@ -1,11 +1,15 @@
 """The Slack side: every inbound path, each checked on its own before it reaches a session."""
 
+import asyncio
 import logging
 import re
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
+from claude_agent_sdk import SDKSessionInfo
 from slack_bolt.async_app import AsyncAck, AsyncApp
 from slack_bolt.authorization import AuthorizeResult
 from slack_sdk.web.async_client import AsyncWebClient
@@ -25,12 +29,24 @@ from code_with_slack.approvals import (
     is_answered,
     question_view,
 )
+from code_with_slack.attachments import (
+    DownloadFailed,
+    download,
+    images_refusal,
+    is_image,
+    limit_for,
+    prompt_for,
+    refusal,
+    save,
+)
 from code_with_slack.commands import (
     Bind,
     Bypass,
+    Guide,
     Help,
     Invalid,
     Passthrough,
+    Resume,
     Status,
     Stop,
     Word,
@@ -38,6 +54,7 @@ from code_with_slack.commands import (
     parse_bang,
 )
 from code_with_slack.config import Config
+from code_with_slack.folders import BIND_ACTION, bind_blocks
 from code_with_slack.guards import (
     ChannelGuard,
     Identity,
@@ -46,8 +63,17 @@ from code_with_slack.guards import (
     is_prompt_message,
     message_actor,
 )
+from code_with_slack.render.escape import markdown_escape
+from code_with_slack.render.renderer import one_line
 from code_with_slack.render.sinks import FALLBACK_LIMIT, describe, split
-from code_with_slack.sessions import DirectoryUnavailable, SessionManager, resolve_directory
+from code_with_slack.resume import RESUME_ACTION, TITLE_LIMIT, matching, resume_blocks
+from code_with_slack.sessions import (
+    ChannelSession,
+    DirectoryUnavailable,
+    Prompt,
+    SessionManager,
+    resolve_directory,
+)
 
 logger = logging.getLogger(__name__)
 DECISION_ACTIONS = ("approval_allow", "approval_deny", "question_skip")
@@ -74,6 +100,10 @@ def slack_unescape(text: str) -> str:
     return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
 
+# How a file is downloaded: its URL, its declared type and the size limit, to its bytes.
+Fetch = Callable[[str, str, int], Awaitable[bytes]]
+
+
 def build_app(
     *,
     slack: AsyncWebClient,
@@ -82,7 +112,15 @@ def build_app(
     sessions: SessionManager,
     approvals: Approvals,
     guard: ChannelGuard,
+    uploads: Path,
+    fetch: Fetch | None = None,
 ) -> AsyncApp:
+    async def download_file(url: str, mimetype: str, limit: int) -> bytes:
+        return await download(url, config.bot_token, mimetype, limit)
+
+    fetch_file = fetch or download_file
+    arrival_order: dict[str, asyncio.Lock] = {}
+
     async def authorize() -> AuthorizeResult:
         # auth.test already ran at startup; who may act is decided by the guards below.
         return AuthorizeResult(
@@ -144,18 +182,24 @@ def build_app(
         await reply_on_failure(channel, handle_message(channel, event))
 
     async def handle_message(channel: str, event: dict[str, Any]) -> None:
-        text = slack_unescape(event["text"])
-        command = parse_bang(text)
-        if isinstance(command, Help | Bind):
+        text = slack_unescape(event.get("text") or "")
+        files: list[dict[str, Any]] = event.get("files") or []
+        # A message with files is a prompt: no daemon word or command takes a file.
+        command = None if files else parse_bang(text)
+        if isinstance(command, Help | Guide | Bind):
             await handle_word(channel, command)
             return
         session = sessions.get(channel)
         if session is None:
-            await tell_owner(channel, texts.UNBOUND)
+            await tell_owner(channel, texts.UNBOUND.format(root=config.allowed_root))
             return
-        if command is None:
-            # Every reply goes to the main window, even for a message written inside a thread.
-            await session.submit(text)
+        if files or command is None:
+            # Prompts enter the queue in the order they were sent, although files take a while
+            # to download. Every reply goes to the main window, even for a threaded message.
+            async with arrival_order.setdefault(channel, asyncio.Lock()):
+                prompt = await with_attachments(channel, text, files) if files else text
+                if prompt is not None:
+                    await session.submit(prompt)
         elif isinstance(command, Passthrough):
             await session.ensure_connected()
             known = {str(c.get("name")) for c in session.commands}
@@ -173,15 +217,12 @@ def build_app(
                 if session is not None:
                     await session.ensure_connected()
                 await say(channel, help_text(session.commands if session else None, query))
+            case Guide():
+                await say(channel, texts.GUIDE)
+            case Bind(path=""):
+                await list_folders(channel)
             case Bind(path=path):
-                directory = resolve_directory(path, config.allowed_root)
-                if directory is None:
-                    await say(
-                        channel, texts.BIND_OUTSIDE.format(path=path, root=config.allowed_root)
-                    )
-                else:
-                    await sessions.bind(channel, directory)
-                    await say(channel, texts.BIND_OK.format(directory=directory))
+                await bind_to(channel, path)
             case _:
                 session = sessions.get(channel)
                 assert session is not None
@@ -201,6 +242,8 @@ def build_app(
                             channel,
                             texts.STOPPED if await session.stop() else texts.NOTHING_TO_STOP,
                         )
+                    case Resume(target=target):
+                        await handle_resume(channel, session, target)
 
     @app.action("answer")
     async def on_answer(ack: AsyncAck) -> None:
@@ -231,6 +274,171 @@ def build_app(
 
     for action_id in DECISION_ACTIONS:
         app.action(action_id)(on_decision)
+
+    async def with_attachments(
+        channel: str, text: str, files: list[dict[str, Any]]
+    ) -> Prompt | None:
+        """The prompt for `text` and its files; None, after telling the owner why, when any file
+        cannot reach Claude: the message is sent whole or not at all."""
+
+        async def refuse(file: dict[str, Any], reason: str) -> None:
+            name = markdown_escape(str(file.get("name") or file.get("id")))
+            await say(channel, texts.UPLOAD_FAILED.format(name=name, reason=reason))
+
+        for file in files:
+            reason = refusal(file)
+            if reason is not None:
+                await refuse(file, reason)
+                return None
+        together = images_refusal(files)
+        if together is not None:
+            await say(channel, together)
+            return None
+        fetched = await asyncio.gather(
+            *(
+                fetch_file(str(f["url_private_download"]), str(f.get("mimetype")), limit_for(f))
+                for f in files
+            ),
+            return_exceptions=True,
+        )
+        # Nothing is saved until every file arrived: a failed message leaves no copy behind.
+        for file, data in zip(files, fetched, strict=True):
+            if isinstance(data, DownloadFailed):
+                await refuse(file, texts.UPLOAD_DOWNLOAD.format(error=data))
+                return None
+            if isinstance(data, BaseException):
+                raise data
+        images: list[tuple[str, bytes]] = []
+        paths: list[Path] = []
+        for file, data in zip(files, fetched, strict=True):
+            assert isinstance(data, bytes)
+            if is_image(file):
+                images.append((str(file["mimetype"]), data))
+            else:
+                try:
+                    paths.append(await save(uploads, file, data))
+                except DownloadFailed as exc:
+                    await refuse(file, texts.UPLOAD_DOWNLOAD.format(error=exc))
+                    return None
+        return prompt_for(text, images, paths)
+
+    async def bind_to(channel: str, path: str) -> None:
+        directory = await folder_named(channel, path)
+        if directory is not None:
+            await sessions.bind(channel, directory)
+            await say(channel, texts.BIND_OK.format(directory=directory))
+
+    async def folder_named(channel: str, path: str) -> Path | None:
+        directory = resolve_directory(path, config.allowed_root)
+        if directory is None:
+            await say(channel, texts.BIND_OUTSIDE.format(path=path, root=config.allowed_root))
+        return directory
+
+    async def list_folders(channel: str) -> None:
+        root = config.allowed_root
+        stored = sessions.get(channel)
+        folders = await sessions.folders_in(root)
+        blocks = bind_blocks(root, folders, stored.directory if stored else None)
+        await slack.chat_postMessage(
+            channel=channel,
+            text=(texts.BIND_LIST if folders else texts.BIND_EMPTY).format(root=root),
+            blocks=blocks,
+            unfurl_links=False,
+            unfurl_media=False,
+        )
+
+    @app.action(BIND_ACTION)
+    async def on_bind(ack: AsyncAck, body: dict[str, Any]) -> None:
+        await ack()
+        user, team = interaction_actor(body)
+        channel = (body.get("channel") or {}).get("id")
+        if not await admitted(user, team, channel):
+            return
+        assert channel is not None
+        await reply_on_failure(channel, bind_clicked(channel, body))
+
+    async def bind_clicked(channel: str, body: dict[str, Any]) -> None:
+        # The button is not trusted: its folder goes through the same check as a typed `!bind`.
+        directory = await folder_named(channel, str(body["actions"][0].get("value")))
+        if directory is None:
+            return
+        current = sessions.get(channel)
+        if current is not None and current.directory == directory:
+            await say(channel, texts.BIND_ALREADY.format(directory=directory))
+            return
+        # A list can be old: unlike a typed `!bind`, a click never ends work in flight.
+        if not await sessions.bind_when_idle(channel, directory):
+            await say(channel, texts.BIND_BUSY)
+            return
+        await say(channel, texts.BIND_OK.format(directory=directory))
+        await remove_request(channel, body["message"]["ts"])
+
+    async def handle_resume(channel: str, session: ChannelSession, target: str) -> None:
+        # Only the list shows dates: matching a target needs none, and dating reads every file.
+        stored = await sessions.sessions_in(session.directory, dated=not target)
+        if not target:
+            current = sessions.current_session(channel)
+            blocks = resume_blocks(session.directory, stored, current, datetime.now().astimezone())
+            await slack.chat_postMessage(
+                channel=channel,
+                text=texts.RESUME_LIST.format(directory=session.directory),
+                blocks=blocks,
+                unfurl_links=False,
+                unfurl_media=False,
+            )
+            return
+        found = matching(stored, target)
+        if len(found) != 1:
+            template = texts.RESUME_AMBIGUOUS if found else texts.RESUME_NONE
+            await say(channel, template.format(directory=session.directory, target=target))
+            return
+        await resume_session(channel, found[0], session.directory)
+
+    async def resume_session(channel: str, chosen: SDKSessionInfo, directory: Path) -> bool:
+        """Point the channel at `chosen`, a session read from `directory`; False when nothing
+        changed and the owner was told why."""
+        current = sessions.get(channel)
+        # The listing awaited: a `!bind` meanwhile moved the channel, and `chosen` belongs to
+        # the old folder. No await from this check to the store in `sessions.resume`.
+        if current is None or current.directory != directory:
+            await tell_owner(channel, texts.RESUME_GONE)
+            return False
+        if chosen.session_id == sessions.current_session(channel):
+            # Resuming it again would close the live client and turn bypass off for nothing.
+            await say(channel, texts.RESUME_ALREADY)
+            return False
+        if not await sessions.resume(channel, chosen.session_id):
+            await say(channel, texts.RESUME_BUSY)
+            return False
+        # A markdown block, not mrkdwn: the title is escaped so it cannot close or open the bold.
+        title = markdown_escape(one_line(chosen.summary, TITLE_LIMIT)) or chosen.session_id
+        await say(channel, texts.RESUME_OK.format(title=title))
+        return True
+
+    @app.action(RESUME_ACTION)
+    async def on_resume(ack: AsyncAck, body: dict[str, Any]) -> None:
+        await ack()
+        user, team = interaction_actor(body)
+        channel = (body.get("channel") or {}).get("id")
+        if not await admitted(user, team, channel):
+            return
+        assert channel is not None
+        await reply_on_failure(channel, resume_clicked(channel, body))
+
+    async def resume_clicked(channel: str, body: dict[str, Any]) -> None:
+        session = sessions.get(channel)
+        if session is None:
+            await tell_owner(channel, texts.UNBOUND.format(root=config.allowed_root))
+            return
+        # The button is not trusted: the session must still belong to the channel's directory.
+        session_id = str(body["actions"][0].get("value"))
+        stored = await sessions.sessions_in(session.directory)
+        chosen = next((s for s in stored if s.session_id == session_id), None)
+        if chosen is None:
+            await tell_owner(channel, texts.RESUME_GONE)
+            return
+        if await resume_session(channel, chosen, session.directory):
+            await remove_request(channel, body["message"]["ts"])
 
     async def remove_request(channel: str, ts: str | None) -> None:
         # The tool's line in the reply records the call: the request message has done its job.
