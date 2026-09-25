@@ -60,6 +60,8 @@ First release.
 - `!resume` lists the twenty newest sessions of the channel's directory (terminal and Slack)
   with a Resume button each, and says when more exist, and `!resume <id or name>` resumes one, as Claude Code's `/resume` does in the
   terminal.
+- Issue forms for bug reports and feature requests; blank issues are off, and security reports
+  are pointed to private vulnerability reporting.
 - Files attached to a message: JPEG, PNG, GIF and WebP images (up to 7.5 MB and 8000x8000 px,
   at most 5 and 15 MB per message) reach Claude as image blocks; text, source code, PDF, JSON,
   XML, YAML and notebook files (up to 100 MB) as the path of a copy in a private temporary

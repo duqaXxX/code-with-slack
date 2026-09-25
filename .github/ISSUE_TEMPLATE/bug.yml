@@ -1,0 +1,57 @@
+name: Bug report
+description: Something code-with-slack does differs from what the docs say it does.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This repository is public. Leave out Slack tokens, real user, channel or workspace ids,
+        paths from your machine, and excerpts of real sessions: replace them with placeholders.
+        A security problem goes to the **Security** tab instead (see SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: code-with-slack version or commit
+      description: The release tag, or the commit you installed from.
+      placeholder: 0.1.0, or 79fc27b
+    validations:
+      required: true
+  - type: input
+    id: claude-version
+    attributes:
+      label: Claude Code version
+      description: The output of `claude --version` on the machine that runs code-with-slack.
+      placeholder: 2.1.280 (Claude Code)
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What you did
+      description: The messages you sent in the channel, in order, and the buttons you clicked.
+      placeholder: |
+        1. `!bind my-project`
+        2. A message with a PNG attached
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: The reply in Slack, and any line from the daemon's log, with ids replaced.
+      render: text
+    validations:
+      required: true
+  - type: checkboxes
+    id: scrubbed
+    attributes:
+      label: Before you submit
+      options:
+        - label: This issue holds no token, real id, personal path or real session content.
+          required: true

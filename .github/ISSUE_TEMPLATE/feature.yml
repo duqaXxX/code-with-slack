@@ -1,0 +1,38 @@
+name: Feature request
+description: Something code-with-slack should do and does not.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This repository is public. Leave out tokens, real ids, paths from your machine and
+        excerpts of real sessions.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you tried to do from Slack, and where code-with-slack got in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: terminal
+    attributes:
+      label: How the Claude Code terminal does it
+      description: code-with-slack follows the terminal. Say how the same thing looks or works there, if it exists.
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+  - type: checkboxes
+    id: scrubbed
+    attributes:
+      label: Before you submit
+      options:
+        - label: This issue holds no token, real id, personal path or real session content.
+          required: true
