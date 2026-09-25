@@ -2,8 +2,11 @@
 
 ## Reporting a problem
 
-Open an issue with what you did, what you expected and what happened. Leave out tokens, real
-Slack ids, and paths from your machine.
+Open an issue with the **Bug report** or **Feature request** form; blank issues are turned off.
+The bug form asks for the code-with-slack and Claude Code versions, what you did, what you expected
+and what happened. Leave out tokens, real Slack ids, paths from your machine and excerpts of real
+sessions. A vulnerability goes to the **Security** tab, never to an issue (see
+[SECURITY.md](SECURITY.md)).
 
 ## Sending a change
 
