@@ -99,7 +99,7 @@ class World:
             uploads=self.uploads,
         )
 
-    async def fetch(self, url: str, mimetype: str, limit: int) -> bytes:
+    async def fetch(self, *, url: str, mimetype: str, limit: int) -> bytes:
         self.fetched.append(url)
         await asyncio.sleep(self.slow_downloads)
         found = self.downloads[url]
@@ -781,3 +781,42 @@ async def test_too_many_images_send_nothing_and_download_nothing(world: World) -
     await world.dispatch(body)
     assert world.fetched == [] and world.queries() == []
     assert said(world) == [texts.UPLOAD_TOO_MANY.format(count=6, limit=5)]
+
+
+async def test_a_rebind_during_the_downloads_sends_the_prompt_nowhere(world: World) -> None:
+    # The session read before the downloads is closed by the rebind: nothing may reach it.
+    (world.root / "docs").mkdir()
+    body = shared_file("snippet")
+    world.downloads[body["event"]["files"][0]["url_private_download"]] = b"hello\n"
+    world.slow_downloads = 0.2
+    first = asyncio.create_task(world.dispatch(body))
+    await asyncio.sleep(0.05)
+    await world.dispatch(message("!bind docs"))
+    await first
+    await asyncio.sleep(0.3)
+    assert world.queries() == [] and world.clients == []
+    assert said(world)[-1] == texts.PROMPT_REBOUND
+
+
+async def test_a_command_after_a_message_with_files_waits_its_turn(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    body = shared_file("snippet")
+    world.downloads[body["event"]["files"][0]["url_private_download"]] = b"hello\n"
+    world.slow_downloads = 0.2
+    session = world.sessions.get(CHANNEL)
+    assert session is not None
+    queued: list[Any] = []
+    submit = session.submit
+
+    async def spy(prompt: Any) -> Any:
+        queued.append(prompt)
+        return await submit(prompt)
+
+    monkeypatch.setattr(session, "submit", spy)
+    first = asyncio.create_task(world.dispatch(body))
+    await asyncio.sleep(0.05)
+    await world.dispatch(message("!compact"))
+    await first
+    await asyncio.sleep(0.3)
+    assert [str(p).startswith(body["event"]["text"]) for p in queued] == [True, False]

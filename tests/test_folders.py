@@ -2,6 +2,8 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from code_with_slack import texts
 from code_with_slack.folders import FOLDER_ROWS, TRUST_BATCH, bind_blocks, bindable_folders
 
@@ -129,3 +131,15 @@ def test_the_root_is_shown_as_written(tmp_path: Path) -> None:
     root = tmp_path / "R&D"
     assert "R&amp;D" in bind_blocks(root, [root / "a"], current=None)[0]["text"]["text"]
     assert "R&amp;D" in bind_blocks(root, [], current=None)[0]["text"]["text"]
+
+
+async def test_an_unreadable_root_is_an_error_not_an_empty_list(tmp_path: Path) -> None:
+    # An empty list would tell the owner to trust folders; the real cause is the root.
+    root = tmp_path / "root"
+    tree(root, "a")
+    root.chmod(0o000)
+    try:
+        with pytest.raises(OSError):
+            await bindable_folders(root, trusted_unless_named_untrusted)
+    finally:
+        root.chmod(0o700)

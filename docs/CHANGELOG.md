@@ -64,7 +64,8 @@ First release.
   at most 5 and 15 MB per message) reach Claude as image blocks; text, source code, PDF, JSON,
   XML, YAML and notebook files (up to 100 MB) as the path of a copy in a private temporary
   folder, kept 3 days. Other image types and other files (archives, Office documents, binaries)
-  are refused. A refused file or a failed
+  are refused. Messages keep the order they were sent in while files download, and one that a
+  `!bind` overtook is not sent. A refused file or a failed
   download sends nothing and says why. The app needs the `files:read` scope.
 - The footer ends with the channel's folder, by its last two names.
 - `!bind` alone lists `ALLOWED_ROOT` and the folders up to two levels below it that Claude Code

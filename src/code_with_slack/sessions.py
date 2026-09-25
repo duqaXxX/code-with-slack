@@ -61,6 +61,7 @@ from code_with_slack.footer import (
     session_tokens,
 )
 from code_with_slack.guards import Identity
+from code_with_slack.prompt import Prompt, user_message
 from code_with_slack.render.renderer import TurnRenderer, ended_line, one_line, task_title
 from code_with_slack.render.sinks import ReplySink, describe
 from code_with_slack.resume import by_last_activity
@@ -132,6 +133,7 @@ class DirectoryUnreadable(DirectoryUnavailable):
 class ClaudeClient(Protocol):
     async def connect(self) -> None: ...
     async def disconnect(self) -> None: ...
+    # The SDK's own signature; a turn sends text or prompt.user_message(), exactly one message.
     async def query(self, prompt: str | AsyncIterable[dict[str, Any]]) -> None: ...
     def receive_messages(self) -> AsyncIterator[Message]: ...
     async def set_permission_mode(self, mode: PermissionMode) -> None: ...
@@ -199,19 +201,6 @@ class SessionDeps:
     client_factory: ClientFactory = default_client_factory
     workspace_trusted: Callable[[Path], Awaitable[bool]] = workspace_trusted
     sessions_of: Callable[[Path], list[SDKSessionInfo]] = directory_sessions
-
-
-# The owner's text, or the content blocks of one user message when it carries images.
-Prompt = str | list[dict[str, Any]]
-
-
-async def _user_message(content: list[dict[str, Any]]) -> AsyncIterator[dict[str, Any]]:
-    """Content blocks as one user message: streaming input, the only mode that takes images."""
-    yield {
-        "type": "user",
-        "message": {"role": "user", "content": content},
-        "parent_tool_use_id": None,
-    }
 
 
 @dataclass
@@ -420,7 +409,7 @@ class ChannelSession:
                 self._sent.append(turn)
                 self._taken = None
                 prompt = turn.prompt
-                await client.query(prompt if isinstance(prompt, str) else _user_message(prompt))
+                await client.query(prompt if isinstance(prompt, str) else user_message(prompt))
                 await turn.done.wait()
             except DirectoryUnavailable as exc:
                 self._taken = None

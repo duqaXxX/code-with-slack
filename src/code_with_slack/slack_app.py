@@ -3,11 +3,11 @@
 import asyncio
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from claude_agent_sdk import SDKSessionInfo
 from slack_bolt.async_app import AsyncAck, AsyncApp
@@ -63,6 +63,7 @@ from code_with_slack.guards import (
     is_prompt_message,
     message_actor,
 )
+from code_with_slack.prompt import Prompt
 from code_with_slack.render.escape import markdown_escape
 from code_with_slack.render.renderer import one_line
 from code_with_slack.render.sinks import FALLBACK_LIMIT, describe, split
@@ -70,7 +71,6 @@ from code_with_slack.resume import RESUME_ACTION, TITLE_LIMIT, matching, resume_
 from code_with_slack.sessions import (
     ChannelSession,
     DirectoryUnavailable,
-    Prompt,
     SessionManager,
     resolve_directory,
 )
@@ -100,8 +100,11 @@ def slack_unescape(text: str) -> str:
     return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
 
-# How a file is downloaded: its URL, its declared type and the size limit, to its bytes.
-Fetch = Callable[[str, str, int], Awaitable[bytes]]
+class Fetch(Protocol):
+    """How a file is downloaded: its URL, its declared type and the size limit, to its bytes.
+    Keywords only: the two strings must never be swapped."""
+
+    async def __call__(self, *, url: str, mimetype: str, limit: int) -> bytes: ...
 
 
 def build_app(
@@ -115,7 +118,7 @@ def build_app(
     uploads: Path,
     fetch: Fetch | None = None,
 ) -> AsyncApp:
-    async def download_file(url: str, mimetype: str, limit: int) -> bytes:
+    async def download_file(*, url: str, mimetype: str, limit: int) -> bytes:
         return await download(url, config.bot_token, mimetype, limit)
 
     fetch_file = fetch or download_file
@@ -193,20 +196,28 @@ def build_app(
         if session is None:
             await tell_owner(channel, texts.UNBOUND.format(root=config.allowed_root))
             return
-        if files or command is None:
-            # Prompts enter the queue in the order they were sent, although files take a while
-            # to download. Every reply goes to the main window, even for a threaded message.
-            async with arrival_order.setdefault(channel, asyncio.Lock()):
-                prompt = await with_attachments(channel, text, files) if files else text
-                if prompt is not None:
-                    await session.submit(prompt)
-        elif isinstance(command, Passthrough):
-            await session.ensure_connected()
-            known = {str(c.get("name")) for c in session.commands}
-            name = command.text.split(" ", 1)[0]
-            await session.submit(f"/{command.text}" if name in known else text)
-        else:
+        if not (files or command is None or isinstance(command, Passthrough)):
             await handle_word(channel, command)
+            return
+        # Prompts and commands for Claude Code enter the queue in the order they were sent,
+        # although files take a while to download. Every reply goes to the main window.
+        directory = session.directory
+        async with arrival_order.setdefault(channel, asyncio.Lock()):
+            prompt = await with_attachments(channel, text, files) if files else text
+            if prompt is None:
+                return
+            # A !bind or a Resume meanwhile closed the session read above: take the channel's
+            # own now, and send nothing if the folder changed under the message.
+            current = sessions.get(channel)
+            if current is None or current.directory != directory:
+                await say(channel, texts.PROMPT_REBOUND)
+                return
+            if isinstance(command, Passthrough):
+                await current.ensure_connected()
+                known = {str(c.get("name")) for c in current.commands}
+                name = command.text.split(" ", 1)[0]
+                prompt = f"/{command.text}" if name in known else text
+            await current.submit(prompt)
 
     async def handle_word(channel: str, command: Word) -> None:
         match command:
@@ -296,7 +307,11 @@ def build_app(
             return None
         fetched = await asyncio.gather(
             *(
-                fetch_file(str(f["url_private_download"]), str(f.get("mimetype")), limit_for(f))
+                fetch_file(
+                    url=str(f["url_private_download"]),
+                    mimetype=str(f.get("mimetype")),
+                    limit=limit_for(f),
+                )
                 for f in files
             ),
             return_exceptions=True,
@@ -318,7 +333,7 @@ def build_app(
                 try:
                     paths.append(await save(uploads, file, data))
                 except DownloadFailed as exc:
-                    await refuse(file, texts.UPLOAD_DOWNLOAD.format(error=exc))
+                    await refuse(file, str(exc))
                     return None
         return prompt_for(text, images, paths)
 

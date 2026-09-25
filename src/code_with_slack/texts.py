@@ -67,6 +67,10 @@ UPLOAD_TOO_MANY = (
 UPLOAD_TOO_HEAVY = (
     "Nothing was sent to Claude: its images total {size}, over the {limit} one message takes."
 )
+PROMPT_REBOUND = (
+    "Nothing was sent to Claude: the channel was bound to another folder while this message "
+    "waited. Send it again if it is meant for the new folder."
+)
 UPLOAD_NOT_SHARED = "is not a file shared in this channel that code-with-slack can download"
 UPLOAD_DOWNLOAD = "could not be downloaded ({error})"
 BIND_LIST = "Folders under `{root}` that Claude Code trusts:"

@@ -11,6 +11,7 @@ title, the time since its last activity, its git branch and its size (sessions r
 import dataclasses
 import heapq
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ from code_with_slack import texts
 from code_with_slack.render.escape import shown_as_written
 from code_with_slack.render.renderer import one_line
 
+logger = logging.getLogger(__name__)
 RESUME_ROWS = 20
 RESUME_ACTION = "session_resume"
 TITLE_LIMIT = 80
@@ -44,7 +46,8 @@ def _last_message_ms(path: Path) -> int | None:
     """The time of the last user or assistant entry in a transcript, read from its end.
 
     `list_sessions` dates a session by its file's mtime, and Claude Code appends bookkeeping
-    entries with no timestamp to old transcripts (artifact ledgers, seen 2026-09-25): a session
+    entries with no timestamp to old transcripts (artifact ledgers, seen 2026-09-25 with the
+    bundled CLI 2.1.280): a session
     untouched for days then reads as minutes old. The terminal's picker shows the last activity,
     so this reads it. The transcript format is not documented; None falls back to the mtime."""
     try:
@@ -75,6 +78,8 @@ def by_last_activity(directory: Path, sessions: list[SDKSessionInfo]) -> list[SD
     Blocking file reads, run it off the event loop."""
     folder = _find_project_dir(_canonicalize_path(str(directory)))
     if folder is None:
+        # Also what a change in the SDK's private helpers would look like: say so.
+        logger.warning("found no transcript folder: session dates fall back to file times")
         return sessions
     by_mtime = sorted(sessions, key=lambda s: s.last_modified, reverse=True)
     dated: list[SDKSessionInfo] = []

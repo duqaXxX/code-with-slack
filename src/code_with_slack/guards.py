@@ -47,8 +47,8 @@ def interaction_actor(body: dict[str, Any]) -> tuple[str | None, str | None]:
 
 
 def is_prompt_message(event: dict[str, Any]) -> bool:
-    """A message a person wrote: no subtype (edits, deletes, joins) but `file_share`, no bot, and
-    some text or a file."""
+    """A message a person wrote: with no subtype, or the subtype `file_share` (any other subtype
+    is an edit, a deletion or a join), from no bot, with some text or a file."""
     return (
         event.get("type") == "message"
         and event.get("subtype", "file_share") == "file_share"

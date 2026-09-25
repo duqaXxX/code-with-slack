@@ -66,8 +66,10 @@ is saved to `$TMPDIR/code-with-slack/` and its path is appended to the prompt, b
 file arrived, so a failed message leaves no copy. The folder must be a directory of this user with
 mode 700, or nothing is written there; at each start the files older than 3 days are removed, so a
 conversation resumed after a restart still finds its files. A refused file or a failed download
-sends nothing and tells the owner which file and why. Messages with files and plain prompts enter
-the queue in the order they were sent, although downloads take a while.
+sends nothing and tells the owner which file and why. Prompts, messages with files and Claude Code
+commands enter the queue in the order they were sent, although downloads take a while. A message
+that waited for its turn is sent to the channel's session as it is then; if a `!bind` moved the
+channel to another folder meanwhile, nothing is sent and the owner is told.
 
 ## Rendering
 

@@ -175,3 +175,14 @@ def test_the_branch_and_the_folder_are_shown_as_written() -> None:
     blocks = resume_blocks(Path("/srv/R&D"), sessions, None, NOW)
     assert "R&amp;D" in blocks[0]["text"]["text"]
     assert "fix/&lt;!here&gt;" in rows(blocks)[0]["text"]["text"]
+
+
+def test_dates_falling_back_to_file_times_are_logged(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A change in the SDK's private helpers must not bring the wrong dates back unnoticed.
+    monkeypatch.setattr(resume, "_find_project_dir", lambda _: None)
+    sessions = [info("68da9311-0000-4000-8000-000000000001", "s", 1)]
+    with caplog.at_level("WARNING"):
+        assert by_last_activity(Path("/srv/dev/app"), sessions) == sessions
+    assert "file times" in caplog.text
