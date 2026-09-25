@@ -164,12 +164,26 @@ channel's directory, the model and the context percentage from the SDK's
 5-hour and weekly limits, and last the last two names of the channel's directory, as a terminal
 status line such as ccstatusline shows the working directory. The effort level is the one Claude Code reports in the input of a
 `Stop` hook the daemon registers on each client (`effort.level`); `/effort` and `/model` run no
-hook, so after one of them the footer follows its output (`Set effort level to ...`). Until a
-level is known, or when the model takes no effort parameter, the footer shows `default`. The limits
+hook, so after one of them the footer follows its output (`Set effort level to ...`). Until Claude
+Code reports a level on the running client the footer leaves it out, and when the model takes no
+effort parameter it shows `default`. The limits
 come from Claude Code's `/usage`, sent on a separate
 long-lived client and cached for five minutes; a rate-limit event from the SDK invalidates the
 cache. The limit fields exist only with a claude.ai subscription. A field that cannot be read is
 left out.
+
+`!status` lists the same values one per line (`Model: ...`, `Context: ...`), read by the same
+`ChannelSession._footer_data` and written from the same list, `footer.footer_fields`, as the
+footer writes them, then the running tasks; bypass and the folder are left out, since its Mode and Directory
+lines show them. It starts the channel's client when none is running, since the model and the
+context come from it (`get_context_usage()` answers before a session's first turn and during a
+turn: measured on claude-agent-sdk 0.2.158, bundled CLI 2.1.280, 2026-09-25). The session tokens
+are those of the client's last result, left out until its first turn and after a result that
+reports none (`/usage`, `/clear`). Claude Code's version comes with a turn's `init` message and not
+with the connect (measured 2026-09-26, same versions), so a client started by `!status` shows
+`started, version shown after the first turn`. When the directory is missing, unreadable or not
+trusted, the status ends with the message a prompt would get there; when the client fails to start
+for another reason, it ends with the error line a prompt would get.
 
 ## Sessions
 

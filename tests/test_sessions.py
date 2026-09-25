@@ -822,6 +822,15 @@ async def test_the_footer_shows_the_effort_claude_code_reports(
     assert "effort medium" in statuses(h)[-1]
 
 
+async def test_the_footer_leaves_out_the_effort_until_claude_code_reports_it(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # A local command's turn (`/usage`) runs no Stop hook: the level is not known yet.
+    h = harness_for({"turns": [sdk_messages("usage")]})
+    await asyncio.wait_for((await h.session().submit("/usage")).done.wait(), 2)
+    assert statuses(h) and "effort" not in statuses(h)[-1]
+
+
 async def test_the_footer_says_default_when_claude_code_reports_no_effort(
     harness_for: Callable[..., Harness],
 ) -> None:
@@ -998,7 +1007,7 @@ async def test_bypass_from_the_folder_s_own_settings_shows_and_turns_off(
     assert statuses(h)[-1].startswith("⚡ bypass")
     await session.set_bypass(False)
     assert h.clients[0].modes[-1] == "default"
-    assert "Mode: `default`" in session.status()
+    assert "Mode: `default`" in await session.status()
     await asyncio.wait_for((await session.submit("again")).done.wait(), 2)
     assert not statuses(h)[-1].startswith("⚡ bypass")
 
@@ -1070,3 +1079,121 @@ async def test_the_footer_names_the_bound_folder(harness_for: Callable[..., Harn
     await asyncio.wait_for((await h.session().submit("list the files")).done.wait(), 2)
     folder = h.tmp_path.resolve()
     assert statuses(h)[-1].endswith(f" · {folder.parent.name}/{folder.name}")
+
+
+async def test_status_lists_the_footer_s_values_of_the_latest_reply(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"turns": [with_stop_hook(sdk_messages("tools"), sdk_json("stop-hook"))]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
+    await until(lambda: h.usage_fetches == 1)  # the turn's own refresh of the limits
+    text = await session.status()
+    assert text.startswith("Directory:") and "Claude Code: `2.1.280`" in text
+    tokens = re.search(r"([\d.]+[kM]?) tok", statuses(h)[-1])
+    assert tokens is not None
+    lines = text.splitlines()
+    assert lines[lines.index("Now: idle") + 1 :] == [
+        "Model: `claude-haiku-4-5-20251001`",
+        "Effort: `medium`",
+        "Context: `7%`",
+        f"Session tokens: `{tokens.group(1)}`",
+        "5h limit: `5%`",
+    ]
+
+
+async def test_status_before_any_turn_starts_the_client_and_leaves_out_the_tokens(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"turns": []})
+    text = await h.session().status()
+    assert len(h.clients) == 1 and h.clients[0].queries == []
+    # The version comes with a turn's `init` message, never on connect (measured 2026-09-26).
+    assert f"Claude Code: `{texts.VERSION_PENDING}`" in text
+    assert "Model: `claude-haiku-4-5-20251001`" in text and "Context: `7%`" in text
+    # Only a turn's Stop hook, or `/effort`, reports the level: the settings do not say it.
+    assert "Session tokens" not in text and "Effort" not in text
+
+
+async def test_status_says_why_claude_code_cannot_start_in_place_of_the_footer_s_values(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"turns": []})
+
+    async def untrusted(directory: Path) -> bool:
+        return False
+
+    h.deps.workspace_trusted = untrusted
+    text = await h.session().status()
+    assert h.clients == []
+    assert "Claude Code: `not started`" in text
+    assert text.endswith(f"Now: idle\n{texts.DIRECTORY_UNTRUSTED.format(directory=h.tmp_path)}")
+
+
+async def test_status_during_a_turn_shows_the_model_and_the_context(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"turns": [sdk_messages("tools")[:-1]]})
+    session = h.session()
+    await session.submit("list the files")
+    await until(lambda: len(h.clients) == 1 and h.clients[0].queries == ["list the files"])
+    text = await session.status()
+    assert texts.ACTIVITY_BUSY.format(queued=0) in text
+    assert "Model: `claude-haiku-4-5-20251001`" in text and "Context: `7%`" in text
+
+
+async def test_status_shows_the_tasks_still_running_as_the_latest_reply_does(
+    harness_for: Callable[..., Harness],
+) -> None:
+    first, _, _ = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    assert statuses(h)[-1].endswith("⏳ 1 shell")
+    assert (await session.status()).endswith("\nBackground: `1 shell`")
+
+
+async def test_status_refreshes_the_usage_limits_and_the_next_one_shows_them(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"turns": []})
+    session = h.session()
+    await session.status()
+    await until(lambda: h.usage_fetches == 1)
+    assert "5h limit: `5%`" in await session.status()
+
+
+async def test_status_after_claude_code_restarts_leaves_out_the_old_process_s_tokens(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"turns": [with_stop_hook(sdk_messages("tools"), sdk_json("stop-hook"))]}, {})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
+    text = await session.status()
+    assert "Session tokens" in text and "Effort: `medium`" in text
+    h.clients[0].inject([EndOfStream()])
+    await until(lambda: session._client is None)
+    text = await session.status()
+    assert len(h.clients) == 2 and "Context: `7%`" in text
+    assert "Session tokens" not in text and "Effort" not in text
+
+
+async def test_status_says_claude_code_s_error_when_it_fails_to_start(
+    harness_for: Callable[..., Harness], caplog: pytest.LogCaptureFixture
+) -> None:
+    h = harness_for({"connect_error": RuntimeError("x")})
+    # The reason a prompt would get in the same state, never less.
+    text = await h.session().status()
+    assert text.endswith(f"Now: idle\n{texts.ERROR_REPLY.format(error='RuntimeError')}")
+    assert "could not read the footer's values for the status" in caplog.text
+
+
+async def test_status_follows_a_reply_that_reports_no_tokens(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"turns": [sdk_messages("tools"), sdk_messages("usage")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("/usage")).done.wait(), 2)
+    assert " tok" not in statuses(h)[-1]
+    assert "Session tokens" not in await session.status()

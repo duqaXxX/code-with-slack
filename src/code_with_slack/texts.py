@@ -98,13 +98,15 @@ STATUS = (
     "Claude Code: `{version}`\nNow: {activity}"
 )
 ACTIVITY_IDLE = "idle"
+VERSION_PENDING = "started, version shown after the first turn"
+STATUS_BACKGROUND = "Background: `{counts}`"
 RUNNING = "⏳ {counts}"
 ACTIVITY_BUSY = "running a turn, {queued} queued"
 HELP_OWN = "**code-with-slack**"
 HELP_WORDS = (
     "`!guide` how code-with-slack works, in a few lines",
     "`!help [text]` this list, or only the lines that contain the text",
-    "`!status` the channel's directory, session and mode",
+    "`!status` the channel's directory, session and mode, then the footer's values",
     "`!stop` stop the running turn and deny its pending approvals",
     "`!bind [folder]` the folders Claude Code trusts, or bind this channel to one, its path "
     "relative to the allowed root",
@@ -180,9 +182,10 @@ When Claude Code asks permission, the request shows what will run, with **Approv
 question from Claude comes with **Answer**, which opens a short form, and **Skip**.
 
 **Sessions**
-`!status` shows the folder, the session and the permission mode. `!stop` stops the running \
-turn. `!resume` lists this folder's twenty newest sessions, from the terminal too, with a \
-**Resume** button each; `!resume <title>` resumes a session that has a title directly.
+`!status` shows the folder, the session, the permission mode and the footer's values. \
+`!stop` stops the running turn. `!resume` lists this folder's twenty newest sessions, from \
+the terminal too, with a **Resume** button each; `!resume <title>` resumes a session that has a \
+title directly.
 
 **Bypass**
 `!bypass on` lets Claude Code run every tool without asking, until `!bypass off` or a restart. \
