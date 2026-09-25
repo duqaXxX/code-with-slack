@@ -42,7 +42,7 @@ From then on:
   from Claude opens a form.
 - `!<command>` runs a Claude Code command, such as `!compact` or `!model opus`. `!help` lists the
   commands the session offers.
-- `!status` shows the channel's directory, session and mode; `!stop` stops the running turn.
+- `!status` shows the channel's directory, session and mode, then the footer's values one per line; `!stop` stops the running turn.
 - `!resume` lists the directory's sessions, from the terminal too, with a Resume button each;
   `!resume <id or name>` resumes one directly.
 - Images and files attached to a message reach Claude: a JPEG, PNG, GIF or WebP image as an

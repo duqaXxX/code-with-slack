@@ -37,7 +37,8 @@ First release.
   3m 59s`).
 - A footer on the channel's latest reply: bypass, git branch, model, effort level, context,
   session tokens, the 5-hour and weekly limits, and the tasks still running (`⏳ 1 shell ·
-  1 agent`). The effort level is the one Claude Code reports to a `Stop` hook.
+  1 agent`). The effort level is the one Claude Code reports to a `Stop` hook. `!status` lists
+  the same values one per line, or says why Claude Code cannot start.
 - Approvals with Approve and Deny buttons; a decided request is removed and the tool's line
   records the call. A clarifying question is one line with Answer and Skip; Answer opens a form
   with one question at a time, radio buttons or checkboxes with each option's description, and

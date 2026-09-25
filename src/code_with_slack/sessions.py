@@ -57,6 +57,7 @@ from code_with_slack.footer import (
     UsageCache,
     effort_change,
     format_footer,
+    format_status_fields,
     git_branch,
     session_tokens,
 )
@@ -253,8 +254,13 @@ class ChannelSession:
         self.cli_version: str | None = None
         self.bypass = False
         # The effort level Claude Code last reported: its Stop hook, or the output of `/effort`
-        # and `/model`, which run no hook. None until then, or for a model without effort.
+        # and `/model`, which run no hook. None for a model without effort.
         self.effort: str | None = None
+        # Whether Claude Code has reported the level since the client started: until then it is
+        # not known, since the settings do not decide it (measured 2026-09-25).
+        self.effort_reported = False
+        # The session's token count as the client's last result reported it, for `!status`.
+        self.session_tokens: int | None = None
 
     @property
     def busy(self) -> bool:
@@ -320,7 +326,9 @@ class ChannelSession:
                 await self._disconnect(client)
                 raise
             self._client = client
-            self.effort = None  # a resumed session runs at the settings' level (measured)
+            # A resumed session runs at the settings' level (measured), unknown until reported.
+            self.effort, self.effort_reported = None, False
+            self.session_tokens = None  # counted by the client process, which starts at zero
             self._reader = asyncio.create_task(self._read(client), name=f"reader-{self.channel_id}")
             return client
 
@@ -343,20 +351,52 @@ class ChannelSession:
         await self._client.interrupt()
         return True
 
-    def status(self) -> str:
+    async def status(self) -> str:
+        """The channel's directory, session and mode, then the footer's values one per line, or
+        why Claude Code cannot start.
+
+        Starts the client like `!help` does, since model and context come from it.
+        """
+        data: FooterData | None = None
+        unavailable: list[str] = []
+        try:
+            await self.ensure_connected()
+            self._refresh_usage()
+            data = await self._footer_data(self.session_tokens)
+        except DirectoryUnavailable as exc:
+            unavailable = [exc.message]
+        except Exception as exc:  # the status still answers, with what a prompt would get
+            logger.warning(
+                "could not read the footer's values for the status in %s: %s",
+                self.channel_id,
+                describe(exc),
+            )
+            unavailable = [texts.ERROR_REPLY.format(error=type(exc).__name__)]
+        fields = format_status_fields(data, datetime.now().astimezone()) if data else []
+        if running := self._running_kinds():
+            fields.append(texts.STATUS_BACKGROUND.format(counts=running))
         stored = self._deps.state.get(self.channel_id)
         activity = (
             texts.ACTIVITY_BUSY.format(queued=self._queue.qsize())
             if self.busy
             else texts.ACTIVITY_IDLE
         )
-        return texts.STATUS.format(
+        text = texts.STATUS.format(
             directory=self.directory,
             session=(stored.session_id if stored else None) or "new",
             mode="bypassPermissions" if self.bypass else self.native_mode,
-            version=self.cli_version or "not started",
+            # Only a turn's `init` message carries the version, never the connect (measured).
+            version=self.cli_version
+            or (texts.VERSION_PENDING if self._client is not None else "not started"),
             activity=activity,
         )
+        return "\n".join([text, *fields, *unavailable])
+
+    def _refresh_usage(self) -> None:
+        """Refresh the usage limits in the background when stale; the next footer shows them."""
+        refresh = asyncio.create_task(self._deps.usage.refresh_if_stale())
+        self._background.add(refresh)
+        refresh.add_done_callback(self._background.discard)
 
     async def close(self, reason: str = texts.ENDED_SHUTDOWN) -> None:
         """Stop the session. Every reply still waiting (running, sent or queued) ends with a line
@@ -402,9 +442,7 @@ class ChannelSession:
             self._taken = turn
             try:
                 client = await self.ensure_connected()
-                refresh = asyncio.create_task(self._deps.usage.refresh_if_stale())
-                self._background.add(refresh)
-                refresh.add_done_callback(self._background.discard)
+                self._refresh_usage()
                 await self._settled.wait()
                 self._sent.append(turn)
                 self._taken = None
@@ -595,16 +633,17 @@ class ChannelSession:
 
     def _running_counts(self) -> str:
         """`⏳ 1 shell · 2 agents`: the tasks that outlived their turn and still run."""
+        kinds = self._running_kinds()
+        return texts.RUNNING.format(counts=kinds) if kinds else ""
+
+    def _running_kinds(self) -> str:
+        """`1 shell · 2 agents`, or empty when no task outlived its turn."""
         counts: dict[str, int] = {}
         for task_id, renderer in self._task_replies.items():
             if task_id in renderer.running_tasks:
                 kind = TASK_KINDS.get(self._tasks.get(task_id, ("", ""))[0], UNKNOWN_KIND)[0]
                 counts[kind] = counts.get(kind, 0) + 1
-        if not counts:
-            return ""
-        return texts.RUNNING.format(
-            counts=" · ".join(f"{n} {kind}{'s' if n > 1 else ''}" for kind, n in counts.items())
-        )
+        return " · ".join(f"{n} {kind}{'s' if n > 1 else ''}" for kind, n in counts.items())
 
     async def _show_running(self) -> None:
         if self._latest is not None:
@@ -626,9 +665,12 @@ class ChannelSession:
                 self._deps.state.set_session(self.channel_id, result.session_id)
             changed, effort = effort_change(result.result or "")
             if changed:
-                self.effort = effort
+                self.effort, self.effort_reported = effort, True
+            # Kept for `!status`, even when this result reports none (`/usage`, `/clear`): the two
+            # lines never disagree.
+            self.session_tokens = session_tokens(result)
             try:
-                footer = await self._footer(result)
+                footer = await self._footer(self.session_tokens)
             except Exception as exc:  # the reply still ends, with no footer
                 logger.warning(
                     "could not build the footer in %s: %s", self.channel_id, describe(exc)
@@ -680,7 +722,13 @@ class ChannelSession:
                 turn.done.set()
             self._settled.set()
 
-    async def _footer(self, result: ResultMessage) -> str | None:
+    async def _footer(self, tokens: int | None) -> str | None:
+        data = await self._footer_data(tokens)
+        return format_footer(data, datetime.now().astimezone()) or None
+
+    async def _footer_data(self, tokens: int | None) -> FooterData:
+        """The footer's values from what the session knows now and `tokens`: the one source for
+        both the footer and `!status`, so the two never disagree."""
         context: dict[str, Any] = {}
         if self._client is not None:
             try:
@@ -689,17 +737,16 @@ class ChannelSession:
                 logger.warning(
                     "could not read the context usage in %s: %s", self.channel_id, describe(exc)
                 )
-        data = FooterData(
+        return FooterData(
             bypass=self.bypass or self.native_mode == "bypassPermissions",
             branch=await git_branch(self.directory),
             model=context.get("model"),
             context_percent=context.get("percentage"),
-            session_tokens=session_tokens(result),
+            session_tokens=tokens,
             usage=self._deps.usage.current,
-            effort=self.effort or "default",
+            effort=(self.effort or "default") if self.effort_reported else None,
             directory=self.directory,
         )
-        return format_footer(data, datetime.now().astimezone()) or None
 
     async def _on_stop(
         self, hook_input: HookInput, tool_use_id: str | None, context: HookContext
@@ -708,6 +755,7 @@ class ChannelSession:
         # StopHookInput; absent when the model takes no effort parameter.
         effort = cast(dict[str, Any], hook_input).get("effort")
         self.effort = effort.get("level") if isinstance(effort, dict) else None
+        self.effort_reported = True
         return {}
 
     async def _can_use_tool(

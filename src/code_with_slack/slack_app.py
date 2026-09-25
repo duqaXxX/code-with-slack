@@ -247,7 +247,7 @@ def build_app(
                             else texts.BYPASS_OFF.format(mode=session.native_mode),
                         )
                     case Status():
-                        await say(channel, session.status())
+                        await say(channel, await session.status())
                     case Stop():
                         await say(
                             channel,

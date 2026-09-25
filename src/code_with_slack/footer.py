@@ -231,27 +231,56 @@ def format_until(delta: timedelta) -> str:
     return f"{hours}h" if hours < 48 else f"{hours // 24}d"
 
 
-def format_footer(data: FooterData, now: datetime) -> str:
-    parts: list[str] = []
-    if data.bypass:
-        parts.append("⚡ bypass")
+def format_limit(limit: Limit, now: datetime) -> str:
+    """`3% ↻ 2h`: the share used, and the time to its reset when known."""
+    if limit.resets_at is None:
+        return f"{limit.percent}%"
+    return f"{limit.percent}% ↻ {format_until(limit.resets_at - now)}"
+
+
+@dataclass(frozen=True)
+class FooterField:
+    """One of the footer's values: `!status` shows `label: value`, the footer `short`."""
+
+    label: str
+    value: str
+    short: str
+
+
+def footer_fields(data: FooterData, now: datetime) -> list[FooterField]:
+    """The values the footer and `!status` both show, in the footer's order; what is not known
+    is left out. One list, so the two never write a value differently."""
+    fields: list[FooterField] = []
     if data.branch:
-        parts.append(mrkdwn_escape(data.branch))
+        fields.append(FooterField("Branch", data.branch, mrkdwn_escape(data.branch)))
     if data.model:
-        parts.append(data.model)
+        fields.append(FooterField("Model", data.model, data.model))
     if data.effort:
-        parts.append(f"effort {data.effort}")
+        fields.append(FooterField("Effort", data.effort, f"effort {data.effort}"))
     if data.context_percent is not None:
-        parts.append(f"ctx {data.context_percent:.0f}%")
+        context = f"{data.context_percent:.0f}%"
+        fields.append(FooterField("Context", context, f"ctx {context}"))
     if data.session_tokens is not None:
-        parts.append(f"{format_tokens(data.session_tokens)} tok")
+        tokens = format_tokens(data.session_tokens)
+        fields.append(FooterField("Session tokens", tokens, f"{tokens} tok"))
     if data.usage and data.usage.session:
-        session = f"5h {data.usage.session.percent}%"
-        if data.usage.session.resets_at is not None:
-            session += f" ↻ {format_until(data.usage.session.resets_at - now)}"
-        parts.append(session)
+        session = format_limit(data.usage.session, now)
+        fields.append(FooterField("5h limit", session, f"5h {session}"))
     if data.usage and data.usage.week:
-        parts.append(f"7d {data.usage.week.percent}%")
+        week = f"{data.usage.week.percent}%"
+        fields.append(FooterField("7d limit", week, f"7d {week}"))
+    return fields
+
+
+def format_status_fields(data: FooterData, now: datetime) -> list[str]:
+    """The footer's values as `!status` lines, one per field; bypass and the folder are left
+    out, since the status's Mode and Directory lines already show them."""
+    return [f"{field.label}: `{field.value}`" for field in footer_fields(data, now)]
+
+
+def format_footer(data: FooterData, now: datetime) -> str:
+    parts = ["⚡ bypass"] if data.bypass else []
+    parts += [field.short for field in footer_fields(data, now)]
     if data.directory is not None:
         # Last, and its last two names, as the owner's terminal status line shows the folder.
         names = [part for part in data.directory.parts if part != data.directory.anchor][-2:]
