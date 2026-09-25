@@ -20,7 +20,8 @@ First release.
   recovery, bypass held in memory, and stop. Shutting down or rebinding a channel ends every
   waiting reply with the reason.
 - Commands typed as `!word` messages: `!help [text]` lists the daemon's words and the session's
-  Claude Code commands, filtered by the text when one is given; `!bind`, `!bypass`, `!status`
+  Claude Code commands, filtered by the text when one is given, each description shown as
+  written; `!bind`, `!bypass`, `!status`
   and `!stop`. Any other `!name` is sent to Claude Code as `/name`. The app registers no slash
   command.
 - Replies in the channel's main window: one message per reply, rewritten about once a second,
@@ -54,5 +55,20 @@ First release.
   model-written text in it is escaped for Slack. The footer shows `⚡ bypass` when the folder's
   own settings start the session in bypass, and `!bypass off` then returns to `default`. Nothing
   the daemon posts gets a link or media preview.
+- `!guide` explains how to use the channel in a few lines; a test fails when a word of the
+  daemon is missing from the guide or from `!help`.
+- `!resume` lists the twenty newest sessions of the channel's directory (terminal and Slack)
+  with a Resume button each, and says when more exist, and `!resume <id or name>` resumes one, as Claude Code's `/resume` does in the
+  terminal.
+- Files attached to a message: JPEG, PNG, GIF and WebP images (up to 7.5 MB and 8000x8000 px,
+  at most 5 and 15 MB per message) reach Claude as image blocks; text, source code, PDF, JSON,
+  XML, YAML and notebook files (up to 100 MB) as the path of a copy in a private temporary
+  folder, kept 3 days. Other image types and other files (archives, Office documents, binaries)
+  are refused. A refused file or a failed
+  download sends nothing and says why. The app needs the `files:read` scope.
+- The footer ends with the channel's folder, by its last two names.
+- `!bind` alone lists `ALLOWED_ROOT` and the folders up to two levels below it that Claude Code
+  trusts, never inside a git repository, with a Bind button each; a click is refused while a
+  turn runs.
 - `!bind` reads a relative path from `ALLOWED_ROOT`; a link Slack made in a message reaches
   Claude Code as typed.

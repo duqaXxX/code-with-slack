@@ -1,5 +1,8 @@
+import asyncio
 import json
+import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -114,3 +117,40 @@ async def test_a_failing_git_is_not_read_as_outside_a_repository(
     trust(home, tmp_path)
     monkeypatch.setenv("PATH", f"{bin_dir}:/bin")
     assert not await workspace_trusted(folder, home)
+
+
+async def test_the_trust_record_is_read_again_only_when_it_changes(
+    tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folder = tmp_path / "notes"
+    folder.mkdir()
+    trust(home, folder)
+    reads: list[str] = []
+    real = json.loads
+    monkeypatch.setattr(json, "loads", lambda text: reads.append("read") or real(text))
+    assert await workspace_trusted(folder, home) and await workspace_trusted(folder, home)
+    assert len(reads) == 1  # a `!bind` list checks many folders against one record
+    trust(home, folder, accepted=False)
+    os.utime(home / ".claude.json", ns=(1, 1))  # a different mtime, as a real write gives
+    assert not await workspace_trusted(folder, home)
+
+
+async def test_a_batch_of_checks_parses_the_record_once(
+    tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folders = [tmp_path / f"f{i}" for i in range(8)]
+    for folder in folders:
+        folder.mkdir()
+    trust(home, *folders)
+    os.utime(home / ".claude.json", ns=(2, 2))  # a record no earlier test cached
+    parses: list[str] = []
+    real = json.loads
+
+    def slow_loads(text: str) -> object:
+        parses.append("parse")
+        time.sleep(0.05)  # a multi-MB record: the other threads arrive meanwhile
+        return real(text)
+
+    monkeypatch.setattr(json, "loads", slow_loads)
+    verdicts = await asyncio.gather(*(workspace_trusted(f, home) for f in folders))
+    assert all(verdicts) and len(parses) == 1

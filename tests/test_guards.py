@@ -69,6 +69,15 @@ def test_only_plain_human_messages_are_prompts() -> None:
     assert not is_prompt_message({**message, "text": ""})
 
 
+def test_a_message_with_a_file_is_a_prompt_even_with_no_text() -> None:
+    # Measured 2026-09-25: a file arrives as subtype file_share, although Slack's reference calls
+    # that subtype legacy.
+    shared = recorded("event_callback-file_share-image")["event"]
+    assert is_prompt_message(shared)
+    assert is_prompt_message({**shared, "text": ""})
+    assert not is_prompt_message({**shared, "bot_id": "B000BOT"})
+
+
 def channel_info(**flags: Any) -> dict[str, Any]:
     info = copy.deepcopy(slack_payload("api-conversations-info"))
     info["channel"].update(flags)
@@ -133,3 +142,12 @@ async def test_a_network_failure_reading_the_channel_is_a_refusal(slack: FakeSla
 
     slack.responses["conversations.info"] = aiohttp.ClientConnectionError("network down")
     assert await ChannelGuard(slack, IDENTITY).refusal(CHANNEL) == texts.REASON_UNREADABLE
+
+
+def test_a_file_share_names_its_workspace_in_the_file() -> None:
+    # Measured 2026-09-25: a file_share event has no `team`; each file carries `user_team`.
+    shared = recorded("event_callback-file_share-image")["event"]
+    assert "team" not in shared
+    assert message_actor(shared) == (OWNER, TEAM)
+    other = {**shared["files"][0], "user_team": OTHER_TEAM}
+    assert message_actor({**shared, "files": [*shared["files"], other]}) == (OWNER, None)

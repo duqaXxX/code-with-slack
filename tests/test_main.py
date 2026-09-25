@@ -46,6 +46,7 @@ def test_the_manifest_asks_for_the_minimum() -> None:
     manifest = json.loads((ROOT / "slack-app-manifest.json").read_text())
     assert sorted(manifest["oauth_config"]["scopes"]["bot"]) == [
         "chat:write",
+        "files:read",  # downloading the files attached to a message (the maintainer, 2026-09-25)
         "groups:history",
         "groups:read",
     ]

@@ -15,7 +15,8 @@
       "bot": [
         "groups:history",
         "groups:read",
-        "chat:write"
+        "chat:write",
+        "files:read"
       ]
     },
     "pkce_enabled": false

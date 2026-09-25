@@ -191,3 +191,35 @@ async def test_a_usage_probe_with_no_answer_gives_up_and_closes(
     with pytest.raises(TimeoutError):
         await probe()
     assert clients[0].connected is False  # the next refresh starts from a clean client
+
+
+@pytest.mark.parametrize(
+    ("directory", "shown"),
+    [("/srv/alice/code/app", "code/app"), ("/app", "app"), ("/", None)],
+)
+def test_the_footer_ends_with_the_folder_s_last_two_names(directory: str, shown: str) -> None:
+    # As the owner's terminal status line shows it (ccstatusline current-working-dir, 2 segments;
+    # the maintainer, 2026-09-25).
+    data = FooterData(
+        bypass=False,
+        branch="main",
+        model=None,
+        context_percent=None,
+        session_tokens=None,
+        usage=None,
+        directory=Path(directory),
+    )
+    assert format_footer(data, NOW) == " · ".join(p for p in ("main", shown) if p)
+
+
+def test_the_folder_and_the_branch_are_shown_as_written() -> None:
+    data = FooterData(
+        bypass=False,
+        branch="fix/<a>&b",
+        model=None,
+        context_percent=None,
+        session_tokens=None,
+        usage=None,
+        directory=Path("/srv/alice/R&D/<x>"),
+    )
+    assert format_footer(data, NOW) == "fix/&lt;a&gt;&amp;b · R&amp;D/&lt;x&gt;"

@@ -16,6 +16,7 @@ from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
 from code_with_slack import texts
+from code_with_slack.render.escape import mrkdwn_escape
 from code_with_slack.render.renderer import STOPPED, TaskUpdate
 
 logger = logging.getLogger(__name__)
@@ -61,11 +62,6 @@ def spacer(where: str) -> dict[str, Any]:
 
 SPACER_ABOVE = spacer("above")
 SPACER_BELOW = spacer("below")
-
-
-def mrkdwn_escape(text: str) -> str:
-    """Slack's mrkdwn reads `&`, `<` and `>` as markup; a tool's title is shown as written."""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def tools_block(lines: list[str], index: int) -> dict[str, Any]:

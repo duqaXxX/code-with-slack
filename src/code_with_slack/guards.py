@@ -29,7 +29,13 @@ def is_owner(identity: Identity, user_id: str | None, team_id: str | None) -> bo
 
 
 def message_actor(event: dict[str, Any]) -> tuple[str | None, str | None]:
-    return event.get("user"), event.get("team")
+    """The user and the workspace of a message. A file_share event has no `team` (measured
+    2026-09-25): its files name the uploader's workspace, and must all name the same one."""
+    team = event.get("team")
+    if team is None and event.get("files"):
+        teams = {file.get("user_team") for file in event["files"]}
+        team = teams.pop() if len(teams) == 1 else None
+    return event.get("user"), team
 
 
 def interaction_actor(body: dict[str, Any]) -> tuple[str | None, str | None]:
@@ -41,12 +47,13 @@ def interaction_actor(body: dict[str, Any]) -> tuple[str | None, str | None]:
 
 
 def is_prompt_message(event: dict[str, Any]) -> bool:
-    """A plain message a person typed: no subtype (edits, deletes, joins), no bot, some text."""
+    """A message a person wrote: no subtype (edits, deletes, joins) but `file_share`, no bot, and
+    some text or a file."""
     return (
         event.get("type") == "message"
-        and "subtype" not in event
+        and event.get("subtype", "file_share") == "file_share"
         and "bot_id" not in event
-        and bool((event.get("text") or "").strip())
+        and bool((event.get("text") or "").strip() or event.get("files"))
     )
 
 

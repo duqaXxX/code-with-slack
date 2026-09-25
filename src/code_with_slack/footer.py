@@ -14,6 +14,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage
 
+from code_with_slack.render.escape import mrkdwn_escape
+
 if TYPE_CHECKING:  # sessions imports this module
     from code_with_slack.sessions import ClaudeClient
 
@@ -210,6 +212,7 @@ class FooterData:
     session_tokens: int | None
     usage: Usage | None
     effort: str | None = None
+    directory: Path | None = None
 
 
 def format_tokens(count: int) -> str:
@@ -233,7 +236,7 @@ def format_footer(data: FooterData, now: datetime) -> str:
     if data.bypass:
         parts.append("⚡ bypass")
     if data.branch:
-        parts.append(data.branch)
+        parts.append(mrkdwn_escape(data.branch))
     if data.model:
         parts.append(data.model)
     if data.effort:
@@ -249,4 +252,9 @@ def format_footer(data: FooterData, now: datetime) -> str:
         parts.append(session)
     if data.usage and data.usage.week:
         parts.append(f"7d {data.usage.week.percent}%")
+    if data.directory is not None:
+        # Last, and its last two names, as the owner's terminal status line shows the folder.
+        names = data.directory.parts[1:][-2:]
+        if names:
+            parts.append(mrkdwn_escape("/".join(names)))
     return " · ".join(parts)

@@ -1,0 +1,85 @@
+{
+  "team_id": "T000TEAM",
+  "context_team_id": "T000TEAM",
+  "context_enterprise_id": null,
+  "api_app_id": "A000APP",
+  "event": {
+    "type": "message",
+    "text": "Summarize this file.",
+    "files": [
+      {
+        "id": "F000FILE",
+        "created": 1790350304,
+        "timestamp": 1790350304,
+        "mimetype": "text/plain",
+        "filetype": "text",
+        "pretty_type": "Plain Text",
+        "user": "U000ALICE",
+        "user_team": "T000TEAM",
+        "editable": true,
+        "size": 5,
+        "mode": "snippet",
+        "is_external": false,
+        "external_type": "",
+        "is_public": false,
+        "public_url_shared": false,
+        "display_as_bot": false,
+        "username": "",
+        "name": "notes.txt",
+        "title": "notes.txt",
+        "is_modified_by_ai": false,
+        "url_private": "https://files.slack.com/files-pri/T000TEAM-F000FILE/notes.txt",
+        "url_private_download": "https://files.slack.com/files-pri/T000TEAM-F000FILE/download/notes.txt",
+        "permalink": "https://example.slack.com/files/U000ALICE/F000FILE/notes.txt",
+        "permalink_public": "https://slack-files.com/T000TEAM-F000FILE-0000000000",
+        "edit_link": "https://example.slack.com/files/U000ALICE/F000FILE/notes.txt/edit",
+        "preview": "hello\n",
+        "lines": 2,
+        "lines_more": 0,
+        "preview_is_truncated": false,
+        "skipped_shares": true,
+        "has_rich_preview": false,
+        "file_access": "visible"
+      }
+    ],
+    "upload": false,
+    "user": "U000ALICE",
+    "display_as_bot": false,
+    "blocks": [
+      {
+        "type": "rich_text",
+        "block_id": "b0000",
+        "elements": [
+          {
+            "type": "rich_text_section",
+            "elements": [
+              {
+                "type": "text",
+                "text": "Summarize this file."
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "ts": "1790350306.267839",
+    "client_msg_id": "00000000-0000-4000-8000-000000000001",
+    "channel": "C000CHAN",
+    "subtype": "file_share",
+    "event_ts": "1790350306.267839",
+    "channel_type": "group"
+  },
+  "type": "event_callback",
+  "event_id": "Ev000EVENT",
+  "event_time": 1790350306,
+  "authorizations": [
+    {
+      "enterprise_id": null,
+      "team_id": "T000TEAM",
+      "user_id": "U000BOT",
+      "is_bot": true,
+      "is_enterprise_install": false
+    }
+  ],
+  "is_ext_shared_channel": false
+}

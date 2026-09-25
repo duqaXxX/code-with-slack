@@ -13,8 +13,10 @@ The record is `projects["<path>"].hasTrustDialogAccepted` in `~/.claude.json`.
 """
 
 import asyncio
+import functools
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -59,20 +61,38 @@ async def repository_root(directory: Path) -> Path | None:
     return Path(top) if top else None
 
 
-def _trusted_paths(home: Path) -> set[str]:
+def _trusted_paths(home: Path) -> frozenset[str]:
+    record = home / ".claude.json"
     try:
-        record: Any = json.loads((home / ".claude.json").read_text())
+        stat = record.stat()
+    except OSError as exc:
+        logger.warning("could not read Claude Code's trusted folders: %s", type(exc).__name__)
+        return frozenset()
+    # The checks of a `!bind` list run in parallel threads: one parses, the others wait for it.
+    with _READING:
+        return _read_trusted(record, stat.st_mtime_ns, stat.st_size)
+
+
+_READING = threading.Lock()
+
+
+# A `!bind` list checks many folders in a row: the record, several MB, is parsed again only once
+# it has changed on disk.
+@functools.lru_cache(maxsize=1)
+def _read_trusted(record_path: Path, mtime_ns: int, size: int) -> frozenset[str]:
+    try:
+        record: Any = json.loads(record_path.read_text())
     except (OSError, ValueError) as exc:
         logger.warning("could not read Claude Code's trusted folders: %s", type(exc).__name__)
-        return set()
+        return frozenset()
     projects = record.get("projects") if isinstance(record, dict) else None
     if not isinstance(projects, dict):
-        return set()
-    return {
+        return frozenset()
+    return frozenset(
         path
         for path, state in projects.items()
         if isinstance(state, dict) and state.get("hasTrustDialogAccepted") is True
-    }
+    )
 
 
 def _covered(directory: Path, root: Path | None, home: Path) -> bool:

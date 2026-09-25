@@ -31,17 +31,26 @@ the security checklist.
 
 ## Usage
 
-In a private channel with only you and the bot, `!bind <path>` binds the channel to a directory.
+In a private channel with only you and the bot, `!guide` explains how the channel works and
+`!bind <path>` binds it to a directory.
 From then on:
 
 - A message is a prompt. The reply appears below it and grows as Claude works: Claude's text, a
   line per tool call, subagent and background task, and a footer with the branch, the model, the
-  effort level, the context used and the usage limits.
+  effort level, the context used, the usage limits and the channel's folder.
 - Whatever Claude Code asks approval for arrives as **Approve** and **Deny** buttons; a question
   from Claude opens a form.
 - `!<command>` runs a Claude Code command, such as `!compact` or `!model opus`. `!help` lists the
   commands the session offers.
 - `!status` shows the channel's directory, session and mode; `!stop` stops the running turn.
+- `!resume` lists the directory's sessions, from the terminal too, with a Resume button each;
+  `!resume <id or name>` resumes one directly.
+- Images and files attached to a message reach Claude: a JPEG, PNG, GIF or WebP image as an
+  image; a text, code, PDF, JSON, XML, YAML or notebook file as a path to a copy saved in a
+  private temporary folder. Any other file, and any file past a limit, stops the message, with
+  the reason.
+- `!bind` lists the folders under `ALLOWED_ROOT` that Claude Code trusts, with a Bind button
+  each; `!bind <folder>` binds one directly.
 - `!bypass on` switches the channel to `bypassPermissions` until `!bypass off` or a restart.
 
 The full list is in [docs/setup.md](docs/setup.md#using-it).
