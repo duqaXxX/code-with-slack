@@ -94,7 +94,9 @@ it stays at the bottom of the channel as the terminal's status line. A reply lon
 Slack's native streaming API (`chat.startStream`) is not used: in an ordinary channel it works
 only inside a thread, and replies belong in the main window. A write Slack refuses, or cannot
 receive because the network is down, is retried with the whole reply at the next rewrite; it never
-stops the Claude Code session. The final rewrite has no next one: when Slack refuses its content
+stops the Claude Code session. Every message the daemon posts turns link and media previews off
+(`unfurl_links`, `unfurl_media`), so a link in Claude's text is never fetched by Slack on its
+own. The final rewrite has no next one: when Slack refuses its content
 (`invalid_blocks`, `msg_too_long` and the like, not a rate limit), that message is written once
 more as plain text, its text and the footer with no blocks, and the rewrite goes on to the next
 messages, so none keeps saying `Claude is writing…`. A final rewrite that fails for any other
@@ -105,7 +107,12 @@ reason (the network, or a rate limit slack-sdk has already retried) is tried onc
 
 When Claude Code asks for permission, the SDK calls `can_use_tool`. The session posts the
 request as a message of its own, below the reply, with **Approve** and **Deny** buttons, and waits, for as long as it
-takes. A clarifying question (Claude Code's `AskUserQuestion` tool, 1 to 4 questions) arrives the
+takes. The request shows the tool's whole input, since Approve hands Claude Code the whole input:
+it runs over as many code blocks as it needs, and past one message it keeps the start and the
+end with a line saying how many characters are not shown. Everything the model wrote (the
+title, the description, the input, a question's header) goes to Slack with `&`, `<` and `>`
+escaped and a zero-width space after each backtick, so no `<url|label>` can hide what it links
+and no text can close its code block. A clarifying question (Claude Code's `AskUserQuestion` tool, 1 to 4 questions) arrives the
 same way and is posted as one line naming the questions, with **Answer** and **Skip**. Answer
 opens a modal (`approvals.question_view`) that shows one question at a time, since Slack has
 no tabs: radio buttons, or checkboxes when several may be picked, each option with its
@@ -141,13 +148,24 @@ left out.
 
 `code_with_slack.sessions.SessionManager` keeps one `ChannelSession` per bound channel.
 
-- The Claude Agent SDK client is created on first use, with the channel's directory as its
+- The Claude Agent SDK client is created on first use, and only in a folder the owner has
+  trusted in Claude Code. An SDK session never shows Claude Code's trust dialog and counts as
+  trusted, so a repository's own hooks, `env` block and allow rules would apply at once.
+  `code_with_slack.trust.workspace_trusted` reads Claude Code's record
+  (`projects["<path>"].hasTrustDialogAccepted` in `~/.claude.json`) by Claude Code's rules: in a
+  git repository the repository root decides (the main checkout's root for a worktree) and a
+  trusted parent does not cover it; outside git, a trusted folder covers its subdirectories. A
+  folder git cannot answer about (git missing or failing) counts as untrusted. An untrusted
+  folder starts nothing, and the reply says to open `claude` there in the terminal
+  once and accept the dialog.
+- The client has the channel's directory as its
   working directory, `resume` set to the stored session id, the owner's own settings
   (`setting_sources` user, project and local), streaming of partial messages, the approval
   callback, and `--allow-dangerously-skip-permissions`, which makes `!bypass on` possible
   without turning it on.
 - After connecting, `get_server_info()` gives the commands the session offers (for `!help` and
-  `!`) and the permission mode that `!bypass off` returns to.
+  `!`) and the permission mode that `!bypass off` returns to, or `default` when the folder's own
+  settings start it in `bypassPermissions`. The footer shows `⚡ bypass` in either case.
 - If the stored session cannot be resumed (its transcript was deleted), the session id is
   cleared, a new session starts, and the reply opens with a line saying so. If the channel's
   directory no longer exists, nothing starts and the reply asks to bind the channel again. If

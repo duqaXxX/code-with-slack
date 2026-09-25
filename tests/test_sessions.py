@@ -59,6 +59,9 @@ class Harness:
         self.usage_fetches = 0
         self._scripts = scripts
 
+        async def trusted(directory: Path) -> bool:
+            return True
+
         async def fetch() -> str:
             self.usage_fetches += 1
             return "Current session: 5% used"
@@ -70,6 +73,7 @@ class Harness:
             approvals=self.approvals,
             usage=UsageCache(fetch),
             client_factory=self.factory,
+            workspace_trusted=trusted,
         )
         self.manager = SessionManager(self.deps)
 
@@ -967,3 +971,47 @@ def test_a_relative_bind_path_is_read_under_the_allowed_root(tmp_path: Path) -> 
     (tmp_path / "app").mkdir()
     assert resolve_directory("app", tmp_path) == (tmp_path / "app").resolve()
     assert resolve_directory("../", tmp_path / "app") is None
+
+
+async def test_a_folder_claude_code_does_not_trust_is_not_started(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"turns": [sdk_messages("tools")]})
+
+    async def untrusted(directory: Path) -> bool:
+        return False
+
+    h.deps.workspace_trusted = untrusted
+    turn = await h.session().submit("list the files")
+    await asyncio.wait_for(turn.done.wait(), 2)
+    assert h.clients == []  # no Claude Code process, so no hook of the folder's ran
+    assert "trust" in h.written_text()
+
+
+async def test_bypass_from_the_folder_s_own_settings_shows_and_turns_off(
+    harness_for: Callable[..., Harness],
+) -> None:
+    info = {"commands": [], "current_permission_mode": "bypassPermissions"}
+    h = harness_for({"turns": [sdk_messages("tools"), sdk_messages("tools")], "server_info": info})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
+    assert statuses(h)[-1].startswith("⚡ bypass")
+    await session.set_bypass(False)
+    assert h.clients[0].modes[-1] == "default"
+    assert "Mode: `default`" in session.status()
+    await asyncio.wait_for((await session.submit("again")).done.wait(), 2)
+    assert not statuses(h)[-1].startswith("⚡ bypass")
+
+
+async def test_every_message_is_posted_without_link_previews(
+    harness_for: Callable[..., Harness],
+) -> None:
+    ask = CanUseToolCall("Bash", {"command": "ls"})
+    h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
+    turn = await h.session().submit("list the files")
+    await until(lambda: len(h.approvals._pending) == 1)
+    h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, Approve())
+    await asyncio.wait_for(turn.done.wait(), 2)
+    posts = h.slack.calls_to("chat.postMessage")
+    assert len(posts) >= 2
+    assert all(p.get("unfurl_links") is False and p.get("unfurl_media") is False for p in posts)

@@ -20,8 +20,10 @@ from claude_agent_sdk.types import (
 
 from code_with_slack import texts
 from code_with_slack.render.renderer import one_line
+from code_with_slack.render.sinks import mrkdwn_escape
 
 SECTION_LIMIT = 3000
+MESSAGE_BLOCKS = 50  # Slack's limit on blocks in one message
 OPTION_TEXT_LIMIT = 75
 LABEL_LIMIT = 2000  # an input block's label
 
@@ -113,24 +115,59 @@ def _button(action_id: str, label: str, value: str, style: str | None = None) ->
     return button
 
 
+def shown_as_written(text: str) -> str:
+    """Model-written text for mrkdwn, shown as written: `&`, `<` and `>` escaped, so no
+    `<url|label>` can hide what it links, and a zero-width space after each backtick, so no
+    run of three can close a code block."""
+    return mrkdwn_escape(text).replace("`", "`\u200b")
+
+
+def _code_chunks(text: str, limit: int) -> list[str]:
+    """`text` in pieces that each fit `limit` once shown as written, never splitting an escape."""
+    chunks: list[str] = []
+    chunk, size = "", 0
+    for char in text:
+        width = len(shown_as_written(char))
+        if size + width > limit:
+            chunks.append(chunk)
+            chunk, size = "", 0
+        chunk += char
+        size += width
+    return [*chunks, chunk] if chunk or not chunks else chunks
+
+
 def approval_blocks(
     approval_id: str, tool_name: str, tool_input: dict[str, Any], context: ToolPermissionContext
 ) -> list[dict[str, Any]]:
-    heading = context.title or texts.APPROVAL_PROMPT.format(tool=tool_name)
-    detail = json.dumps(tool_input, indent=2, ensure_ascii=False)
-    code = "```\n" + detail[: SECTION_LIMIT - 10] + "\n```"
+    """The request the owner approves: everything the tool will run with, never cut silently,
+    since Approve hands Claude Code the whole input whatever was shown."""
+    heading = (
+        shown_as_written(context.title)
+        if context.title
+        else texts.APPROVAL_PROMPT.format(tool=shown_as_written(tool_name))
+    )
     blocks: list[dict[str, Any]] = [
         {"type": "section", "text": {"type": "mrkdwn", "text": heading[:SECTION_LIMIT]}}
     ]
     if context.description:
-        blocks.append(
-            {
-                "type": "context",
-                "elements": [{"type": "mrkdwn", "text": context.description[:SECTION_LIMIT]}],
-            }
-        )
+        description = shown_as_written(context.description)[:SECTION_LIMIT]
+        blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": description}]})
+    detail = json.dumps(tool_input, indent=2, ensure_ascii=False)
+    chunks = _code_chunks(detail, SECTION_LIMIT - len("```\n\n```"))
+    room = MESSAGE_BLOCKS - len(blocks) - 1  # the actions block closes the message
+    if len(chunks) > room:
+        # Past one message, the start and the end stay (a payload hides at the end of padding)
+        # and a line says how much is not shown, so the owner can Deny rather than guess.
+        head, tail = chunks[: room - 2], chunks[-1]
+        hidden = sum(len(c) for c in chunks[room - 2 : -1])
+        notice = texts.APPROVAL_CUT.format(count=f"{hidden:,}")
+        code_blocks = [_code(c) for c in head]
+        code_blocks += [{"type": "context", "elements": [{"type": "mrkdwn", "text": notice}]}]
+        code_blocks += [_code(tail)]
+    else:
+        code_blocks = [_code(c) for c in chunks]
     blocks += [
-        {"type": "section", "text": {"type": "mrkdwn", "text": code}},
+        *code_blocks,
         {
             "type": "actions",
             "elements": [
@@ -142,6 +179,13 @@ def approval_blocks(
     return blocks
 
 
+def _code(chunk: str) -> dict[str, Any]:
+    return {
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": f"```\n{shown_as_written(chunk)}\n```"},
+    }
+
+
 QUESTION_FORM = "question_form"
 # Text typed under Other, per question: four at the worst (every character escaped, `"` becoming
 # `\"`) still keep the draft under private_metadata's 3,000 characters.
@@ -151,7 +195,9 @@ TYPED_LIMIT = 300
 def question_blocks(approval_id: str, questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The request in the channel: one line naming the questions, with Answer (which opens the
     form) and Skip. It stays one line however many questions Claude asks."""
-    headers = " · ".join(f"*{q.get('header') or q['question']}*" for q in questions)
+    headers = " · ".join(
+        f"*{shown_as_written(q.get('header') or q['question'])}*" for q in questions
+    )
     count = (
         texts.QUESTIONS_ONE
         if len(questions) == 1
@@ -278,7 +324,7 @@ def question_view(draft: Draft, questions: list[dict[str, Any]]) -> dict[str, An
     blocks: list[dict[str, Any]] = []
     count = len(questions)
     if count > 1:
-        header = questions[draft.active].get("header") or ""
+        header = shown_as_written(questions[draft.active].get("header") or "")
         where = texts.QUESTION_WHERE.format(number=draft.active + 1, count=count)
         line = f"{header} · {where}" if header else where
         blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": line}]})
