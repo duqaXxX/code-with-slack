@@ -34,8 +34,9 @@ All notable changes to this project are documented here. The format follows
   stays open; a second signal, or `SIGINT`, stops without waiting. The documented restart command is
   `launchctl kill TERM`, which returns at once, so a session running from Slack can restart the
   daemon and still finish its turn.
-- `claude-agent-sdk` 0.2.159, which bundles Claude Code 2.1.281 (was 0.2.158 with 2.1.280). The
-  SDK streams in `tests/fixtures/sdk/` are recorded again on 2.1.281.
+- `claude-agent-sdk` 0.2.160, which bundles Claude Code 2.1.283 (was 0.2.158 with 2.1.280). The
+  SDK streams in `tests/fixtures/sdk/` are recorded again on 2.1.283; the subagent stream now runs
+  to the agent's end instead of stopping at the first result.
 
 ### Added
 

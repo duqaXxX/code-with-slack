@@ -72,7 +72,7 @@
     {
       "name": "doctor",
       "description": "Health-check the user's Claude Code setup and fix issues: diagnose installation health \u2014 what the `claude doctor` terminal diagnostics cover \u2014 from local data (duplicate or leftover installs, PATH, unparseable settings files, broken or colliding agent definitions, skills whose frontmatter fails to parse); find unused skills, MCP servers, and plugins versus their context cost and disable dead weight; deduplicate local CLAUDE.md files against checked-in ones; trim checked-in CLAUDE.md files by cutting content a session could derive from the codebase (directory layouts, tech-stack lists, architecture overviews) while keeping gotchas, rationale, and non-standard conventions; migrate always-loaded CLAUDE.md guidance into lazy skills and nested CLAUDE.md files; flag slow hooks and context-heavy extensions; check the installed version is current; make auto mode the default permission mode; and pre-approve frequently denied read-only commands. Use when the user asks for a doctor run, checkup, audit, tune-up, or cleanup of their Claude Code setup or configuration.",
-      "argumentHint": "",
+      "argumentHint": "[prompt-audit [<path>]]",
       "aliases": [
         "checkup"
       ],
@@ -391,9 +391,9 @@
   "models": [
     {
       "value": "default",
-      "resolvedModel": "claude-opus-5-5[1m]",
+      "resolvedModel": "claude-opus-5-5",
       "displayName": "Default (recommended)",
-      "description": "Opus 5.5 with 1M context \u00b7 Best for everyday, complex tasks",
+      "description": "Opus 5.5 \u00b7 Best for everyday, complex tasks",
       "supportsEffort": true,
       "supportedEffortLevels": [
         "low",
@@ -407,10 +407,10 @@
       "supportsAutoMode": true
     },
     {
-      "value": "opus[1m]",
-      "resolvedModel": "claude-opus-5-5[1m]",
-      "displayName": "Opus (1M context)",
-      "description": "Opus 5.5 with 1M context \u00b7 Best for everyday, complex tasks",
+      "value": "opus",
+      "resolvedModel": "claude-opus-5-5",
+      "displayName": "Opus 5.5",
+      "description": "Most capable for ambitious work",
       "supportsEffort": true,
       "supportedEffortLevels": [
         "low",
@@ -424,10 +424,10 @@
       "supportsAutoMode": true
     },
     {
-      "value": "claude-fable-5-1[1m]",
+      "value": "claude-fable-5-1",
       "resolvedModel": "claude-fable-5-1",
-      "displayName": "Fable",
-      "description": "Fable 5.1 \u00b7 Most capable for your hardest and longest-running tasks",
+      "displayName": "Fable 5.1",
+      "description": "For your toughest challenges",
       "supportsEffort": true,
       "supportedEffortLevels": [
         "low",
@@ -442,8 +442,8 @@
     {
       "value": "sonnet",
       "resolvedModel": "claude-sonnet-5",
-      "displayName": "Sonnet",
-      "description": "Sonnet 5 \u00b7 Efficient for routine tasks",
+      "displayName": "Sonnet 5",
+      "description": "Most efficient for everyday tasks",
       "supportsEffort": true,
       "supportedEffortLevels": [
         "low",
@@ -458,11 +458,107 @@
     {
       "value": "haiku",
       "resolvedModel": "claude-haiku-4-5-20251001",
-      "displayName": "Haiku",
-      "description": "Haiku 4.5 \u00b7 Fastest for quick answers"
+      "displayName": "Haiku 4.5",
+      "description": "Fastest for quick answers"
+    },
+    {
+      "value": "claude-opus-5",
+      "resolvedModel": "claude-opus-5",
+      "displayName": "Opus 5",
+      "description": "Best for everyday, complex tasks",
+      "supportsEffort": true,
+      "supportedEffortLevels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "supportsAdaptiveThinking": true,
+      "supportsFastMode": true,
+      "supportsAutoMode": true
+    },
+    {
+      "value": "claude-fable-5",
+      "resolvedModel": "claude-fable-5",
+      "displayName": "Fable 5",
+      "description": "Most capable for your hardest and longest-running tasks",
+      "supportsEffort": true,
+      "supportedEffortLevels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "supportsAdaptiveThinking": true,
+      "supportsAutoMode": true
+    },
+    {
+      "value": "claude-opus-4-8",
+      "resolvedModel": "claude-opus-4-8",
+      "displayName": "Opus 4.8",
+      "description": "Best for everyday, complex tasks",
+      "supportsEffort": true,
+      "supportedEffortLevels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "supportsAdaptiveThinking": true,
+      "supportsFastMode": true,
+      "supportsAutoMode": true
+    },
+    {
+      "value": "claude-opus-4-7",
+      "resolvedModel": "claude-opus-4-7",
+      "displayName": "Opus 4.7",
+      "description": "Best for everyday, complex tasks",
+      "supportsEffort": true,
+      "supportedEffortLevels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "supportsAdaptiveThinking": true,
+      "supportsAutoMode": true
+    },
+    {
+      "value": "claude-opus-4-6",
+      "resolvedModel": "claude-opus-4-6",
+      "displayName": "Opus 4.6",
+      "description": "Best for everyday, complex tasks",
+      "supportsEffort": true,
+      "supportedEffortLevels": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
+      "supportsAdaptiveThinking": true,
+      "supportsAutoMode": true
+    },
+    {
+      "value": "claude-sonnet-4-6",
+      "resolvedModel": "claude-sonnet-4-6",
+      "displayName": "Sonnet 4.6",
+      "description": "Efficient for routine tasks",
+      "supportsEffort": true,
+      "supportedEffortLevels": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
+      "supportsAdaptiveThinking": true,
+      "supportsAutoMode": true
     }
   ],
-  "pid": 26724,
+  "pid": 74364,
   "current_permission_mode": "bypassPermissions",
   "analytics_disabled": false,
   "remote_control_auto_enable": false,
