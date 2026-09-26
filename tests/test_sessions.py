@@ -1265,17 +1265,43 @@ async def test_a_second_signal_cuts_the_stop_short(harness_for: Callable[..., Ha
 
 
 async def test_a_stop_waits_for_a_background_task_and_the_turn_that_reports_it(
-    harness_for: Callable[..., Harness],
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(sessions, "DRAIN_POLL_SECONDS", 0.01)
     first, notice, injected = split_background()
+    ended = [m for m in notice if not isinstance(m, TaskNotificationMessage)]
+    notification = [m for m in notice if isinstance(m, TaskNotificationMessage)]
     h = harness_for({"turns": [first]})
     await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
     drained = asyncio.create_task(h.manager.drain(asyncio.Event()))
     await asyncio.sleep(0.05)
     assert not drained.done()  # the task still runs
-    h.clients[0].inject(notice)
+    # Live, the terminal task_updated came a moment before the notification (2026-09-26): the
+    # task's line is closed, yet the turn that reports it has not started.
+    h.clients[0].inject(ended)
+    await asyncio.sleep(0.1)
+    assert not drained.done()
+    h.clients[0].inject(notification)
     await asyncio.sleep(0.05)
     assert not drained.done()  # Claude Code is expected to report it
     h.clients[0].inject(injected)
     await asyncio.wait_for(drained, 2)
     assert any(is_report(r) for r in h.replies())
+
+
+async def test_a_stop_waits_only_a_while_for_a_notification_that_never_comes(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A task stopped with TaskStop can end with no notification (SDK TaskUpdatedMessage docstring).
+    monkeypatch.setattr(sessions, "DRAIN_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.2)
+    first, notice, _ = split_background()
+    ended = [m for m in notice if not isinstance(m, TaskNotificationMessage)]
+    h = harness_for({"turns": [first]})
+    await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
+    h.clients[0].inject(ended)
+    await asyncio.sleep(0.05)
+    drained = asyncio.create_task(h.manager.drain(asyncio.Event()))
+    await asyncio.sleep(0.05)
+    assert not drained.done()
+    await asyncio.wait_for(drained, 1)

@@ -25,6 +25,7 @@ from claude_agent_sdk import (
     list_sessions,
 )
 from claude_agent_sdk.types import (
+    TERMINAL_TASK_STATUSES,
     CanUseTool,
     HookCallback,
     HookContext,
@@ -245,6 +246,10 @@ class ChannelSession:
         # end lines that open Claude Code's next turn of its own, the one that reports them.
         self._tasks: dict[str, tuple[str, str]] = {}
         self._ended: list[str] = []
+        # Tasks whose end arrived without their notification yet, by the loop time it arrived:
+        # the notification starts the turn that reports them. The CLI can suppress it (SDK
+        # TaskUpdatedMessage docstring), so a stop waits for it only INJECTED_TURN_WAIT.
+        self._unreported: dict[str, float] = {}
         # Clear while a background notification's own turn is expected or running: the owner's
         # next query waits, so the two replies never share a thread.
         self._settled = asyncio.Event()
@@ -281,6 +286,13 @@ class ChannelSession:
             and self._queue.empty()
             and self._settled.is_set()
         )
+
+    @property
+    def reporting(self) -> bool:
+        """A task ended less than INJECTED_TURN_WAIT ago and the notification that makes Claude
+        Code report it has not come yet."""
+        now = asyncio.get_running_loop().time()
+        return any(now - ended < INJECTED_TURN_WAIT for ended in self._unreported.values())
 
     async def fail_queued(self, line: str) -> None:
         """End every queued turn's reply with `line`, and release whoever waits on them."""
@@ -507,7 +519,14 @@ class ChannelSession:
                 del self._tasks[next(iter(self._tasks))]
         if isinstance(message, TaskNotificationMessage) and self._active is None and not self._sent:
             self._ended.append(self._ended_line(message))
+        if (
+            isinstance(message, TaskUpdatedMessage)
+            and message.status in TERMINAL_TASK_STATUSES
+            and message.task_id not in self._unreported
+        ):
+            self._unreported[message.task_id] = asyncio.get_running_loop().time()
         if isinstance(message, TaskNotificationMessage):
+            self._unreported.pop(message.task_id, None)
             # Read above for the end line, which comes after the terminal task_updated (recorded
             # order); a task whose notification never comes goes with the process.
             self._tasks.pop(message.task_id, None)
@@ -635,6 +654,7 @@ class ChannelSession:
         self._task_replies.clear()
         self._tasks.clear()
         self._ended.clear()
+        self._unreported.clear()
         for renderer in renderers:
             with contextlib.suppress(Exception):
                 await renderer.stop_running()
@@ -909,7 +929,7 @@ class SessionManager:
             for session in list(self._sessions.values()):
                 if self._deps.approvals.waiting(session.channel_id):
                     await session.stop()
-            if all(s.idle for s in self._sessions.values()):
+            if all(s.idle and not s.reporting for s in self._sessions.values()):
                 return
             # Polled: a turn ends in several places, and a stop needs no finer timing.
             with contextlib.suppress(TimeoutError):
