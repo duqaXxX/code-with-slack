@@ -16,7 +16,9 @@ sends no other: a new prompt gets `texts.RESTARTING`, a queued or taken turn end
 `texts.ENDED_RESTARTING`. Approvals and questions stay open: the Socket Mode connection closes only
 after the drain. A channel left with only background tasks gets `texts.RESTART_WAITS` once, naming
 them by the footer's counts, since the daemon cannot tell whether a task (a dev server, a watcher)
-ever ends; `!stop` ends them with `ClaudeSDKClient.stop_task`. When no channel is working, after `__main__.DRAIN_LIMIT_SECONDS`, or on a second
+ever ends; `!stop` ends them with `ClaudeSDKClient.stop_task`. Claude Code starts no turn to report a
+task stopped this way (measured on 2.1.283), so neither the drain nor the channel's next prompt waits
+`sessions.INJECTED_TURN_WAIT` for one. When no channel is working, after `__main__.DRAIN_LIMIT_SECONDS`, or on a second
 signal, the daemon closes the connection, then every session. After `bootout` launchd kills the
 daemon once the LaunchAgent's `ExitTimeOut` passes (60 seconds at most), whatever the drain is
 doing. `SIGINT` skips the drain: from a terminal it also reaches the Claude Code processes, which

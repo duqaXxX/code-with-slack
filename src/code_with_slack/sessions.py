@@ -276,6 +276,9 @@ class ChannelSession:
         # the notification starts the turn that reports them. The CLI can suppress it (SDK
         # TaskUpdatedMessage docstring), so a stop waits for it only INJECTED_TURN_WAIT.
         self._unreported: dict[str, float] = {}
+        # Tasks `!stop` ended. Claude Code starts no turn to report such a task: its notification
+        # stays queued (measured twice on 2026-09-27, Claude Code 2.1.283), so none is awaited.
+        self._stopped: set[str] = set()
         # Clear while a background notification's own turn is expected or running: the owner's
         # next query waits, so the two replies never share a thread.
         self._settled = asyncio.Event()
@@ -425,6 +428,7 @@ class ChannelSession:
                 await self._delete_request(pending.message_ts)
             await self._client.interrupt()
         for task_id in tasks:
+            self._stopped.add(task_id)
             try:
                 await self._client.stop_task(task_id)
             except Exception as exc:  # it may have ended meanwhile; the others still stop
@@ -588,16 +592,24 @@ class ChannelSession:
             self._tasks[message.task_id] = (message.task_type or "", message.description)
             while len(self._tasks) > TASKS_KEPT:
                 del self._tasks[next(iter(self._tasks))]
-        if isinstance(message, TaskNotificationMessage) and self._active is None and not self._sent:
+        stopped = isinstance(message, TASK_MESSAGES) and message.task_id in self._stopped
+        if (
+            isinstance(message, TaskNotificationMessage)
+            and self._active is None
+            and not self._sent
+            and not stopped
+        ):
             self._ended.append(self._ended_line(message))
         if (
             isinstance(message, TaskUpdatedMessage)
             and message.status in TERMINAL_TASK_STATUSES
             and message.task_id not in self._unreported
+            and not stopped
         ):
             self._unreported[message.task_id] = asyncio.get_running_loop().time()
         if isinstance(message, TaskNotificationMessage):
             self._unreported.pop(message.task_id, None)
+            self._stopped.discard(message.task_id)
             # Read above for the end line, which comes after the terminal task_updated (recorded
             # order); a task whose notification never comes goes with the process.
             self._tasks.pop(message.task_id, None)
@@ -605,7 +617,11 @@ class ChannelSession:
             # A task that outlived its turn shows only on its own line, wherever it started.
             await self._task_replies[message.task_id].feed(message)
             await self._show_running()
-            if self._active is None and isinstance(message, TaskNotificationMessage):
+            if (
+                self._active is None
+                and isinstance(message, TaskNotificationMessage)
+                and not stopped
+            ):
                 self._notified()
             return
         # A stream message names the call it runs under (`parent_tool_use_id`), a task frame
@@ -636,7 +652,7 @@ class ChannelSession:
             if not starts_owner_turn:
                 if isinstance(message, TASK_MESSAGES):
                     self._held.append(message)
-                    if isinstance(message, TaskNotificationMessage):
+                    if isinstance(message, TaskNotificationMessage) and not stopped:
                         self._notified()
                     return
                 if not isinstance(message, TURN_MESSAGES):
@@ -750,6 +766,7 @@ class ChannelSession:
         self._tasks.clear()
         self._ended.clear()
         self._unreported.clear()
+        self._stopped.clear()
         for renderer in renderers:
             with contextlib.suppress(Exception):
                 await renderer.stop_running()

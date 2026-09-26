@@ -1456,14 +1456,25 @@ async def test_a_stop_waits_only_a_while_for_a_notification_that_never_comes(
     await asyncio.wait_for(drained, 1)
 
 
+def stopped_end(notice: list[Any]) -> list[Any]:
+    """The recorded end of a background task, as `stop_task` makes it: a `killed` task_updated
+    and a `stopped` notification (SDK 0.2.160 `stop_task` docstring)."""
+    return [
+        dataclasses.replace(m, status="killed", patch={**m.patch, "status": "killed"})
+        if isinstance(m, TaskUpdatedMessage)
+        else dataclasses.replace(m, status="stopped")
+        if isinstance(m, TaskNotificationMessage)
+        else m
+        for m in notice
+    ]
+
+
 async def test_a_stop_held_by_a_background_task_says_so_and_bang_stop_ends_it(
     harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # A task that never ends (a watcher) held a restart for the whole limit (2026-09-27).
     monkeypatch.setattr(sessions, "DRAIN_POLL_SECONDS", 0.01)
-    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.2)
     first, notice, _ = split_background()
-    ended = [m for m in notice if not isinstance(m, TaskNotificationMessage)]
     task_id = next(m.task_id for m in first if isinstance(m, TaskStartedMessage))
     h = harness_for({"turns": [first]})
     session = h.session()
@@ -1476,9 +1487,26 @@ async def test_a_stop_held_by_a_background_task_says_so_and_bang_stop_ends_it(
     assert await session.stop()
     assert h.clients[0].stopped_tasks == [task_id]
     assert h.clients[0].interrupts == 0  # no turn was running
-    # The CLI answers a stop with the task's terminal task_updated (SDK stop_task docstring).
-    h.clients[0].inject(ended)
+    # No report turn follows a stopped task, so the stop does not wait INJECTED_TURN_WAIT for one.
+    h.clients[0].inject(stopped_end(notice))
     await asyncio.wait_for(drained, 1)
+
+
+async def test_the_next_prompt_after_bang_stop_does_not_wait_for_a_report(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # Measured 2026-09-27 on Claude Code 2.1.283: the stopped task's notification stays queued
+    # and no turn reports it; the owner's next prompt waited INJECTED_TURN_WAIT (30 s).
+    first, notice, _ = split_background()
+    h = harness_for({"turns": [first, sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    assert await session.stop()
+    h.clients[0].inject(stopped_end(notice))
+    await until(lambda: not session._running_counts())
+    following = await session.submit("next")
+    await asyncio.wait_for(following.done.wait(), 1)
+    assert h.clients[0].queries == ["start it", "next"]
 
 
 async def test_bang_stop_ends_background_tasks_outside_a_stop_too(
