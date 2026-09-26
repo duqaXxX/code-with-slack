@@ -30,12 +30,15 @@ logger = logging.getLogger(__name__)
 RESUME_ROWS = 20
 RESUME_ACTION = "session_resume"
 TITLE_LIMIT = 80
+ID_SHOWN = 8  # the first characters of a session id the list shows, and `!resume` takes
 
 
 def matching(sessions: list[SDKSessionInfo], target: str) -> list[SDKSessionInfo]:
-    """The sessions `!resume <target>` names: the one with that id, or those whose title (set
-    with /rename or generated, the SDK's `custom_title`) is `target`."""
-    by_id = [s for s in sessions if s.session_id == target]
+    """The sessions `!resume <target>` names: those whose id is `target` or starts with it, when
+    it is at least as long as the ID_SHOWN characters the list shows (so a short title such as
+    "add" is not read as an id), else those whose title (set with /rename or generated, the
+    SDK's `custom_title`) is `target`."""
+    by_id = [s for s in sessions if len(target) >= ID_SHOWN and s.session_id.startswith(target)]
     return by_id or [s for s in sessions if s.custom_title == target]
 
 
@@ -122,15 +125,20 @@ def _row(session: SDKSessionInfo, current: bool, now: datetime) -> dict[str, Any
     # Shown as the terminal's picker shows it, HEAD outside a repository included.
     branch = shown_as_written(session.git_branch) if session.git_branch else None
     title = shown_as_written(one_line(session.summary, TITLE_LIMIT))
-    parts = [title, _age(session.last_modified, now), branch, _size(session.file_size)]
+    # The terminal's picker shows no id, since picking a row resumes it; here the id's start is
+    # what `!resume <id>` takes. Plain text, as the rest of the row (the maintainer, 2026-09-26).
+    parts = [
+        title,
+        _age(session.last_modified, now),
+        branch,
+        _size(session.file_size),
+        session.session_id[:ID_SHOWN],
+    ]
     line = " · ".join(p for p in parts if p) + (texts.RESUME_CURRENT if current else "")
-    # The terminal's picker shows no id, since picking a row resumes it. Here the id is what
-    # `!resume <id>` takes, and the only way to open a Slack-born session in the terminal
-    # (`claude --resume <id>`): on its own line, whole, so it copies as written.
     block: dict[str, Any] = {
         "type": "section",
         "block_id": f"session-{session.session_id}",
-        "text": {"type": "mrkdwn", "text": f"{line}\n`{session.session_id}`"},
+        "text": {"type": "mrkdwn", "text": line},
     }
     if not current:
         block["accessory"] = {
