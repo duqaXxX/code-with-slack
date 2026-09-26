@@ -172,6 +172,8 @@ The plist lives at `~/Library/LaunchAgents/local.code-with-slack.plist`. launchd
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <key>ExitTimeOut</key>
+  <integer>60</integer>
   <key>StandardOutPath</key>
   <string><home>/Library/Logs/code-with-slack/code-with-slack.log</string>
   <key>StandardErrorPath</key>
@@ -185,10 +187,34 @@ Load it, restart it, stop it, and read its state:
 ```bash
 mkdir -p ~/Library/Logs/code-with-slack
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.code-with-slack.plist
-launchctl kickstart -k gui/$(id -u)/local.code-with-slack
+launchctl kill TERM gui/$(id -u)/local.code-with-slack
 launchctl bootout gui/$(id -u)/local.code-with-slack
 launchctl print gui/$(id -u)/local.code-with-slack
 ```
+
+On `SIGTERM` code-with-slack stops starting turns and lets everything already running finish: the
+turns, the background commands and agents, which end with the Claude Code process, and the turn in
+which Claude reports each one. Then it exits, and `KeepAlive` starts it again. Meanwhile a new
+message gets `code-with-slack is restarting; send this again in a moment.`, a queued one ends with
+the same request. An approval or a question Claude asks meanwhile stays open and can be answered, so
+a session that restarts the daemon can still finish its turn. The daemon's `!words` keep working:
+`!stop` ends a long turn so the restart goes on. After 29 minutes code-with-slack stops waiting and
+ends what still runs, whose replies say that it stopped: a background command that never ends, such
+as a dev server, holds a restart that long. Sending the signal a second time stops without waiting.
+`SIGINT` (Ctrl-C in a terminal) stops without waiting too, because the terminal sends it to the
+Claude Code processes as well.
+
+How long a turn can take to finish depends on who sends the signal. `launchctl kill TERM` only
+sends it, so a restart waits up to those 29 minutes. `launchctl bootout` and `launchctl
+kickstart -k` stop the job themselves and kill it `ExitTimeOut` seconds later; on macOS 27.0
+launchd caps `ExitTimeOut` at 60 (`launchctl print` shows 60 for any larger value, and a job
+stopped with `bootout` was killed within 60 seconds, measured 2026-09-26). A turn still running
+then keeps a reply that says Claude is writing.
+
+`launchctl kill TERM` returns at once, so a Claude Code session running from Slack can restart
+the daemon that hosts it and still finish its turn. `launchctl kickstart -k` waits until the old
+instance has exited, which from such a session means waiting on its own turn, until launchd
+kills the daemon and that turn with it after `ExitTimeOut`.
 
 The log holds what the service did, never the content of your messages.
 
@@ -211,7 +237,7 @@ code-with-slack:
    file (`python3.12` or similar) from Finder into the list. Alternatively choose **+** and press
    **⌘⇧.** in the file picker to show hidden folders.
 3. Check that the new entry is turned on, then restart the service:
-   `launchctl kickstart -k gui/$(id -u)/local.code-with-slack`.
+   `launchctl kill TERM gui/$(id -u)/local.code-with-slack`.
 
 The permission belongs to that interpreter, which uv shares between the tools that use the same
 Python version: any of them started outside Terminal gets the same access. Projects outside the

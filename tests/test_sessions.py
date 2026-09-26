@@ -1197,3 +1197,112 @@ async def test_status_follows_a_reply_that_reports_no_tokens(
     await asyncio.wait_for((await session.submit("/usage")).done.wait(), 2)
     assert " tok" not in statuses(h)[-1]
     assert "Session tokens" not in await session.status()
+
+
+async def test_a_stop_lets_the_running_turn_finish_and_ends_the_queued_one(
+    harness_for: Callable[..., Harness],
+) -> None:
+    *running, result = sdk_messages("tools")
+    h = harness_for({"turns": [running, sdk_messages("tools")]})
+    session = h.session()
+    first = await session.submit("first")
+    second = await session.submit("second")
+    await until(lambda: bool(h.clients) and h.clients[0].queries == ["first"])
+    drained = asyncio.create_task(h.manager.drain(asyncio.Event()))
+    await asyncio.wait_for(second.done.wait(), 2)
+    assert not drained.done() and not first.done.is_set()
+    h.clients[0].inject([result])
+    await asyncio.wait_for(drained, 2)
+    assert first.done.is_set()
+    assert h.clients[0].queries == ["first"]
+    assert texts.ENDED.format(reason=texts.ENDED_RESTARTING) in h.replies()[1]
+    assert h.state.get(CHANNEL).session_id == result.session_id
+
+
+async def test_an_approval_asked_during_a_stop_stays_open_and_the_turn_finishes(
+    harness_for: Callable[..., Harness],
+) -> None:
+    ask = CanUseToolCall("Bash", {"command": "ls"})
+    h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
+    turn = await h.session().submit("first")
+    await until(lambda: bool(h.approvals._pending))
+    drained = asyncio.create_task(h.manager.drain(asyncio.Event()))
+    await asyncio.sleep(0.05)
+    assert not drained.done() and not turn.done.is_set()
+    # The owner answers while the daemon stops, as a Slack session that restarted it would need.
+    assert h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, Approve()) is not None
+    await asyncio.wait_for(drained, 2)
+    assert turn.done.is_set()
+    assert isinstance(h.clients[0].permission_results[0], PermissionResultAllow)
+    assert h.clients[0].interrupts == 0
+
+
+async def test_a_turn_taken_before_a_stop_is_never_sent(
+    harness_for: Callable[..., Harness],
+) -> None:
+    gate = asyncio.Event()
+    h = harness_for({"connect_gate": gate, "turns": [sdk_messages("tools")]})
+    turn = await h.session().submit("first")
+    await until(lambda: bool(h.clients))
+    drained = asyncio.create_task(h.manager.drain(asyncio.Event()))
+    gate.set()
+    await asyncio.wait_for(drained, 2)
+    assert turn.done.is_set() and h.clients[0].queries == []
+    assert texts.ENDED_RESTARTING in h.written_text()
+
+
+async def test_a_second_signal_cuts_the_stop_short(harness_for: Callable[..., Harness]) -> None:
+    *running, _ = sdk_messages("tools")
+    h = harness_for({"turns": [running]})
+    turn = await h.session().submit("first")
+    await until(lambda: bool(h.clients) and h.clients[0].queries == ["first"])
+    cut_short = asyncio.Event()
+    drained = asyncio.create_task(h.manager.drain(cut_short))
+    await asyncio.sleep(0.05)
+    assert not drained.done()
+    cut_short.set()
+    await asyncio.wait_for(drained, 2)
+    assert not turn.done.is_set()  # close_all ends it, as before
+
+
+async def test_a_stop_waits_for_a_background_task_and_the_turn_that_reports_it(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "DRAIN_POLL_SECONDS", 0.01)
+    first, notice, injected = split_background()
+    ended = [m for m in notice if not isinstance(m, TaskNotificationMessage)]
+    notification = [m for m in notice if isinstance(m, TaskNotificationMessage)]
+    h = harness_for({"turns": [first]})
+    await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
+    drained = asyncio.create_task(h.manager.drain(asyncio.Event()))
+    await asyncio.sleep(0.05)
+    assert not drained.done()  # the task still runs
+    # Live, the terminal task_updated came a moment before the notification (2026-09-26): the
+    # task's line is closed, yet the turn that reports it has not started.
+    h.clients[0].inject(ended)
+    await asyncio.sleep(0.1)
+    assert not drained.done()
+    h.clients[0].inject(notification)
+    await asyncio.sleep(0.05)
+    assert not drained.done()  # Claude Code is expected to report it
+    h.clients[0].inject(injected)
+    await asyncio.wait_for(drained, 2)
+    assert any(is_report(r) for r in h.replies())
+
+
+async def test_a_stop_waits_only_a_while_for_a_notification_that_never_comes(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A task stopped with TaskStop can end with no notification (SDK TaskUpdatedMessage docstring).
+    monkeypatch.setattr(sessions, "DRAIN_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.2)
+    first, notice, _ = split_background()
+    ended = [m for m in notice if not isinstance(m, TaskNotificationMessage)]
+    h = harness_for({"turns": [first]})
+    await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
+    h.clients[0].inject(ended)
+    await asyncio.sleep(0.05)
+    drained = asyncio.create_task(h.manager.drain(asyncio.Event()))
+    await asyncio.sleep(0.05)
+    assert not drained.done()
+    await asyncio.wait_for(drained, 1)

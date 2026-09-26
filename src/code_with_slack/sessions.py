@@ -25,6 +25,7 @@ from claude_agent_sdk import (
     list_sessions,
 )
 from claude_agent_sdk.types import (
+    TERMINAL_TASK_STATUSES,
     CanUseTool,
     HookCallback,
     HookContext,
@@ -99,6 +100,8 @@ SUMMARY_IS_END_LINE = {"local_bash"}
 # Tasks whose reply the session remembers. An ended task stays a while, since an agent can
 # report again after its notification; past this many, the oldest ended ones are forgotten.
 TASK_REPLIES_KEPT = 100
+# How often a stopping daemon checks whether every channel's turns have ended.
+DRAIN_POLL_SECONDS = 0.5
 
 
 class DirectoryUnavailable(Exception):
@@ -243,6 +246,10 @@ class ChannelSession:
         # end lines that open Claude Code's next turn of its own, the one that reports them.
         self._tasks: dict[str, tuple[str, str]] = {}
         self._ended: list[str] = []
+        # Tasks whose end arrived without their notification yet, by the loop time it arrived:
+        # the notification starts the turn that reports them. The CLI can suppress it (SDK
+        # TaskUpdatedMessage docstring), so a stop waits for it only INJECTED_TURN_WAIT.
+        self._unreported: dict[str, float] = {}
         # Clear while a background notification's own turn is expected or running: the owner's
         # next query waits, so the two replies never share a thread.
         self._settled = asyncio.Event()
@@ -261,6 +268,8 @@ class ChannelSession:
         self.effort_reported = False
         # The session's token count as the client's last result reported it, for `!status`.
         self.session_tokens: int | None = None
+        # Set when the daemon stops: the turns already sent finish, no other one starts.
+        self.draining = False
 
     @property
     def busy(self) -> bool:
@@ -277,6 +286,19 @@ class ChannelSession:
             and self._queue.empty()
             and self._settled.is_set()
         )
+
+    @property
+    def reporting(self) -> bool:
+        """A task ended less than INJECTED_TURN_WAIT ago and the notification that makes Claude
+        Code report it has not come yet."""
+        now = asyncio.get_running_loop().time()
+        return any(now - ended < INJECTED_TURN_WAIT for ended in self._unreported.values())
+
+    async def fail_queued(self, line: str) -> None:
+        """End every queued turn's reply with `line`, and release whoever waits on them."""
+        while not self._queue.empty():
+            with contextlib.suppress(Exception):
+                await self._fail(self._queue.get_nowait(), line)
 
     async def submit(self, prompt: Prompt) -> Turn:
         """Queue a prompt; its reply appears at once, saying Claude is writing or waiting."""
@@ -411,15 +433,13 @@ class ChannelSession:
                 await task
         self._deps.approvals.deny_all(self.channel_id)
         # A turn the worker took but had not sent yet is in no queue.
-        queued: list[Turn] = [self._taken] if self._taken is not None else []
-        self._taken = None
-        while not self._queue.empty():
-            queued.append(self._queue.get_nowait())
+        taken, self._taken = self._taken, None
         line = texts.ENDED.format(reason=reason)
         await self._abandon(line)
-        for turn in queued:
+        if taken is not None:
             with contextlib.suppress(Exception):
-                await self._fail(turn, line)
+                await self._fail(taken, line)
+        await self.fail_queued(line)
         if self._client is not None:
             client, self._client = self._client, None
             await self._disconnect(client)
@@ -444,6 +464,10 @@ class ChannelSession:
                 client = await self.ensure_connected()
                 self._refresh_usage()
                 await self._settled.wait()
+                if self.draining:
+                    self._taken = None
+                    await self._fail(turn, texts.ENDED.format(reason=texts.ENDED_RESTARTING))
+                    continue
                 self._sent.append(turn)
                 self._taken = None
                 prompt = turn.prompt
@@ -495,7 +519,14 @@ class ChannelSession:
                 del self._tasks[next(iter(self._tasks))]
         if isinstance(message, TaskNotificationMessage) and self._active is None and not self._sent:
             self._ended.append(self._ended_line(message))
+        if (
+            isinstance(message, TaskUpdatedMessage)
+            and message.status in TERMINAL_TASK_STATUSES
+            and message.task_id not in self._unreported
+        ):
+            self._unreported[message.task_id] = asyncio.get_running_loop().time()
         if isinstance(message, TaskNotificationMessage):
+            self._unreported.pop(message.task_id, None)
             # Read above for the end line, which comes after the terminal task_updated (recorded
             # order); a task whose notification never comes goes with the process.
             self._tasks.pop(message.task_id, None)
@@ -623,6 +654,7 @@ class ChannelSession:
         self._task_replies.clear()
         self._tasks.clear()
         self._ended.clear()
+        self._unreported.clear()
         for renderer in renderers:
             with contextlib.suppress(Exception):
                 await renderer.stop_running()
@@ -821,6 +853,7 @@ class SessionManager:
     def __init__(self, deps: SessionDeps) -> None:
         self._deps = deps
         self._sessions: dict[str, ChannelSession] = {}
+        self.draining = False
 
     def get(self, channel_id: str) -> ChannelSession | None:
         stored = self._deps.state.get(channel_id)
@@ -829,6 +862,7 @@ class SessionManager:
         session = self._sessions.get(channel_id)
         if session is None or session.directory != stored.directory:
             session = ChannelSession(channel_id, stored.directory, self._deps)
+            session.draining = self.draining
             self._sessions[channel_id] = session
         return session
 
@@ -876,6 +910,26 @@ class SessionManager:
     async def folders_in(self, root: Path) -> list[Path]:
         """The folders under `root` where a session can start, as `bindable_folders` finds them."""
         return await bindable_folders(root, self._deps.workspace_trusted)
+
+    async def drain(self, cut_short: asyncio.Event) -> None:
+        """Let the turns already sent finish and send no other, then return: when every channel is
+        idle, or when `cut_short` is set. Idle includes the background commands and agents, which
+        die with the Claude Code process, and the turn Claude Code starts to report each one.
+        Queued turns end at once, asking to be sent again. An approval or a question stays open:
+        the Slack connection lives until the drain ends, so the owner can still answer it."""
+        self.draining = True
+        sessions = list(self._sessions.values())
+        # Every flag before the first await: no worker sends a queued turn in between.
+        for session in sessions:
+            session.draining = True
+        for session in sessions:
+            await session.fail_queued(texts.ENDED.format(reason=texts.ENDED_RESTARTING))
+        while not cut_short.is_set():
+            if all(s.idle and not s.reporting for s in self._sessions.values()):
+                return
+            # Polled: a turn ends in several places, and a stop needs no finer timing.
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(cut_short.wait(), DRAIN_POLL_SECONDS)
 
     async def close_all(self) -> None:
         for session in list(self._sessions.values()):
