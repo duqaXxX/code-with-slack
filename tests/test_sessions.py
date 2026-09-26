@@ -1247,6 +1247,32 @@ async def test_a_stop_lets_the_running_turn_finish_and_ends_the_queued_one(
     assert h.state.get(CHANNEL).session_id == result.session_id
 
 
+async def test_a_stop_waits_for_the_reply_s_final_write(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "DRAIN_POLL_SECONDS", 0.01)
+    *running, result = sdk_messages("tools")
+    h = harness_for({"turns": [running]})
+    turn = await h.session().submit("first")
+    await until(lambda: bool(h.clients) and h.clients[0].queries == ["first"])
+    footer_read = asyncio.Event()
+    original = type(h.clients[0]).get_context_usage
+
+    async def slow(self: Any) -> dict[str, Any]:
+        await footer_read.wait()
+        return await original(self)
+
+    monkeypatch.setattr(type(h.clients[0]), "get_context_usage", slow)
+    drained = asyncio.create_task(h.manager.drain(asyncio.Event()))
+    h.clients[0].inject([result])
+    await asyncio.sleep(0.1)
+    assert not drained.done()  # the footer is still being read: the reply is not final yet
+    footer_read.set()
+    await asyncio.wait_for(drained, 2)
+    assert turn.done.is_set()
+    assert texts.WRITING not in h.replies()[-1]
+
+
 @pytest.mark.parametrize("bypass", [True, False])
 async def test_a_stop_says_bypass_ends_only_where_it_is_on(
     harness_for: Callable[..., Harness], bypass: bool

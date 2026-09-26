@@ -19,6 +19,10 @@ All notable changes to this project are documented here. The format follows
   folds into the counts when it ends. Claude Code starts a task for such a command too; a call's
   line now becomes a task's line only when its result arrives while its task still runs. The
   new `foreground` stream in `tests/fixtures/sdk/` records one.
+- A reply whose turn ended while the daemon was stopping could keep `Claude is writing…` and no
+  footer (#25). The turn counted as ended before its reply was closed, while the footer was still
+  being read, so the stop saw the channel idle and the process exited before the reply's final
+  write. A turn now stays active until its reply is closed.
 
 ### Changed
 

@@ -10,7 +10,7 @@ configuration, so a bad `.env` fails before anything else; takes the single-inst
 second daemon fails before it opens a Socket Mode connection; reads `state.json`; calls `auth.test`
 for the workspace id and the bot user id; then opens the Socket Mode connection. On `SIGTERM`, which
 `launchctl kill TERM` and `launchctl bootout` send, `SessionManager.drain` lets the turns already
-sent finish, and the background tasks with the turns that report them (a task whose end came without
+sent finish, each up to its reply's final write (footer included), and the background tasks with the turns that report them (a task whose end came without
 its notification is waited for `sessions.INJECTED_TURN_WAIT`, since the CLI can suppress it), and
 sends no other: a new prompt gets `texts.RESTARTING`, a queued or taken turn ends with
 `texts.ENDED_RESTARTING`. Approvals and questions stay open: the Socket Mode connection closes only
