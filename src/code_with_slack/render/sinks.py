@@ -100,6 +100,9 @@ class _Tool:
     def line(self) -> str:
         update = self.update
         line = f"{ICONS[update.status]} `{update.title}`"
+        if update.calls:
+            # How much a subagent has done: its latest call alone does not say.
+            line += f" · {update.calls} call{'' if update.calls == 1 else 's'}"
         if (update.status == "error" and update.output) or update.output == STOPPED:
             line += f" · {update.output}"
         elif update.status == "in_progress" and update.details:

@@ -46,6 +46,7 @@ class TaskUpdate:
     output: str | None = None
     name: str = ""  # the tool's name, for a line folded into a summary
     task: bool = False  # a subagent's or a background command's line: never folded
+    calls: int = 0  # calls made inside it (a subagent's), counted on its line
 
 
 class Sink(Protocol):
@@ -290,9 +291,12 @@ class TurnRenderer:
         lines = self._children.setdefault(root, [])
         lines.append(line)
         del lines[:-CHILD_LINES]
+        calls = self._lines[root].calls + 1
         # A call that runs calls of its own (a subagent) keeps its line once it ends, whether it
         # ran in the foreground or not: the nested calls are its work, not one more call.
-        await self._set(replace(self._lines[root], details="\n".join(lines), task=True))
+        await self._set(
+            replace(self._lines[root], details="\n".join(lines), task=True, calls=calls)
+        )
 
     async def _set(self, update: TaskUpdate) -> None:
         self._lines[update.id] = update

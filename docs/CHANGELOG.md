@@ -47,6 +47,8 @@ All notable changes to this project are documented here. The format follows
   where each had a line with its command and the first line of its output. A running call, a
   task and a stopped call keep a line of their own below the counts. The `tool-error` stream in
   `tests/fixtures/sdk/` is recorded again with a Bash command that exits 1.
+- A subagent's line counts the calls it made (`· 12 calls`) before its latest one, while it runs
+  and once it ends.
 
 ### Added
 
