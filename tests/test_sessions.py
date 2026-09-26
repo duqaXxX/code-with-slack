@@ -1345,3 +1345,92 @@ async def test_a_stop_waits_only_a_while_for_a_notification_that_never_comes(
     await asyncio.sleep(0.05)
     assert not drained.done()
     await asyncio.wait_for(drained, 1)
+
+
+async def swap(h: Harness, how: str, tmp_path: Path) -> None:
+    if how == "bind":
+        other = tmp_path / "other"
+        other.mkdir()
+        await h.manager.bind(CHANNEL, other)
+    else:
+        assert await h.manager.resume(CHANNEL, "another")
+
+
+@pytest.mark.parametrize("how", ["bind", "resume"])
+async def test_a_swap_while_a_word_starts_the_client_leaves_no_process(
+    harness_for: Callable[..., Harness], tmp_path: Path, how: str
+) -> None:
+    # `!help` or `!status` starts the client in its own task, outside the prompt queue.
+    gate = asyncio.Event()
+    h = harness_for({"connect_gate": gate})
+    word = asyncio.create_task(h.session().ensure_connected())
+    await until(lambda: len(h.clients) == 1)
+    swapping = asyncio.create_task(swap(h, how, tmp_path))
+    await asyncio.sleep(0.05)
+    assert not swapping.done()  # the close waits for the connect in progress
+    gate.set()
+    await asyncio.wait_for(swapping, 2)
+    await asyncio.wait_for(word, 2)
+    assert len(h.clients) == 1 and h.clients[0].connected is False
+
+
+async def test_a_closed_session_starts_no_client(harness_for: Callable[..., Harness]) -> None:
+    h = harness_for()
+    session = h.session()
+    await session.close()
+    with pytest.raises(sessions.SessionClosed):
+        await session.ensure_connected()
+    assert h.clients == []
+
+
+async def test_bypass_asked_on_a_session_rebound_meanwhile_is_not_stored(
+    harness_for: Callable[..., Harness], tmp_path: Path
+) -> None:
+    gate = asyncio.Event()
+    h = harness_for({"connect_gate": gate})
+    word = asyncio.create_task(h.session().set_bypass(True))
+    await until(lambda: len(h.clients) == 1)
+    swapping = asyncio.create_task(swap(h, "bind", tmp_path))
+    await asyncio.sleep(0.05)
+    gate.set()
+    await asyncio.wait_for(swapping, 2)
+    with pytest.raises(sessions.SessionClosed):
+        await asyncio.wait_for(word, 2)
+    stored = h.state.get(CHANNEL)
+    assert stored is not None and stored.bypass is False
+
+
+async def test_the_status_of_a_session_closed_meanwhile_is_not_given(
+    harness_for: Callable[..., Harness], tmp_path: Path
+) -> None:
+    gate = asyncio.Event()
+    h = harness_for({"connect_gate": gate})
+    session = h.session()
+    word = asyncio.create_task(session.status())
+    await until(lambda: len(h.clients) == 1)
+    swapping = asyncio.create_task(swap(h, "bind", tmp_path))
+    await asyncio.sleep(0.05)
+    gate.set()
+    await asyncio.wait_for(swapping, 2)
+    with pytest.raises(sessions.SessionClosed):  # connected before the close, read after it
+        await asyncio.wait_for(word, 2)
+    with pytest.raises(sessions.SessionClosed):
+        await session.status()
+
+
+async def test_bypass_whose_client_closes_under_it_says_the_session_closed(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({})
+    session = h.session()
+    client = await session.ensure_connected()
+
+    async def closing(mode: str) -> None:
+        await session.close()
+        raise ConnectionError("the CLI went away")
+
+    client.set_permission_mode = closing
+    with pytest.raises(sessions.SessionClosed):
+        await session.set_bypass(True)
+    stored = h.state.get(CHANNEL)
+    assert stored is not None and stored.bypass is False

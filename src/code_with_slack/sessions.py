@@ -113,6 +113,14 @@ class DirectoryUnavailable(Exception):
         self.message = message
 
 
+class SessionClosed(Exception):
+    """A `!bind` or a Resume closed the session while a daemon word was using it."""
+
+    def __init__(self) -> None:
+        super().__init__(texts.SESSION_CLOSED)
+        self.message = texts.SESSION_CLOSED
+
+
 class DirectoryMissing(DirectoryUnavailable):
     def __init__(self, directory: Path) -> None:
         super().__init__(directory, texts.DIRECTORY_MISSING.format(directory=directory))
@@ -233,6 +241,8 @@ class ChannelSession:
         self._sent: deque[Turn] = deque()
         self._active: ActiveTurn | None = None
         self._connect_lock = asyncio.Lock()
+        # Set once close starts: no client starts after it, and no word stores a setting.
+        self._closed = False
         self._notice: str | None = None
         self._background: set[asyncio.Task[None]] = set()
         # Task messages that arrived between turns, shown in the next turn's reply.
@@ -318,6 +328,8 @@ class ChannelSession:
 
     async def ensure_connected(self) -> ClaudeClient:
         async with self._connect_lock:
+            if self._closed:
+                raise SessionClosed
             if self._client is not None:
                 return self._client
             if not self.directory.is_dir():
@@ -366,7 +378,15 @@ class ChannelSession:
         if not on and self.native_mode == "bypassPermissions":
             self.native_mode = "default"
         mode = "bypassPermissions" if on else self.native_mode
-        await client.set_permission_mode(mode)  # type: ignore[arg-type]
+        try:
+            await client.set_permission_mode(mode)  # type: ignore[arg-type]
+        except Exception:
+            if self._closed:  # the close disconnected the client under the call
+                raise SessionClosed from None
+            raise
+        # After a !bind the stored switch belongs to the new folder: never turn it on there.
+        if self._closed:
+            raise SessionClosed
         self._deps.state.set_bypass(self.channel_id, on)
 
     async def announce_restart(self) -> None:
@@ -404,6 +424,9 @@ class ChannelSession:
                 describe(exc),
             )
             unavailable = [texts.ERROR_REPLY.format(error=type(exc).__name__)]
+        # A !bind or a Resume meanwhile: this would describe a session the channel no longer has.
+        if self._closed:
+            raise SessionClosed
         fields = format_status_fields(data, datetime.now().astimezone()) if data else []
         if running := self._running_kinds():
             fields.append(texts.STATUS_BACKGROUND.format(counts=running))
@@ -433,14 +456,14 @@ class ChannelSession:
     async def close(self, reason: str = texts.ENDED_SHUTDOWN) -> None:
         """Stop the session. Every reply still waiting (running, sent or queued) ends with a line
         saying why, so none is left showing that Claude is writing."""
-        # Every task is cancelled before any is awaited: a reader left running while the worker
-        # stops could still end a turn and record its session after a rebind.
-        tasks = [t for t in (self._worker, self._reader, self._expiry) if t is not None]
-        for task in tasks:
-            task.cancel()
-        for task in tasks:
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        self._closed = True
+        # The worker may hold the connect lock while the CLI starts: it is cancelled first.
+        await self._cancel_tasks()
+        # A daemon word may be starting the client in its own task. Its connect finishes, then
+        # the reader it started is cancelled and its client closed below: no process outlives
+        # the session, and none resumes the session id the next one will resume.
+        async with self._connect_lock:
+            await self._cancel_tasks()
         self._deps.approvals.deny_all(self.channel_id)
         # A turn the worker took but had not sent yet is in no queue.
         taken, self._taken = self._taken, None
@@ -453,6 +476,16 @@ class ChannelSession:
         if self._client is not None:
             client, self._client = self._client, None
             await self._disconnect(client)
+
+    async def _cancel_tasks(self) -> None:
+        # Every task is cancelled before any is awaited: a reader left running while the worker
+        # stops could still end a turn and record its session after a rebind.
+        tasks = [t for t in (self._worker, self._reader, self._expiry) if t is not None]
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
     async def _disconnect(self, client: ClaudeClient) -> None:
         try:

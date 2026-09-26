@@ -59,13 +59,15 @@ class World:
         self.uploads = tmp_path / "uploads"
         self.fetched: list[str] = []
         self.slow_downloads = 0.0
+        # Holds every client's connect until set, as a CLI that is still starting.
+        self.connect_gate: asyncio.Event | None = None
         identity = Identity(OWNER, TEAM, BOT)
 
         async def no_usage() -> str:
             return ""
 
         def factory(options: ClaudeAgentOptions) -> FakeClaudeClient:
-            client = FakeClaudeClient(options)
+            client = FakeClaudeClient(options, connect_gate=self.connect_gate)
             self.clients.append(client)
             return client
 
@@ -237,6 +239,28 @@ async def test_bang_bypass_on_switches_the_live_client(world: World) -> None:
     await world.dispatch(message("!bypass on"))
     assert world.clients[0].modes == ["bypassPermissions"]
     assert said(world) == [texts.BYPASS_ON]
+
+
+async def test_bypass_on_while_the_channel_is_rebound_tells_the_owner(world: World) -> None:
+    (world.root / "docs").mkdir()
+    world.connect_gate = asyncio.Event()
+    word = asyncio.create_task(world.dispatch(message("!bypass on")))
+    async with asyncio.timeout(2):
+        while not world.clients:  # noqa: ASYNC110
+            await asyncio.sleep(0.01)
+    rebind = asyncio.create_task(world.dispatch(message("!bind docs")))
+    await asyncio.sleep(0.05)
+    world.connect_gate.set()
+    await asyncio.wait_for(asyncio.gather(word, rebind), 2)
+    docs = (world.root / "docs").resolve()
+    async with asyncio.timeout(2):  # the listeners run on after dispatch returns
+        while texts.BIND_OK.format(directory=docs) not in said(world):  # noqa: ASYNC110
+            await asyncio.sleep(0.01)
+    assert world.ephemerals() == [texts.SESSION_CLOSED]
+    assert world.clients[0].connected is False
+    stored = world.state.get(CHANNEL)
+    assert stored.directory == docs and stored.bypass is False
+    await world.sessions.close_all()
 
 
 async def test_a_bind_says_that_it_ended_bypass(world: World) -> None:
