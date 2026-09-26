@@ -71,6 +71,7 @@ from code_with_slack.resume import RESUME_ACTION, TITLE_LIMIT, matching, resume_
 from code_with_slack.sessions import (
     ChannelSession,
     DirectoryUnavailable,
+    SessionClosed,
     SessionManager,
     resolve_directory,
 )
@@ -150,7 +151,7 @@ def build_app(
         """A failure after the checks reaches the owner as a line of its own, never as silence."""
         try:
             await work
-        except DirectoryUnavailable as exc:
+        except (DirectoryUnavailable, SessionClosed) as exc:
             await tell_owner(channel, exc.message)
         except Exception as exc:
             logger.error("a request failed in %s: %s", channel, type(exc).__name__)

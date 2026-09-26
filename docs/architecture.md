@@ -256,7 +256,10 @@ for another reason, it ends with the error line a prompt would get.
 - Shutting down, once the drain has ended, or binding the channel to another directory closes the
   session: every reply still waiting (running, sent or queued) ends with `This reply ended before an answer:` and the
   reason. A bind stores the new directory before the old session closes, so a message that
-  arrives meanwhile opens the new session.
+  arrives meanwhile opens the new session. A closing session waits for a client that a daemon
+  word (`!help`, `!bypass`, `!status`) is still starting, then closes it, and starts no other:
+  the word gets `SessionClosed`, which tells the owner to send it again, and `!bypass` stores
+  nothing.
 - Logs carry channel ids and exception type names, never prompt or reply text.
 
 Bypass is the channel's `ChannelState.bypass` in `state.json`, which `ChannelSession.bypass`

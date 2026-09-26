@@ -5,6 +5,13 @@ All notable changes to this project are documented here. The format follows
 
 ## Unreleased
 
+### Fixed
+
+- A `!bind` or a Resume while `!help`, `!bypass` or `!status` was starting the channel's Claude
+  Code left that process running, and after a Resume two processes could run one session (#15).
+  The old session now waits for the start, then closes the process; the word answers that the
+  channel changed meanwhile, and a `!bypass on` caught this way is not stored for the new folder.
+
 ### Changed
 
 - Bypass is kept in `state.json`, one `bypass` field per channel, so a restart of the daemon no
