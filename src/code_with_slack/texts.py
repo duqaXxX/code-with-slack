@@ -157,7 +157,8 @@ RESUME_BUSY = (
 )
 RESUME_NONE = "No session in `{directory}` has the id or name `{target}`: `!resume` lists them."
 RESUME_AMBIGUOUS = (
-    "More than one session in `{directory}` is named `{target}`: pick one from `!resume`."
+    "More than one session in `{directory}` is named or starts with `{target}`: pick one from "
+    "`!resume`."
 )
 RESUME_GONE = "That session is not in this channel's directory any more: `!resume` lists them."
 # `!guide`: how to use the bot, in the owner's words. tests/test_commands.py fails when a word of
@@ -186,9 +187,10 @@ question from Claude comes with **Answer**, which opens a short form, and **Skip
 **Sessions**
 `!status` shows the folder, the session, the permission mode and the footer's values. \
 `!stop` stops the running turn. `!resume` lists this folder's twenty newest sessions, from \
-the terminal too, each with its id and a **Resume** button; `!resume <id>`, or `!resume <title>` \
-for a session that has one, resumes it directly. To continue a session in the terminal, run \
-`claude --resume <id>` there.
+the terminal too, each with the start of its id and a **Resume** button; `!resume <id>` (that \
+start is enough), or `!resume <title>` for a session that has one, resumes it directly. To \
+continue the channel's session in the terminal, run `claude --resume <id>` there with the full \
+id `!status` shows.
 
 **Bypass**
 `!bypass on` lets Claude Code run every tool without asking, until `!bypass off` or a restart. \
