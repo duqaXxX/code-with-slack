@@ -15,6 +15,10 @@ All notable changes to this project are documented here. The format follows
   message starts a session there, and the message then got the trust refusal (#14). The channel
   is still bound, and the answer now says no session can start there yet and why: the same
   reason, from the same checks, a message would get (untrusted, unreadable or missing).
+- A long command in the foreground no longer shows "Running in background" while it runs, and
+  folds into the counts when it ends. Claude Code starts a task for such a command too; a call's
+  line now becomes a task's line only when its result arrives while its task still runs. The
+  new `foreground` stream in `tests/fixtures/sdk/` records one.
 
 ### Changed
 
@@ -41,8 +45,11 @@ All notable changes to this project are documented here. The format follows
   Claude's text, one line of tool names and counts, updated as calls end (#11). Failed calls are
   counted in the same line after `✗` (`✓ Bash ×3 · Read · ✗ Bash`), in the final reply as well,
   where each had a line with its command and the first line of its output. A running call, a
-  task and a stopped call keep a line of their own below the counts. The `tool-error` stream in
+  task and a stopped call keep a line of their own below the counts, and so does the latest
+  call while Claude is still working after it. The `tool-error` stream in
   `tests/fixtures/sdk/` is recorded again with a Bash command that exits 1.
+- A subagent's line counts the calls it made (`· 12 calls`) before its latest one, while it runs
+  and once it ends.
 
 ### Added
 

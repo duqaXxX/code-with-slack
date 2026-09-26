@@ -45,7 +45,8 @@ class TaskUpdate:
     details: str | None = None
     output: str | None = None
     name: str = ""  # the tool's name, for a line folded into a summary
-    task: bool = False  # a task's line (a subagent, a background command): never folded
+    task: bool = False  # a subagent's or a background command's line: never folded
+    calls: int = 0  # calls made inside it (a subagent's), counted on its line
 
 
 class Sink(Protocol):
@@ -173,7 +174,7 @@ class TurnRenderer:
             await self._text(texts.STOPPED if interrupted else texts.NO_OUTPUT)
         running = set(self._running.values())
         closing = [
-            replace(entry, status="in_progress", details=BACKGROUND)
+            replace(entry, status="in_progress", details=BACKGROUND, task=True)
             if entry.id in running
             else replace(entry, status="complete", output=STOPPED if interrupted else entry.output)
             for entry in self._lines.values()
@@ -228,8 +229,19 @@ class TurnRenderer:
         elif isinstance(block, ToolResultBlock | ServerToolResultBlock):
             entry = self._lines.get(block.tool_use_id)
             if entry is not None and entry.id in self._running.values():
-                # The call only launched a task, which is still running: its line stays open.
-                await self._set(replace(entry, output=result_summary(block.content)))
+                # The call only launched a task, which is still running: it outlives the call, so
+                # its line becomes a task's line and stays open. A task that ends before its
+                # call's result (a long command in the foreground) never gets here.
+                await self._set(
+                    replace(
+                        entry, details=BACKGROUND, task=True, output=result_summary(block.content)
+                    )
+                )
+            elif entry is not None and entry.output == STOPPED:
+                # Its task already ended as stopped; the result that follows only reports the
+                # rejection (recorded: `interrupt.jsonl`, CLI 2.1.283), and must not turn a
+                # stopped call into a failed one.
+                return
             elif entry is not None:
                 failed = isinstance(block, ToolResultBlock) and bool(block.is_error)
                 await self._set(
@@ -242,10 +254,11 @@ class TurnRenderer:
 
     async def _task_started(self, message: TaskStartedMessage) -> None:
         if message.tool_use_id and message.tool_use_id in self._lines:
+            # A call's task: Claude Code starts one for a long command in the foreground too
+            # (recorded: `interrupt.jsonl`, CLI 2.1.283). The line stays the call's until the
+            # call's result arrives with the task still running (`_block`).
             self._line_of_task[message.task_id] = message.tool_use_id
             self._running[message.task_id] = message.tool_use_id
-            entry = self._lines[message.tool_use_id]
-            await self._set(replace(entry, details=BACKGROUND, task=True))
             return
         line_id = f"task-{message.task_id}"
         self._line_of_task[message.task_id] = line_id
@@ -278,7 +291,12 @@ class TurnRenderer:
         lines = self._children.setdefault(root, [])
         lines.append(line)
         del lines[:-CHILD_LINES]
-        await self._set(replace(self._lines[root], details="\n".join(lines)))
+        calls = self._lines[root].calls + 1
+        # A call that runs calls of its own (a subagent) keeps its line once it ends, whether it
+        # ran in the foreground or not: the nested calls are its work, not one more call.
+        await self._set(
+            replace(self._lines[root], details="\n".join(lines), task=True, calls=calls)
+        )
 
     async def _set(self, update: TaskUpdate) -> None:
         self._lines[update.id] = update
