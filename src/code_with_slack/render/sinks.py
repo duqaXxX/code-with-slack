@@ -35,7 +35,7 @@ BLOCKS_LIMIT = 45
 # chat.update errors that refuse the content itself (reference, read 2026-09-25): a plain retry
 # can pass where the blocks did not. A transient error such as `ratelimited` is not one.
 REFUSED_CONTENT = {"invalid_blocks", "invalid_blocks_format", "msg_too_long", "invalid_arguments"}
-ICONS = {"pending": "·", "in_progress": "…", "complete": "✓", "error": "✗"}
+ICONS = {"pending": "·", "in_progress": "…", "complete": "✅", "error": "❌"}
 
 
 def describe(exc: Exception) -> str:
@@ -110,7 +110,7 @@ class _Tool:
 def tool_lines(tools: list[_Tool]) -> list[str]:
     """A run of tool lines as shown, while the turn runs and once it ends: the calls that ended
     fold into one first line of tool names, each counted when it ran more than once, whatever
-    the tool (`✓ Bash · Read · ✗ Bash`), as the terminal folds them. A running call, a task and
+    the tool (`✅ Bash · Read · ❌ Bash`), as the terminal folds them. A running call, a task and
     a stopped line stay whole below it, in order: they outlive the moment or say why they
     ended. A running call moves into the counts when it ends, so the lines above never move."""
     counts: dict[str, dict[str, int]] = {"complete": {}, "error": {}}

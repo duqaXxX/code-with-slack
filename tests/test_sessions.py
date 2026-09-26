@@ -351,7 +351,7 @@ def test_resolve_directory(tmp_path: Path) -> None:
 
 # A report opens with Claude Code's notification summary (recorded: `Background command "..."
 # completed (exit code 0)`, `Agent "..." finished`), never with a tool line.
-REPORT = re.compile(r'^[✓✗] (Background command|Agent) "', re.MULTILINE)
+REPORT = re.compile(r'^[✅❌] (Background command|Agent) "', re.MULTILINE)
 
 
 def is_report(reply: str) -> bool:
@@ -370,7 +370,7 @@ async def test_a_report_opens_with_claude_code_s_summary_and_takes_the_footer(
     await asyncio.sleep(0.05)
     report = h.replies()[1]
     summary = next(m.summary for m in notice if isinstance(m, TaskNotificationMessage))
-    assert report.startswith(f"✓ {summary}")  # Claude Code's own words, as in the terminal
+    assert report.startswith(f"✅ {summary}")  # Claude Code's own words, as in the terminal
     assert texts.BACKGROUND_NOTICE not in report
     shown = h.slack.message_blocks()
     assert {"type": "divider"} in shown[1] and {"type": "divider"} not in shown[0]  # latest only
@@ -434,7 +434,7 @@ async def test_a_background_agent_s_end_reads_as_in_the_terminal(
     h.clients[0].inject([agent_end(started.task_id, started.tool_use_id), *sdk_messages("tools")])
     await until(lambda: len(h.replies()) == 2 and bool(h.replies()[1]))
     await asyncio.sleep(0.05)
-    assert h.replies()[1].startswith(f'✓ Agent "{started.description}" finished · 10s')
+    assert h.replies()[1].startswith(f'✅ Agent "{started.description}" finished · 10s')
     assert "README.md" not in h.replies()[1].splitlines()[0]
 
 
@@ -540,7 +540,7 @@ async def test_running_counts_follow_the_latest_reply(
     await until(lambda: any(is_report(r) for r in h.replies()))
     await asyncio.sleep(0.05)
     assert all(running_block(blocks) is None for blocks in h.slack.message_blocks())
-    assert h.replies()[0].startswith("✓")  # the line where the task started
+    assert h.replies()[0].startswith("✅")  # the line where the task started
 
 
 async def test_a_background_task_frame_stays_out_of_other_replies(
@@ -609,7 +609,7 @@ async def test_a_failed_background_task_shows_why_in_the_reply_that_started_it(
     h.clients[0].inject(failed + injected)
     await until(lambda: any(is_report(r) for r in h.replies()))
     started = h.replies()[0]
-    assert "✗" in started and " ".join(summary.split())[:40] in started
+    assert "❌" in started and " ".join(summary.split())[:40] in started
 
 
 async def test_closing_the_session_stops_the_lines_of_running_tasks(
@@ -637,7 +637,7 @@ async def test_a_notification_with_no_turn_updates_its_line_and_releases_the_que
     second = await session.submit("next")
     await asyncio.wait_for(second.done.wait(), 2)
     # The task is known: its end shows on the line where it started, not in a post of its own.
-    assert h.replies()[0].startswith("✓")
+    assert h.replies()[0].startswith("✅")
     assert not any(is_report(r) for r in h.replies())
     assert h.clients[0].queries == ["start it", "next"]
 

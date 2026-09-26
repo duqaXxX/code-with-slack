@@ -43,10 +43,12 @@ All notable changes to this project are documented here. The format follows
   to the agent's end instead of stopping at the first result.
 - Tool calls fold while a turn runs too, not only once the reply is final: after each piece of
   Claude's text, one line of tool names and counts, updated as calls end (#11). Failed calls are
-  counted in the same line after `✗` (`✓ Bash ×3 · Read · ✗ Bash`), in the final reply as well,
+  counted in the same line after `❌` (`✅ Bash ×3 · Read · ❌ Bash`), in the final reply as well,
   where each had a line with its command and the first line of its output. A running call, a
   task and a stopped call keep a line of their own below the counts. The `tool-error` stream in
   `tests/fixtures/sdk/` is recorded again with a Bash command that exits 1.
+- Tool lines and the line that opens a task's report mark success with ✅ and failure with ❌,
+  the only colour Slack text can carry: mrkdwn has no text colour.
 
 ### Added
 
@@ -76,7 +78,7 @@ First release.
 - Background tasks: a task keeps its line in progress in the reply that started it until it
   ends or its Claude Code process goes away, and a stopped line says `Stopped`. A background
   subagent's calls update its line. Claude Code's report of a finished task is a reply of its
-  own that opens with Claude Code's line for the task's end (`✓ Agent "review" finished ·
+  own that opens with Claude Code's line for the task's end (`✅ Agent "review" finished ·
   3m 59s`).
 - A footer on the channel's latest reply: bypass, git branch, model, effort level, context,
   session tokens, the 5-hour and weekly limits, and the tasks still running (`⏳ 1 shell ·

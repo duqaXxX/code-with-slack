@@ -92,7 +92,7 @@ def format_duration(seconds: float) -> str:
 def ended_line(summary: str, status: str, duration_ms: int | None) -> str:
     """How a task's end opens Claude Code's report of it: the notification's own summary, as
     the terminal prints it (`Agent "..." finished · 10s`), with the duration when there is one."""
-    line = f"{'✗' if status == 'failed' else '✓'} {summary}"
+    line = f"{'❌' if status == 'failed' else '✅'} {summary}"
     return line if duration_ms is None else f"{line} · {format_duration(duration_ms / 1000)}"
 
 
