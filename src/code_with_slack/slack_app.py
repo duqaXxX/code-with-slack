@@ -100,6 +100,11 @@ def slack_unescape(text: str) -> str:
     return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
 
+def bound_text(directory: Path, bypass: bool) -> str:
+    """The answer to a bind, saying bypass ended with the old session when it was on."""
+    return texts.BIND_OK.format(directory=directory) + (texts.BIND_BYPASS_OFF if bypass else "")
+
+
 class Fetch(Protocol):
     """How a file is downloaded: its URL, its declared type and the size limit, to its bytes.
     Keywords only: the two strings must never be swapped."""
@@ -346,8 +351,9 @@ def build_app(
     async def bind_to(channel: str, path: str) -> None:
         directory = await folder_named(channel, path)
         if directory is not None:
+            bypass = sessions.bypass_on(channel)
             await sessions.bind(channel, directory)
-            await say(channel, texts.BIND_OK.format(directory=directory))
+            await say(channel, bound_text(directory, bypass))
 
     async def folder_named(channel: str, path: str) -> Path | None:
         directory = resolve_directory(path, config.allowed_root)
@@ -388,10 +394,11 @@ def build_app(
             await say(channel, texts.BIND_ALREADY.format(directory=directory))
             return
         # A list can be old: unlike a typed `!bind`, a click never ends work in flight.
+        bypass = sessions.bypass_on(channel)
         if not await sessions.bind_when_idle(channel, directory):
             await say(channel, texts.BIND_BUSY)
             return
-        await say(channel, texts.BIND_OK.format(directory=directory))
+        await say(channel, bound_text(directory, bypass))
         await remove_request(channel, body["message"]["ts"])
 
     async def handle_resume(channel: str, session: ChannelSession, target: str) -> None:

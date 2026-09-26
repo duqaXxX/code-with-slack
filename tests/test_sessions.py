@@ -1038,6 +1038,27 @@ async def test_resume_points_the_channel_at_another_session_of_its_directory(
     assert h.clients[-1].options.resume == other
 
 
+async def test_resume_keeps_bypass_as_the_terminal_s_resume_does(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({}, {})
+    await h.session().set_bypass(True)
+    assert await h.manager.resume(CHANNEL, "68da9311-0000-4000-8000-00000000abcd")
+    assert h.manager.bypass_on(CHANNEL)
+    await h.session().ensure_connected()
+    assert h.clients[-1].modes == ["bypassPermissions"]
+
+
+async def test_resume_without_bypass_leaves_the_mode_alone(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({}, {})
+    await h.session().ensure_connected()
+    assert await h.manager.resume(CHANNEL, "68da9311-0000-4000-8000-00000000abcd")
+    await h.session().ensure_connected()
+    assert h.clients[-1].modes == [] and not h.manager.bypass_on(CHANNEL)
+
+
 async def test_resume_waits_for_an_idle_channel(harness_for: Callable[..., Harness]) -> None:
     ask = CanUseToolCall("Bash", {"command": "ls"})
     h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
@@ -1217,6 +1238,17 @@ async def test_a_stop_lets_the_running_turn_finish_and_ends_the_queued_one(
     assert h.clients[0].queries == ["first"]
     assert texts.ENDED.format(reason=texts.ENDED_RESTARTING) in h.replies()[1]
     assert h.state.get(CHANNEL).session_id == result.session_id
+
+
+@pytest.mark.parametrize("bypass", [True, False])
+async def test_a_stop_says_bypass_ends_only_where_it_is_on(
+    harness_for: Callable[..., Harness], bypass: bool
+) -> None:
+    h = harness_for({})
+    await h.session().set_bypass(bypass)
+    await asyncio.wait_for(h.manager.drain(asyncio.Event()), 2)
+    posted = [p["text"] for p in h.slack.calls_to("chat.postMessage")]
+    assert posted == ([texts.BYPASS_RESTARTING] if bypass else [])
 
 
 async def test_an_approval_asked_during_a_stop_stays_open_and_the_turn_finishes(

@@ -7,6 +7,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Bypass across restarts, resumes and binds (#20). On `SIGTERM` every channel with bypass on
+  gets a line saying that bypass is off from the next message and that `!bypass on` switches it
+  on again, before the daemon waits for its turns. `!resume` keeps bypass on, as the
+  terminal's `/resume` does; before, it turned it off with no word. A `!bind` that ends a session
+  in bypass says in its answer that bypass is off. Bypass is still never written to disk.
 - Each row of the `!resume` list ends with the first 8 characters of the session's id, and
   `!resume <id>` accepts that start (or any longer one) as well as the full id. The line under a
   long list names `!resume <id>` and no longer says that `claude --resume` in the terminal lists

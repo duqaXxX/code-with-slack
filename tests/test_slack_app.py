@@ -239,6 +239,21 @@ async def test_bang_bypass_on_switches_the_live_client(world: World) -> None:
     assert said(world) == [texts.BYPASS_ON]
 
 
+async def test_a_bind_says_that_it_ended_bypass(world: World) -> None:
+    (world.root / "docs").mkdir()
+    await world.dispatch(message("!bypass on"))
+    await world.dispatch(click("folder_bind", "docs"))
+    docs = (world.root / "docs").resolve()
+    assert said(world)[-1] == texts.BIND_OK.format(directory=docs) + texts.BIND_BYPASS_OFF
+    await world.dispatch(message("!bypass on"))
+    await world.dispatch(message("!bind app"))
+    app = (world.root / "app").resolve()
+    assert said(world)[-1] == texts.BIND_OK.format(directory=app) + texts.BIND_BYPASS_OFF
+    await world.dispatch(message("!bind docs"))  # bypass was never switched on in app
+    assert said(world)[-1] == texts.BIND_OK.format(directory=docs)
+    await world.sessions.close_all()
+
+
 async def test_bang_status_and_stop_answer_in_the_channel(world: World) -> None:
     await world.dispatch(message("!stop"))
     await world.dispatch(message("!status"))
