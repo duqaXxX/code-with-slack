@@ -275,7 +275,7 @@ The bot answers one person, and the rest of this list protects what that person 
 | `!bind` | Lists `ALLOWED_ROOT` itself (shown as `.`) and the folders up to two levels below it, never inside a git repository, that Claude Code trusts, with a **Bind** button each; the channel's own folder is marked when it is listed. At most 20 are shown, in path order; when there are more, the higher levels fill the list first. A click never ends a running turn: it is refused until the channel is idle |
 | `!bind <folder>` | Binds this channel to a folder under `ALLOWED_ROOT`, given relative to it (`!bind my-project`); an absolute path inside it works too. A new channel does nothing else until bound |
 | `!<command> [args]` | Runs a Claude Code command, for example `!compact` or `!model opus` |
-| `!bypass on` / `off` | Switches the channel's session to `bypassPermissions` and back; a restart turns it off |
+| `!bypass on` / `off` | Switches the channel's session to `bypassPermissions` and back. `!resume` keeps it; `!bind` and a restart turn it off, and a restart started with `SIGTERM` says so first in every channel where it is on |
 | `!status` | Shows the channel's directory, session and mode, then the footer's values one per line |
 | `!stop` | Stops the turn that is running and denies its pending approvals |
 | `!resume` | Lists the twenty newest sessions of the channel's directory (not of other worktrees), terminal and Slack alike, each with the first 8 characters of its session id and a **Resume** button; the channel's own is marked `current` |
