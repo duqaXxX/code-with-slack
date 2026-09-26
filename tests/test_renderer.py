@@ -75,6 +75,26 @@ async def test_a_failed_tool_is_an_error_line() -> None:
     assert "error" in {t.status for t in sink.tasks}
 
 
+async def test_a_long_command_in_the_foreground_stays_a_call_line() -> None:
+    # foreground.jsonl (CLI 2.1.283): task_started with is_backgrounded false, then the task's
+    # end, then the call's result.
+    sink, renderer = await render(sdk_messages("foreground"))
+    assert not any(t.task or t.details == BACKGROUND for t in sink.tasks)
+    assert sink.tasks[-1].status == "complete"
+    assert renderer.running_tasks == []
+
+
+async def test_a_call_whose_task_outlives_its_result_becomes_a_task_line() -> None:
+    # background.jsonl: the call's result arrives while its command still runs.
+    messages = sdk_messages("background")
+    sink, _ = await render(messages)
+    (call,) = top_level_tool_ids(messages)
+    history = [t for t in sink.tasks if t.id == call]
+    assert not history[0].task  # a call's line until its result
+    assert any(t.task and t.details == BACKGROUND for t in history)
+    assert history[-1].task  # a task's line stays one after the task ends
+
+
 async def test_subagent_calls_nest_in_the_parent_line() -> None:
     messages = sdk_messages("subagent")
     sink, _ = await render(messages)
@@ -150,7 +170,9 @@ async def test_any_tool_name_renders_the_same_way(name: str) -> None:
     assert sink.tasks and all(t.title.startswith(name) for t in sink.tasks)
 
 
-@pytest.mark.parametrize("name", ["tools", "tool-error", "subagent", "interrupt", "background"])
+@pytest.mark.parametrize(
+    "name", ["tools", "tool-error", "subagent", "interrupt", "background", "foreground"]
+)
 async def test_statuses_are_only_the_ones_slack_accepts(name: str) -> None:
     sink, _ = await render(sdk_messages(name))
     closing = sink.finished[0] if sink.finished else []

@@ -264,6 +264,16 @@ async def test_a_recorded_turn_counts_its_failed_calls_in_one_line(slack: FakeSl
     assert [sinks.block_text(b) for b in tools] == ["✗ Read · Bash"]
 
 
+async def test_a_long_command_in_the_foreground_folds_once_it_ends(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    renderer = TurnRenderer(sink)
+    for message in sdk_messages("foreground"):
+        await renderer.feed(message)
+    await renderer.close(None)
+    tools = [b for b in last_blocks(slack) if str(b.get("block_id", "")).startswith("tools-")]
+    assert [sinks.block_text(b) for b in tools] == ["✓ Bash"]
+
+
 async def test_lines_fold_while_the_turn_runs(slack: FakeSlack) -> None:
     sink = reply(slack)
     await sink.task(tool("a", "Read"))

@@ -15,6 +15,10 @@ All notable changes to this project are documented here. The format follows
   message starts a session there, and the message then got the trust refusal (#14). The channel
   is still bound, and the answer now says no session can start there yet and why: the same
   reason, from the same checks, a message would get (untrusted, unreadable or missing).
+- A long command in the foreground no longer shows "Running in background" while it runs, and
+  folds into the counts when it ends. Claude Code starts a task for such a command too; a call's
+  line now becomes a task's line only when its result arrives while its task still runs. The
+  new `foreground` stream in `tests/fixtures/sdk/` records one.
 
 ### Changed
 
