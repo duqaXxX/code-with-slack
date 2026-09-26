@@ -143,8 +143,8 @@ RESUME_EMPTY = "No sessions in `{directory}` yet."
 RESUME_CURRENT = " · _current_"
 RESUME_BUTTON = "Resume"
 RESUME_MORE = (
-    "Only the newest {rows} are shown: `!resume <title>` resumes an older session that has a "
-    "title, and `claude --resume` in the terminal lists them all."
+    "Only the newest {rows} are shown: `!resume <id>`, or `!resume <title>` for a session that "
+    "has one, resumes an older session."
 )
 RESUME_ALREADY = "This channel is already on that session."
 RESUME_OK = (
@@ -186,8 +186,9 @@ question from Claude comes with **Answer**, which opens a short form, and **Skip
 **Sessions**
 `!status` shows the folder, the session, the permission mode and the footer's values. \
 `!stop` stops the running turn. `!resume` lists this folder's twenty newest sessions, from \
-the terminal too, with a **Resume** button each; `!resume <title>` resumes a session that has a \
-title directly.
+the terminal too, each with its id and a **Resume** button; `!resume <id>`, or `!resume <title>` \
+for a session that has one, resumes it directly. To continue a session in the terminal, run \
+`claude --resume <id>` there.
 
 **Bypass**
 `!bypass on` lets Claude Code run every tool without asking, until `!bypass off` or a restart. \

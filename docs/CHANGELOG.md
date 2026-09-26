@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The `!resume` list shows each session's id on a second line of its row, for `!resume <id>`
+  and for `claude --resume <id>` in the terminal. The line under a long list names `!resume <id>`
+  and no longer says that `claude --resume` in the terminal lists every session.
 - On `SIGTERM` the daemon lets the turns, background commands and agents already running finish
   before it exits, for up to 29 minutes after `launchctl kill TERM`, and up to the LaunchAgent's
   `ExitTimeOut` (60 seconds, launchd's cap) after `launchctl bootout`. A new prompt meanwhile, or a

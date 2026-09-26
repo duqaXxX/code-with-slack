@@ -36,8 +36,13 @@ def test_each_session_is_a_row_with_the_picker_s_columns_and_a_button() -> None:
     blocks = resume_blocks(Path("/srv/dev/app"), sessions, None, NOW)
     assert "/srv/dev/app" in blocks[0]["text"]["text"]
     first, second = rows(blocks)
-    assert first["text"]["text"] == "Fix footer effort · 2 hours ago · main · 402.3KB"
-    assert second["text"]["text"] == "Add trust gate · 1 day ago · security-fixes · 1.0MB"
+    assert first["text"]["text"] == (
+        "Fix footer effort · 2 hours ago · main · 402.3KB\n`68da9311-0000-4000-8000-000000000001`"
+    )
+    assert second["text"]["text"] == (
+        "Add trust gate · 1 day ago · security-fixes · 1.0MB\n"
+        "`68da9311-0000-4000-8000-000000000002`"
+    )
     button = first["accessory"]
     assert button["action_id"] == "session_resume"
     assert button["value"] == "68da9311-0000-4000-8000-000000000001"
@@ -48,6 +53,8 @@ def test_the_current_session_is_marked_and_has_no_button() -> None:
     sessions = [info("68da9311-0000-4000-8000-000000000001", "Now", 0.1)]
     (row,) = rows(resume_blocks(Path("/srv/dev/app"), sessions, sessions[0].session_id, NOW))
     assert "current" in row["text"]["text"] and "accessory" not in row
+    # Its id is shown too: it is the one `claude --resume <id>` takes to open it in the terminal.
+    assert row["text"]["text"].endswith("\n`68da9311-0000-4000-8000-000000000001`")
 
 
 def test_the_branch_reads_as_the_terminal_shows_it() -> None:
@@ -57,7 +64,7 @@ def test_the_branch_reads_as_the_terminal_shows_it() -> None:
              file_size=976_000),
     ]  # fmt: skip
     (row,) = rows(resume_blocks(Path("/srv/dev/notes"), sessions, None, NOW))
-    assert row["text"]["text"] == "Notes · 2 days ago · HEAD · 953.1KB"
+    assert row["text"]["text"].startswith("Notes · 2 days ago · HEAD · 953.1KB\n")
 
 
 def test_only_the_newest_sessions_are_listed() -> None:
@@ -67,8 +74,8 @@ def test_only_the_newest_sessions_are_listed() -> None:
     assert len(listed) == RESUME_ROWS == 20  # the maintainer, 2026-09-25: ten were too few
     assert listed[0]["accessory"]["value"].endswith("000000000000")
     assert blocks[-1]["text"]["text"] == texts.RESUME_MORE.format(rows=RESUME_ROWS)
-    # An untitled session has no name to type and its id is not shown: only the terminal helps.
-    assert "claude --resume" in texts.RESUME_MORE and "<title>" in texts.RESUME_MORE
+    # An untitled session has no title to type: `!resume <id>` reaches it when its id is known.
+    assert "!resume <id>" in texts.RESUME_MORE and "<title>" in texts.RESUME_MORE
 
 
 def test_no_more_line_when_every_session_fits() -> None:
