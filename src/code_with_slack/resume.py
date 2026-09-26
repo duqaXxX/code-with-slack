@@ -123,11 +123,14 @@ def _row(session: SDKSessionInfo, current: bool, now: datetime) -> dict[str, Any
     branch = shown_as_written(session.git_branch) if session.git_branch else None
     title = shown_as_written(one_line(session.summary, TITLE_LIMIT))
     parts = [title, _age(session.last_modified, now), branch, _size(session.file_size)]
-    line = " · ".join(p for p in parts if p)
+    line = " · ".join(p for p in parts if p) + (texts.RESUME_CURRENT if current else "")
+    # The terminal's picker shows no id, since picking a row resumes it. Here the id is what
+    # `!resume <id>` takes, and the only way to open a Slack-born session in the terminal
+    # (`claude --resume <id>`): on its own line, whole, so it copies as written.
     block: dict[str, Any] = {
         "type": "section",
         "block_id": f"session-{session.session_id}",
-        "text": {"type": "mrkdwn", "text": line + (texts.RESUME_CURRENT if current else "")},
+        "text": {"type": "mrkdwn", "text": f"{line}\n`{session.session_id}`"},
     }
     if not current:
         block["accessory"] = {
