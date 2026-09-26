@@ -35,7 +35,8 @@ BLOCKS_LIMIT = 45
 # chat.update errors that refuse the content itself (reference, read 2026-09-25): a plain retry
 # can pass where the blocks did not. A transient error such as `ratelimited` is not one.
 REFUSED_CONTENT = {"invalid_blocks", "invalid_blocks_format", "msg_too_long", "invalid_arguments"}
-ICONS = {"pending": "·", "in_progress": "…", "complete": "✓", "error": "✗"}
+# ⏳ marks what is still running, as the footer marks running tasks (`⏳ 1 shell`).
+ICONS = {"pending": "⏳", "in_progress": "⏳", "complete": "✓", "error": "✗"}
 
 
 def describe(exc: Exception) -> str:
@@ -131,9 +132,9 @@ def tool_lines(tools: list[_Tool], *, latest: bool = False) -> list[str]:
         ):
             names = counts[update.status]
             names[update.name] = names.get(update.name, 0) + 1
-        elif last and update.status != "error" and not update.task and update.output != STOPPED:
-            # What Claude is doing now, not an outcome: the outcome goes to the counts once
-            # another call follows. A failure keeps its icon and output, or it would read as fine.
+        elif last and update.status == "complete" and not update.task and update.output != STOPPED:
+            # What Claude just did, not an outcome: the outcome goes to the counts once another
+            # call follows. A running call keeps ⏳, a failure its icon and output.
             whole.append(tool.line(icon=False))
         else:
             whole.append(tool.line())

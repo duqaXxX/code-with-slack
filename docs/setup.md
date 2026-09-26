@@ -300,7 +300,7 @@ A reply is one message in the channel. It appears as soon as you send your messa
 It is then rewritten about once a second while Claude works: text in the order it is written,
 and after each piece of text the tool calls that followed it, in small grey text. The calls that
 ended fold into one line of tool names and counts, such as `✓ Bash ×3 · Read · ✗ Bash`, where
-`✗` counts the calls that failed; a call still running (`…` and its command), a subagent and a
+`✗` counts the calls that failed; a call still running (`⏳` and its command), a subagent and a
 background task keep a line of their own below it; a subagent's line counts the calls it made.
 While Claude works, its latest call also keeps a line of its own until the next one, so you
 can follow what it does: the call alone, or `✗` and its error when it failed. When the reply is complete, a divider and

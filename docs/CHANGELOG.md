@@ -26,7 +26,7 @@ All notable changes to this project are documented here. The format follows
 - A skill that runs in a forked context, typed as a command (`!review`), showed nothing but
   `Claude is writing…` while it worked, then its line once it had ended. Its task starts before
   the turn's first message and was held until then; the owner's turn now starts at a task that
-  no call started, so its line (`… /review`) shows while it works. Its agent's calls are not
+  no call started, so its line (`⏳ /review`) shows while it works. Its agent's calls are not
   streamed by Claude Code in this case, so the line carries no call count. The new
   `skill-fork-command` stream in `tests/fixtures/sdk/` records it. A task started by a call
   inside a background subagent now goes to the reply that holds that subagent.
@@ -61,6 +61,8 @@ All notable changes to this project are documented here. The format follows
   `tests/fixtures/sdk/` is recorded again with a Bash command that exits 1.
 - A subagent's line counts the calls it made (`· 12 calls`) before its latest one, while it runs
   and once it ends.
+- Every line of something still running (a call, a subagent, a task, a skill) is marked `⏳`,
+  as the footer marks running tasks, in place of `…`, which did not read as running.
 
 ### Added
 

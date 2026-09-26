@@ -1244,7 +1244,7 @@ async def test_a_skill_typed_as_a_command_shows_its_task_while_it_runs(
     started = next(i for i, m in enumerate(messages) if isinstance(m, TaskStartedMessage))
     h = harness_for({"turns": [messages[: started + 1]]})
     turn = await h.session().submit("/list-files")
-    await until(lambda: "… `/list-files`" in h.replies()[-1])  # before the skill has ended
+    await until(lambda: "⏳ `/list-files`" in h.replies()[-1])  # before the skill has ended
     h.clients[0].inject(messages[started + 1 :])
     await asyncio.wait_for(turn.done.wait(), 2)
     assert "✓ `/list-files`" in h.replies()[-1]
