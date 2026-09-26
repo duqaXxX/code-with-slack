@@ -1219,17 +1219,21 @@ async def test_a_stop_lets_the_running_turn_finish_and_ends_the_queued_one(
     assert h.state.get(CHANNEL).session_id == result.session_id
 
 
-async def test_a_stop_ends_a_turn_waiting_on_an_approval(
+async def test_a_stop_stops_a_turn_waiting_on_an_approval_and_keeps_its_session(
     harness_for: Callable[..., Harness],
 ) -> None:
-    ask = CanUseToolCall("Bash", {"command": "ls"})
-    h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
-    turn = await h.session().submit("first")
+    interrupted = sdk_messages("interrupt")
+    ask = CanUseToolCall("Bash", {"command": "rm -rf build"})
+    h = harness_for({"turns": [[ask, *interrupted]]})
+    turn = await h.session().submit("clean")
     await until(lambda: h.approvals.waiting(CHANNEL))
     await asyncio.wait_for(h.manager.drain(asyncio.Event()), 2)
-    assert turn.done.is_set() and not h.approvals.waiting(CHANNEL)
-    assert not h.clients[0].connected
-    assert texts.ENDED_RESTARTING in h.written_text()
+    assert turn.done.is_set() and h.clients[0].interrupts == 1
+    assert isinstance(h.clients[0].permission_results[0], PermissionResultDeny)
+    assert len(h.slack.calls_to("chat.delete")) == 1  # the request and its buttons are gone
+    result = interrupted[-1]
+    assert isinstance(result, ResultMessage)
+    assert h.state.get(CHANNEL).session_id == result.session_id
 
 
 async def test_a_turn_taken_before_a_stop_is_never_sent(

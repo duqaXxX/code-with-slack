@@ -199,11 +199,6 @@ def build_app(
         if not (files or command is None or isinstance(command, Passthrough)):
             await handle_word(channel, command)
             return
-        # The daemon's words still work while it stops (`!stop` shortens the wait); a new turn
-        # would not finish, and Slack does not send this event again to the next instance.
-        if sessions.draining:
-            await say(channel, texts.RESTARTING)
-            return
         # Prompts and commands for Claude Code enter the queue in the order they were sent,
         # although files take a while to download. Every reply goes to the main window.
         directory = session.directory
@@ -222,6 +217,12 @@ def build_app(
                 known = {str(c.get("name")) for c in current.commands}
                 name = command.text.split(" ", 1)[0]
                 prompt = f"/{command.text}" if name in known else text
+            # Checked last, with no await before the submit: a stop can start during a download.
+            # The daemon's words still work meanwhile (`!stop` shortens the wait); a new turn
+            # would not finish, and Slack does not send this event again to the next instance.
+            if sessions.draining:
+                await say(channel, texts.RESTARTING)
+                return
             await current.submit(prompt)
 
     async def handle_word(channel: str, command: Word) -> None:

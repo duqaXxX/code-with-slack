@@ -287,11 +287,8 @@ class ChannelSession:
         without a loss (closing it ends its Claude Code process)."""
         return not self.working and not self._running_counts()
 
-    async def start_draining(self) -> None:
-        """Start no further turn: the queued ones end now with a line asking to send them again,
-        and a turn taken but not sent yet ends the same way when the worker reaches it."""
-        self.draining = True
-        line = texts.ENDED.format(reason=texts.ENDED_RESTARTING)
+    async def fail_queued(self, line: str) -> None:
+        """End every queued turn's reply with `line`, and release whoever waits on them."""
         while not self._queue.empty():
             with contextlib.suppress(Exception):
                 await self._fail(self._queue.get_nowait(), line)
@@ -429,15 +426,13 @@ class ChannelSession:
                 await task
         self._deps.approvals.deny_all(self.channel_id)
         # A turn the worker took but had not sent yet is in no queue.
-        queued: list[Turn] = [self._taken] if self._taken is not None else []
-        self._taken = None
-        while not self._queue.empty():
-            queued.append(self._queue.get_nowait())
+        taken, self._taken = self._taken, None
         line = texts.ENDED.format(reason=reason)
         await self._abandon(line)
-        for turn in queued:
+        if taken is not None:
             with contextlib.suppress(Exception):
-                await self._fail(turn, line)
+                await self._fail(taken, line)
+        await self.fail_queued(line)
         if self._client is not None:
             client, self._client = self._client, None
             await self._disconnect(client)
@@ -902,16 +897,21 @@ class SessionManager:
         return await bindable_folders(root, self._deps.workspace_trusted)
 
     async def drain(self, cut_short: asyncio.Event) -> None:
-        """Let the turns already sent finish and start none, then return: when no channel is
-        working, or when `cut_short` is set. A turn waiting on an approval or a question has no
-        end in sight, so its session closes at once; so does one that asks later."""
+        """Let the turns already sent finish and send no other, then return: when no channel is
+        working, or when `cut_short` is set. Queued turns end at once, asking to be sent again. A
+        turn waiting on an approval or a question has no end in sight, so it is stopped as
+        `!stop` does, which keeps its session; so is one that asks later."""
         self.draining = True
-        for session in list(self._sessions.values()):
-            await session.start_draining()
+        sessions = list(self._sessions.values())
+        # Every flag before the first await: no worker sends a queued turn in between.
+        for session in sessions:
+            session.draining = True
+        for session in sessions:
+            await session.fail_queued(texts.ENDED.format(reason=texts.ENDED_RESTARTING))
         while not cut_short.is_set():
             for session in list(self._sessions.values()):
                 if self._deps.approvals.waiting(session.channel_id):
-                    await session.close(texts.ENDED_RESTARTING)
+                    await session.stop()
             if not any(s.working for s in self._sessions.values()):
                 return
             # Polled: a turn ends in several places, and a stop needs no finer timing.
