@@ -299,8 +299,8 @@ A reply is one message in the channel. It appears as soon as you send your messa
 `Claude is writing…`, or `Waiting for the previous reply…` when another turn is still running.
 It is then rewritten about once a second while Claude works: text in the order it is written,
 and after each piece of text the tool calls that followed it, in small grey text. The calls that
-ended fold into one line of tool names and counts, such as `✅ Bash ×3 · Read · ❌ Bash`, where
-`❌` counts the calls that failed; a call still running (`…` and its command), a subagent and a
+ended fold into one line of tool names and counts, such as `✓ Bash ×3 · Read · ✗ Bash`, where
+`✗` counts the calls that failed; a call still running (`…` and its command), a subagent and a
 background task keep a line of their own below it. When the reply is complete, a divider and
 the footer replace the status line. A reply longer than one Slack message continues in the next one.
 
@@ -311,7 +311,7 @@ is told it was denied because it could not be shown.
 Messages sent while a turn is running wait their turn; each gets its own reply. When a background
 task finishes while nothing runs, Claude Code starts a turn of its own to report it, as it does
 in the terminal: that reply opens with Claude Code's own line for the task's end, such as
-`✅ Agent "review" finished · 3m 59s`. While tasks run, the footer counts them, such as
+`✓ Agent "review" finished · 3m 59s`. While tasks run, the footer counts them, such as
 `⏳ 1 shell · 1 agent`.
 
 The channel's latest reply ends with a footer, which moves to each new reply: `⚡ bypass` when bypass is on, the git branch, the model, the

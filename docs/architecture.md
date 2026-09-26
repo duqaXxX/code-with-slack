@@ -117,9 +117,9 @@ block; each run of tool calls between two pieces of text is a `context` block (s
 as the terminal dims them), escaped for mrkdwn and marked with a `tools-` block id.
 `sinks.tool_lines` shows such a run the same way while the turn runs and once it ends: the calls
 that ended fold into one first line of tool names and counts, by the tool's name whatever the
-tool, succeeded ones after `✅` and failed ones after `❌` (`✅ Bash ×3 · Read · ❌ Bash`). Below
+tool, succeeded ones after `✓` and failed ones after `✗` (`✓ Bash ×3 · Read · ✗ Bash`). Below
 it, a line of its own for a call still running (`…` and its title), a task
-(`TaskUpdate.task`: a subagent, a background command, with its own `✅` or `❌` and summary once
+(`TaskUpdate.task`: a subagent, a background command, with its own `✓` or `✗` and summary once
 it ends) and a stopped call (`Stopped`). A running call moves into the counts when it ends.
 The reply is posted as soon as the owner's message is queued, showing only a status line:
 `Claude is writing…`, or `Waiting for the previous reply…` behind another turn. While the turn

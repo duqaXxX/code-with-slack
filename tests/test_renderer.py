@@ -264,15 +264,15 @@ async def test_a_notice_does_not_hide_a_local_command_s_result() -> None:
 @pytest.mark.parametrize(
     ("summary", "status", "duration_ms", "expected"),
     [
-        ('Agent "Scan" finished', "completed", 10_400, '✅ Agent "Scan" finished · 10s'),
-        ('Agent "Scan" finished', "completed", 239_000, '✅ Agent "Scan" finished · 3m 59s'),
+        ('Agent "Scan" finished', "completed", 10_400, '✓ Agent "Scan" finished · 10s'),
+        ('Agent "Scan" finished', "completed", 239_000, '✓ Agent "Scan" finished · 3m 59s'),
         (
             'Background command "Wait" completed (exit code 0)',
             "completed",
             None,
-            '✅ Background command "Wait" completed (exit code 0)',
+            '✓ Background command "Wait" completed (exit code 0)',
         ),
-        ('Background command "Wait" failed', "failed", None, '❌ Background command "Wait" failed'),
+        ('Background command "Wait" failed', "failed", None, '✗ Background command "Wait" failed'),
     ],
 )
 def test_ended_line_is_claude_code_s_own_summary(

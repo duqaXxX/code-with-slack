@@ -55,7 +55,7 @@ async def test_tool_lines_sit_where_they_happen(slack: FakeSlack) -> None:
     await sink.text("Then I read the README.")
     await sink.finish([], None)
     (body,) = slack.message_texts()
-    assert body == "First I list the files.\n\n✅ `Bash: ls`\n\nThen I read the README."
+    assert body == "First I list the files.\n\n✓ `Bash: ls`\n\nThen I read the README."
 
 
 async def test_text_that_already_breaks_a_paragraph_gets_no_extra_blank_line(
@@ -68,7 +68,7 @@ async def test_text_that_already_breaks_a_paragraph_gets_no_extra_blank_line(
     await sink.text("\nDone.")
     await sink.finish([], None)
     (body,) = slack.message_texts()
-    assert body == "Checking.\n\n✅ `Bash: ls`\n✅ `Read: README.md`\n\nDone."
+    assert body == "Checking.\n\n✓ `Bash: ls`\n✓ `Read: README.md`\n\nDone."
 
 
 async def test_a_running_tool_and_the_writing_line_show_until_the_end(slack: FakeSlack) -> None:
@@ -81,7 +81,7 @@ async def test_a_running_tool_and_the_writing_line_show_until_the_end(slack: Fak
     assert shown[-1]["elements"][0]["text"] == texts.WRITING
     await sink.finish([TaskUpdate("t1", "Bash: pytest", "complete")], "footer")
     final = last_blocks(slack)
-    assert "✅ `Bash: pytest`" in slack.message_texts()[0]
+    assert "✓ `Bash: pytest`" in slack.message_texts()[0]
     assert all(texts.WRITING not in str(b) for b in final)
 
 
@@ -89,14 +89,14 @@ async def test_a_failed_tool_shows_its_output(slack: FakeSlack) -> None:
     sink = reply(slack)
     await sink.task(TaskUpdate("t1", "Bash: ls missing", "error", output="Exit code 1"))
     await sink.finish([], None)
-    assert slack.message_texts() == ["❌ `Bash: ls missing` · Exit code 1"]
+    assert slack.message_texts() == ["✗ `Bash: ls missing` · Exit code 1"]
 
 
 async def test_a_stopped_tool_says_so(slack: FakeSlack) -> None:
     sink = reply(slack)
     await sink.task(TaskUpdate("t1", "Bash: sleep 20", "complete", output=STOPPED))
     await sink.finish([], None)
-    assert slack.message_texts() == ["✅ `Bash: sleep 20` · Stopped"]
+    assert slack.message_texts() == ["✓ `Bash: sleep 20` · Stopped"]
 
 
 async def test_a_long_reply_continues_in_a_new_message(slack: FakeSlack) -> None:
@@ -233,7 +233,7 @@ async def test_finished_tool_lines_collapse_into_one(slack: FakeSlack) -> None:
         await sink.task(update)
     await sink.text("Done.")
     await sink.finish([], None)
-    assert slack.message_texts() == ["✅ Bash · Read \u00d72 · Grep\n\nDone."]
+    assert slack.message_texts() == ["✓ Bash · Read \u00d72 · Grep\n\nDone."]
 
 
 async def test_failed_calls_are_counted_and_running_task_and_stopped_lines_stay_whole(
@@ -249,7 +249,7 @@ async def test_failed_calls_are_counted_and_running_task_and_stopped_lines_stay_
     await sink.task(tool("g", "Grep", output=STOPPED))
     await sink.finish([], None)
     assert slack.message_texts() == [
-        "✅ Bash · Read · ❌ Edit · Bash\n… `Bash: b`\n✅ `Agent: d`\n✅ `Grep: g` · Stopped"
+        "✓ Bash · Read · ✗ Edit · Bash\n… `Bash: b`\n✓ `Agent: d`\n✓ `Grep: g` · Stopped"
     ]
 
 
@@ -261,7 +261,7 @@ async def test_a_recorded_turn_counts_its_failed_calls_in_one_line(slack: FakeSl
         await renderer.feed(message)
     await renderer.close(None)
     tools = [b for b in last_blocks(slack) if str(b.get("block_id", "")).startswith("tools-")]
-    assert [sinks.block_text(b) for b in tools] == ["❌ Read · Bash"]
+    assert [sinks.block_text(b) for b in tools] == ["✗ Read · Bash"]
 
 
 async def test_a_long_command_in_the_foreground_folds_once_it_ends(slack: FakeSlack) -> None:
@@ -271,7 +271,7 @@ async def test_a_long_command_in_the_foreground_folds_once_it_ends(slack: FakeSl
         await renderer.feed(message)
     await renderer.close(None)
     tools = [b for b in last_blocks(slack) if str(b.get("block_id", "")).startswith("tools-")]
-    assert [sinks.block_text(b) for b in tools] == ["✅ Bash"]
+    assert [sinks.block_text(b) for b in tools] == ["✓ Bash"]
 
 
 async def test_lines_fold_while_the_turn_runs(slack: FakeSlack) -> None:
@@ -280,10 +280,10 @@ async def test_lines_fold_while_the_turn_runs(slack: FakeSlack) -> None:
     await sink.task(tool("b", "Bash", "error", output="Exit code 1"))
     await sink.task(tool("c", "Read", "in_progress"))
     await asyncio.sleep(0.05)
-    assert slack.message_texts() == ["✅ Read · ❌ Bash\n… `Read: c`"]
+    assert slack.message_texts() == ["✓ Read · ✗ Bash\n… `Read: c`"]
     await sink.task(tool("c", "Read"))  # the running call ends: it moves into the counts
     await asyncio.sleep(0.05)
-    assert slack.message_texts() == ["✅ Read \u00d72 · ❌ Bash"]
+    assert slack.message_texts() == ["✓ Read \u00d72 · ✗ Bash"]
 
 
 async def test_a_reply_that_shrinks_as_calls_end_removes_its_extra_message(
@@ -301,7 +301,7 @@ async def test_a_reply_that_shrinks_as_calls_end_removes_its_extra_message(
     assert len(slack.calls_to("chat.postMessage")) == 2
     await sink.finish(ended, "footer")
     assert [a["ts"] for a in slack.calls_to("chat.delete")] == ["2.2"]
-    assert slack.message_texts()[0] == "✅ Read \u00d7300"
+    assert slack.message_texts()[0] == "✓ Read \u00d7300"
 
 
 async def test_tool_lines_are_secondary_text_and_claude_s_words_are_not(slack: FakeSlack) -> None:
@@ -312,7 +312,7 @@ async def test_tool_lines_are_secondary_text_and_claude_s_words_are_not(slack: F
     await sink.finish([], None)
     blocks = last_blocks(slack)
     assert [b["type"] for b in blocks] == ["markdown", "context", "markdown"]
-    assert blocks[1]["elements"][0]["text"] == "✅ Read"
+    assert blocks[1]["elements"][0]["text"] == "✓ Read"
 
 
 async def test_tool_lines_escape_what_slack_mrkdwn_reads_as_markup(slack: FakeSlack) -> None:
