@@ -97,9 +97,9 @@ class _Text:
 class _Tool:
     update: TaskUpdate
 
-    def line(self) -> str:
+    def line(self, *, icon: bool = True) -> str:
         update = self.update
-        line = f"{ICONS[update.status]} `{update.title}`"
+        line = f"{ICONS[update.status]} `{update.title}`" if icon else f"`{update.title}`"
         if update.calls:
             # How much a subagent has done: its latest call alone does not say.
             line += f" · {update.calls} call{'' if update.calls == 1 else 's'}"
@@ -131,6 +131,10 @@ def tool_lines(tools: list[_Tool], *, latest: bool = False) -> list[str]:
         ):
             names = counts[update.status]
             names[update.name] = names.get(update.name, 0) + 1
+        elif last and update.status != "error" and not update.task and update.output != STOPPED:
+            # What Claude is doing now, not an outcome: the outcome goes to the counts once
+            # another call follows. A failure keeps its icon and output, or it would read as fine.
+            whole.append(tool.line(icon=False))
         else:
             whole.append(tool.line())
     groups = [

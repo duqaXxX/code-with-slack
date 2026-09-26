@@ -121,7 +121,8 @@ tool, succeeded ones after `✓` and failed ones after `✗` (`✓ Bash ×3 · R
 it, a line of its own for a call still running (`…` and its title), a task
 (`TaskUpdate.task`: a subagent, a background command, with its own `✓` or `✗` and summary once
 it ends) and a stopped call (`Stopped`). While the reply is written, the last call of the last
-run also keeps its line, running or ended, until another call or Claude's text follows it: a
+run also keeps its line, running or ended, with no icon unless it failed (`✗` and the output's
+first line), until another call or Claude's text follows it: a
 call that ends within the one-second rewrite would otherwise never show. Then it moves into
 the counts.
 The reply is posted as soon as the owner's message is queued, showing only a status line:

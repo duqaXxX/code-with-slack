@@ -77,7 +77,7 @@ async def test_a_running_tool_and_the_writing_line_show_until_the_end(slack: Fak
     await sink.task(TaskUpdate("t1", "Bash: pytest", "in_progress"))
     await asyncio.sleep(0.05)
     shown = last_blocks(slack)
-    assert "… `Bash: pytest`" in slack.message_texts()[0]
+    assert slack.message_texts()[0].endswith("\n`Bash: pytest`")  # what Claude does now
     assert shown[-1]["elements"][0]["text"] == texts.WRITING
     await sink.finish([TaskUpdate("t1", "Bash: pytest", "complete")], "footer")
     final = last_blocks(slack)
@@ -300,7 +300,9 @@ async def test_a_skill_in_a_forked_context_shows_its_calls_like_a_subagent(
 
 async def test_a_running_subagent_counts_its_calls_before_its_latest(slack: FakeSlack) -> None:
     sink = reply(slack)
-    await sink.task(tool("a", "Agent", "in_progress", details="Read: x\nBash: ls", calls=3))
+    await sink.task(
+        tool("a", "Agent", "in_progress", details="Read: x\nBash: ls", calls=3, task=True)
+    )
     await asyncio.sleep(0.05)
     assert slack.message_texts() == ["… `Agent: a` · 3 calls · Bash: ls"]
 
@@ -317,13 +319,23 @@ async def test_lines_fold_while_the_turn_runs(slack: FakeSlack) -> None:
     await sink.task(tool("b", "Bash", "error", output="Exit code 1"))
     await sink.task(tool("c", "Read", "in_progress"))
     await asyncio.sleep(0.05)
-    assert slack.message_texts() == ["✓ Read · ✗ Bash\n… `Read: c`"]
+    assert slack.message_texts() == ["✓ Read · ✗ Bash\n`Read: c`"]
     await sink.task(tool("c", "Read"))  # it ended, and it is still the last call: still shown
     await asyncio.sleep(0.05)
-    assert slack.message_texts() == ["✓ Read · ✗ Bash\n✓ `Read: c`"]
+    assert slack.message_texts() == ["✓ Read · ✗ Bash\n`Read: c`"]
     await sink.task(tool("d", "Bash", "in_progress"))  # a new last call: the previous one folds
     await asyncio.sleep(0.05)
-    assert slack.message_texts() == ["✓ Read \u00d72 · ✗ Bash\n… `Bash: d`"]
+    assert slack.message_texts() == ["✓ Read \u00d72 · ✗ Bash\n`Bash: d`"]
+
+
+async def test_the_last_call_keeps_its_icon_and_output_only_when_it_failed(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.task(tool("a", "Read"))
+    await sink.task(tool("b", "Bash", "error", output="Exit code 1"))
+    await asyncio.sleep(0.05)
+    assert slack.message_texts() == ["✓ Read\n✗ `Bash: b` · Exit code 1"]
 
 
 async def test_the_last_call_folds_once_claude_writes_or_the_reply_ends(slack: FakeSlack) -> None:
@@ -331,7 +343,7 @@ async def test_the_last_call_folds_once_claude_writes_or_the_reply_ends(slack: F
     await sink.task(tool("a", "Read"))
     await sink.task(tool("b", "Read"))
     await asyncio.sleep(0.05)
-    assert slack.message_texts() == ["✓ Read\n✓ `Read: b`"]
+    assert slack.message_texts() == ["✓ Read\n`Read: b`"]
     await sink.text("Found it.")  # the run is closed: nothing in it is the last call any more
     await asyncio.sleep(0.05)
     assert slack.message_texts() == ["✓ Read \u00d72\n\nFound it."]
