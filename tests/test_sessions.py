@@ -1262,3 +1262,20 @@ async def test_a_second_signal_cuts_the_stop_short(harness_for: Callable[..., Ha
     cut_short.set()
     await asyncio.wait_for(drained, 2)
     assert not turn.done.is_set()  # close_all ends it, as before
+
+
+async def test_a_stop_waits_for_a_background_task_and_the_turn_that_reports_it(
+    harness_for: Callable[..., Harness],
+) -> None:
+    first, notice, injected = split_background()
+    h = harness_for({"turns": [first]})
+    await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
+    drained = asyncio.create_task(h.manager.drain(asyncio.Event()))
+    await asyncio.sleep(0.05)
+    assert not drained.done()  # the task still runs
+    h.clients[0].inject(notice)
+    await asyncio.sleep(0.05)
+    assert not drained.done()  # Claude Code is expected to report it
+    h.clients[0].inject(injected)
+    await asyncio.wait_for(drained, 2)
+    assert any(is_report(r) for r in h.replies())

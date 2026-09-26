@@ -271,21 +271,16 @@ class ChannelSession:
         return self._active is not None or bool(self._sent)
 
     @property
-    def working(self) -> bool:
-        """A turn runs, is sent, taken or queued, or Claude Code is expected to start one of its
-        own. Background tasks that outlived their turn do not count."""
-        return (
-            self.busy
-            or self._taken is not None
-            or not self._queue.empty()
-            or not self._settled.is_set()
-        )
-
-    @property
     def idle(self) -> bool:
-        """Not working, and no background task still running: the session can be swapped
-        without a loss (closing it ends its Claude Code process)."""
-        return not self.working and not self._running_counts()
+        """Nothing running, sent, taken or queued, and no background task still working: the
+        session can be swapped without a loss (closing it ends its Claude Code process)."""
+        return (
+            not self.busy
+            and not self._running_counts()
+            and self._taken is None
+            and self._queue.empty()
+            and self._settled.is_set()
+        )
 
     async def fail_queued(self, line: str) -> None:
         """End every queued turn's reply with `line`, and release whoever waits on them."""
@@ -897,10 +892,12 @@ class SessionManager:
         return await bindable_folders(root, self._deps.workspace_trusted)
 
     async def drain(self, cut_short: asyncio.Event) -> None:
-        """Let the turns already sent finish and send no other, then return: when no channel is
-        working, or when `cut_short` is set. Queued turns end at once, asking to be sent again. A
-        turn waiting on an approval or a question has no end in sight, so it is stopped as
-        `!stop` does, which keeps its session; so is one that asks later."""
+        """Let the turns already sent finish and send no other, then return: when every channel is
+        idle, or when `cut_short` is set. Idle includes the background commands and agents, which
+        die with the Claude Code process, and the turn Claude Code starts to report each one.
+        Queued turns end at once, asking to be sent again. A turn waiting on an approval or a
+        question has no end in sight, so it is stopped as `!stop` does, which keeps its session;
+        so is one that asks later."""
         self.draining = True
         sessions = list(self._sessions.values())
         # Every flag before the first await: no worker sends a queued turn in between.
@@ -912,7 +909,7 @@ class SessionManager:
             for session in list(self._sessions.values()):
                 if self._deps.approvals.waiting(session.channel_id):
                     await session.stop()
-            if not any(s.working for s in self._sessions.values()):
+            if all(s.idle for s in self._sessions.values()):
                 return
             # Polled: a turn ends in several places, and a stop needs no finer timing.
             with contextlib.suppress(TimeoutError):

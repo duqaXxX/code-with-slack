@@ -192,14 +192,16 @@ launchctl bootout gui/$(id -u)/local.code-with-slack
 launchctl print gui/$(id -u)/local.code-with-slack
 ```
 
-On `SIGTERM` code-with-slack stops starting turns and lets the ones already running finish, then
-exits; `KeepAlive` starts it again. Meanwhile a new message gets `code-with-slack is restarting;
-send this again in a moment.`, a queued one ends with the same request, and a turn waiting on an
-approval or a question is stopped as `!stop` would, so the conversation goes on after the
-restart. The daemon's `!words` keep working: `!stop` ends a long turn so the restart goes on.
-After 29 minutes code-with-slack stops waiting and ends the turns still running, whose replies
-say that it stopped. Sending the signal a second time stops without waiting. `SIGINT` (Ctrl-C in
-a terminal) stops without waiting too, because the terminal sends it to the Claude Code processes
+On `SIGTERM` code-with-slack stops starting turns and lets everything already running finish: the
+turns, the background commands and agents, which end with the Claude Code process, and the turn in
+which Claude reports each one. Then it exits, and `KeepAlive` starts it again. Meanwhile a new
+message gets `code-with-slack is restarting; send this again in a moment.`, a queued one ends with
+the same request, and a turn waiting on an approval or a question is stopped as `!stop` would, so
+the conversation goes on after the restart. The daemon's `!words` keep working: `!stop` ends a long
+turn so the restart goes on. After 29 minutes code-with-slack stops waiting and ends what still
+runs, whose replies say that it stopped: a background command that never ends, such as a dev server,
+holds a restart that long. Sending the signal a second time stops without waiting. `SIGINT` (Ctrl-C
+in a terminal) stops without waiting too, because the terminal sends it to the Claude Code processes
 as well.
 
 How long a turn can take to finish depends on who sends the signal. `launchctl kill TERM` only
