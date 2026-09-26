@@ -173,7 +173,7 @@ The plist lives at `~/Library/LaunchAgents/local.code-with-slack.plist`. launchd
   <key>KeepAlive</key>
   <true/>
   <key>ExitTimeOut</key>
-  <integer>1800</integer>
+  <integer>60</integer>
   <key>StandardOutPath</key>
   <string><home>/Library/Logs/code-with-slack/code-with-slack.log</string>
   <key>StandardErrorPath</key>
@@ -198,16 +198,21 @@ send this again in a moment.`, a queued one ends with the same request, and a tu
 approval or a question is stopped as `!stop` would, so the conversation goes on after the
 restart. The daemon's `!words` keep working: `!stop` ends a long turn so the restart goes on.
 After 29 minutes code-with-slack stops waiting and ends the turns still running, whose replies
-say that it stopped. `ExitTimeOut` is how long launchd waits before it kills the process (the
-default was 5 seconds on macOS 27.0): keep it above those 29 minutes, or a reply still open
-keeps saying that Claude is writing. Sending the signal a second time stops without waiting.
-`SIGINT` (Ctrl-C in a terminal) stops without waiting too, because the terminal sends it to the
-Claude Code processes as well.
+say that it stopped. Sending the signal a second time stops without waiting. `SIGINT` (Ctrl-C in
+a terminal) stops without waiting too, because the terminal sends it to the Claude Code processes
+as well.
+
+How long a turn can take to finish depends on who sends the signal. `launchctl kill TERM` only
+sends it, so a restart waits up to those 29 minutes. `launchctl bootout` and `launchctl
+kickstart -k` stop the job themselves and kill it `ExitTimeOut` seconds later; on macOS 27.0
+launchd caps `ExitTimeOut` at 60 (`launchctl print` shows 60 for any larger value, and a job
+stopped with `bootout` was killed within 60 seconds, measured 2026-09-26). A turn still running
+then keeps a reply that says Claude is writing.
 
 `launchctl kill TERM` returns at once, so a Claude Code session running from Slack can restart
 the daemon that hosts it and still finish its turn. `launchctl kickstart -k` waits until the old
-instance has exited, which from such a session means waiting on its own turn: its command stays
-blocked until the tool call gives up or `ExitTimeOut` passes.
+instance has exited, which from such a session means waiting on its own turn, until launchd
+kills the daemon and that turn with it after `ExitTimeOut`.
 
 The log holds what the service did, never the content of your messages.
 
