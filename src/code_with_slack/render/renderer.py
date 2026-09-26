@@ -115,6 +115,8 @@ class TurnRenderer:
         # Tasks started and not yet ended (task_id -> entry id). Only the lifecycle frames say
         # this reliably: a subagent can move to the background without a second task_started.
         self._running: dict[str, str] = {}
+        self._commands: set[str] = set()  # lines of tasks no call started (a command's)
+        self._nested: set[str] = set()  # tasks shown on a command's line, not on their own
         self._wrote_text = False
         self.result: ResultMessage | None = None
         self.auth_failed = False
@@ -260,14 +262,28 @@ class TurnRenderer:
             self._line_of_task[message.task_id] = message.tool_use_id
             self._running[message.task_id] = message.tool_use_id
             return
+        command = next((i for i in reversed(self._running.values()) if i in self._commands), None)
+        if message.tool_use_id and command is not None and message.tool_use_id not in self._root_of:
+            # Started by a call this reply never saw while a command's task runs: an agent inside
+            # that command (a forked skill typed as a command streams none of its own calls,
+            # recorded: `skill-fork-command.jsonl`, CLI 2.1.283). It shows on the command's
+            # line, as a subagent's calls show on the subagent's: one work, one line.
+            self._nested.add(message.task_id)
+            await self._child(command, one_line(message.description, TITLE_LIMIT))
+            return
         line_id = f"task-{message.task_id}"
         self._line_of_task[message.task_id] = line_id
         self._running[message.task_id] = line_id
+        if message.tool_use_id is None:
+            self._commands.add(line_id)
         title = one_line(message.description, TITLE_LIMIT)
         name = message.task_type or "task"
         await self._set(TaskUpdate(line_id, title, "in_progress", name=name, task=True))
 
     async def _task_ended(self, task_id: str, status: str, summary: str | None) -> None:
+        if task_id in self._nested:
+            self._nested.discard(task_id)  # the command's own end closes its line
+            return
         self._running.pop(task_id, None)
         line_id = self._line_of_task.get(task_id, f"task-{task_id}")
         entry = self._lines.get(line_id) or TaskUpdate(

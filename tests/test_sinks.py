@@ -1,9 +1,11 @@
 import asyncio
+import dataclasses
 from dataclasses import replace
 from typing import Any
 
 import aiohttp
 import pytest
+from claude_agent_sdk.types import TaskNotificationMessage, TaskStartedMessage
 from slack_sdk.errors import SlackApiError
 
 from code_with_slack import texts
@@ -296,6 +298,25 @@ async def test_a_skill_in_a_forked_context_shows_its_calls_like_a_subagent(
     # skill-fork.jsonl (CLI 2.1.283): a `context: fork` skill's calls carry the Skill call's id.
     (text,) = await tool_texts_of(slack, "skill-fork")
     assert text == "✓ `Skill: list-files` · 2 calls"
+
+
+async def test_an_agent_inside_a_command_shows_on_the_command_s_line(slack: FakeSlack) -> None:
+    # skill-fork-command.jsonl, with an agent the skill starts inside it: a task whose
+    # tool_use_id names a call the stream never carried (seen live with `!code-review`).
+    messages = sdk_messages("skill-fork-command")
+    started = next(m for m in messages if isinstance(m, TaskStartedMessage))
+    ended = next(m for m in messages if isinstance(m, TaskNotificationMessage))
+    inner = {"task_id": "inner", "tool_use_id": "toolu_inner"}
+    renderer = TurnRenderer(reply(slack))
+    await renderer.feed(started)
+    await renderer.feed(dataclasses.replace(started, **inner, description="Run the tests"))
+    await asyncio.sleep(0.05)
+    assert slack.message_texts() == ["⏳ `/list-files` · 1 call · Run the tests"]  # one line
+    await renderer.feed(dataclasses.replace(ended, **inner))
+    for message in messages[messages.index(started) + 1 :]:
+        await renderer.feed(message)
+    await renderer.close(None)
+    assert slack.message_texts()[0].startswith("✓ `/list-files` · 1 call\n\n")  # then the text
 
 
 async def test_a_running_subagent_counts_its_calls_before_its_latest(slack: FakeSlack) -> None:
