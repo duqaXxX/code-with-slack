@@ -413,11 +413,11 @@ class ChannelSession:
         await self._post(texts.RESTART_WAITS.format(counts=kinds))
 
     async def stop(self) -> bool:
-        """Interrupt the running turn and deny its pending approvals; queued turns stay queued.
-        While the daemon stops, also stop the background tasks, which the restart waits for."""
+        """Interrupt the running turn, deny its pending approvals and stop the channel's
+        background tasks; queued turns stay queued."""
         if self._client is None:
             return False
-        tasks = self._running_task_ids() if self.draining else []
+        tasks = self._running_task_ids()
         if not self.busy and not tasks:
             return False
         if self.busy:

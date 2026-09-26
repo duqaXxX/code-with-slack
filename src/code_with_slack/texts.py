@@ -103,7 +103,7 @@ BYPASS_ON = (
 BYPASS_RESTARTING = "code-with-slack is restarting: bypass stays on in this channel."
 BYPASS_OFF = "Bypass is off. Claude Code is back in its `{mode}` mode."
 STOPPED = "Stopped the current turn."
-STOPPED_DRAINING = "Stopped what was running in this channel."
+STOPPED_CHANNEL = "Stopped what was running in this channel."
 RESTART_WAITS = (
     "code-with-slack is restarting once these background tasks end: {counts}. "
     "`!stop` ends them now."
@@ -123,7 +123,7 @@ HELP_WORDS = (
     "`!guide` how code-with-slack works, in a few lines",
     "`!help [text]` this list, or only the lines that contain the text",
     "`!status` the channel's directory, session and mode, then the footer's values",
-    "`!stop` stop the running turn and deny its pending approvals",
+    "`!stop` stop the running turn and the background tasks, and deny pending approvals",
     "`!bind [folder]` the folders Claude Code trusts, or bind this channel to one, its path "
     "relative to the allowed root",
     "`!bypass on|off` run every tool without asking, until off or a bind",
@@ -199,12 +199,12 @@ When Claude Code asks permission, the request shows what will run, with **Approv
 question from Claude comes with **Answer**, which opens a short form, and **Skip**.
 
 **Sessions**
-`!status` shows the folder, the session, the permission mode and the footer's values. \
-`!stop` stops the running turn. `!resume` lists this folder's twenty newest sessions, from \
-the terminal too, each with the start of its id and a **Resume** button; `!resume <id>` (that \
-start is enough), or `!resume <title>` for a session that has one, resumes it directly. To \
-continue the channel's session in the terminal, run `claude --resume <id>` there with the full \
-id `!status` shows.
+`!status` shows the folder, the session, the permission mode and the footer's values. `!stop` \
+stops the running turn and the background tasks. `!resume` lists this folder's twenty newest \
+sessions, from the terminal too, each with the start of its id and a **Resume** button; `!resume \
+<id>` (that start is enough), or `!resume <title>` for a session that has one, resumes it \
+directly. To continue the channel's session in the terminal, run `claude --resume <id>` there with \
+the full id `!status` shows.
 
 **Bypass**
 `!bypass on` lets Claude Code run every tool without asking, until `!bypass off` or `!bind`; \

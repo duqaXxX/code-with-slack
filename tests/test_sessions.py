@@ -1481,15 +1481,17 @@ async def test_a_stop_held_by_a_background_task_says_so_and_bang_stop_ends_it(
     await asyncio.wait_for(drained, 1)
 
 
-async def test_bang_stop_leaves_background_tasks_alone_outside_a_stop(
+async def test_bang_stop_ends_background_tasks_outside_a_stop_too(
     harness_for: Callable[..., Harness],
 ) -> None:
     first, _, _ = split_background()
+    task_id = next(m.task_id for m in first if isinstance(m, TaskStartedMessage))
     h = harness_for({"turns": [first]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    assert not await session.stop()
-    assert h.clients[0].stopped_tasks == []
+    assert await session.stop()
+    assert h.clients[0].stopped_tasks == [task_id]
+    assert h.clients[0].interrupts == 0  # no turn was running
 
 
 async def swap(h: Harness, how: str, tmp_path: Path) -> None:

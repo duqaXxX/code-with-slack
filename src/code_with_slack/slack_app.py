@@ -269,7 +269,7 @@ def build_app(
                     case Stop():
                         await say(
                             channel,
-                            (texts.STOPPED_DRAINING if session.draining else texts.STOPPED)
+                            texts.STOPPED_CHANNEL
                             if await session.stop()
                             else texts.NOTHING_TO_STOP,
                         )
