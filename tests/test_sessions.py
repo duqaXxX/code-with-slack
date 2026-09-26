@@ -8,7 +8,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from claude_agent_sdk import ClaudeAgentOptions, Message, RateLimitEvent, ResultError, ResultMessage
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    Message,
+    RateLimitEvent,
+    ResultError,
+    ResultMessage,
+    ToolUseBlock,
+)
 from claude_agent_sdk._internal.message_parser import parse_message
 from claude_agent_sdk.types import (
     PermissionResultAllow,
@@ -23,6 +31,7 @@ from code_with_slack import sessions, texts
 from code_with_slack.approvals import Answer, Approvals, Approve
 from code_with_slack.footer import UsageCache
 from code_with_slack.guards import Identity
+from code_with_slack.render.sinks import NESTED
 from code_with_slack.sessions import SessionDeps, SessionManager, resolve_directory
 from code_with_slack.state import StateStore
 from tests.fakes import (
@@ -569,7 +578,8 @@ async def test_a_background_agent_s_calls_update_its_line_and_open_no_reply(
     h.clients[0].inject(children)
     await asyncio.sleep(0.1)
     assert len(h.slack.posted_ts) == posted
-    assert "Bash" in h.replies()[0].splitlines()[0]
+    parent, nested = h.replies()[0].splitlines()[:2]
+    assert "Agent" in parent and nested.startswith(NESTED) and "Bash" in nested
 
 
 async def test_ended_tasks_are_forgotten_past_the_limit(
@@ -1225,6 +1235,79 @@ async def test_status_follows_a_reply_that_reports_no_tokens(
     await asyncio.wait_for((await session.submit("/usage")).done.wait(), 2)
     assert " tok" not in statuses(h)[-1]
     assert "Session tokens" not in await session.status()
+
+
+async def test_a_skill_typed_as_a_command_shows_its_task_while_it_runs(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # skill-fork-command.jsonl (CLI 2.1.283): the forked skill's task starts and ends before the
+    # turn's first message, and none of its calls is streamed.
+    messages = sdk_messages("skill-fork-command")
+    started = next(i for i, m in enumerate(messages) if isinstance(m, TaskStartedMessage))
+    h = harness_for({"turns": [messages[: started + 1]]})
+    turn = await h.session().submit("/list-files")
+    await until(lambda: "⏳ `/list-files`" in h.replies()[-1])  # before the skill has ended
+    h.clients[0].inject(messages[started + 1 :])
+    await asyncio.wait_for(turn.done.wait(), 2)
+    assert "✓ `/list-files`" in h.replies()[-1]
+    assert len(h.replies()) == 1  # one reply: the task's line is the owner's turn's
+
+
+def started_of(name: str) -> TaskStartedMessage:
+    return next(m for m in sdk_messages(name) if isinstance(m, TaskStartedMessage))
+
+
+async def test_a_task_started_by_a_call_does_not_start_the_owner_s_turn(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # foreground.jsonl: a long Bash call's task, whose tool_use_id names that call.
+    h = harness_for({"turns": [[started_of("foreground")]]})
+    session = h.session()
+    await session.submit("run it")
+    await until(lambda: bool(h.clients) and h.clients[0].queries == ["run it"])
+    await asyncio.sleep(0.05)
+    assert session._active is None and len(session._held) == 1
+    assert h.replies() == [""]  # the status line alone: no task line in the reply
+
+
+async def test_a_command_s_task_waits_while_a_report_turn_is_expected(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({})
+    session = h.session()
+    await session.submit("/list-files")
+    await until(lambda: bool(h.clients) and h.clients[0].queries == ["/list-files"])
+    # The prompt is sent, and a report turn is expected meanwhile (a turn that crossed it).
+    session._expect_injected_turn()
+    h.clients[0].inject([started_of("skill-fork-command")])
+    await until(lambda: len(session._held) == 1)
+    assert session._active is None
+
+
+async def test_a_task_started_under_a_background_agent_goes_to_the_agent_s_reply(
+    harness_for: Callable[..., Harness],
+) -> None:
+    recorded = sdk_messages("subagent")
+    turn = [m for m in split_turns(recorded)[0] if getattr(m, "parent_tool_use_id", None) is None]
+    child_call = next(
+        b.id
+        for m in recorded
+        if isinstance(m, AssistantMessage) and m.parent_tool_use_id is not None
+        for b in m.content
+        if isinstance(b, ToolUseBlock)
+    )
+    nested = dataclasses.replace(
+        started_of("subagent"), task_id="nested", tool_use_id=child_call, description="nested"
+    )
+    h = harness_for({"turns": [turn]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    posted = len(h.slack.posted_ts)
+    children = [m for m in recorded if getattr(m, "parent_tool_use_id", None) is not None]
+    h.clients[0].inject([*children, nested])
+    await until(lambda: "nested" in h.replies()[0])
+    assert len(h.slack.posted_ts) == posted  # no reply of its own
+    assert "nested" in session._task_replies
 
 
 async def test_a_stop_lets_the_running_turn_finish_and_ends_the_queued_one(

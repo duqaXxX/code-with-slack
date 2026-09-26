@@ -35,7 +35,10 @@ BLOCKS_LIMIT = 45
 # chat.update errors that refuse the content itself (reference, read 2026-09-25): a plain retry
 # can pass where the blocks did not. A transient error such as `ratelimited` is not one.
 REFUSED_CONTENT = {"invalid_blocks", "invalid_blocks_format", "msg_too_long", "invalid_arguments"}
-ICONS = {"pending": "·", "in_progress": "…", "complete": "✓", "error": "✗"}
+# ⏳ marks what is still running, as the footer marks running tasks (`⏳ 1 shell`).
+ICONS = {"pending": "⏳", "in_progress": "⏳", "complete": "✓", "error": "✗"}
+# Slack drops plain spaces at the start of a line; no-break spaces stay and make the indent.
+NESTED = "\u00a0" * 4 + "⎿ "
 
 
 def describe(exc: Exception) -> str:
@@ -106,7 +109,8 @@ class _Tool:
         if (update.status == "error" and update.output) or update.output == STOPPED:
             line += f" · {update.output}"
         elif update.status == "in_progress" and update.details:
-            line += f" · {update.details.splitlines()[-1]}"
+            # What it is doing now, one level down, as the terminal nests it under `⎿`.
+            line += f"\n{NESTED}{update.details.splitlines()[-1]}"
         return line
 
 
@@ -131,9 +135,9 @@ def tool_lines(tools: list[_Tool], *, latest: bool = False) -> list[str]:
         ):
             names = counts[update.status]
             names[update.name] = names.get(update.name, 0) + 1
-        elif last and update.status != "error" and not update.task and update.output != STOPPED:
-            # What Claude is doing now, not an outcome: the outcome goes to the counts once
-            # another call follows. A failure keeps its icon and output, or it would read as fine.
+        elif last and update.status == "complete" and not update.task and update.output != STOPPED:
+            # What Claude just did, not an outcome: the outcome goes to the counts once another
+            # call follows. A running call keeps ⏳, a failure its icon and output.
             whole.append(tool.line(icon=False))
         else:
             whole.append(tool.line())

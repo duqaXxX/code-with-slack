@@ -587,20 +587,39 @@ class ChannelSession:
             if self._active is None and isinstance(message, TaskNotificationMessage):
                 self._notified()
             return
-        parent = getattr(message, "parent_tool_use_id", None)
-        origin = self._origin_of(parent) if parent else None
+        # A stream message names the call it runs under (`parent_tool_use_id`), a task frame
+        # the call that started it (`tool_use_id`): either leads to the reply holding that call
+        # when a background subagent works on after its turn.
+        call = getattr(message, "parent_tool_use_id", None) or (
+            getattr(message, "tool_use_id", None) if isinstance(message, TASK_MESSAGES) else None
+        )
+        origin = self._origin_of(call) if call else None
         if origin is not None:
-            # A background subagent at work after its turn: its calls belong under its line.
             await origin.feed(message)
+            if isinstance(message, TaskStartedMessage):
+                self._task_replies[message.task_id] = origin
+                await self._show_running()
             return
         if self._active is None:
-            if isinstance(message, TASK_MESSAGES):
-                self._held.append(message)
-                if isinstance(message, TaskNotificationMessage):
-                    self._notified()
-                return
-            if not isinstance(message, TURN_MESSAGES):
-                return
+            # A task started by no call, while an owner prompt is sent and no report turn is
+            # expected, is that prompt's: a skill with `context: fork` typed as a command
+            # (`!review` → `/review`) runs its agent before the turn's first message (recorded:
+            # `skill-fork-command.jsonl`, CLI 2.1.283, the only recording with no
+            # `tool_use_id`). Its turn starts now, so its line shows while it works.
+            starts_owner_turn = (
+                isinstance(message, TaskStartedMessage)
+                and message.tool_use_id is None
+                and bool(self._sent)
+                and not self._injected_expected
+            )
+            if not starts_owner_turn:
+                if isinstance(message, TASK_MESSAGES):
+                    self._held.append(message)
+                    if isinstance(message, TaskNotificationMessage):
+                        self._notified()
+                    return
+                if not isinstance(message, TURN_MESSAGES):
+                    return
             self._active = await self._start_turn()
         active = self._active
         await active.renderer.feed(message)

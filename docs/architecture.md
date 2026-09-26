@@ -89,9 +89,9 @@ a tool Claude Code adds later gets its line in the reply with no code change.
 | `StreamEvent` with no parent, a `text_delta` | the text, as it is written |
 | a top-level `TextBlock` in an `AssistantMessage` | nothing more: the same text already arrived as deltas |
 | `ToolUseBlock` or `ServerToolUseBlock` with no parent | a new tool line, in progress, titled `Name: first string argument` |
-| the same inside a subagent or a skill run in a forked context (`parent_tool_use_id` set) | the parent's line counts the subagent's calls and shows its latest one (`… Agent: review · 12 calls · Bash: ls`), and becomes a task's line: it keeps a line of its own once it ends, in the foreground or in the background |
+| the same inside a subagent or a skill run in a forked context (`parent_tool_use_id` set) | the parent's line counts the subagent's calls (`⏳ Agent: review · 12 calls`) and, while it runs, shows its latest one on a line below, indented with no-break spaces under `⎿` (`sinks.NESTED`), and becomes a task's line: it keeps a line of its own once it ends, in the foreground or in the background |
 | `ToolResultBlock` or `ServerToolResultBlock` for a line | the line completes, or shows an error with the output's first line when `is_error`; a line whose task already ended as stopped keeps `Stopped` |
-| `TaskStartedMessage` | for a tool call, nothing yet: Claude Code starts a task for a long command in the foreground too, which ends before the call's result. When the call's result arrives with its task still running, the line becomes a task's line, notes "Running in background" and stays in progress. A task with no call in the reply gets a new line |
+| `TaskStartedMessage` | for a tool call, nothing yet: Claude Code starts a task for a long command in the foreground too, which ends before the call's result. When the call's result arrives with its task still running, the line becomes a task's line, notes "Running in background" on its nested line and stays in progress. A task with no call in the reply gets a new line; one started by a call the reply never saw, while such a task (a command's) runs, is an agent inside that command and shows on the command's line, counted as a call with its description, as a subagent's calls show on its line |
 | `TaskProgressMessage` | the line shows the task's description |
 | `TaskNotificationMessage`, a terminal `TaskUpdatedMessage` | the line completes, shows an error when the task failed, or completes with `Stopped` |
 | `AssistantMessage.error` `authentication_failed` | a note asking to run `claude` and `/login` on the host |
@@ -118,11 +118,11 @@ as the terminal dims them), escaped for mrkdwn and marked with a `tools-` block 
 `sinks.tool_lines` shows such a run the same way while the turn runs and once it ends: the calls
 that ended fold into one first line of tool names and counts, by the tool's name whatever the
 tool, succeeded ones after `✓` and failed ones after `✗` (`✓ Bash ×3 · Read · ✗ Bash`). Below
-it, a line of its own for a call still running (`…` and its title), a task
+it, a line of its own for a call still running (`⏳` and its title), a task
 (`TaskUpdate.task`: a subagent, a background command, with its own `✓` or `✗` and summary once
 it ends) and a stopped call (`Stopped`). While the reply is written, the last call of the last
-run also keeps its line, running or ended, with no icon unless it failed (`✗` and the output's
-first line), until another call or Claude's text follows it: a
+run also keeps its line, running (`⏳`) or ended, with no icon once ended unless it failed (`✗`
+and the output's first line), until another call or Claude's text follows it: a
 call that ends within the one-second rewrite would otherwise never show. Then it moves into
 the counts.
 The reply is posted as soon as the owner's message is queued, showing only a status line:
@@ -233,9 +233,15 @@ for another reason, it ends with the error line a prompt would get.
   while a reply is written never stops the session or the running turn.
 - Messages are queued and run one at a time; each gets its own reply in the channel.
   `!stop` interrupts the running turn and denies its pending approvals.
-- One reader task follows the SDK's message stream for the life of the client. On each result
-  the session id is stored (so `/clear`, which starts a new session, is recorded), the footer is
-  built and the reply closed.
+- One reader task follows the SDK's message stream for the life of the client. A turn starts
+  at its first text or tool message, or earlier at a `TaskStartedMessage` with no
+  `tool_use_id` that comes while a message is sent and no report turn is expected: a skill with
+  `context: fork` typed as a command runs its agent before the turn's first message, and streams
+  none of that agent's calls, so its line shows the command while it works. A task frame that
+  names a call (`tool_use_id`) held by a reply whose background subagent still works goes to
+  that reply, as the subagent's calls do (`parent_tool_use_id`). On each result the session id is stored
+  (so `/clear`, which starts a new session, is recorded), the footer is built and the reply
+  closed. The turn stays active until the reply is closed.
 - A background task that finishes between turns sends its notification while the session is
   idle, then Claude Code starts a turn of its own to report it. That turn gets a reply of its own
   that opens with one line per task it reports, as the terminal prints it
