@@ -89,7 +89,7 @@ a tool Claude Code adds later gets its line in the reply with no code change.
 | `StreamEvent` with no parent, a `text_delta` | the text, as it is written |
 | a top-level `TextBlock` in an `AssistantMessage` | nothing more: the same text already arrived as deltas |
 | `ToolUseBlock` or `ServerToolUseBlock` with no parent | a new tool line, in progress, titled `Name: first string argument` |
-| the same inside a subagent (`parent_tool_use_id` set) | the parent's line counts the subagent's calls and shows its latest one (`… Agent: review · 12 calls · Bash: ls`), and becomes a task's line: it keeps a line of its own once it ends, in the foreground or in the background |
+| the same inside a subagent or a skill run in a forked context (`parent_tool_use_id` set) | the parent's line counts the subagent's calls and shows its latest one (`… Agent: review · 12 calls · Bash: ls`), and becomes a task's line: it keeps a line of its own once it ends, in the foreground or in the background |
 | `ToolResultBlock` or `ServerToolResultBlock` for a line | the line completes, or shows an error with the output's first line when `is_error`; a line whose task already ended as stopped keeps `Stopped` |
 | `TaskStartedMessage` | for a tool call, nothing yet: Claude Code starts a task for a long command in the foreground too, which ends before the call's result. When the call's result arrives with its task still running, the line becomes a task's line, notes "Running in background" and stays in progress. A task with no call in the reply gets a new line |
 | `TaskProgressMessage` | the line shows the task's description |

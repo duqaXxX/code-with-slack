@@ -290,6 +290,14 @@ async def test_a_subagent_in_the_foreground_keeps_its_line_once_it_ends(slack: F
     assert text.startswith("✓ `Agent: ") and text.endswith("` · 1 call")  # it ran one ls
 
 
+async def test_a_skill_in_a_forked_context_shows_its_calls_like_a_subagent(
+    slack: FakeSlack,
+) -> None:
+    # skill-fork.jsonl (CLI 2.1.283): a `context: fork` skill's calls carry the Skill call's id.
+    (text,) = await tool_texts_of(slack, "skill-fork")
+    assert text == "✓ `Skill: list-files` · 2 calls"
+
+
 async def test_a_running_subagent_counts_its_calls_before_its_latest(slack: FakeSlack) -> None:
     sink = reply(slack)
     await sink.task(tool("a", "Agent", "in_progress", details="Read: x\nBash: ls", calls=3))
