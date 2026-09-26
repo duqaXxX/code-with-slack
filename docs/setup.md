@@ -195,10 +195,14 @@ launchctl print gui/$(id -u)/local.code-with-slack
 On `SIGTERM` code-with-slack stops starting turns and lets the ones already running finish, then
 exits; `KeepAlive` starts it again. Meanwhile a new message gets `code-with-slack is restarting;
 send this again in a moment.`, a queued one ends with the same request, and a turn waiting on an
-approval or a question ends at once, since nobody can say when it would. The daemon's `!words`
-keep working: `!stop` ends a long turn so the restart goes on. `ExitTimeOut` is how long launchd
-waits for that before it kills the process (the default was 5 seconds on macOS 27.0); a turn
-still running then ends with no answer. Sending the signal a second time stops without waiting.
+approval or a question is stopped as `!stop` would, so the conversation goes on after the
+restart. The daemon's `!words` keep working: `!stop` ends a long turn so the restart goes on.
+After 29 minutes code-with-slack stops waiting and ends the turns still running, whose replies
+say that it stopped. `ExitTimeOut` is how long launchd waits before it kills the process (the
+default was 5 seconds on macOS 27.0): keep it above those 29 minutes, or a reply still open
+keeps saying that Claude is writing. Sending the signal a second time stops without waiting.
+`SIGINT` (Ctrl-C in a terminal) stops without waiting too, because the terminal sends it to the
+Claude Code processes as well.
 
 `launchctl kill TERM` returns at once, so a Claude Code session running from Slack can restart
 the daemon that hosts it and still finish its turn. `launchctl kickstart -k` waits until the old

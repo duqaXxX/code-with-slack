@@ -1,6 +1,7 @@
 """`code-with-slack`: start the daemon (normally from the LaunchAgent in docs/setup.md)."""
 
 import asyncio
+import contextlib
 import logging
 import signal
 import sys
@@ -21,6 +22,11 @@ from code_with_slack.slack_app import build_app
 from code_with_slack.state import StateError, StateStore
 
 logger = logging.getLogger("code_with_slack")
+
+# How long a stop waits for running turns before it ends them itself. The LaunchAgent's
+# ExitTimeOut (1800 in docs/setup.md) must stay above it: past that, launchd kills the process and
+# the replies still open would keep saying that Claude is writing.
+DRAIN_LIMIT_SECONDS = 1740
 
 
 async def run(config_dir: Path = CONFIG_DIR) -> None:
@@ -57,18 +63,27 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
         handler = AsyncSocketModeHandler(app, config.app_token)
 
         stop = asyncio.Event()
+        received: list[signal.Signals] = []
+
+        def on_signal(sig: signal.Signals) -> None:
+            received.append(sig)
+            stop.set()
+
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, stop.set)
+            loop.add_signal_handler(sig, on_signal, sig)
         await handler.connect_async()  # type: ignore[no-untyped-call]  # untyped in Bolt 1.30.0
         logger.info("connected to Slack workspace %s", identity.team_id)
         try:
             await stop.wait()
-            # launchd sends SIGTERM for a restart too: the turns already running finish first,
-            # within the LaunchAgent's ExitTimeOut. A second signal stops without waiting.
-            stop.clear()
-            logger.info("stopping: letting running turns finish")
-            await sessions.drain(stop)
+            # launchd stops and restarts with SIGTERM: the turns already running finish first. Not
+            # on SIGINT: a Ctrl-C in a terminal reaches the Claude Code processes too, which share
+            # the daemon's process group. A second signal stops without waiting.
+            if received[0] == signal.SIGTERM:
+                stop.clear()
+                logger.info("stopping: letting running turns finish")
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(sessions.drain(stop), DRAIN_LIMIT_SECONDS)
         finally:
             logger.info("shutting down")
             await handler.close_async()  # type: ignore[no-untyped-call]
