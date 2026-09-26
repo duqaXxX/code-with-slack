@@ -23,9 +23,9 @@ from code_with_slack.state import StateError, StateStore
 
 logger = logging.getLogger("code_with_slack")
 
-# How long a stop waits for running turns before it ends them itself. The LaunchAgent's
-# ExitTimeOut (1800 in docs/setup.md) must stay above it: past that, launchd kills the process and
-# the replies still open would keep saying that Claude is writing.
+# How long a stop waits for running turns before it ends them itself. It holds after
+# `launchctl kill TERM`, which only sends the signal; a stop launchd makes itself (`bootout`,
+# `kickstart -k`) kills the process after ExitTimeOut, which launchd caps at 60 seconds.
 DRAIN_LIMIT_SECONDS = 1740
 
 
