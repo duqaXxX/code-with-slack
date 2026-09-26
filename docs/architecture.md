@@ -233,9 +233,15 @@ for another reason, it ends with the error line a prompt would get.
   while a reply is written never stops the session or the running turn.
 - Messages are queued and run one at a time; each gets its own reply in the channel.
   `!stop` interrupts the running turn and denies its pending approvals.
-- One reader task follows the SDK's message stream for the life of the client. On each result
-  the session id is stored (so `/clear`, which starts a new session, is recorded), the footer is
-  built and the reply closed.
+- One reader task follows the SDK's message stream for the life of the client. A turn starts
+  at its first text or tool message, or earlier at a `TaskStartedMessage` with no
+  `tool_use_id` that comes while a message is sent and no report turn is expected: a skill with
+  `context: fork` typed as a command runs its agent before the turn's first message, and streams
+  none of that agent's calls, so its line shows the command while it works. A task frame that
+  names a call (`tool_use_id`) held by a reply whose background subagent still works goes to
+  that reply, as the subagent's calls do (`parent_tool_use_id`). On each result the session id is stored
+  (so `/clear`, which starts a new session, is recorded), the footer is built and the reply
+  closed. The turn stays active until the reply is closed.
 - A background task that finishes between turns sends its notification while the session is
   idle, then Claude Code starts a turn of its own to report it. That turn gets a reply of its own
   that opens with one line per task it reports, as the terminal prints it

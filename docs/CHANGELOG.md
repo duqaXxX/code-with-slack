@@ -23,6 +23,13 @@ All notable changes to this project are documented here. The format follows
   footer (#25). The turn counted as ended before its reply was closed, while the footer was still
   being read, so the stop saw the channel idle and the process exited before the reply's final
   write. A turn now stays active until its reply is closed.
+- A skill that runs in a forked context, typed as a command (`!review`), showed nothing but
+  `Claude is writing…` while it worked, then its line once it had ended. Its task starts before
+  the turn's first message and was held until then; the owner's turn now starts at a task that
+  no call started, so its line (`… /review`) shows while it works. Its agent's calls are not
+  streamed by Claude Code in this case, so the line carries no call count. The new
+  `skill-fork-command` stream in `tests/fixtures/sdk/` records it. A task started by a call
+  inside a background subagent now goes to the reply that holds that subagent.
 
 ### Changed
 
