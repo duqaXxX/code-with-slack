@@ -222,6 +222,21 @@ class Turn:
     done: asyncio.Event = field(default_factory=asyncio.Event)
 
 
+async def check_directory(directory: Path, trusted: Callable[[Path], Awaitable[bool]]) -> None:
+    """Raise the `DirectoryUnavailable` that keeps a session from starting in `directory`, the
+    first found in the order the owner can act on: missing, unreadable, untrusted."""
+    # One stat and one directory open on a local folder, as a session start always made them.
+    if not directory.is_dir():  # noqa: ASYNC240
+        raise DirectoryMissing(directory)
+    try:
+        with os.scandir(directory):
+            pass
+    except PermissionError:
+        raise DirectoryUnreadable(directory) from None
+    if not await trusted(directory):
+        raise DirectoryUntrusted(directory)
+
+
 @dataclass
 class ActiveTurn:
     turn: Turn | None
@@ -332,15 +347,7 @@ class ChannelSession:
                 raise SessionClosed
             if self._client is not None:
                 return self._client
-            if not self.directory.is_dir():
-                raise DirectoryMissing(self.directory)
-            try:
-                with os.scandir(self.directory):
-                    pass
-            except PermissionError:
-                raise DirectoryUnreadable(self.directory) from None
-            if not await self._deps.workspace_trusted(self.directory):
-                raise DirectoryUntrusted(self.directory)
+            await check_directory(self.directory, self._deps.workspace_trusted)
             stored = self._deps.state.get(self.channel_id)
             session_id = stored.session_id if stored else None
             try:
@@ -956,6 +963,15 @@ class SessionManager:
         if dated:
             found = await asyncio.to_thread(by_last_activity, directory, found)
         return found
+
+    async def unavailable(self, directory: Path) -> DirectoryUnavailable | None:
+        """What would keep a session from starting in `directory`, by the checks a start makes;
+        None when nothing would."""
+        try:
+            await check_directory(directory, self._deps.workspace_trusted)
+        except DirectoryUnavailable as exc:
+            return exc
+        return None
 
     async def folders_in(self, root: Path) -> list[Path]:
         """The folders under `root` where a session can start, as `bindable_folders` finds them."""

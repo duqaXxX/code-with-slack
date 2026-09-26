@@ -330,7 +330,7 @@ runs at the level your Claude Code settings give the model.
 | `Claude Code is not logged in on the host` | Claude Code on the machine is logged out: run `claude`, then `/login` |
 | Some messages get no reply | A second instance is running and receiving part of the events |
 | `The previous session could not be resumed` | The stored session no longer exists (its transcript was deleted); the reply runs in a new session |
-| `Claude Code has not been trusted in ...` | Open `claude` in that folder (the repository root) in the terminal, accept the trust dialog, and send the message again |
+| `Claude Code has not been trusted in ...`, after a message or a `!bind` | Open `claude` in that folder (the repository root) in the terminal, accept the trust dialog, and send the message again |
 | `The directory ... no longer exists` | The channel's directory was moved or deleted: bind the channel again with `!bind <path>` |
 | `macOS does not let code-with-slack read ...` | The directory is in a folder macOS protects: see Part 4, "Folders macOS protects" |
 | `another code-with-slack is running` in the log | A second instance tried to start; only one may run |
