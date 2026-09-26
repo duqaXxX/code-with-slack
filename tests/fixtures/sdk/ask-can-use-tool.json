@@ -3,16 +3,16 @@
   "input": {
     "questions": [
       {
-        "question": "Which color do you prefer?",
-        "header": "Color preference",
+        "question": "Which colour do you prefer?",
+        "header": "Colour preference",
         "options": [
           {
             "label": "Red",
-            "description": "A warm, vibrant color"
+            "description": "The colour red"
           },
           {
             "label": "Blue",
-            "description": "A cool, calming color"
+            "description": "The colour blue"
           }
         ],
         "multiSelect": false
@@ -23,11 +23,11 @@
         "options": [
           {
             "label": "Yes",
-            "description": "I enjoy green"
+            "description": "I like green"
           },
           {
             "label": "No",
-            "description": "I don't particularly like green"
+            "description": "I do not like green"
           }
         ],
         "multiSelect": true

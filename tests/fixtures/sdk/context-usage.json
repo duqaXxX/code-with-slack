@@ -7,6 +7,12 @@
       "kind": "used"
     },
     {
+      "name": "MCP server instructions",
+      "tokens": 538,
+      "color": "green_FOR_SUBAGENTS_ONLY",
+      "kind": "used"
+    },
+    {
       "name": "MCP tools (deferred)",
       "tokens": 1726,
       "color": "inactive",
@@ -28,7 +34,7 @@
     },
     {
       "name": "Messages",
-      "tokens": 3140,
+      "tokens": 2602,
       "color": "purple_FOR_SUBAGENTS_ONLY",
       "kind": "used"
     },
@@ -87,6 +93,14 @@
         "squareFullness": 1
       },
       {
+        "color": "green_FOR_SUBAGENTS_ONLY",
+        "isFilled": true,
+        "categoryName": "MCP server instructions",
+        "tokens": 538,
+        "percentage": 0,
+        "squareFullness": 0.269
+      },
+      {
         "color": "warning",
         "isFilled": true,
         "categoryName": "Skills",
@@ -98,17 +112,9 @@
         "color": "purple_FOR_SUBAGENTS_ONLY",
         "isFilled": true,
         "categoryName": "Messages",
-        "tokens": 3140,
-        "percentage": 2,
+        "tokens": 2602,
+        "percentage": 1,
         "squareFullness": 1
-      },
-      {
-        "color": "purple_FOR_SUBAGENTS_ONLY",
-        "isFilled": true,
-        "categoryName": "Messages",
-        "tokens": 3140,
-        "percentage": 2,
-        "squareFullness": 0.5699999999999998
       },
       {
         "color": "promptBorder",
@@ -1001,8 +1007,8 @@
   "messageBreakdown": {
     "toolCallTokens": 0,
     "toolResultTokens": 0,
-    "attachmentTokens": 21285,
-    "assistantMessageTokens": 176,
+    "attachmentTokens": 21314,
+    "assistantMessageTokens": 152,
     "userMessageTokens": 8,
     "redirectedContextTokens": 0,
     "unattributedTokens": 0,
@@ -1010,7 +1016,7 @@
     "attachmentsByType": [
       {
         "name": "prompt_snapshot",
-        "tokens": 18647
+        "tokens": 18676
       },
       {
         "name": "skill_listing",
@@ -1056,7 +1062,7 @@
   },
   "apiUsage": {
     "input_tokens": 10,
-    "output_tokens": 52,
+    "output_tokens": 40,
     "cache_creation_input_tokens": 3436,
     "cache_read_input_tokens": 11303
   }

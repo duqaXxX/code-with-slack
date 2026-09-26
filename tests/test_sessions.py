@@ -426,9 +426,9 @@ def agent_end(task_id: str, tool_use_id: str) -> Message:
 async def test_a_background_agent_s_end_reads_as_in_the_terminal(
     harness_for: Callable[..., Harness],
 ) -> None:
-    recorded = sdk_messages("subagent")
-    started = next(m for m in recorded if isinstance(m, TaskStartedMessage))
-    h = harness_for({"turns": [recorded]})
+    first = split_turns(sdk_messages("subagent"))[0]
+    started = next(m for m in first if isinstance(m, TaskStartedMessage))
+    h = harness_for({"turns": [first]})
     await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
     assert started.tool_use_id is not None
     h.clients[0].inject([agent_end(started.task_id, started.tool_use_id), *sdk_messages("tools")])
@@ -561,7 +561,7 @@ async def test_a_background_agent_s_calls_update_its_line_and_open_no_reply(
     harness_for: Callable[..., Harness],
 ) -> None:
     recorded = sdk_messages("subagent")
-    turn = [m for m in recorded if getattr(m, "parent_tool_use_id", None) is None]
+    turn = [m for m in split_turns(recorded)[0] if getattr(m, "parent_tool_use_id", None) is None]
     children = [m for m in recorded if getattr(m, "parent_tool_use_id", None) is not None]
     h = harness_for({"turns": [turn]})
     await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
@@ -1117,7 +1117,7 @@ async def test_status_lists_the_footer_s_values_of_the_latest_reply(
     await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
     await until(lambda: h.usage_fetches == 1)  # the turn's own refresh of the limits
     text = await session.status()
-    assert text.startswith("Directory:") and "Claude Code: `2.1.281`" in text
+    assert text.startswith("Directory:") and "Claude Code: `2.1.283`" in text
     tokens = re.search(r"([\d.]+[kM]?) tok", statuses(h)[-1])
     assert tokens is not None
     lines = text.splitlines()

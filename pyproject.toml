@@ -8,7 +8,7 @@ license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "aiohttp==3.14.3",
-    "claude-agent-sdk==0.2.159",
+    "claude-agent-sdk==0.2.160",
     "python-dotenv==1.2.3",
     "slack-bolt==1.30.0",
     "slack-sdk==3.44.1",
