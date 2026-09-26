@@ -301,7 +301,9 @@ It is then rewritten about once a second while Claude works: text in the order i
 and after each piece of text the tool calls that followed it, in small grey text. The calls that
 ended fold into one line of tool names and counts, such as `✓ Bash ×3 · Read · ✗ Bash`, where
 `✗` counts the calls that failed; a call still running (`…` and its command), a subagent and a
-background task keep a line of their own below it; a subagent's line counts the calls it made. When the reply is complete, a divider and
+background task keep a line of their own below it; a subagent's line counts the calls it made.
+While Claude works, its latest call also keeps a line of its own until the next one, so you
+can follow what it does. When the reply is complete, a divider and
 the footer replace the status line. A reply longer than one Slack message continues in the next one.
 
 An approval request is a message of its own below the reply; once you decide, it disappears and

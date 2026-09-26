@@ -110,17 +110,25 @@ class _Tool:
         return line
 
 
-def tool_lines(tools: list[_Tool]) -> list[str]:
-    """A run of tool lines as shown, while the turn runs and once it ends: the calls that ended
-    fold into one first line of tool names, each counted when it ran more than once, whatever
-    the tool (`✓ Bash · Read · ✗ Bash`), as the terminal folds them. A running call, a task and
-    a stopped line stay whole below it, in order: they outlive the moment or say why they
-    ended. A running call moves into the counts when it ends, so the lines above never move."""
+def tool_lines(tools: list[_Tool], *, latest: bool = False) -> list[str]:
+    """A run of tool lines as shown: the calls that ended fold into one first line of tool
+    names, each counted when it ran more than once, whatever the tool (`✓ Bash · Read ·
+    ✗ Bash`), as the terminal folds them. A running call, a task and a stopped line stay whole
+    below it, in order: they outlive the moment or say why they ended. With `latest`, for the
+    run Claude is still in, its last call stays whole too until it is no longer the last: a
+    call that ends within a second of starting would otherwise never show."""
     counts: dict[str, dict[str, int]] = {"complete": {}, "error": {}}
     whole: list[str] = []
-    for tool in tools:
+    for index, tool in enumerate(tools):
         update = tool.update
-        if update.status in counts and update.name and not update.task and update.output != STOPPED:
+        last = latest and index == len(tools) - 1
+        if (
+            update.status in counts
+            and update.name
+            and not update.task
+            and update.output != STOPPED
+            and not last
+        ):
             names = counts[update.status]
             names[update.name] = names.get(update.name, 0) + 1
         else:
@@ -251,15 +259,21 @@ class ReplySink:
 
     def _blocks(self) -> list[dict[str, Any]]:
         """The reply's body in order: Claude's text as markdown, each run of tool lines as
-        secondary text, folded by `tool_lines` whether the reply is finished or not."""
+        secondary text, folded by `tool_lines`. The last run of a reply still being written is
+        the one Claude is in: its last call stays whole."""
         blocks: list[dict[str, Any]] = []
-        for is_text, run in itertools.groupby(self._parts, key=lambda p: isinstance(p, _Text)):
+        runs = [
+            (is_text, list(run))
+            for is_text, run in itertools.groupby(self._parts, key=lambda p: isinstance(p, _Text))
+        ]
+        for position, (is_text, run) in enumerate(runs):
             if is_text:
                 text = "".join(p.text for p in run if isinstance(p, _Text)).strip("\n")
                 blocks += [{"type": "markdown", "text": c} for c in split(text) if c]
             else:
                 tools = [p for p in run if isinstance(p, _Tool)]
-                lines = tool_lines(tools)
+                latest = not self._finished and position == len(runs) - 1
+                lines = tool_lines(tools, latest=latest)
                 # Escaped first: Slack's limit counts the text it receives.
                 lines = [mrkdwn_escape(line) for line in lines]
                 chunk: list[str] = []

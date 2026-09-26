@@ -318,9 +318,26 @@ async def test_lines_fold_while_the_turn_runs(slack: FakeSlack) -> None:
     await sink.task(tool("c", "Read", "in_progress"))
     await asyncio.sleep(0.05)
     assert slack.message_texts() == ["✓ Read · ✗ Bash\n… `Read: c`"]
-    await sink.task(tool("c", "Read"))  # the running call ends: it moves into the counts
+    await sink.task(tool("c", "Read"))  # it ended, and it is still the last call: still shown
     await asyncio.sleep(0.05)
-    assert slack.message_texts() == ["✓ Read \u00d72 · ✗ Bash"]
+    assert slack.message_texts() == ["✓ Read · ✗ Bash\n✓ `Read: c`"]
+    await sink.task(tool("d", "Bash", "in_progress"))  # a new last call: the previous one folds
+    await asyncio.sleep(0.05)
+    assert slack.message_texts() == ["✓ Read \u00d72 · ✗ Bash\n… `Bash: d`"]
+
+
+async def test_the_last_call_folds_once_claude_writes_or_the_reply_ends(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.task(tool("a", "Read"))
+    await sink.task(tool("b", "Read"))
+    await asyncio.sleep(0.05)
+    assert slack.message_texts() == ["✓ Read\n✓ `Read: b`"]
+    await sink.text("Found it.")  # the run is closed: nothing in it is the last call any more
+    await asyncio.sleep(0.05)
+    assert slack.message_texts() == ["✓ Read \u00d72\n\nFound it."]
+    await sink.task(tool("c", "Bash"))
+    await sink.finish([], None)
+    assert slack.message_texts() == ["✓ Read \u00d72\n\nFound it.\n\n✓ Bash"]
 
 
 async def test_a_reply_that_shrinks_as_calls_end_removes_its_extra_message(
