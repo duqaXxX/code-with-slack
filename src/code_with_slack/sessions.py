@@ -364,6 +364,12 @@ class ChannelSession:
         await client.set_permission_mode(mode)  # type: ignore[arg-type]
         self.bypass = on
 
+    async def announce_restart(self) -> None:
+        """Say in the channel that bypass ends with this process, when it is on."""
+        # Held in memory only, bypass ends with the daemon: said now, while it still can be.
+        if self.bypass:
+            await self._post(texts.BYPASS_RESTARTING)
+
     async def stop(self) -> bool:
         """Interrupt the running turn and deny its pending approvals; queued turns stay queued."""
         if self._client is None or not self.busy:
@@ -892,8 +898,19 @@ class SessionManager:
         self._sessions.pop(channel_id, None)
         self._deps.state.set_session(channel_id, session_id)
         if session is not None:
+            # The terminal's `/resume` continues in the current session's permission mode
+            # (sessions reference, read 2026-09-26). Set before the close awaits, so a message
+            # arriving meanwhile already starts the successor in that mode.
+            successor = self.get(channel_id)
+            if successor is not None:
+                successor.bypass = session.bypass
             await session.close(texts.ENDED_RESUMED)
         return True
+
+    def bypass_on(self, channel_id: str) -> bool:
+        """Whether `!bypass on` holds in the channel's live session; starts nothing."""
+        session = self._sessions.get(channel_id)
+        return session is not None and session.bypass
 
     def current_session(self, channel_id: str) -> str | None:
         stored = self._deps.state.get(channel_id)
@@ -924,6 +941,7 @@ class SessionManager:
             session.draining = True
         for session in sessions:
             await session.fail_queued(texts.ENDED.format(reason=texts.ENDED_RESTARTING))
+            await session.announce_restart()
         while not cut_short.is_set():
             if all(s.idle and not s.reporting for s in self._sessions.values()):
                 return

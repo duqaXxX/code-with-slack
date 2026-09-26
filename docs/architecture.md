@@ -261,7 +261,12 @@ for another reason, it ends with the error line a prompt would get.
 
 Bypass is a field of the in-memory session and nothing else: `state.json` never holds it, and a
 restart brings every channel back to Claude Code's own mode. That matches Claude Code, whose
-`--resume` does not restore `bypassPermissions` either.
+`--resume` does not restore `bypassPermissions` either. The restart is said in the channel: at
+the start of `SessionManager.drain`, every channel with bypass on gets `texts.BYPASS_RESTARTING`.
+A crash or a `SIGKILL` runs no code, so it says nothing, and neither does `SIGINT`, which skips
+the drain. `!resume` carries bypass to the resumed session, as the terminal's `/resume` keeps the
+current session's mode (sessions reference, read 2026-09-26); `!bind` starts a new session in
+another folder without it, and its answer says so when bypass was on.
 
 ## Slack handlers
 
