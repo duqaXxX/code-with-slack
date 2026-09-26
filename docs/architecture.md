@@ -30,8 +30,8 @@ refuses tokens of the wrong kind. [setup.md](setup.md) lists the variables.
 
 ## State and the single-instance lock
 
-`code_with_slack.state.StateStore` keeps, for each bound channel, its directory and its Claude
-Code session id, in `~/.config/code-with-slack/state.json`. Every change is written to a
+`code_with_slack.state.StateStore` keeps, for each bound channel, its directory, its Claude
+Code session id and its bypass switch, in `~/.config/code-with-slack/state.json`. Every change is written to a
 temporary file beside it, synced, and renamed over it, so a crash leaves either the old file or
 the new one. A file that cannot be read stops the daemon instead of being replaced.
 
@@ -259,14 +259,15 @@ for another reason, it ends with the error line a prompt would get.
   arrives meanwhile opens the new session.
 - Logs carry channel ids and exception type names, never prompt or reply text.
 
-Bypass is a field of the in-memory session and nothing else: `state.json` never holds it, and a
-restart brings every channel back to Claude Code's own mode. That matches Claude Code, whose
-`--resume` does not restore `bypassPermissions` either. The restart is said in the channel: at
-the start of `SessionManager.drain`, every channel with bypass on gets `texts.BYPASS_RESTARTING`.
-A crash or a `SIGKILL` runs no code, so it says nothing, and neither does `SIGINT`, which skips
-the drain. `!resume` carries bypass to the resumed session, as the terminal's `/resume` keeps the
-current session's mode (sessions reference, read 2026-09-26); `!bind` starts a new session in
-another folder without it, and its answer says so when bypass was on.
+Bypass is the channel's `ChannelState.bypass` in `state.json`, which `ChannelSession.bypass`
+reads: a restart of the daemon, whatever its cause, keeps it, and the next Claude Code process
+gets it from `ensure_connected`. Claude Code's own `--resume` never restores `bypassPermissions`
+(sessions reference, read 2026-09-26); here the daemon restarts on its own (an update, launchd
+after a crash), so the switch stays with the owner's `!bypass off`. A restarted daemon starts no
+Claude Code process until a message arrives. At the start of `SessionManager.drain`, every channel
+with bypass on gets `texts.BYPASS_RESTARTING`. `!resume` keeps bypass, as the terminal's `/resume`
+keeps the current session's mode; `!bind` starts a new session in another folder without it,
+and its answer says so when bypass was on.
 
 ## Slack handlers
 

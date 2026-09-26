@@ -259,7 +259,6 @@ class ChannelSession:
         self.commands: list[dict[str, Any]] = []
         self.native_mode = "default"
         self.cli_version: str | None = None
-        self.bypass = False
         # The effort level Claude Code last reported: its Stop hook, or the output of `/effort`
         # and `/model`, which run no hook. None for a model without effort.
         self.effort: str | None = None
@@ -270,6 +269,12 @@ class ChannelSession:
         self.session_tokens: int | None = None
         # Set when the daemon stops: the turns already sent finish, no other one starts.
         self.draining = False
+
+    @property
+    def bypass(self) -> bool:
+        """`!bypass on` in this channel, as state.json holds it: a restart keeps it."""
+        stored = self._deps.state.get(self.channel_id)
+        return stored is not None and stored.bypass
 
     @property
     def busy(self) -> bool:
@@ -362,11 +367,10 @@ class ChannelSession:
             self.native_mode = "default"
         mode = "bypassPermissions" if on else self.native_mode
         await client.set_permission_mode(mode)  # type: ignore[arg-type]
-        self.bypass = on
+        self._deps.state.set_bypass(self.channel_id, on)
 
     async def announce_restart(self) -> None:
-        """Say in the channel that bypass ends with this process, when it is on."""
-        # Held in memory only, bypass ends with the daemon: said now, while it still can be.
+        """Say in the channel that bypass outlives the restart, when it is on."""
         if self.bypass:
             await self._post(texts.BYPASS_RESTARTING)
 
@@ -897,20 +901,16 @@ class SessionManager:
             return False
         self._sessions.pop(channel_id, None)
         self._deps.state.set_session(channel_id, session_id)
+        # The stored bypass stays: the terminal's `/resume` continues in the current session's
+        # permission mode (sessions reference, read 2026-09-26).
         if session is not None:
-            # The terminal's `/resume` continues in the current session's permission mode
-            # (sessions reference, read 2026-09-26). Set before the close awaits, so a message
-            # arriving meanwhile already starts the successor in that mode.
-            successor = self.get(channel_id)
-            if successor is not None:
-                successor.bypass = session.bypass
             await session.close(texts.ENDED_RESUMED)
         return True
 
     def bypass_on(self, channel_id: str) -> bool:
-        """Whether `!bypass on` holds in the channel's live session; starts nothing."""
-        session = self._sessions.get(channel_id)
-        return session is not None and session.bypass
+        """Whether `!bypass on` holds in the channel; starts nothing."""
+        stored = self._deps.state.get(channel_id)
+        return stored is not None and stored.bypass
 
     def current_session(self, channel_id: str) -> str | None:
         stored = self._deps.state.get(channel_id)

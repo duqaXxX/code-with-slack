@@ -91,12 +91,9 @@ BIND_BUSY = (
 )
 BYPASS_ON = (
     "Bypass is on in this channel: Claude Code runs every tool without asking, until "
-    "`!bypass off`, `!bind` or a restart of code-with-slack."
+    "`!bypass off` or `!bind`. It stays on when code-with-slack restarts."
 )
-BYPASS_RESTARTING = (
-    "code-with-slack is restarting: bypass is off from the next message. Send `!bypass on` to "
-    "switch it on again."
-)
+BYPASS_RESTARTING = "code-with-slack is restarting: bypass stays on in this channel."
 BYPASS_OFF = "Bypass is off. Claude Code is back in its `{mode}` mode."
 STOPPED = "Stopped the current turn."
 NOTHING_TO_STOP = "Nothing is running in this channel."
@@ -117,7 +114,7 @@ HELP_WORDS = (
     "`!stop` stop the running turn and deny its pending approvals",
     "`!bind [folder]` the folders Claude Code trusts, or bind this channel to one, its path "
     "relative to the allowed root",
-    "`!bypass on|off` run every tool without asking, until off, a bind or a restart",
+    "`!bypass on|off` run every tool without asking, until off or a bind",
     "`!resume [session]` this directory's sessions, or resume one by id or name",
 )
 HELP_NO_MATCH = "No command matches `{query}`."
@@ -198,8 +195,7 @@ continue the channel's session in the terminal, run `claude --resume <id>` there
 id `!status` shows.
 
 **Bypass**
-`!bypass on` lets Claude Code run every tool without asking, until `!bypass off`, `!bind` or \
-a restart; `!resume` keeps it. Before a restart code-with-slack says so in every channel where \
-it is on. The footer shows ⚡ bypass while it is on.
+`!bypass on` lets Claude Code run every tool without asking, until `!bypass off` or `!bind`; \
+`!resume` and a restart of code-with-slack keep it. The footer shows ⚡ bypass while it is on.
 
 `!guide` shows this text again."""

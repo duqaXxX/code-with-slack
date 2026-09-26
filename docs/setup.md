@@ -88,12 +88,12 @@ code-with-slack keeps its files in `~/.config/code-with-slack/`:
 | File | Written by | Holds |
 |---|---|---|
 | `.env` | you | the tokens and the settings below |
-| `state.json` | code-with-slack | for each channel, its directory and its Claude Code session id |
+| `state.json` | code-with-slack | for each channel, its directory, its Claude Code session id and whether bypass is on |
 
 `state.json` looks like this; you never need to edit it:
 
 ```json
-{"version": 1, "channels": {"C0123456789": {"directory": "/home/dev/code/project", "session_id": "..."}}}
+{"version": 1, "channels": {"C0123456789": {"directory": "/home/dev/code/project", "session_id": "...", "bypass": false}}}
 ```
 
 Create the directory and the file, readable by you only. code-with-slack refuses to start when
@@ -275,7 +275,7 @@ The bot answers one person, and the rest of this list protects what that person 
 | `!bind` | Lists `ALLOWED_ROOT` itself (shown as `.`) and the folders up to two levels below it, never inside a git repository, that Claude Code trusts, with a **Bind** button each; the channel's own folder is marked when it is listed. At most 20 are shown, in path order; when there are more, the higher levels fill the list first. A click never ends a running turn: it is refused until the channel is idle |
 | `!bind <folder>` | Binds this channel to a folder under `ALLOWED_ROOT`, given relative to it (`!bind my-project`); an absolute path inside it works too. A new channel does nothing else until bound |
 | `!<command> [args]` | Runs a Claude Code command, for example `!compact` or `!model opus` |
-| `!bypass on` / `off` | Switches the channel's session to `bypassPermissions` and back. `!resume` keeps it; `!bind` and a restart turn it off, and a restart started with `SIGTERM` says so first in every channel where it is on |
+| `!bypass on` / `off` | Switches the channel's session to `bypassPermissions` and back. It is kept in `state.json`: `!resume` and a restart of code-with-slack keep it, `!bind` turns it off. A restart started with `SIGTERM` says first, in every channel where it is on, that it stays on |
 | `!status` | Shows the channel's directory, session and mode, then the footer's values one per line |
 | `!stop` | Stops the turn that is running and denies its pending approvals |
 | `!resume` | Lists the twenty newest sessions of the channel's directory (not of other worktrees), terminal and Slack alike, each with the first 8 characters of its session id and a **Resume** button; the channel's own is marked `current` |
@@ -289,7 +289,7 @@ session offers is sent as a normal prompt, so `!important: …` reaches Claude a
 `!help`, `!guide`, `!bind`, `!bypass`, `!status`, `!stop` and `!resume` are code-with-slack's own
 and come first. Claude Code's own `/resume` is interactive and not offered to an SDK session, so
 `!resume` does its job: the next message continues the chosen session, in a new Claude Code
-process, with bypass off. It refuses while a turn or a background task is running or waiting in
+process, with bypass as it was. It refuses while a turn or a background task is running or waiting in
 the channel, since resuming ends the channel's Claude Code process. If the session is still open in a
 terminal, close it there first: Claude Code interleaves the messages of two processes resuming
 the same session into one transcript. Claude Code has no other command with these names today; `!help` lists what the session offers. The
