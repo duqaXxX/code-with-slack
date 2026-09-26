@@ -298,10 +298,11 @@ answers to these words are messages in the channel.
 A reply is one message in the channel. It appears as soon as you send your message, reading
 `Claude is writing…`, or `Waiting for the previous reply…` when another turn is still running.
 It is then rewritten about once a second while Claude works: text in the order it is written,
-and a line per tool call where it happens (`…` while it runs, `✗` with its output when it
-fails), in small grey text. Once the reply is complete, calls that succeeded fold into one line
-of tool names and counts, such as `✓ Bash · Read ×2`; a subagent or a background task keeps a
-line of its own, and a divider and the footer replace the status line. A reply longer than one Slack message continues in the next one.
+and after each piece of text the tool calls that followed it, in small grey text. The calls that
+ended fold into one line of tool names and counts, such as `✓ Bash ×3 · Read · ✗ Bash`, where
+`✗` counts the calls that failed; a call still running (`…` and its command), a subagent and a
+background task keep a line of their own below it. When the reply is complete, a divider and
+the footer replace the status line. A reply longer than one Slack message continues in the next one.
 
 An approval request is a message of its own below the reply; once you decide, it disappears and
 the tool's line in the reply records the call. If Slack does not accept the request, Claude Code

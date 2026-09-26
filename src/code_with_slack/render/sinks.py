@@ -108,32 +108,27 @@ class _Tool:
 
 
 def tool_lines(tools: list[_Tool]) -> list[str]:
-    """A run of tool lines as shown: calls that ended well fold into one summary line of tool
-    names and counts, whatever the tool; a running or failed call, a task and a stopped line stay
-    whole, since they carry something to read."""
-    lines: list[str] = []
-    folded: dict[str, int] = {}
-
-    def fold() -> None:
-        if folded:
-            names = (name if n == 1 else f"{name} \u00d7{n}" for name, n in folded.items())
-            lines.append(f"{ICONS['complete']} " + " · ".join(names))
-            folded.clear()
-
+    """A run of tool lines as shown, while the turn runs and once it ends: the calls that ended
+    fold into one first line of tool names, each counted when it ran more than once, whatever
+    the tool (`✓ Bash · Read · ✗ Bash`), as the terminal folds them. A running call, a task and
+    a stopped line stay whole below it, in order: they outlive the moment or say why they
+    ended. A running call moves into the counts when it ends, so the lines above never move."""
+    counts: dict[str, dict[str, int]] = {"complete": {}, "error": {}}
+    whole: list[str] = []
     for tool in tools:
         update = tool.update
-        if (
-            update.status == "complete"
-            and update.name
-            and not update.task
-            and update.output != STOPPED
-        ):
-            folded[update.name] = folded.get(update.name, 0) + 1
+        if update.status in counts and update.name and not update.task and update.output != STOPPED:
+            names = counts[update.status]
+            names[update.name] = names.get(update.name, 0) + 1
         else:
-            fold()
-            lines.append(tool.line())
-    fold()
-    return lines
+            whole.append(tool.line())
+    groups = [
+        f"{ICONS[status]} "
+        + " · ".join(name if n == 1 else f"{name} \u00d7{n}" for name, n in names.items())
+        for status, names in counts.items()
+        if names
+    ]
+    return ([" · ".join(groups)] if groups else []) + whole
 
 
 def split(body: str) -> list[str]:
@@ -251,10 +246,9 @@ class ReplySink:
         # would lose the message's ts. `finish` waits for the lock instead.
         await asyncio.shield(self._flush(final=False, footer=None))
 
-    def _blocks(self, final: bool) -> list[dict[str, Any]]:
+    def _blocks(self) -> list[dict[str, Any]]:
         """The reply's body in order: Claude's text as markdown, each run of tool lines as
-        secondary text. Tool lines fold only once the reply is finished: nothing moves while
-        Claude works."""
+        secondary text, folded by `tool_lines` whether the reply is finished or not."""
         blocks: list[dict[str, Any]] = []
         for is_text, run in itertools.groupby(self._parts, key=lambda p: isinstance(p, _Text)):
             if is_text:
@@ -262,7 +256,7 @@ class ReplySink:
                 blocks += [{"type": "markdown", "text": c} for c in split(text) if c]
             else:
                 tools = [p for p in run if isinstance(p, _Tool)]
-                lines = tool_lines(tools) if final else [t.line() for t in tools]
+                lines = tool_lines(tools)
                 # Escaped first: Slack's limit counts the text it receives.
                 lines = [mrkdwn_escape(line) for line in lines]
                 chunk: list[str] = []
@@ -278,7 +272,7 @@ class ReplySink:
     def _render(self, final: bool, footer: str | None) -> list[list[dict[str, Any]]]:
         messages: list[list[dict[str, Any]]] = [[]]
         size = 0
-        for block in self._blocks(final):
+        for block in self._blocks():
             length = len(block_text(block))
             if messages[-1] and (
                 size + length > MESSAGE_LIMIT or len(messages[-1]) >= BLOCKS_LIMIT
