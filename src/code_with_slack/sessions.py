@@ -915,9 +915,8 @@ class SessionManager:
         """Let the turns already sent finish and send no other, then return: when every channel is
         idle, or when `cut_short` is set. Idle includes the background commands and agents, which
         die with the Claude Code process, and the turn Claude Code starts to report each one.
-        Queued turns end at once, asking to be sent again. A turn waiting on an approval or a
-        question has no end in sight, so it is stopped as `!stop` does, which keeps its session;
-        so is one that asks later."""
+        Queued turns end at once, asking to be sent again. An approval or a question stays open:
+        the Slack connection lives until the drain ends, so the owner can still answer it."""
         self.draining = True
         sessions = list(self._sessions.values())
         # Every flag before the first await: no worker sends a queued turn in between.
@@ -926,9 +925,6 @@ class SessionManager:
         for session in sessions:
             await session.fail_queued(texts.ENDED.format(reason=texts.ENDED_RESTARTING))
         while not cut_short.is_set():
-            for session in list(self._sessions.values()):
-                if self._deps.approvals.waiting(session.channel_id):
-                    await session.stop()
             if all(s.idle and not s.reporting for s in self._sessions.values()):
                 return
             # Polled: a turn ends in several places, and a stop needs no finer timing.

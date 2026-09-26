@@ -1219,21 +1219,22 @@ async def test_a_stop_lets_the_running_turn_finish_and_ends_the_queued_one(
     assert h.state.get(CHANNEL).session_id == result.session_id
 
 
-async def test_a_stop_stops_a_turn_waiting_on_an_approval_and_keeps_its_session(
+async def test_an_approval_asked_during_a_stop_stays_open_and_the_turn_finishes(
     harness_for: Callable[..., Harness],
 ) -> None:
-    interrupted = sdk_messages("interrupt")
-    ask = CanUseToolCall("Bash", {"command": "rm -rf build"})
-    h = harness_for({"turns": [[ask, *interrupted]]})
-    turn = await h.session().submit("clean")
-    await until(lambda: h.approvals.waiting(CHANNEL))
-    await asyncio.wait_for(h.manager.drain(asyncio.Event()), 2)
-    assert turn.done.is_set() and h.clients[0].interrupts == 1
-    assert isinstance(h.clients[0].permission_results[0], PermissionResultDeny)
-    assert len(h.slack.calls_to("chat.delete")) == 1  # the request and its buttons are gone
-    result = interrupted[-1]
-    assert isinstance(result, ResultMessage)
-    assert h.state.get(CHANNEL).session_id == result.session_id
+    ask = CanUseToolCall("Bash", {"command": "ls"})
+    h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
+    turn = await h.session().submit("first")
+    await until(lambda: bool(h.approvals._pending))
+    drained = asyncio.create_task(h.manager.drain(asyncio.Event()))
+    await asyncio.sleep(0.05)
+    assert not drained.done() and not turn.done.is_set()
+    # The owner answers while the daemon stops, as a Slack session that restarted it would need.
+    assert h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, Approve()) is not None
+    await asyncio.wait_for(drained, 2)
+    assert turn.done.is_set()
+    assert isinstance(h.clients[0].permission_results[0], PermissionResultAllow)
+    assert h.clients[0].interrupts == 0
 
 
 async def test_a_turn_taken_before_a_stop_is_never_sent(

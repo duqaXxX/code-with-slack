@@ -10,10 +10,10 @@ All notable changes to this project are documented here. The format follows
 - On `SIGTERM` the daemon lets the turns, background commands and agents already running finish
   before it exits, for up to 29 minutes after `launchctl kill TERM`, and up to the LaunchAgent's
   `ExitTimeOut` (60 seconds, launchd's cap) after `launchctl bootout`. A new prompt meanwhile, or a
-  queued one, is answered with a request to send it again; a turn waiting on an approval or a
-  question is stopped as `!stop` does; a second signal, or `SIGINT`, stops without waiting. The
-  documented restart command is `launchctl kill TERM`, which returns at once, so a session running
-  from Slack can restart the daemon and still finish its turn.
+  queued one, is answered with a request to send it again; an approval or a question asked meanwhile
+  stays open; a second signal, or `SIGINT`, stops without waiting. The documented restart command is
+  `launchctl kill TERM`, which returns at once, so a session running from Slack can restart the
+  daemon and still finish its turn.
 
 ### Added
 
