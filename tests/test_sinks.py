@@ -274,6 +274,28 @@ async def test_a_long_command_in_the_foreground_folds_once_it_ends(slack: FakeSl
     assert [sinks.block_text(b) for b in tools] == ["✓ Bash"]
 
 
+async def tool_texts_of(slack: FakeSlack, name: str) -> list[str]:
+    """The tool blocks of a recorded turn, rendered through a reply and closed."""
+    renderer = TurnRenderer(reply(slack))
+    for message in sdk_messages(name):
+        await renderer.feed(message)
+    await renderer.close(None)
+    blocks = last_blocks(slack)
+    return [sinks.block_text(b) for b in blocks if str(b.get("block_id", "")).startswith("tools-")]
+
+
+async def test_a_subagent_in_the_foreground_keeps_its_line_once_it_ends(slack: FakeSlack) -> None:
+    # subagent-foreground.jsonl (CLI 2.1.283): the agent's task ends before the Agent call's result.
+    (text,) = await tool_texts_of(slack, "subagent-foreground")
+    assert text.startswith("✓ `Agent: ")
+
+
+async def test_a_stopped_command_keeps_its_line_and_is_not_a_failure(slack: FakeSlack) -> None:
+    # interrupt.jsonl: the task ends as stopped, then the result reports the rejection.
+    (text,) = await tool_texts_of(slack, "interrupt")
+    assert text.startswith("✓ `Bash: ") and text.endswith("· Stopped")
+
+
 async def test_lines_fold_while_the_turn_runs(slack: FakeSlack) -> None:
     sink = reply(slack)
     await sink.task(tool("a", "Read"))

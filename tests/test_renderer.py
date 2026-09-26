@@ -171,7 +171,16 @@ async def test_any_tool_name_renders_the_same_way(name: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "name", ["tools", "tool-error", "subagent", "interrupt", "background", "foreground"]
+    "name",
+    [
+        "tools",
+        "tool-error",
+        "subagent",
+        "interrupt",
+        "background",
+        "foreground",
+        "subagent-foreground",
+    ],
 )
 async def test_statuses_are_only_the_ones_slack_accepts(name: str) -> None:
     sink, _ = await render(sdk_messages(name))

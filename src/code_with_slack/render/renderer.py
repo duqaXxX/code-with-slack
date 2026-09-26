@@ -45,7 +45,7 @@ class TaskUpdate:
     details: str | None = None
     output: str | None = None
     name: str = ""  # the tool's name, for a line folded into a summary
-    task: bool = False  # a task's line (a subagent, a background command): never folded
+    task: bool = False  # a subagent's or a background command's line: never folded
 
 
 class Sink(Protocol):
@@ -236,6 +236,11 @@ class TurnRenderer:
                         entry, details=BACKGROUND, task=True, output=result_summary(block.content)
                     )
                 )
+            elif entry is not None and entry.output == STOPPED:
+                # Its task already ended as stopped; the result that follows only reports the
+                # rejection (recorded: `interrupt.jsonl`, CLI 2.1.283), and must not turn a
+                # stopped call into a failed one.
+                return
             elif entry is not None:
                 failed = isinstance(block, ToolResultBlock) and bool(block.is_error)
                 await self._set(
@@ -285,7 +290,9 @@ class TurnRenderer:
         lines = self._children.setdefault(root, [])
         lines.append(line)
         del lines[:-CHILD_LINES]
-        await self._set(replace(self._lines[root], details="\n".join(lines)))
+        # A call that runs calls of its own (a subagent) keeps its line once it ends, whether it
+        # ran in the foreground or not: the nested calls are its work, not one more call.
+        await self._set(replace(self._lines[root], details="\n".join(lines), task=True))
 
     async def _set(self, update: TaskUpdate) -> None:
         self._lines[update.id] = update
