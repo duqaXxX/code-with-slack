@@ -605,8 +605,13 @@ class ChannelSession:
         active = self._active
         await active.renderer.feed(message)
         if isinstance(message, ResultMessage):
-            self._active = None
-            await self._finish(active, message)
+            # The turn stays active until its reply is closed: the footer is read first, and a
+            # drain that saw the channel idle meanwhile would exit before the reply's final
+            # write, leaving it on `Claude is writing…` (#25).
+            try:
+                await self._finish(active, message)
+            finally:
+                self._active = None
 
     def _ended_line(self, message: TaskNotificationMessage) -> str:
         """The terminal's line for a task's end: a command's own summary, or `Agent "..."
