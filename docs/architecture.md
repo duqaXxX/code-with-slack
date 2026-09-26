@@ -10,14 +10,15 @@ configuration, so a bad `.env` fails before anything else; takes the single-inst
 second daemon fails before it opens a Socket Mode connection; reads `state.json`; calls `auth.test`
 for the workspace id and the bot user id; then opens the Socket Mode connection. On `SIGTERM`, which
 `launchctl kill TERM` and `launchctl bootout` send, `SessionManager.drain` lets the turns already
-sent finish and sends no other: a new prompt gets `texts.RESTARTING`, a queued or taken turn ends
-with `texts.ENDED_RESTARTING`, and a turn waiting on an approval or a question is stopped as `!stop`
-does, which keeps its session id. When no channel is working, after `__main__.DRAIN_LIMIT_SECONDS`,
-or on a second signal, the daemon closes the connection, then every session. After `bootout` launchd
-kills the daemon once the LaunchAgent's `ExitTimeOut` passes (60 seconds at most), whatever the
-drain is doing. `SIGINT` skips the drain: from a terminal it also reaches the Claude Code processes,
-which claude-agent-sdk starts in the daemon's process group. Logs go to standard error, which the
-LaunchAgent writes to `~/Library/Logs/code-with-slack/code-with-slack.log`.
+sent finish, and the background tasks with the turns that report them, and sends no other: a new
+prompt gets `texts.RESTARTING`, a queued or taken turn ends with `texts.ENDED_RESTARTING`, and a
+turn waiting on an approval or a question is stopped as `!stop` does, which keeps its session id.
+When no channel is working, after `__main__.DRAIN_LIMIT_SECONDS`, or on a second signal, the daemon
+closes the connection, then every session. After `bootout` launchd kills the daemon once the
+LaunchAgent's `ExitTimeOut` passes (60 seconds at most), whatever the drain is doing. `SIGINT` skips
+the drain: from a terminal it also reaches the Claude Code processes, which claude-agent-sdk starts
+in the daemon's process group. Logs go to standard error, which the LaunchAgent writes to
+`~/Library/Logs/code-with-slack/code-with-slack.log`.
 
 ## Configuration
 
