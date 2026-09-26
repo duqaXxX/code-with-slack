@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from typing import Any
 
 import aiohttp
@@ -7,9 +8,9 @@ from slack_sdk.errors import SlackApiError
 
 from code_with_slack import texts
 from code_with_slack.render import sinks
-from code_with_slack.render.renderer import STOPPED, TaskUpdate
+from code_with_slack.render.renderer import STOPPED, TaskUpdate, TurnRenderer
 from code_with_slack.render.sinks import ReplySink
-from tests.fakes import CHANNEL, FakeSlack
+from tests.fakes import CHANNEL, FakeSlack, sdk_messages
 
 
 @pytest.fixture(autouse=True)
@@ -235,37 +236,60 @@ async def test_finished_tool_lines_collapse_into_one(slack: FakeSlack) -> None:
     assert slack.message_texts() == ["✓ Bash · Read \u00d72 · Grep\n\nDone."]
 
 
-async def test_running_failed_and_task_lines_stay_whole(slack: FakeSlack) -> None:
+async def test_failed_calls_are_counted_and_running_task_and_stopped_lines_stay_whole(
+    slack: FakeSlack,
+) -> None:
     sink = reply(slack)
     await sink.task(tool("a", "Bash"))
     await sink.task(tool("b", "Bash", "in_progress"))
     await sink.task(tool("c", "Edit", "error", output="old_string not found"))
     await sink.task(tool("d", "Agent", task=True))
     await sink.task(tool("e", "Read"))
+    await sink.task(tool("f", "Bash", "error", output="Exit code 1"))
+    await sink.task(tool("g", "Grep", output=STOPPED))
     await sink.finish([], None)
     assert slack.message_texts() == [
-        "✓ Bash\n… `Bash: b`\n✗ `Edit: c` · old_string not found\n✓ `Agent: d`\n✓ Read"
+        "✓ Bash · Read · ✗ Edit · Bash\n… `Bash: b`\n✓ `Agent: d`\n✓ `Grep: g` · Stopped"
     ]
 
 
-async def test_lines_fold_only_once_the_reply_is_finished(slack: FakeSlack) -> None:
+async def test_a_recorded_turn_counts_its_failed_calls_in_one_line(slack: FakeSlack) -> None:
+    # tool-error.jsonl: a Read of a missing file, then a Bash command that exits 1 (CLI 2.1.283).
+    sink = reply(slack)
+    renderer = TurnRenderer(sink)
+    for message in sdk_messages("tool-error"):
+        await renderer.feed(message)
+    await renderer.close(None)
+    tools = [b for b in last_blocks(slack) if str(b.get("block_id", "")).startswith("tools-")]
+    assert [sinks.block_text(b) for b in tools] == ["✗ Read · Bash"]
+
+
+async def test_lines_fold_while_the_turn_runs(slack: FakeSlack) -> None:
     sink = reply(slack)
     await sink.task(tool("a", "Read"))
-    await sink.task(tool("b", "Read"))
+    await sink.task(tool("b", "Bash", "error", output="Exit code 1"))
+    await sink.task(tool("c", "Read", "in_progress"))
     await asyncio.sleep(0.05)
-    assert slack.message_texts() == ["✓ `Read: a`\n✓ `Read: b`"]  # nothing moves while it works
-    await sink.finish([], None)
-    assert slack.message_texts() == ["✓ Read \u00d72"]
+    assert slack.message_texts() == ["✓ Read · ✗ Bash\n… `Read: c`"]
+    await sink.task(tool("c", "Read"))  # the running call ends: it moves into the counts
+    await asyncio.sleep(0.05)
+    assert slack.message_texts() == ["✓ Read \u00d72 · ✗ Bash"]
 
 
-async def test_a_reply_that_shrinks_on_folding_removes_its_extra_message(slack: FakeSlack) -> None:
+async def test_a_reply_that_shrinks_as_calls_end_removes_its_extra_message(
+    slack: FakeSlack,
+) -> None:
     slack.responses["chat.postMessage"] = [{"ok": True, "ts": "1.1"}, {"ok": True, "ts": "2.2"}]
     sink = reply(slack)
-    for i in range(300):  # two messages while whole, one line once folded
-        await sink.task(TaskUpdate(f"t{i}", f"Read: {'x' * 40}{i}", "complete", name="Read"))
+    running = [
+        TaskUpdate(f"t{i}", f"Read: {'x' * 40}{i}", "in_progress", name="Read") for i in range(300)
+    ]
+    for update in running:  # two messages while they run, one line once they end
+        await sink.task(update)
     await asyncio.sleep(0.05)
+    ended = [replace(u, status="complete") for u in running]
     assert len(slack.calls_to("chat.postMessage")) == 2
-    await sink.finish([], "footer")
+    await sink.finish(ended, "footer")
     assert [a["ts"] for a in slack.calls_to("chat.delete")] == ["2.2"]
     assert slack.message_texts()[0] == "✓ Read \u00d7300"
 
@@ -411,10 +435,14 @@ async def test_an_extra_message_that_cannot_be_removed_is_tried_again(
     slack.responses["chat.postMessage"] = [{"ok": True, "ts": "1.1"}, {"ok": True, "ts": "2.2"}]
     slack.responses["chat.delete"] = [aiohttp.ClientConnectionError("network down"), {"ok": True}]
     sink = reply(slack)
-    for i in range(300):  # two messages while whole, one line once folded
-        await sink.task(TaskUpdate(f"t{i}", f"Read: {'x' * 40}{i}", "complete", name="Read"))
+    running = [
+        TaskUpdate(f"t{i}", f"Read: {'x' * 40}{i}", "in_progress", name="Read") for i in range(300)
+    ]
+    for update in running:  # two messages while they run, one line once they end
+        await sink.task(update)
     await asyncio.sleep(0.05)
-    await sink.finish([], "footer")
+    ended = [replace(u, status="complete") for u in running]
+    await sink.finish(ended, "footer")
     await asyncio.sleep(0.05)
     assert [a["ts"] for a in slack.calls_to("chat.delete")] == ["2.2", "2.2"]
 

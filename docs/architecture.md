@@ -112,13 +112,15 @@ second `TaskStartedMessage`.
 `code_with_slack.render.sinks.ReplySink` writes each reply as one message in the channel's main
 window, below the message that asked for it. The message is rewritten with `chat.update` at most
 once a second (Slack allows `chat.update` 50 or more times a minute), in the order things happen:
-text as Claude writes it, and a line per tool call where the call happens, updated in place
-(`…` while it runs, `✓` when it succeeds, `✗` and the first line of its output when it fails).
-Claude's text is a `markdown` block; each run of tool lines is a `context` block (small, grey
-text, as the terminal dims them), escaped for mrkdwn and marked with a `tools-` block id.
-`sinks.tool_lines` folds the calls in such a run that ended well into one line of tool names and
-counts (`✓ Bash · Read ×2`), by the tool's name whatever the tool; a call that runs or failed, a
-task's line (`TaskUpdate.task`: a subagent, a background command) and a stopped line stay whole.
+text as Claude writes it, and the tool calls where they happen. Claude's text is a `markdown`
+block; each run of tool calls between two pieces of text is a `context` block (small, grey text,
+as the terminal dims them), escaped for mrkdwn and marked with a `tools-` block id.
+`sinks.tool_lines` shows such a run the same way while the turn runs and once it ends: the calls
+that ended fold into one first line of tool names and counts, by the tool's name whatever the
+tool, succeeded ones after `✓` and failed ones after `✗` (`✓ Bash ×3 · Read · ✗ Bash`). Below
+it, a line of its own for a call still running (`…` and its title), a task
+(`TaskUpdate.task`: a subagent, a background command, with its own `✓` or `✗` and summary once
+it ends) and a stopped call (`Stopped`). A running call moves into the counts when it ends.
 The reply is posted as soon as the owner's message is queued, showing only a status line:
 `Claude is writing…`, or `Waiting for the previous reply…` behind another turn. While the turn
 runs the status stays last; when it ends, a divider and the footer replace it. Only the

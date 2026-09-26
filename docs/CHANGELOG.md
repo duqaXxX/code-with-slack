@@ -37,6 +37,12 @@ All notable changes to this project are documented here. The format follows
 - `claude-agent-sdk` 0.2.160, which bundles Claude Code 2.1.283 (was 0.2.158 with 2.1.280). The
   SDK streams in `tests/fixtures/sdk/` are recorded again on 2.1.283; the subagent stream now runs
   to the agent's end instead of stopping at the first result.
+- Tool calls fold while a turn runs too, not only once the reply is final: after each piece of
+  Claude's text, one line of tool names and counts, updated as calls end (#11). Failed calls are
+  counted in the same line after `✗` (`✓ Bash ×3 · Read · ✗ Bash`), in the final reply as well,
+  where each had a line with its command and the first line of its output. A running call, a
+  task and a stopped call keep a line of their own below the counts. The `tool-error` stream in
+  `tests/fixtures/sdk/` is recorded again with a Bash command that exits 1.
 
 ### Added
 
