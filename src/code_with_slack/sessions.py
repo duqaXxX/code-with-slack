@@ -99,6 +99,8 @@ SUMMARY_IS_END_LINE = {"local_bash"}
 # Tasks whose reply the session remembers. An ended task stays a while, since an agent can
 # report again after its notification; past this many, the oldest ended ones are forgotten.
 TASK_REPLIES_KEPT = 100
+# How often a stopping daemon checks whether every channel's turns have ended.
+DRAIN_POLL_SECONDS = 0.5
 
 
 class DirectoryUnavailable(Exception):
@@ -261,22 +263,38 @@ class ChannelSession:
         self.effort_reported = False
         # The session's token count as the client's last result reported it, for `!status`.
         self.session_tokens: int | None = None
+        # Set when the daemon stops: the turns already sent finish, no other one starts.
+        self.draining = False
 
     @property
     def busy(self) -> bool:
         return self._active is not None or bool(self._sent)
 
     @property
-    def idle(self) -> bool:
-        """Nothing running, sent, taken or queued, and no background task still working: the
-        session can be swapped without a loss (closing it ends its Claude Code process)."""
+    def working(self) -> bool:
+        """A turn runs, is sent, taken or queued, or Claude Code is expected to start one of its
+        own. Background tasks that outlived their turn do not count."""
         return (
-            not self.busy
-            and not self._running_counts()
-            and self._taken is None
-            and self._queue.empty()
-            and self._settled.is_set()
+            self.busy
+            or self._taken is not None
+            or not self._queue.empty()
+            or not self._settled.is_set()
         )
+
+    @property
+    def idle(self) -> bool:
+        """Not working, and no background task still running: the session can be swapped
+        without a loss (closing it ends its Claude Code process)."""
+        return not self.working and not self._running_counts()
+
+    async def start_draining(self) -> None:
+        """Start no further turn: the queued ones end now with a line asking to send them again,
+        and a turn taken but not sent yet ends the same way when the worker reaches it."""
+        self.draining = True
+        line = texts.ENDED.format(reason=texts.ENDED_RESTARTING)
+        while not self._queue.empty():
+            with contextlib.suppress(Exception):
+                await self._fail(self._queue.get_nowait(), line)
 
     async def submit(self, prompt: Prompt) -> Turn:
         """Queue a prompt; its reply appears at once, saying Claude is writing or waiting."""
@@ -444,6 +462,10 @@ class ChannelSession:
                 client = await self.ensure_connected()
                 self._refresh_usage()
                 await self._settled.wait()
+                if self.draining:
+                    self._taken = None
+                    await self._fail(turn, texts.ENDED.format(reason=texts.ENDED_RESTARTING))
+                    continue
                 self._sent.append(turn)
                 self._taken = None
                 prompt = turn.prompt
@@ -821,6 +843,7 @@ class SessionManager:
     def __init__(self, deps: SessionDeps) -> None:
         self._deps = deps
         self._sessions: dict[str, ChannelSession] = {}
+        self.draining = False
 
     def get(self, channel_id: str) -> ChannelSession | None:
         stored = self._deps.state.get(channel_id)
@@ -829,6 +852,7 @@ class SessionManager:
         session = self._sessions.get(channel_id)
         if session is None or session.directory != stored.directory:
             session = ChannelSession(channel_id, stored.directory, self._deps)
+            session.draining = self.draining
             self._sessions[channel_id] = session
         return session
 
@@ -876,6 +900,23 @@ class SessionManager:
     async def folders_in(self, root: Path) -> list[Path]:
         """The folders under `root` where a session can start, as `bindable_folders` finds them."""
         return await bindable_folders(root, self._deps.workspace_trusted)
+
+    async def drain(self, cut_short: asyncio.Event) -> None:
+        """Let the turns already sent finish and start none, then return: when no channel is
+        working, or when `cut_short` is set. A turn waiting on an approval or a question has no
+        end in sight, so its session closes at once; so does one that asks later."""
+        self.draining = True
+        for session in list(self._sessions.values()):
+            await session.start_draining()
+        while not cut_short.is_set():
+            for session in list(self._sessions.values()):
+                if self._deps.approvals.waiting(session.channel_id):
+                    await session.close(texts.ENDED_RESTARTING)
+            if not any(s.working for s in self._sessions.values()):
+                return
+            # Polled: a turn ends in several places, and a stop needs no finer timing.
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(cut_short.wait(), DRAIN_POLL_SECONDS)
 
     async def close_all(self) -> None:
         for session in list(self._sessions.values()):

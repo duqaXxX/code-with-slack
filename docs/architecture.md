@@ -9,8 +9,11 @@ Agent SDK client per bound channel, all on one asyncio event loop.
 configuration, so a bad `.env` fails before anything else; takes the single-instance lock, so a
 second daemon fails before it opens a Socket Mode connection; reads `state.json`; calls
 `auth.test` for the workspace id and the bot user id; then opens the Socket Mode connection.
-`SIGTERM`, which `launchctl bootout` sends, and `SIGINT` close the connection, then every
-session. Logs go to standard error, which the LaunchAgent writes to
+On `SIGTERM`, which `launchctl kill TERM` and `launchctl bootout` send, or `SIGINT`,
+`SessionManager.drain` lets the turns already sent finish and starts no other: a new prompt gets
+`texts.RESTARTING`, a queued or taken turn and a turn waiting on an approval or a question end
+with `texts.ENDED_RESTARTING`. When no channel is working, or on a second signal, the daemon
+closes the connection, then every session. Logs go to standard error, which the LaunchAgent writes to
 `~/Library/Logs/code-with-slack/code-with-slack.log`.
 
 ## Configuration
@@ -245,8 +248,8 @@ for another reason, it ends with the error line a prompt would get.
   over and the previous one drops them; they disappear when nothing runs.
 - When the Claude Code process goes away (shutdown, rebinding, a process that exits), its tasks
   go with it: their lines close with `Stopped` and the list empties. The map lives in memory only.
-- Shutting down or binding the channel to another directory closes the session: every reply
-  still waiting (running, sent or queued) ends with `This reply ended before an answer:` and the
+- Shutting down, once the drain has ended, or binding the channel to another directory closes the
+  session: every reply still waiting (running, sent or queued) ends with `This reply ended before an answer:` and the
   reason. A bind stores the new directory before the old session closes, so a message that
   arrives meanwhile opens the new session.
 - Logs carry channel ids and exception type names, never prompt or reply text.
