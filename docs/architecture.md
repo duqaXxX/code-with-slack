@@ -206,7 +206,9 @@ for another reason, it ends with the error line a prompt would get.
   trusted parent does not cover it; outside git, a trusted folder covers its subdirectories. A
   folder git cannot answer about (git missing or failing) counts as untrusted. An untrusted
   folder starts nothing, and the reply says to open `claude` there in the terminal
-  once and accept the dialog.
+  once and accept the dialog. A `!bind` runs the same checks (`sessions.check_directory`: missing,
+  unreadable, untrusted): the channel is bound, and the answer gives the reason instead of
+  promising a session.
 - The client has the channel's directory as its
   working directory, `resume` set to the stored session id, the owner's own settings
   (`setting_sources` user, project and local), streaming of partial messages, the approval

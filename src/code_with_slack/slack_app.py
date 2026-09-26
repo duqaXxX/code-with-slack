@@ -101,9 +101,15 @@ def slack_unescape(text: str) -> str:
     return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
 
-def bound_text(directory: Path, bypass: bool) -> str:
-    """The answer to a bind, saying bypass ended with the old session when it was on."""
-    return texts.BIND_OK.format(directory=directory) + (texts.BIND_BYPASS_OFF if bypass else "")
+def bound_text(directory: Path, bypass: bool, unavailable: DirectoryUnavailable | None) -> str:
+    """The answer to a bind: what keeps a session from starting in the folder, if anything, and
+    that bypass ended with the old session when it was on."""
+    bound = (
+        texts.BIND_OK.format(directory=directory)
+        if unavailable is None
+        else texts.BIND_UNAVAILABLE.format(directory=directory, reason=unavailable.message)
+    )
+    return bound + (texts.BIND_BYPASS_OFF if bypass else "")
 
 
 class Fetch(Protocol):
@@ -354,7 +360,8 @@ def build_app(
         if directory is not None:
             bypass = sessions.bypass_on(channel)
             await sessions.bind(channel, directory)
-            await say(channel, bound_text(directory, bypass))
+            unavailable = await sessions.unavailable(directory)
+            await say(channel, bound_text(directory, bypass, unavailable))
 
     async def folder_named(channel: str, path: str) -> Path | None:
         directory = resolve_directory(path, config.allowed_root)
@@ -399,7 +406,8 @@ def build_app(
         if not await sessions.bind_when_idle(channel, directory):
             await say(channel, texts.BIND_BUSY)
             return
-        await say(channel, bound_text(directory, bypass))
+        unavailable = await sessions.unavailable(directory)
+        await say(channel, bound_text(directory, bypass, unavailable))
         await remove_request(channel, body["message"]["ts"])
 
     async def handle_resume(channel: str, session: ChannelSession, target: str) -> None:

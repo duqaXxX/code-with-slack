@@ -11,6 +11,10 @@ All notable changes to this project are documented here. The format follows
   Code left that process running, and after a Resume two processes could run one session (#15).
   The old session now waits for the start, then closes the process; the word answers that the
   channel changed meanwhile, and a `!bypass on` caught this way is not stored for the new folder.
+- A `!bind` to a folder Claude Code has not trusted, typed or clicked, answered that the next
+  message starts a session there, and the message then got the trust refusal (#14). The channel
+  is still bound, and the answer now says no session can start there yet and why: the same
+  reason, from the same checks, a message would get (untrusted, unreadable or missing).
 
 ### Changed
 
