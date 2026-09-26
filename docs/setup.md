@@ -172,6 +172,8 @@ The plist lives at `~/Library/LaunchAgents/local.code-with-slack.plist`. launchd
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <key>ExitTimeOut</key>
+  <integer>1800</integer>
   <key>StandardOutPath</key>
   <string><home>/Library/Logs/code-with-slack/code-with-slack.log</string>
   <key>StandardErrorPath</key>
@@ -185,10 +187,23 @@ Load it, restart it, stop it, and read its state:
 ```bash
 mkdir -p ~/Library/Logs/code-with-slack
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.code-with-slack.plist
-launchctl kickstart -k gui/$(id -u)/local.code-with-slack
+launchctl kill TERM gui/$(id -u)/local.code-with-slack
 launchctl bootout gui/$(id -u)/local.code-with-slack
 launchctl print gui/$(id -u)/local.code-with-slack
 ```
+
+On `SIGTERM` code-with-slack stops starting turns and lets the ones already running finish, then
+exits; `KeepAlive` starts it again. Meanwhile a new message gets `code-with-slack is restarting;
+send this again in a moment.`, a queued one ends with the same request, and a turn waiting on an
+approval or a question ends at once, since nobody can say when it would. The daemon's `!words`
+keep working: `!stop` ends a long turn so the restart goes on. `ExitTimeOut` is how long launchd
+waits for that before it kills the process (the default was 5 seconds on macOS 27.0); a turn
+still running then ends with no answer. Sending the signal a second time stops without waiting.
+
+`launchctl kill TERM` returns at once, so a Claude Code session running from Slack can restart
+the daemon that hosts it and still finish its turn. `launchctl kickstart -k` waits until the old
+instance has exited, which from such a session means waiting on its own turn: its command stays
+blocked until the tool call gives up or `ExitTimeOut` passes.
 
 The log holds what the service did, never the content of your messages.
 
@@ -211,7 +226,7 @@ code-with-slack:
    file (`python3.12` or similar) from Finder into the list. Alternatively choose **+** and press
    **⌘⇧.** in the file picker to show hidden folders.
 3. Check that the new entry is turned on, then restart the service:
-   `launchctl kickstart -k gui/$(id -u)/local.code-with-slack`.
+   `launchctl kill TERM gui/$(id -u)/local.code-with-slack`.
 
 The permission belongs to that interpreter, which uv shares between the tools that use the same
 Python version: any of them started outside Terminal gets the same access. Projects outside the

@@ -199,6 +199,11 @@ def build_app(
         if not (files or command is None or isinstance(command, Passthrough)):
             await handle_word(channel, command)
             return
+        # The daemon's words still work while it stops (`!stop` shortens the wait); a new turn
+        # would not finish, and Slack does not send this event again to the next instance.
+        if sessions.draining:
+            await say(channel, texts.RESTARTING)
+            return
         # Prompts and commands for Claude Code enter the queue in the order they were sent,
         # although files take a while to download. Every reply goes to the main window.
         directory = session.directory

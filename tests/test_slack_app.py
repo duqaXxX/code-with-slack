@@ -821,3 +821,13 @@ async def test_a_command_after_a_message_with_files_waits_its_turn(
     await first
     await asyncio.sleep(0.3)
     assert [str(p).startswith(body["event"]["text"]) for p in queued] == [True, False]
+
+
+async def test_a_prompt_while_the_daemon_stops_is_refused_and_words_still_work(
+    world: World,
+) -> None:
+    await world.sessions.drain(asyncio.Event())  # nothing runs: returns at once
+    await world.dispatch(message("list the files"))
+    await world.dispatch(message("!stop"))
+    assert said(world) == [texts.RESTARTING, texts.NOTHING_TO_STOP]
+    assert world.queries() == []

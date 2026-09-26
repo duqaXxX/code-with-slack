@@ -64,6 +64,11 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
         logger.info("connected to Slack workspace %s", identity.team_id)
         try:
             await stop.wait()
+            # launchd sends SIGTERM for a restart too: the turns already running finish first,
+            # within the LaunchAgent's ExitTimeOut. A second signal stops without waiting.
+            stop.clear()
+            logger.info("stopping: letting running turns finish")
+            await sessions.drain(stop)
         finally:
             logger.info("shutting down")
             await handler.close_async()  # type: ignore[no-untyped-call]

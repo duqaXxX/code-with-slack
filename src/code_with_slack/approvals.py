@@ -90,6 +90,12 @@ class Approvals:
                 denied.append(pending)
         return denied
 
+    def waiting(self, channel_id: str) -> bool:
+        """Whether a request of the channel still waits for the owner."""
+        return any(
+            p.channel_id == channel_id and not p.future.done() for p in self._pending.values()
+        )
+
     def posted(self, approval_id: str, message_ts: str) -> bool:
         """Record the message that shows a request, so it can be removed once decided; False
         when the request was decided before its message was known (`!stop` while posting)."""
