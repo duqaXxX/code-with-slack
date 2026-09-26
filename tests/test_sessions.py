@@ -1089,7 +1089,7 @@ async def test_status_lists_the_footer_s_values_of_the_latest_reply(
     await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
     await until(lambda: h.usage_fetches == 1)  # the turn's own refresh of the limits
     text = await session.status()
-    assert text.startswith("Directory:") and "Claude Code: `2.1.280`" in text
+    assert text.startswith("Directory:") and "Claude Code: `2.1.281`" in text
     tokens = re.search(r"([\d.]+[kM]?) tok", statuses(h)[-1])
     assert tokens is not None
     lines = text.splitlines()
