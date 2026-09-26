@@ -821,3 +821,26 @@ async def test_a_command_after_a_message_with_files_waits_its_turn(
     await first
     await asyncio.sleep(0.3)
     assert [str(p).startswith(body["event"]["text"]) for p in queued] == [True, False]
+
+
+async def test_a_prompt_while_the_daemon_stops_is_refused_and_words_still_work(
+    world: World,
+) -> None:
+    await world.sessions.drain(asyncio.Event())  # nothing runs: returns at once
+    await world.dispatch(message("list the files"))
+    await world.dispatch(message("!stop"))
+    assert said(world) == [texts.RESTARTING, texts.NOTHING_TO_STOP]
+    assert world.queries() == []
+
+
+async def test_a_stop_during_the_downloads_sends_the_prompt_nowhere(world: World) -> None:
+    body = shared_file("snippet")
+    world.downloads[body["event"]["files"][0]["url_private_download"]] = b"hello\n"
+    world.slow_downloads = 0.2
+    first = asyncio.create_task(world.dispatch(body))
+    await asyncio.sleep(0.05)
+    await world.sessions.drain(asyncio.Event())
+    await first
+    await asyncio.sleep(0.3)
+    assert world.queries() == [] and world.clients == []
+    assert said(world)[-1] == texts.RESTARTING
