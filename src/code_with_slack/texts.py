@@ -47,6 +47,9 @@ COMPACTED = "Compacted the conversation: {before} → {after} tokens."
 COMPACTED_PLAIN = "Compacted the conversation."
 NO_OUTPUT = "_Done. Claude Code returned no text._"
 BIND_OK = "Bound this channel to `{directory}`. The next message starts a new session there."
+BIND_UNAVAILABLE = (
+    "Bound this channel to `{directory}`, but no session can start there yet. {reason}"
+)
 BIND_BYPASS_OFF = " Bypass is off in it: send `!bypass on` to switch it on again."
 BIND_OUTSIDE = (
     "`{path}` is not a folder under `{root}`. Give its path relative to that folder, for "

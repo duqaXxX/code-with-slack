@@ -883,3 +883,24 @@ async def test_a_stop_during_the_downloads_sends_the_prompt_nowhere(world: World
     await asyncio.sleep(0.3)
     assert world.queries() == [] and world.clients == []
     assert said(world)[-1] == texts.RESTARTING
+
+
+@pytest.mark.parametrize("how", ["typed", "clicked"])
+async def test_a_bind_to_an_untrusted_folder_says_no_session_can_start_yet(
+    world: World, how: str
+) -> None:
+    (world.root / "docs").mkdir()
+    docs = (world.root / "docs").resolve()
+
+    async def only_app(directory: Path) -> bool:
+        return directory != docs
+
+    world.sessions._deps.workspace_trusted = only_app
+    if how == "typed":
+        await world.dispatch(message("!bind docs"))
+    else:
+        await world.dispatch(click("folder_bind", "docs"))
+    reason = texts.DIRECTORY_UNTRUSTED.format(directory=docs)
+    assert said(world)[-1] == texts.BIND_UNAVAILABLE.format(directory=docs, reason=reason)
+    assert world.state.get(CHANNEL).directory == docs
+    await world.sessions.close_all()
