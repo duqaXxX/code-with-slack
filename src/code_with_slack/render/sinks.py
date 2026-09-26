@@ -37,6 +37,8 @@ BLOCKS_LIMIT = 45
 REFUSED_CONTENT = {"invalid_blocks", "invalid_blocks_format", "msg_too_long", "invalid_arguments"}
 # ⏳ marks what is still running, as the footer marks running tasks (`⏳ 1 shell`).
 ICONS = {"pending": "⏳", "in_progress": "⏳", "complete": "✓", "error": "✗"}
+# Slack drops plain spaces at the start of a line; no-break spaces stay and make the indent.
+NESTED = "\u00a0" * 4 + "⎿ "
 
 
 def describe(exc: Exception) -> str:
@@ -107,7 +109,8 @@ class _Tool:
         if (update.status == "error" and update.output) or update.output == STOPPED:
             line += f" · {update.output}"
         elif update.status == "in_progress" and update.details:
-            line += f" · {update.details.splitlines()[-1]}"
+            # What it is doing now, one level down, as the terminal nests it under `⎿`.
+            line += f"\n{NESTED}{update.details.splitlines()[-1]}"
         return line
 
 

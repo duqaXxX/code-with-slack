@@ -311,7 +311,7 @@ async def test_an_agent_inside_a_command_shows_on_the_command_s_line(slack: Fake
     await renderer.feed(started)
     await renderer.feed(dataclasses.replace(started, **inner, description="Run the tests"))
     await asyncio.sleep(0.05)
-    assert slack.message_texts() == ["⏳ `/list-files` · 1 call · Run the tests"]  # one line
+    assert slack.message_texts() == [f"⏳ `/list-files` · 1 call\n{sinks.NESTED}Run the tests"]
     await renderer.feed(dataclasses.replace(ended, **inner))
     for message in messages[messages.index(started) + 1 :]:
         await renderer.feed(message)
@@ -325,7 +325,7 @@ async def test_a_running_subagent_counts_its_calls_before_its_latest(slack: Fake
         tool("a", "Agent", "in_progress", details="Read: x\nBash: ls", calls=3, task=True)
     )
     await asyncio.sleep(0.05)
-    assert slack.message_texts() == ["⏳ `Agent: a` · 3 calls · Bash: ls"]
+    assert slack.message_texts() == [f"⏳ `Agent: a` · 3 calls\n{sinks.NESTED}Bash: ls"]
 
 
 async def test_a_stopped_command_keeps_its_line_and_is_not_a_failure(slack: FakeSlack) -> None:

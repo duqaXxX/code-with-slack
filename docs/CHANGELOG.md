@@ -30,7 +30,7 @@ All notable changes to this project are documented here. The format follows
   streamed by Claude Code in this case, so the line carries no call count. The new
   `skill-fork-command` stream in `tests/fixtures/sdk/` records it. A task started by a call
   inside a background subagent now goes to the reply that holds that subagent. An agent the
-  command starts inside it shows on the command's line (`⏳ /review · 1 call · Run the tests`)
+  command starts inside it shows on the command's line (`⏳ /review · 1 call`, then `⎿ Run the tests`)
   instead of a second running line.
 
 ### Changed
@@ -61,8 +61,10 @@ All notable changes to this project are documented here. The format follows
   task and a stopped call keep a line of their own below the counts, and so does the latest
   call while Claude is still working after it. The `tool-error` stream in
   `tests/fixtures/sdk/` is recorded again with a Bash command that exits 1.
-- A subagent's line counts the calls it made (`· 12 calls`) before its latest one, while it runs
-  and once it ends.
+- A subagent's line counts the calls it made (`· 12 calls`), while it runs and once it ends.
+  What a running line is doing now (a subagent's latest call, a command's latest agent,
+  `Running in background`) shows on a line below it, indented under `⎿` as in the terminal,
+  instead of after a `·` on the same line.
 - Every line of something still running (a call, a subagent, a task, a skill) is marked `⏳`,
   as the footer marks running tasks, in place of `…`, which did not read as running.
 

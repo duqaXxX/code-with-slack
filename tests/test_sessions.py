@@ -31,6 +31,7 @@ from code_with_slack import sessions, texts
 from code_with_slack.approvals import Answer, Approvals, Approve
 from code_with_slack.footer import UsageCache
 from code_with_slack.guards import Identity
+from code_with_slack.render.sinks import NESTED
 from code_with_slack.sessions import SessionDeps, SessionManager, resolve_directory
 from code_with_slack.state import StateStore
 from tests.fakes import (
@@ -577,7 +578,8 @@ async def test_a_background_agent_s_calls_update_its_line_and_open_no_reply(
     h.clients[0].inject(children)
     await asyncio.sleep(0.1)
     assert len(h.slack.posted_ts) == posted
-    assert "Bash" in h.replies()[0].splitlines()[0]
+    parent, nested = h.replies()[0].splitlines()[:2]
+    assert "Agent" in parent and nested.startswith(NESTED) and "Bash" in nested
 
 
 async def test_ended_tasks_are_forgotten_past_the_limit(
