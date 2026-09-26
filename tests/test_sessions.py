@@ -181,17 +181,24 @@ async def test_stale_session_starts_fresh_and_says_so(harness_for: Callable[...,
     assert h.state.get(CHANNEL).session_id not in (None, "gone")
 
 
-async def test_bypass_is_memory_only(harness_for: Callable[..., Harness], tmp_path: Path) -> None:
+async def test_bypass_survives_a_restart(
+    harness_for: Callable[..., Harness], tmp_path: Path
+) -> None:
     h = harness_for({}, {})
     session = h.session()
     await session.set_bypass(True)
     assert h.clients[0].modes == ["bypassPermissions"] and session.bypass
-    stored = json.loads((tmp_path / "state.json").read_text())["channels"][CHANNEL]
-    assert set(stored) == {"directory", "session_id"}
-    await session.set_bypass(False)
-    assert h.clients[0].modes[-1] == "default"
-    restarted = SessionManager(h.deps).get(CHANNEL)
-    assert restarted is not None and restarted.bypass is False
+    assert json.loads((tmp_path / "state.json").read_text())["channels"][CHANNEL]["bypass"]
+    # A new daemon: state.json read again, a new manager, a new Claude Code process.
+    reloaded = dataclasses.replace(h.deps, state=StateStore(tmp_path / "state.json"))
+    restarted = SessionManager(reloaded).get(CHANNEL)
+    assert restarted is not None and restarted.bypass
+    await restarted.ensure_connected()
+    assert h.clients[1].modes == ["bypassPermissions"]
+    await restarted.set_bypass(False)
+    assert h.clients[1].modes[-1] == "default"
+    assert not StateStore(tmp_path / "state.json").get(CHANNEL).bypass
+    await restarted.close()
 
 
 async def test_queue_waits_while_approval_pending(harness_for: Callable[..., Harness]) -> None:
