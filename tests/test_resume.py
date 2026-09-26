@@ -36,12 +36,10 @@ def test_each_session_is_a_row_with_the_picker_s_columns_and_a_button() -> None:
     blocks = resume_blocks(Path("/srv/dev/app"), sessions, None, NOW)
     assert "/srv/dev/app" in blocks[0]["text"]["text"]
     first, second = rows(blocks)
-    assert first["text"]["text"] == (
-        "Fix footer effort · 2 hours ago · main · 402.3KB\n`68da9311-0000-4000-8000-000000000001`"
-    )
-    assert second["text"]["text"] == (
-        "Add trust gate · 1 day ago · security-fixes · 1.0MB\n"
-        "`68da9311-0000-4000-8000-000000000002`"
+    # The id's first characters close the row, in plain text like the rest of it.
+    assert first["text"]["text"] == "Fix footer effort · 2 hours ago · main · 402.3KB · 68da9311"
+    assert (
+        second["text"]["text"] == "Add trust gate · 1 day ago · security-fixes · 1.0MB · 68da9311"
     )
     button = first["accessory"]
     assert button["action_id"] == "session_resume"
@@ -53,8 +51,7 @@ def test_the_current_session_is_marked_and_has_no_button() -> None:
     sessions = [info("68da9311-0000-4000-8000-000000000001", "Now", 0.1)]
     (row,) = rows(resume_blocks(Path("/srv/dev/app"), sessions, sessions[0].session_id, NOW))
     assert "current" in row["text"]["text"] and "accessory" not in row
-    # Its id is shown too: it is the one `claude --resume <id>` takes to open it in the terminal.
-    assert row["text"]["text"].endswith("\n`68da9311-0000-4000-8000-000000000001`")
+    assert row["text"]["text"] == "Now · 6 minutes ago · 68da9311 · _current_"
 
 
 def test_the_branch_reads_as_the_terminal_shows_it() -> None:
@@ -64,7 +61,7 @@ def test_the_branch_reads_as_the_terminal_shows_it() -> None:
              file_size=976_000),
     ]  # fmt: skip
     (row,) = rows(resume_blocks(Path("/srv/dev/notes"), sessions, None, NOW))
-    assert row["text"]["text"].startswith("Notes · 2 days ago · HEAD · 953.1KB\n")
+    assert row["text"]["text"] == "Notes · 2 days ago · HEAD · 953.1KB · 68da9311"
 
 
 def test_only_the_newest_sessions_are_listed() -> None:
@@ -106,6 +103,17 @@ def test_a_session_is_found_by_id_or_by_its_name() -> None:
     assert matching(sessions, "trust") == [named]
     assert matching(sessions, "Other") == []  # a summary with no title (a first prompt) is no name
     assert matching(sessions, "twin") == [twin, twin2]
+
+
+def test_a_session_is_found_by_the_start_of_its_id_the_list_shows() -> None:
+    first = info("1b4b42a0-0000-4000-8000-000000000001", "first", 1)
+    second = info("1b4b42a1-0000-4000-8000-000000000002", "second", 2)
+    added = info("add00000-0000-4000-8000-000000000003", "add", 3, custom_title="add")
+    sessions = [first, second, added]
+    assert matching(sessions, "1b4b42a0") == [first]
+    assert matching(sessions, "1b4b42a") == []  # shorter than the list shows: not read as an id
+    assert matching(sessions, "add") == [added]  # a short title that is also hex stays a title
+    assert matching(sessions, "1b4b42a0-0000") == [first]
 
 
 def write_transcript(config: Path, directory: Path, sid: str, lines: list[dict[str, Any]]) -> Path:
