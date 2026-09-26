@@ -1,4 +1,5 @@
-"""The daemon's only written file: the directory and the session id of each bound channel."""
+"""The daemon's only written file: the directory, the session id and the bypass switch of each
+bound channel."""
 
 import contextlib
 import json
@@ -12,6 +13,8 @@ from pathlib import Path
 class ChannelState:
     directory: Path
     session_id: str | None = None
+    # `!bypass on`, kept across restarts: a restart is the daemon's doing, not the owner's.
+    bypass: bool = False
 
 
 class StateError(Exception):
@@ -29,7 +32,7 @@ class StateStore:
         return self._channels.get(channel_id)
 
     def bind(self, channel_id: str, directory: Path) -> None:
-        """Bind a channel to a directory; the old session belongs to the old directory."""
+        """Bind a channel to a directory; the old session and its bypass stay with the old one."""
         self._channels[channel_id] = ChannelState(directory)
         self._save()
 
@@ -40,13 +43,23 @@ class StateStore:
             self._channels[channel_id] = replace(current, session_id=session_id)
             self._save()
 
+    def set_bypass(self, channel_id: str, on: bool) -> None:
+        """Record a bound channel's bypass switch; a resumed session keeps it."""
+        current = self._channels.get(channel_id)
+        if current is not None and current.bypass != on:
+            self._channels[channel_id] = replace(current, bypass=on)
+            self._save()
+
     def _load(self) -> dict[str, ChannelState]:
         try:
             raw = json.loads(self._path.read_text())
             if raw.get("version") != 1:
                 raise StateError(f"{self._path} has an unknown version; fix or delete it")
             return {
-                channel: ChannelState(Path(entry["directory"]), entry.get("session_id"))
+                # Only a literal true switches bypass on: a hand-edited "false" must not.
+                channel: ChannelState(
+                    Path(entry["directory"]), entry.get("session_id"), entry.get("bypass") is True
+                )
                 for channel, entry in raw["channels"].items()
             }
         except FileNotFoundError:
@@ -58,7 +71,11 @@ class StateStore:
         data = {
             "version": 1,
             "channels": {
-                channel: {"directory": str(s.directory), "session_id": s.session_id}
+                channel: {
+                    "directory": str(s.directory),
+                    "session_id": s.session_id,
+                    "bypass": s.bypass,
+                }
                 for channel, s in self._channels.items()
             },
         }
