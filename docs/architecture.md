@@ -14,7 +14,9 @@ sent finish, each up to its reply's final write (footer included), and the backg
 its notification is waited for `sessions.INJECTED_TURN_WAIT`, since the CLI can suppress it), and
 sends no other: a new prompt gets `texts.RESTARTING`, a queued or taken turn ends with
 `texts.ENDED_RESTARTING`. Approvals and questions stay open: the Socket Mode connection closes only
-after the drain. When no channel is working, after `__main__.DRAIN_LIMIT_SECONDS`, or on a second
+after the drain. A channel left with only background tasks gets `texts.RESTART_WAITS` once, naming
+them by the footer's counts, since the daemon cannot tell whether a task (a dev server, a watcher)
+ever ends; during the drain `!stop` also ends them with `ClaudeSDKClient.stop_task`. When no channel is working, after `__main__.DRAIN_LIMIT_SECONDS`, or on a second
 signal, the daemon closes the connection, then every session. After `bootout` launchd kills the
 daemon once the LaunchAgent's `ExitTimeOut` passes (60 seconds at most), whatever the drain is
 doing. `SIGINT` skips the drain: from a terminal it also reaches the Claude Code processes, which
@@ -232,7 +234,8 @@ for another reason, it ends with the error line a prompt would get.
   every waiting message is told, and the next message starts a new process. A Slack failure
   while a reply is written never stops the session or the running turn.
 - Messages are queued and run one at a time; each gets its own reply in the channel.
-  `!stop` interrupts the running turn and denies its pending approvals.
+  `!stop` interrupts the running turn and denies its pending approvals; while the daemon stops,
+  it also stops the channel's background tasks.
 - One reader task follows the SDK's message stream for the life of the client. A turn starts
   at its first text or tool message, or earlier at a `TaskStartedMessage` with no
   `tool_use_id` that comes while a message is sent and no report turn is expected: a skill with

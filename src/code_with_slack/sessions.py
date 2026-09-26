@@ -150,6 +150,7 @@ class ClaudeClient(Protocol):
     def receive_messages(self) -> AsyncIterator[Message]: ...
     async def set_permission_mode(self, mode: PermissionMode) -> None: ...
     async def interrupt(self) -> None: ...
+    async def stop_task(self, task_id: str) -> None: ...
     async def get_server_info(self) -> dict[str, Any] | None: ...
     async def get_context_usage(self) -> Any: ...
 
@@ -294,6 +295,8 @@ class ChannelSession:
         self.session_tokens: int | None = None
         # Set when the daemon stops: the turns already sent finish, no other one starts.
         self.draining = False
+        # Whether this stop has said which background tasks it waits for.
+        self._told_waiting = False
 
     @property
     def bypass(self) -> bool:
@@ -401,13 +404,31 @@ class ChannelSession:
         if self.bypass:
             await self._post(texts.BYPASS_RESTARTING)
 
+    async def announce_waiting(self) -> None:
+        """Once per stop, when only background tasks are left: say which ones the restart waits
+        for, since only the owner knows whether a task (a dev server, a watcher) ever ends."""
+        if self._told_waiting or self.busy or not (kinds := self._running_kinds()):
+            return
+        self._told_waiting = True
+        await self._post(texts.RESTART_WAITS.format(counts=kinds))
+
     async def stop(self) -> bool:
-        """Interrupt the running turn and deny its pending approvals; queued turns stay queued."""
-        if self._client is None or not self.busy:
+        """Interrupt the running turn and deny its pending approvals; queued turns stay queued.
+        While the daemon stops, also stop the background tasks, which the restart waits for."""
+        if self._client is None:
             return False
-        for pending in self._deps.approvals.deny_all(self.channel_id):
-            await self._delete_request(pending.message_ts)
-        await self._client.interrupt()
+        tasks = self._running_task_ids() if self.draining else []
+        if not self.busy and not tasks:
+            return False
+        if self.busy:
+            for pending in self._deps.approvals.deny_all(self.channel_id):
+                await self._delete_request(pending.message_ts)
+            await self._client.interrupt()
+        for task_id in tasks:
+            try:
+                await self._client.stop_task(task_id)
+            except Exception as exc:  # it may have ended meanwhile; the others still stop
+                logger.warning("could not stop a task in %s: %s", self.channel_id, describe(exc))
         return True
 
     async def status(self) -> str:
@@ -742,6 +763,12 @@ class ChannelSession:
         kinds = self._running_kinds()
         return texts.RUNNING.format(counts=kinds) if kinds else ""
 
+    def _running_task_ids(self) -> list[str]:
+        """The tasks still running: those that outlived their turn, and the running turn's."""
+        outlived = [t for t, r in self._task_replies.items() if t in r.running_tasks]
+        current = self._active.renderer.running_tasks if self._active is not None else []
+        return list(dict.fromkeys(outlived + current))
+
     def _running_kinds(self) -> str:
         """`1 shell · 2 agents`, or empty when no task outlived its turn."""
         counts: dict[str, int] = {}
@@ -1018,6 +1045,9 @@ class SessionManager:
         while not cut_short.is_set():
             if all(s.idle and not s.reporting for s in self._sessions.values()):
                 return
+            for session in list(self._sessions.values()):
+                with contextlib.suppress(Exception):  # a failed post must not end the wait
+                    await session.announce_waiting()
             # Polled: a turn ends in several places, and a stop needs no finer timing.
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(cut_short.wait(), DRAIN_POLL_SECONDS)

@@ -1456,6 +1456,42 @@ async def test_a_stop_waits_only_a_while_for_a_notification_that_never_comes(
     await asyncio.wait_for(drained, 1)
 
 
+async def test_a_stop_held_by_a_background_task_says_so_and_bang_stop_ends_it(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A task that never ends (a watcher) held a restart for the whole limit (2026-09-27).
+    monkeypatch.setattr(sessions, "DRAIN_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.2)
+    first, notice, _ = split_background()
+    ended = [m for m in notice if not isinstance(m, TaskNotificationMessage)]
+    task_id = next(m.task_id for m in first if isinstance(m, TaskStartedMessage))
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    drained = asyncio.create_task(h.manager.drain(asyncio.Event()))
+    await asyncio.sleep(0.1)
+    assert not drained.done()
+    posted = [p["text"] for p in h.slack.calls_to("chat.postMessage")]
+    assert posted.count(texts.RESTART_WAITS.format(counts="1 shell")) == 1
+    assert await session.stop()
+    assert h.clients[0].stopped_tasks == [task_id]
+    assert h.clients[0].interrupts == 0  # no turn was running
+    # The CLI answers a stop with the task's terminal task_updated (SDK stop_task docstring).
+    h.clients[0].inject(ended)
+    await asyncio.wait_for(drained, 1)
+
+
+async def test_bang_stop_leaves_background_tasks_alone_outside_a_stop(
+    harness_for: Callable[..., Harness],
+) -> None:
+    first, _, _ = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    assert not await session.stop()
+    assert h.clients[0].stopped_tasks == []
+
+
 async def swap(h: Harness, how: str, tmp_path: Path) -> None:
     if how == "bind":
         other = tmp_path / "other"

@@ -7,6 +7,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A background task that never ends (a dev server, a watcher) held a restart for the full 29
+  minutes, with nothing in Slack saying why. During a restart, a channel left with only background
+  tasks now gets one message naming them by the footer's counts, and `!stop` there stops them with
+  `ClaudeSDKClient.stop_task`, so the restart goes on. Outside a restart `!stop` is unchanged.
 - A `!bind` or a Resume while `!help`, `!bypass` or `!status` was starting the channel's Claude
   Code left that process running, and after a Resume two processes could run one session (#15).
   The old session now waits for the start, then closes the process; the word answers that the

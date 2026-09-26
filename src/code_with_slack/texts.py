@@ -103,6 +103,11 @@ BYPASS_ON = (
 BYPASS_RESTARTING = "code-with-slack is restarting: bypass stays on in this channel."
 BYPASS_OFF = "Bypass is off. Claude Code is back in its `{mode}` mode."
 STOPPED = "Stopped the current turn."
+STOPPED_DRAINING = "Stopped what was running in this channel."
+RESTART_WAITS = (
+    "code-with-slack is restarting once these background tasks end: {counts}. "
+    "`!stop` ends them now."
+)
 NOTHING_TO_STOP = "Nothing is running in this channel."
 STATUS = (
     "Directory: `{directory}`\nSession: `{session}`\nMode: `{mode}`\n"
