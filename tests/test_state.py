@@ -28,6 +28,32 @@ def test_rebinding_drops_the_session(tmp_path: Path) -> None:
     assert store.get("C000CHAN") == ChannelState(tmp_path / "b", None)
 
 
+def test_bypass_survives_a_reload_and_a_new_session_but_not_a_rebind(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    store = StateStore(path)
+    store.bind("C000CHAN", tmp_path / "a")
+    store.set_bypass("C000CHAN", True)
+    store.set_session("C000CHAN", "session-1")
+    assert StateStore(path).get("C000CHAN") == ChannelState(tmp_path / "a", "session-1", True)
+    store.bind("C000CHAN", tmp_path / "b")
+    assert StateStore(path).get("C000CHAN") == ChannelState(tmp_path / "b", None, False)
+
+
+@pytest.mark.parametrize("value", ["true", "false", 1, None])
+def test_only_a_literal_true_turns_bypass_on(tmp_path: Path, value: object) -> None:
+    path = tmp_path / "state.json"
+    entry = {"directory": str(tmp_path), "session_id": None, "bypass": value}
+    path.write_text(json.dumps({"version": 1, "channels": {"C000CHAN": entry}}))
+    assert StateStore(path).get("C000CHAN") == ChannelState(tmp_path, None, False)
+
+
+def test_a_file_written_before_bypass_was_stored_still_loads(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    entry = {"directory": str(tmp_path), "session_id": "s"}
+    path.write_text(json.dumps({"version": 1, "channels": {"C000CHAN": entry}}))
+    assert StateStore(path).get("C000CHAN") == ChannelState(tmp_path, "s", False)
+
+
 def test_file_is_private_and_nothing_else_is_left_behind(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "state.json")
     store.bind("C000CHAN", tmp_path)
@@ -71,13 +97,14 @@ def test_a_corrupt_file_is_refused_not_discarded(tmp_path: Path) -> None:
     assert path.read_text() == "{not json"
 
 
-def test_the_file_holds_directory_and_session_only(tmp_path: Path) -> None:
+def test_the_file_holds_directory_session_and_bypass_only(tmp_path: Path) -> None:
     path = tmp_path / "state.json"
     store = StateStore(path)
     store.bind("C000CHAN", tmp_path)
     store.set_session("C000CHAN", "s")
+    store.set_bypass("C000CHAN", True)
     data = json.loads(path.read_text())
-    entry = {"directory": str(tmp_path), "session_id": "s"}
+    entry = {"directory": str(tmp_path), "session_id": "s", "bypass": True}
     assert data == {"version": 1, "channels": {"C000CHAN": entry}}
 
 
