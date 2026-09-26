@@ -279,9 +279,10 @@ that Claude Code command when the session offers `name`, and is sent as a normal
 otherwise. `!resume` stands in for Claude Code's interactive `/resume`, which an SDK session
 does not offer: `code_with_slack.resume` lists the directory's sessions from the SDK's
 `list_sessions` with the columns of the terminal's picker (name or title, time since the last
-activity, git branch, size), the session id on a second line and a Resume button each, or matches
-`!resume <id or name>`. The terminal's picker shows no id; the list does, because `!resume <id>`
-takes it and `claude --resume <id>` is the only way to open a Slack-born session in the terminal.
+activity, git branch, size), the first 8 characters of the session id and a Resume button each, or matches
+`!resume <id or name>`. The terminal's picker shows no id; the list shows its start because
+`!resume` takes a full id or any start of one at least 8 characters long (`resume.ID_SHOWN`).
+A shorter target is read only as a title.
 The list holds the directory's own sessions, not other worktrees', as the terminal's picker
 starts. Resuming stores the session id for the channel and closes the channel's client, only
 when no turn or background task is running or waiting; the next message starts Claude Code with `resume` set to it. A Resume click is
