@@ -151,6 +151,14 @@ CLAIMS = [
         "code_with_slack.render.previews.preview",
         "ask Claude to create a file and then edit it; each call shows its lines under it",
     ),
+    Claim(
+        "P14",
+        "model",
+        "the Stop hook's `cwd` follows a `cd`, so the footer shows that folder's branch",
+        "code_with_slack.sessions.ChannelSession._on_stop",
+        "bind a folder holding a repo one level down, ask Claude to `cd` into it; the footer "
+        "shows the repo's branch",
+    ),
 ]
 
 

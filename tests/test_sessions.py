@@ -3,6 +3,7 @@ import dataclasses
 import json
 import logging
 import re
+import subprocess
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
@@ -1119,10 +1120,53 @@ async def test_the_footer_names_the_bound_folder(harness_for: Callable[..., Harn
     assert statuses(h)[-1].endswith(f" · {folder.parent.name}/{folder.name}")
 
 
-async def test_status_lists_the_footer_s_values_of_the_latest_reply(
-    harness_for: Callable[..., Harness],
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    """A repo one level down the channel's folder, which is no repo itself."""
+    repo = tmp_path / "app"
+    subprocess.run(["git", "init", "-q", "-b", "feature-x", str(repo)], check=True)
+    return repo
+
+
+async def test_the_footer_follows_the_folder_the_session_works_in(
+    harness_for: Callable[..., Harness], tmp_path: Path, repo: Path
 ) -> None:
-    h = harness_for({"turns": [with_stop_hook(sdk_messages("tools"), sdk_json("stop-hook"))]})
+    # The layout where the bound folder's branch was always missing (#37).
+    moved = {**sdk_json("stop-hook"), "cwd": str(repo)}
+    h = harness_for({"turns": [with_stop_hook(sdk_messages("tools"), moved)]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
+    footer = statuses(h)[-1]
+    assert footer.startswith("feature-x · (+0,-0) · ")
+    assert footer.endswith(f" · {tmp_path.name}/app")
+    lines = (await session.status()).splitlines()
+    assert lines[0] == f"Directory: `{tmp_path}`"
+    assert lines[lines.index("Now: idle") + 1 :][:3] == [
+        f"Working in: `{repo}`",
+        "Branch: `feature-x`",
+        "Uncommitted: `(+0,-0)`",
+    ]
+
+
+async def test_a_restarted_client_starts_again_in_the_bound_folder(
+    harness_for: Callable[..., Harness], repo: Path
+) -> None:
+    moved = {**sdk_json("stop-hook"), "cwd": str(repo)}
+    h = harness_for({"turns": [with_stop_hook(sdk_messages("tools"), moved)]}, {"turns": []})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
+    assert "feature-x" in statuses(h)[-1]
+    await h.manager.close_all()
+    text = await h.session().status()
+    assert "Working in" not in text and "feature-x" not in text
+
+
+async def test_status_lists_the_footer_s_values_of_the_latest_reply(
+    harness_for: Callable[..., Harness], tmp_path: Path
+) -> None:
+    # The session stayed in the channel's folder, which is no repo: no branch, no changes.
+    stayed = {**sdk_json("stop-hook"), "cwd": str(tmp_path)}
+    h = harness_for({"turns": [with_stop_hook(sdk_messages("tools"), stayed)]})
     session = h.session()
     await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
     await until(lambda: h.usage_fetches == 1)  # the turn's own refresh of the limits

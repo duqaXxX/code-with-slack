@@ -1,4 +1,4 @@
-"""The context line under every reply: bypass, branch, model, context, tokens, usage limits."""
+"""The context line under every reply: bypass, branch, changes, model, context, tokens, limits."""
 
 import asyncio
 import calendar
@@ -37,6 +37,9 @@ RESET = re.compile(
 EFFORT_OUTPUT = re.compile(r"^(?:Set effort level to|Effort level set to) ([a-z0-9-]+)", re.I)
 MODEL_OUTPUT = re.compile(r"^Set model to\b(?:.*? with ([a-z0-9-]+) effort)?", re.I | re.S)
 MONTHS = {name: i for i, name in enumerate(calendar.month_abbr) if name}
+# ` 2 files changed, 42 insertions(+), 10 deletions(-)`, git 2.54 (2026-09-27).
+SHORTSTAT_INSERTIONS = re.compile(r"(\d+) insertions?\(\+\)")
+SHORTSTAT_DELETIONS = re.compile(r"(\d+) deletions?\(-\)")
 
 
 @dataclass(frozen=True)
@@ -151,14 +154,18 @@ class UsageProbe:
             await client.disconnect()
 
 
-async def git_branch(cwd: Path) -> str | None:
+async def _git(cwd: Path, *args: str) -> str | None:
+    """`git` run in `cwd`: its output, or None when it fails or outlasts `GIT_TIMEOUT`."""
     try:
         proc = await asyncio.create_subprocess_exec(
             "git",
+            # The folder is wherever the session went, maybe a repo just cloned: a diff there
+            # must not run the repo's own fsmonitor command.
+            "-c",
+            "core.fsmonitor=false",
             "-C",
             str(cwd),
-            "branch",
-            "--show-current",
+            *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
@@ -167,11 +174,37 @@ async def git_branch(cwd: Path) -> str | None:
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), GIT_TIMEOUT)
     except TimeoutError:
-        proc.kill()
-        await proc.wait()
         return None
-    branch = out.decode(errors="replace").strip()
-    return branch if proc.returncode == 0 and branch else None
+    finally:
+        # Also when the footer is cancelled (the session closing): no git left unreaped.
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+    return out.decode(errors="replace") if proc.returncode == 0 else None
+
+
+async def git_branch(cwd: Path) -> str | None:
+    out = await _git(cwd, "branch", "--show-current")
+    return out.strip() or None if out else None
+
+
+def shortstat_lines(out: str) -> tuple[int, int]:
+    """Insertions and deletions from `git diff --shortstat`, which leaves out a zero count."""
+    insertions = SHORTSTAT_INSERTIONS.search(out)
+    deletions = SHORTSTAT_DELETIONS.search(out)
+    return (int(insertions[1]) if insertions else 0, int(deletions[1]) if deletions else 0)
+
+
+async def git_changes(cwd: Path) -> tuple[int, int] | None:
+    """Lines inserted and deleted since the last commit, staged and unstaged, as ccstatusline's
+    git-changes counts them for the terminal (untracked files not counted). None outside a repo."""
+    unstaged, staged = await asyncio.gather(
+        _git(cwd, "diff", "--shortstat"), _git(cwd, "diff", "--cached", "--shortstat")
+    )
+    if unstaged is None or staged is None:
+        return None
+    (added, removed), (added_staged, removed_staged) = map(shortstat_lines, (unstaged, staged))
+    return added + added_staged, removed + removed_staged
 
 
 def effort_change(output: str) -> tuple[bool, str | None]:
@@ -212,7 +245,10 @@ class FooterData:
     session_tokens: int | None
     usage: Usage | None
     effort: str | None = None
+    # The folder the session works in, which the branch and the changes describe.
     directory: Path | None = None
+    # Lines inserted and deleted there since the last commit; None outside a repo.
+    changes: tuple[int, int] | None = None
 
 
 def format_tokens(count: int) -> str:
@@ -228,7 +264,11 @@ def format_until(delta: timedelta) -> str:
     if minutes < 60:
         return f"{minutes}m"
     hours = minutes // 60
-    return f"{hours}h" if hours < 48 else f"{hours // 24}d"
+    if hours < 48:
+        return f"{hours}h"
+    # Days and hours, as the terminal's weekly reset timer (ccstatusline) counts down a week.
+    days, hours = divmod(hours, 24)
+    return f"{days}d {hours}h" if hours else f"{days}d"
 
 
 def format_limit(limit: Limit, now: datetime) -> str:
@@ -253,6 +293,9 @@ def footer_fields(data: FooterData, now: datetime) -> list[FooterField]:
     fields: list[FooterField] = []
     if data.branch:
         fields.append(FooterField("Branch", data.branch, mrkdwn_escape(data.branch)))
+    if data.changes is not None:
+        changes = f"(+{data.changes[0]},-{data.changes[1]})"
+        fields.append(FooterField("Uncommitted", changes, changes))
     if data.model:
         fields.append(FooterField("Model", data.model, data.model))
     if data.effort:
@@ -267,7 +310,7 @@ def footer_fields(data: FooterData, now: datetime) -> list[FooterField]:
         session = format_limit(data.usage.session, now)
         fields.append(FooterField("5h limit", session, f"5h {session}"))
     if data.usage and data.usage.week:
-        week = f"{data.usage.week.percent}%"
+        week = format_limit(data.usage.week, now)
         fields.append(FooterField("7d limit", week, f"7d {week}"))
     return fields
 

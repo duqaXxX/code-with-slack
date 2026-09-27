@@ -192,11 +192,17 @@ shown, and the tool's line records the denial.
 
 ## Footer
 
-Every reply ends with one context line: `⚡ bypass` when bypass is on, the git branch of the
-channel's directory, the model and the context percentage from the SDK's
+Every reply ends with one context line: `⚡ bypass` when bypass is on, the git branch and the
+uncommitted changes of the folder the session works in, the model and the context percentage from the SDK's
 `get_context_usage()`, the effort level, the session's tokens from the turn's `ResultMessage.model_usage`, the
-5-hour and weekly limits, and last the last two names of the channel's directory, as a terminal
-status line such as ccstatusline shows the working directory. The effort level is the one Claude Code reports in the input of a
+5-hour and weekly limits with the time to each reset, and last the last two names of the folder the session works in, as a terminal
+status line such as ccstatusline shows the working directory. The folder the session works in is
+the `cwd` of the same `Stop` hook's input, which follows a `cd` and a worktree
+(`ChannelSession.working_directory`); until a turn reports it, and again after the client
+restarts, it is the channel's directory. The changes are the lines inserted and deleted since the
+last commit, staged and unstaged (`git diff --shortstat` and `git diff --cached --shortstat`,
+untracked files not counted), as ccstatusline's git-changes counts them; git runs there with
+`core.fsmonitor` off, so a repo's own configuration runs no command. The effort level is the one Claude Code reports in the input of a
 `Stop` hook the daemon registers on each client (`effort.level`); `/effort` and `/model` run no
 hook, so after one of them the footer follows its output (`Set effort level to ...`). Until Claude
 Code reports a level on the running client the footer leaves it out, and when the model takes no
@@ -209,7 +215,8 @@ left out.
 `!status` lists the same values one per line (`Model: ...`, `Context: ...`), read by the same
 `ChannelSession._footer_data` and written from the same list, `footer.footer_fields`, as the
 footer writes them, then the running tasks; bypass and the folder are left out, since its Mode and Directory
-lines show them. It starts the channel's client when none is running, since the model and the
+lines show them. When the session works in another folder than the channel's, a `Working in:`
+line names it before the values. It starts the channel's client when none is running, since the model and the
 context come from it (`get_context_usage()` answers before a session's first turn and during a
 turn: measured on claude-agent-sdk 0.2.158, bundled CLI 2.1.280, 2026-09-25). The session tokens
 are those of the client's last result, left out until its first turn and after a result that

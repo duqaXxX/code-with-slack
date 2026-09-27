@@ -12,6 +12,7 @@ import json
 import secrets
 import shutil
 import struct
+import subprocess
 import tempfile
 import zlib
 from collections.abc import Awaitable, Callable, Coroutine
@@ -384,6 +385,25 @@ async def bypass(s: Stage) -> dict[str, Observation]:
     }
 
 
+def init_repo(path: Path, branch: str) -> None:
+    subprocess.run(["git", "init", "-q", "-b", branch, str(path)], check=True)
+
+
+async def working_folder(s: Stage) -> dict[str, Observation]:
+    # Last: the session stays in the child folder, where the other scenes' files do not go.
+    app, branch = s.workdir / "app", f"probe-{secrets.token_hex(3)}"
+    init_repo(app, branch)
+    mark = s.mark()
+    await s.turn("Use the Bash tool to run exactly this command: cd app\nThen reply: done")
+    # A `cd` inside the working folder asks for no approval (measured 2026-09-27, 2.1.283):
+    # the call shows on the tool lines only.
+    called = bash_line(s.tool_lines_since(mark))
+    moved = s.session.working_directory == app
+    shown = branch in s.shown_now()
+    detail = f"working directory {s.session.working_directory}, branch shown: {shown}"
+    return {"P14": Observation(called, moved and shown, "" if moved and shown else detail)}
+
+
 def folders(root: str) -> tuple[Path, Path]:
     """The session's working directory, named at random so its transcripts can be found and
     removed, and a folder outside it for attachments, as the daemon's uploads folder is."""
@@ -418,6 +438,7 @@ SCENES: dict[str, tuple[str, ...]] = {
     "interrupt": ("P8",),
     "resume": ("P6", "P7"),
     "bypass": ("P9",),
+    "working folder": ("P14",),
 }
 
 
@@ -437,6 +458,7 @@ async def run_scenes(log: Log) -> dict[str, Observation]:
             seen |= await attempt("interrupt", s, interrupt(s))
             seen |= await attempt("resume", s, resume(s, word))
             seen |= await attempt("bypass", s, bypass(s))
+            seen |= await attempt("working folder", s, working_folder(s))
         finally:
             await s.manager.close_all()
             forget_sessions(workdir, log)

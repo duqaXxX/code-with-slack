@@ -60,6 +60,7 @@ from code_with_slack.footer import (
     format_footer,
     format_status_fields,
     git_branch,
+    git_changes,
     session_tokens,
 )
 from code_with_slack.guards import Identity
@@ -294,6 +295,9 @@ class ChannelSession:
         # Whether Claude Code has reported the level since the client started: until then it is
         # not known, since the settings do not decide it (measured 2026-09-25).
         self.effort_reported = False
+        # Where the session works as its Stop hook last reported (`cwd` follows a `cd` and a
+        # worktree, measured 2026-09-27 on 2.1.283); None until then, which means `directory`.
+        self.working_directory: Path | None = None
         # The session's token count as the client's last result reported it, for `!status`.
         self.session_tokens: int | None = None
         # Set when the daemon stops: the turns already sent finish, no other one starts.
@@ -380,6 +384,7 @@ class ChannelSession:
             self._client = client
             # A resumed session runs at the settings' level (measured), unknown until reported.
             self.effort, self.effort_reported = None, False
+            self.working_directory = None  # the new process starts in the bound folder
             self.session_tokens = None  # counted by the client process, which starts at zero
             self._reader = asyncio.create_task(self._read(client), name=f"reader-{self.channel_id}")
             return client
@@ -460,6 +465,9 @@ class ChannelSession:
         if self._closed:
             raise SessionClosed
         fields = format_status_fields(data, datetime.now().astimezone()) if data else []
+        if data and data.directory and data.directory != self.directory:
+            # The branch and the changes below describe this folder, not the channel's.
+            fields.insert(0, texts.STATUS_WORKING.format(directory=data.directory))
         if running := self._running_kinds():
             fields.append(texts.STATUS_BACKGROUND.format(counts=running))
         stored = self._deps.state.get(self.channel_id)
@@ -887,15 +895,18 @@ class ChannelSession:
                 logger.warning(
                     "could not read the context usage in %s: %s", self.channel_id, describe(exc)
                 )
+        here = self.working_directory or self.directory
+        branch, changes = await asyncio.gather(git_branch(here), git_changes(here))
         return FooterData(
             bypass=self.bypass or self.native_mode == "bypassPermissions",
-            branch=await git_branch(self.directory),
+            branch=branch,
             model=context.get("model"),
             context_percent=context.get("percentage"),
             session_tokens=tokens,
             usage=self._deps.usage.current,
             effort=(self.effort or "default") if self.effort_reported else None,
-            directory=self.directory,
+            directory=here,
+            changes=changes,
         )
 
     async def _on_stop(
@@ -906,6 +917,8 @@ class ChannelSession:
         effort = cast(dict[str, Any], hook_input).get("effort")
         self.effort = effort.get("level") if isinstance(effort, dict) else None
         self.effort_reported = True
+        cwd = hook_input.get("cwd")
+        self.working_directory = Path(cwd) if cwd else None
         return {}
 
     async def _can_use_tool(
