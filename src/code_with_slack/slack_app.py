@@ -269,7 +269,9 @@ def build_app(
                     case Stop():
                         await say(
                             channel,
-                            texts.STOPPED if await session.stop() else texts.NOTHING_TO_STOP,
+                            texts.STOPPED_CHANNEL
+                            if await session.stop()
+                            else texts.NOTHING_TO_STOP,
                         )
                     case Resume(target=target):
                         await handle_resume(channel, session, target)

@@ -7,6 +7,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A background task that never ends (a dev server, a watcher) held a restart for the full 29
+  minutes, with nothing in Slack saying why. During a restart, a channel left with only background
+  tasks now gets one message naming them by the footer's counts, and `!stop` stops them, so the
+  restart goes on.
 - A `!bind` or a Resume while `!help`, `!bypass` or `!status` was starting the channel's Claude
   Code left that process running, and after a Resume two processes could run one session (#15).
   The old session now waits for the start, then closes the process; the word answers that the
@@ -35,6 +39,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `!stop` also stops the channel's background commands and agents (`ClaudeSDKClient.stop_task`),
+  besides the running turn and its pending approvals, and answers
+  `Stopped what was running in this channel.` Claude Code starts no turn to report a task stopped
+  this way, so neither a restart nor the channel's next prompt waits 30 seconds for one.
 - Bypass is kept in `state.json`, one `bypass` field per channel, so a restart of the daemon no
   longer turns it off (#20). On `SIGTERM` every channel with bypass on gets a line saying that it
   stays on. `!resume` keeps bypass on, as the terminal's `/resume` does; before, it turned it off

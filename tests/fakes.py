@@ -112,6 +112,7 @@ class FakeClaudeClient:
         self.queries: list[Any] = []
         self.modes: list[str] = []
         self.interrupts = 0
+        self.stopped_tasks: list[str] = []
         self.permission_results: list[PermissionResult] = []
 
     async def connect(self) -> None:
@@ -161,6 +162,9 @@ class FakeClaudeClient:
 
     async def interrupt(self) -> None:
         self.interrupts += 1
+
+    async def stop_task(self, task_id: str) -> None:
+        self.stopped_tasks.append(task_id)
 
     async def get_server_info(self) -> dict[str, Any]:
         if self._server_info_error is not None:
