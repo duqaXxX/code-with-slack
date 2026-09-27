@@ -597,23 +597,56 @@ async def test_an_edit_and_a_write_show_as_the_terminal_shows_them(slack: FakeSl
     body = [
         b
         for b in last_blocks(slack)
-        if b["type"] == "markdown" or "tools-" in b.get("block_id", "")
+        if b["type"] in ("markdown", "container") or "tools-" in b.get("block_id", "")
     ]
-    shown = [(b["type"], sinks.block_text(b)) for b in body]
-    lines = [text for kind, text in shown if kind == "context"]
+    lines = [sinks.block_text(b) for b in body if b["type"] == "context"]
     assert lines[0] == f"✓ `Write(new.txt)`\n{sinks.NESTED}Wrote 15 lines to new.txt"
     assert lines[1].startswith("✓ Read 1 file · ✗ Edit")  # the failed Edit folds, as before
-    assert lines[2] == f"✓ `Update(notes.txt)`\n{sinks.NESTED}Added 1 line, removed 1 line"
-    assert lines[3] == f"✓ `Write(notes.txt)`\n{sinks.NESTED}Added 2 lines, removed 3 lines"
-    code = [text for kind, text in shown if kind == "markdown" and text.startswith("```")]
+    assert len(lines) == 2  # each diff's call line heads its container instead
+    code = [sinks.block_text(b) for b in body if b["type"] == "markdown"]
     assert code[0].splitlines()[1:3] == [" 1 1", " 2 2"] and "… +5 lines" in code[0]
-    assert code[1] == (
-        "```diff\n    1 alpha\n-\U0001f7e5 2 beta\n+\U0001f7e9 2 gamma\n    3 delta\n```"
-    )
-    assert code[2] == (
-        "```diff\n-\U0001f7e5 1 alpha\n-\U0001f7e5 2 gamma\n-\U0001f7e5 3 delta\n"
-        "+\U0001f7e9 1 one\n+\U0001f7e9 2 two\n```"
-    )
+    diffs = [b for b in body if b["type"] == "container"]
+    assert [(title_of(d), d["subtitle"]["text"]) for d in diffs] == [
+        ("✓ Update(notes.txt)", "Added 1 line, removed 1 line"),
+        ("✓ Write(notes.txt)", "Added 2 lines, removed 3 lines"),
+    ]
+    assert [sinks.block_text(d) for d in diffs] == [
+        "    1 alpha\n-\U0001f7e5 2 beta\n+\U0001f7e9 2 gamma\n    3 delta",
+        "-\U0001f7e5 1 alpha\n-\U0001f7e5 2 gamma\n-\U0001f7e5 3 delta\n"
+        "+\U0001f7e9 1 one\n+\U0001f7e9 2 two",
+    ]
+
+
+def title_of(container: dict[str, Any]) -> str:
+    """A container's rich title as it reads, with the call's name in code style checked."""
+    [section] = container["rich_text_title"]["elements"]
+    icon, name = section["elements"]
+    assert name["style"] == {"code": True}
+    assert container["title"]["text"] == icon["text"] + name["text"]  # the plain fallback
+    return str(icon["text"] + name["text"])
+
+
+def test_a_diff_shows_collapsed_and_full_width() -> None:
+    [block] = sinks.diff_containers("✓", "Update(a.txt)", "Added 1 line", "+\U0001f7e9 1 x")
+    assert block["is_collapsible"] is True and block["default_collapsed"] is True
+    assert block["width"] == "full"
+    [child] = block["child_blocks"]
+    [pre] = child["elements"]
+    assert pre["type"] == "rich_text_preformatted" and pre["language"] == "diff"
+
+
+def test_a_diff_past_a_message_continues_in_the_next() -> None:
+    body = "\n".join(f"+\U0001f7e9 {i} {'x' * 90}" for i in range(1, 400))
+    blocks = sinks.diff_containers("✓", "Update(a.txt)", "Added 399 lines", body)
+    assert len(blocks) > 1
+    assert all(len(sinks.block_text(b)) <= sinks.MESSAGE_LIMIT for b in blocks)
+    assert "\n".join(sinks.block_text(b) for b in blocks) == body  # nothing lost at the cuts
+
+
+def test_a_long_title_is_cut_to_slacks_limit() -> None:
+    [block] = sinks.diff_containers("✓", "Update(" + "a" * 200 + ")", "Added 1 line", "+x")
+    assert len(block["title"]["text"]) == 150
+    assert title_of(block) == block["title"]["text"]
 
 
 async def test_a_call_with_a_preview_splits_the_fold_around_it(slack: FakeSlack) -> None:

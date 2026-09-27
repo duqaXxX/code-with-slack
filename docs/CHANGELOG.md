@@ -14,6 +14,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- An Edit or Write diff shows whole, as the terminal shows it, in a collapsible full-width
+  container closed by default: the call's line is its title and `Added … lines, removed … lines`
+  its subtitle. It no longer stops at 20 lines.
 - code-with-slack's own notices (the answer to `!bind`, `!bypass` and `!stop`, a restart, a
   refused attachment, the ephemeral errors, and the lines of the `!bind` and `!resume` lists)
   are a context block, small and grey as the footer, so they read apart from Claude's replies.

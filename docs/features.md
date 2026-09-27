@@ -18,7 +18,7 @@ how a reply looks on desktop and on mobile is checked by hand.
 | `!bind` and the folder list, only folders Claude Code trusts | `test_folders`, `test_trust`, `test_slack_app`, `test_state` | none | Bind a folder you trusted in the terminal the same day |
 | A prompt gets one reply, rewritten as it grows, split past Slack's limits | `test_sessions`, `test_sinks` | P1, P3 | How a long reply reads on desktop and on mobile |
 | Tool lines fold in the terminal's words (`Ran 2 shell commands · Read 1 file`) | `test_sinks`, `test_previews` | P10 | none |
-| Edit and Write previews: sentence, diff or new file's lines | `test_previews`, `test_sinks` | P13 | The diff colours on desktop, the squares on mobile |
+| Edit and Write previews: sentence, diff or new file's lines | `test_previews`, `test_sinks` | P13 | A diff opens and closes on desktop and mobile; it colours on desktop, the squares on mobile |
 | Approvals: Approve and Deny buttons for a tool call | `test_approvals`, `test_sessions`, `test_slack_app` | P11 | none |
 | Questions: the Answer form, and the answered record kept in the channel | `test_approvals`, `test_slack_app` | none | Answer a real question; the record stays with each answer |
 | `!bypass`, kept in `state.json` across restarts | `test_sessions`, `test_state`, `test_slack_app` | P9 | none |

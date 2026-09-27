@@ -84,13 +84,56 @@ def tools_block(lines: list[str], index: int) -> dict[str, Any]:
     return {**block, "block_id": f"tools-{index}"}
 
 
-def preview_blocks(body: str, language: str = "") -> list[dict[str, Any]]:
-    """A call's preview (a diff, a new file's first lines) as code blocks, split where a block
-    would pass its limit. A fence inside the file must not close the block early: every run of
-    three or more backticks is broken up, as `escape.shown_as_written` breaks every one."""
+def preview_blocks(body: str) -> list[dict[str, Any]]:
+    """A new file's first lines as code blocks, split where a block would pass its limit. A fence
+    inside the file must not close the block early: every run of three or more backticks is
+    broken up, as `escape.shown_as_written` breaks every one."""
     body = re.sub(r"`{3,}", lambda run: "\u200b".join(run.group()), body)
+    return [{"type": "markdown", "text": f"```\n{chunk}\n```"} for chunk in split(body) if chunk]
+
+
+def diff_containers(icon: str, title: str, summary: str, body: str) -> list[dict[str, Any]]:
+    """A diff as the terminal's call line, collapsed: a full-width container per MESSAGE_LIMIT
+    piece of the body, titled with the call's line and its summary, closed until the owner opens
+    it. The diff sits in the message itself, so it opens after a restart too."""
+    # The plain title is the fallback of a client that does not draw the rich one, which shows
+    # the call's name in code style as the tool line does. Both are cut to the plain one's 150.
+    name = title[: 150 - len(icon) - 1]
     return [
-        {"type": "markdown", "text": f"```{language}\n{chunk}\n```"}
+        {
+            "type": "container",
+            "title": {"type": "plain_text", "text": f"{icon} {name}"},
+            "rich_text_title": {
+                "type": "rich_text",
+                "elements": [
+                    {
+                        "type": "rich_text_section",
+                        "elements": [
+                            {"type": "text", "text": f"{icon} "},
+                            {"type": "text", "text": name, "style": {"code": True}},
+                        ],
+                    }
+                ],
+            },
+            "subtitle": {"type": "mrkdwn", "text": summary[:150]},
+            "width": "full",
+            "is_collapsible": True,
+            "default_collapsed": True,
+            # A `markdown` block is not allowed in a container: rich text is, and its text is
+            # literal, so no fence to break. Slack desktop colours `diff`; mobile colours nothing.
+            "child_blocks": [
+                {
+                    "type": "rich_text",
+                    "elements": [
+                        {
+                            "type": "rich_text_preformatted",
+                            "language": "diff",
+                            "elements": [{"type": "text", "text": chunk}],
+                        }
+                    ],
+                }
+            ],
+        }
         for chunk in split(body)
         if chunk
     ]
@@ -99,6 +142,13 @@ def preview_blocks(body: str, language: str = "") -> list[dict[str, Any]]:
 def block_text(block: dict[str, Any]) -> str:
     if block["type"] == "markdown":
         return str(block["text"])
+    if block["type"] == "container":
+        return "".join(
+            e["text"]
+            for child in block["child_blocks"]
+            for pre in child["elements"]
+            for e in pre["elements"]
+        )
     return "".join(str(e.get("text", "")) for e in block.get("elements") or [])
 
 
@@ -320,11 +370,16 @@ class ReplySink:
                 for index, (shown, group) in enumerate(segments):
                     last = latest and index == len(segments) - 1
                     for tool in group if shown else [None]:
+                        view = tool.update.shown_preview if tool else None
+                        if tool and view and view.body and view.language == "diff":
+                            # The call's line heads its diff's container: no line of its own.
+                            icon = ICONS[tool.update.status]
+                            blocks += diff_containers(icon, view.title, view.summary, view.body)
+                            continue
                         lines = [tool.line()] if tool else tool_lines(group, latest=last)
                         blocks += self._tool_blocks(lines, len(blocks))
-                        if tool and tool.update.shown_preview and tool.update.shown_preview.body:
-                            view = tool.update.shown_preview
-                            blocks += preview_blocks(view.body, view.language)
+                        if view and view.body:
+                            blocks += preview_blocks(view.body)
         return blocks
 
     @staticmethod
