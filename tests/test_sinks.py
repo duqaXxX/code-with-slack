@@ -586,6 +586,11 @@ async def test_a_draft_rewrite_that_lands_after_the_end_changes_nothing(slack: F
     assert len(writes(slack)) == before
 
 
+def unpadded(block: str) -> str:
+    """A diff block without the trailing spaces that stretch its changed lines' colour."""
+    return "\n".join(line.rstrip() for line in block.splitlines())
+
+
 async def test_an_edit_and_a_write_show_as_the_terminal_shows_them(slack: FakeSlack) -> None:
     # edit-write.jsonl (CLI 2.1.283): Write a new file, Read, a failed Edit, an Edit, a Write over
     # the file. The terminal showed each Edit and Write whole, with its sentence and its lines.
@@ -607,10 +612,10 @@ async def test_an_edit_and_a_write_show_as_the_terminal_shows_them(slack: FakeSl
     assert lines[3] == f"✓ `Write(notes.txt)`\n{sinks.NESTED}Added 2 lines, removed 3 lines"
     code = [text for kind, text in shown if kind == "markdown" and text.startswith("```")]
     assert code[0].splitlines()[1:3] == [" 1 1", " 2 2"] and "… +5 lines" in code[0]
-    assert code[1] == (
+    assert unpadded(code[1]) == (
         "```diff\n    1 alpha\n-\U0001f7e5 2 beta\n+\U0001f7e9 2 gamma\n    3 delta\n```"
     )
-    assert code[2] == (
+    assert unpadded(code[2]) == (
         "```diff\n-\U0001f7e5 1 alpha\n-\U0001f7e5 2 gamma\n-\U0001f7e5 3 delta\n"
         "+\U0001f7e9 1 one\n+\U0001f7e9 2 two\n```"
     )
