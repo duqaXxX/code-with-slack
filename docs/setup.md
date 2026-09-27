@@ -78,6 +78,10 @@ In Slack, open your profile, choose the **⋮** button, then **Copy member ID** 
    so the channels sort together, for example `cc-myproject`. Custom sidebar sections would group
    them better, but Slack offers those on paid plans only.
 2. In the channel, run `/invite @code-with-slack`.
+3. Open the channel's notification settings and choose **Just mentions**, with `@channel`
+   mentions not ignored. The bot writes `@channel` only at the end of a complete reply's footer,
+   in an approval request and in a question, so with this setting those ring and nothing else does.
+   With **All new posts**, every message the bot posts rings.
 
 The bot sees private channels it was invited to, and nothing else.
 
@@ -307,9 +311,10 @@ background task keep a line of their own below it; a subagent's line counts the 
 and what it is doing now shows indented below it, under `⎿`.
 While Claude works, its latest call also keeps a line of its own until the next one, so you
 can follow what it does: the call alone, or `✗` and its error when it failed. When the reply is complete, a divider and
-the footer replace the status line. A reply longer than one Slack message continues in the next one.
+the footer follow in a closing message of its own. A reply longer than one Slack message continues in the next one.
 
-An approval request is a message of its own below the reply; once you decide, it disappears and
+
+An approval request is a message of its own below the reply, and rings, as a question does; once you decide, it disappears and
 the tool's line in the reply records the call. If Slack does not accept the request, Claude Code
 is told it was denied because it could not be shown.
 
@@ -343,6 +348,26 @@ one Claude Code reported at the end of the last turn, or the one set since with 
 `!model`); it reads `default` on a model that takes no effort level, and is left out after a
 restart until a turn ends normally (an interrupted turn or an API error reports no level). A level set with `!effort` lasts until the daemon restarts: the resumed session
 runs at the level your Claude Code settings give the model.
+
+### Notifications
+
+Notifications arrive by mention: with the channel on **Just mentions** (Part 1), a message rings
+only when the bot writes `@channel` in it, and the bot writes it only where you are needed.
+
+- A reply rings once, when it is complete. The footer is then posted as a closing message of its
+  own, ending with `@channel`, and the notification reads `Reply to: ` and the start of your
+  message.
+- An approval request and a question ring; `@channel` ends the request.
+- A reply that ends in an error rings.
+- Nothing rings while Claude writes, nor for a reply ended by `!stop`, a restart or a background
+  task.
+
+The closing message goes when a newer reply starts, as the footer does, except when the reply
+ends below a newer one (a message you sent while it ran): then it stays, holding `@channel` alone.
+Why the mention has to be visible, and what was measured, is in
+[features.md](features.md#notifications). A second notification from the channel shortly after a
+first one may not arrive: of the probe messages sent about 40 seconds after a ringing one, most
+stayed silent. Slack does not document this.
 
 ## Troubleshooting
 

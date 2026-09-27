@@ -43,6 +43,12 @@ ENDED_RESTARTING = "code-with-slack is restarting; send your message again in a 
 RESTARTING = "code-with-slack is restarting; send this again in a moment."
 REPLY_ABOVE = "_This reply appeared in the background update above._"
 BACKGROUND_NOTICE = "_Background task update_"
+# With the channel on "Just mentions", only a NEW message whose blocks carry @channel rings the
+# owner's phone reliably: an edit that adds it never does, and a mention in `text` alone mostly
+# does not (measured on iOS 2026-09-27, #26). `text` is what the notification shows.
+MENTION = "<!channel>"
+REPLY_TO = "Reply to: {prompt}"
+PROMPT_IMAGE = "an image"
 COMPACTED = "Compacted the conversation: {before} → {after} tokens."
 COMPACTED_PLAIN = "Compacted the conversation."
 NO_OUTPUT = "_Done. Claude Code returned no text._"

@@ -33,7 +33,9 @@ class RecordingSink:
     async def task(self, update: TaskUpdate) -> None:
         self.tasks.append(update)
 
-    async def finish(self, closing: list[TaskUpdate], footer: str | None) -> None:
+    async def finish(
+        self, closing: list[TaskUpdate], footer: str | None, *, reply_to: str | None = None
+    ) -> None:
         self.finished = (closing, footer)
 
 

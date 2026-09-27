@@ -129,6 +129,10 @@ def _code_chunks(text: str, limit: int) -> list[str]:
     return [*chunks, chunk] if chunk or not chunks else chunks
 
 
+# A request stops the turn until the owner answers: it ends with the mention that rings.
+MENTION_BLOCK = {"type": "context", "elements": [{"type": "mrkdwn", "text": texts.MENTION}]}
+
+
 def approval_blocks(
     approval_id: str, tool_name: str, tool_input: dict[str, Any], context: ToolPermissionContext
 ) -> list[dict[str, Any]]:
@@ -147,7 +151,7 @@ def approval_blocks(
         blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": description}]})
     detail = json.dumps(tool_input, indent=2, ensure_ascii=False)
     chunks = _code_chunks(detail, SECTION_LIMIT - len("```\n\n```"))
-    room = MESSAGE_BLOCKS - len(blocks) - 1  # the actions block closes the message
+    room = MESSAGE_BLOCKS - len(blocks) - 2  # the actions block and the mention close it
     if len(chunks) > room:
         # Past one message, the start and the end stay (a payload hides at the end of padding)
         # and a line says how much is not shown, so the owner can Deny rather than guess.
@@ -168,6 +172,7 @@ def approval_blocks(
                 _button("approval_deny", "Deny", approval_id, "danger"),
             ],
         },
+        MENTION_BLOCK,
     ]
     return blocks
 
@@ -227,6 +232,7 @@ def question_blocks(approval_id: str, questions: list[dict[str, Any]]) -> list[d
                 _button("question_skip", "Skip", approval_id),
             ],
         },
+        MENTION_BLOCK,
     ]
 
 

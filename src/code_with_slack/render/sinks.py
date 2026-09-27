@@ -153,14 +153,12 @@ def block_text(block: dict[str, Any]) -> str:
 
 
 def plain_text(blocks: list[dict[str, Any]]) -> str:
-    """A message's text and footer with no block: what a refused final write is retried with.
-    Slack caps a text-only message at 4,000 characters (chat.update reference, 2026-09-25)."""
+    """A message's text with no block: what a refused final write is retried with. Slack caps a
+    text-only message at 4,000 characters (chat.update reference, 2026-09-25)."""
     body = "\n\n".join(str(b["text"]) for b in blocks if b["type"] == "markdown")
     if len(body) > FALLBACK_LIMIT:
         body = body[:FALLBACK_LIMIT] + "…"
-    types = [b["type"] for b in blocks]
-    footer = block_text(blocks[types.index("divider") + 1]) if "divider" in types else ""
-    return "\n\n".join(filter(None, (body, footer))) or "…"
+    return body or "…"
 
 
 @dataclass
@@ -246,9 +244,11 @@ def split(body: str) -> list[str]:
 class ReplySink:
     """One reply in the channel, written in the order things happen: text, then a line per tool
     where it ran, updated in place. The last line shows a status (Claude is writing, or waiting
-    for the previous reply) until a divider and the footer replace it. A reply past MESSAGE_LIMIT
-    continues in a new message. Never raises: a write that fails is retried with the whole reply
-    at the next flush, the final one after FINAL_RETRY_SECONDS, and the session goes on."""
+    for the previous reply) until the reply ends. A reply past MESSAGE_LIMIT continues in a new
+    message. The end is a closing message of its own, posted then (a divider and the footer), so
+    that a reply that must reach the owner rings once, when it is complete: only a new message
+    notifies. Never raises: a write that fails is retried with the whole reply at the next flush,
+    the final one after FINAL_RETRY_SECONDS, and the session goes on."""
 
     def __init__(self, slack: AsyncWebClient, *, channel: str) -> None:
         self._slack = slack
@@ -265,16 +265,20 @@ class ReplySink:
         self._footer: str | None = None
         self._running = ""
         self._latest = True
+        self._closing: str | None = None  # ts of the closing message, once posted
+        self._closing_shown: list[dict[str, Any]] = []
+        self._reply_to: str | None = None  # the owner's question, when the end must ring
+        self._ring_kept = False  # whether the mention line outlives the footer
 
     async def open(self, status: str) -> None:
         """Post the reply at once, showing only its status: the owner sees an answer is coming."""
         self._status = status
-        await self._flush(final=False, footer=None)
+        await self._flush(final=False)
 
     async def announce(self, status: str) -> None:
         """Change the status line now, without waiting for the next rewrite."""
         self._status = status
-        await self._flush(final=False, footer=None)
+        await self._flush(final=False)
 
     async def text(self, markdown: str) -> None:
         if self._parts and isinstance(self._parts[-1], _Text):
@@ -310,26 +314,32 @@ class ReplySink:
         if self._finished:
             await self._changed()
 
-    async def finish(self, closing: list[TaskUpdate], footer: str | None) -> None:
+    async def finish(
+        self, closing: list[TaskUpdate], footer: str | None, *, reply_to: str | None = None
+    ) -> None:
         """End the reply. A line still in progress is a task that outlives the turn: `task`
-        keeps updating it after the end."""
+        keeps updating it after the end. With `reply_to` (the owner's question, one line) the
+        closing message notifies the owner; without it the end is silent."""
         for update in closing:
             await self.task(update)
         if self._pending is not None:
             self._pending.cancel()
-        self._finished, self._footer = True, footer
-        if not await self._flush(final=True, footer=footer):
+        self._finished, self._footer, self._reply_to = True, footer, reply_to
+        # A reply that ends below a newer one has no footer to show: its mention line is the
+        # whole closing message, and stays.
+        self._ring_kept = not self._latest
+        if not await self._flush(final=True):
             self._retry = asyncio.create_task(self._retry_final())
 
     async def _retry_final(self) -> None:
         await asyncio.sleep(FINAL_RETRY_SECONDS)
-        await self._flush(final=True, footer=self._footer)
+        await self._flush(final=True)
 
     async def _changed(self) -> None:
         if self._finished:
             # A background task or subagent after the reply ended: rare, and possibly during
             # shutdown, so written at once in its final form rather than on a timer.
-            await self._flush(final=True, footer=self._footer)
+            await self._flush(final=True)
         else:
             self._schedule()
 
@@ -341,7 +351,7 @@ class ReplySink:
         await asyncio.sleep(DEBOUNCE_SECONDS)
         # Shielded: `finish` cancels a pending rewrite, and a write cancelled after Slack took it
         # would lose the message's ts. `finish` waits for the lock instead.
-        await asyncio.shield(self._flush(final=False, footer=None))
+        await asyncio.shield(self._flush(final=False))
 
     def _blocks(self) -> list[dict[str, Any]]:
         """The reply's body in order: Claude's text as markdown, each run of tool lines as
@@ -398,7 +408,8 @@ class ReplySink:
             blocks.append(tools_block(chunk, start + len(blocks)))
         return blocks
 
-    def _render(self, final: bool, footer: str | None) -> list[list[dict[str, Any]]]:
+    def _render(self, final: bool) -> list[list[dict[str, Any]]]:
+        """The reply's body, message by message; while it is written, the status line ends it."""
         messages: list[list[dict[str, Any]]] = [[]]
         size = 0
         for block in self._blocks():
@@ -413,16 +424,57 @@ class ReplySink:
         if not final:
             status = " · ".join(filter(None, (self._status, self._running)))
             messages[-1].append(context_block(status))
-            return messages
-        last_line = " · ".join(filter(None, (footer, self._running))) if self._latest else ""
-        if last_line:
-            messages[-1] += [
-                SPACER_ABOVE,
-                {"type": "divider"},
-                context_block(last_line),
-                SPACER_BELOW,
-            ]
         return messages
+
+    def _closing_blocks(self) -> list[dict[str, Any]]:
+        """The closing message: the footer and what still runs, then the mention of a reply that
+        rings, at the end of the line. Only the channel's latest reply shows them, so a newer
+        reply removes the closing message, unless it was already newer when this one ended: then
+        the mention stands alone. Empty: no closing message."""
+        rings = self._reply_to is not None and (self._latest or self._ring_kept)
+        footer = (self._footer, self._running) if self._latest else ()
+        last_line = " · ".join(filter(None, (*footer, texts.MENTION if rings else None)))
+        if not last_line:
+            return []
+        if not any(footer):
+            return [context_block(last_line)]
+        return [SPACER_ABOVE, {"type": "divider"}, context_block(last_line), SPACER_BELOW]
+
+    def _closing_text(self) -> str:
+        """What the notification shows: the question a ringing reply answers, or the footer."""
+        if self._reply_to is not None:
+            return texts.REPLY_TO.format(prompt=mrkdwn_escape(self._reply_to))
+        return " · ".join(filter(None, (self._footer, self._running)))[:FALLBACK_LIMIT] or "…"
+
+    async def _write_closing(self) -> bool:
+        """Post, rewrite or remove the closing message to match the reply's end."""
+        blocks = self._closing_blocks()
+        try:
+            if blocks and self._closing is None:
+                posted = await self._slack.chat_postMessage(
+                    channel=self._channel,
+                    text=self._closing_text(),
+                    blocks=blocks,
+                    unfurl_links=False,
+                    unfurl_media=False,
+                )
+                self._closing = str(posted["ts"])
+            elif blocks and self._closing is not None and blocks != self._closing_shown:
+                # An edit never rings (measured 2026-09-27): the text can stay as posted.
+                await self._slack.chat_update(
+                    channel=self._channel,
+                    ts=self._closing,
+                    text=self._closing_text(),
+                    blocks=blocks,
+                )
+            elif not blocks and self._closing is not None:
+                await self._slack.chat_delete(channel=self._channel, ts=self._closing)
+                self._closing = None
+        except Exception as exc:
+            logger.warning("could not write a reply's closing message: %s", describe(exc))
+            return False
+        self._closing_shown = blocks
+        return True
 
     async def _write_plain(self, index: int, blocks: list[dict[str, Any]]) -> bool:
         """Slack refused the final form of a message: without this one retry it would keep
@@ -438,12 +490,12 @@ class ReplySink:
         self._shown[index] = []
         return True
 
-    async def _flush(self, *, final: bool, footer: str | None) -> bool:
+    async def _flush(self, *, final: bool) -> bool:
         """Write what changed; False when a write failed and the reply is not as rendered."""
         async with self._lock:
             if self._finished and not final:
                 return True  # a draft that waited for the lock must not undo the final form
-            rendered = self._render(final, footer)
+            rendered = self._render(final)
             if rendered == [[]]:
                 rendered = []  # nothing left to show: the extra-message removal below takes it
             for index, blocks in enumerate(rendered):
@@ -492,4 +544,5 @@ class ReplySink:
                     return False
                 self._messages.pop()
                 self._shown.pop()
-        return True
+            # After the body, so the closing message is posted below it.
+            return await self._write_closing() if final else True

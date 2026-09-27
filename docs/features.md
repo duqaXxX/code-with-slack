@@ -19,6 +19,7 @@ how a reply looks on desktop and on mobile is checked by hand.
 | A prompt gets one reply, rewritten as it grows, split past Slack's limits | `test_sessions`, `test_sinks` | P1, P3 | How a long reply reads on desktop and on mobile |
 | Tool lines fold in the terminal's words (`Ran 2 shell commands · Read 1 file`) | `test_sinks`, `test_previews` | P10 | none |
 | Edit and Write previews: sentence, diff or new file's lines | `test_previews`, `test_sinks` | P13 | A diff opens and closes on desktop and mobile; it colours on desktop, the squares on mobile |
+| Notifications: one per complete reply, approval, question or error, none while Claude writes | `test_sinks`, `test_sessions` | none | With the channel on Just mentions, away from Slack on the desktop: a reply rings once, `!stop` does not |
 | Approvals: Approve and Deny buttons for a tool call | `test_approvals`, `test_sessions`, `test_slack_app` | P11 | none |
 | Questions: the Answer form, and the answered record kept in the channel | `test_approvals`, `test_slack_app` | none | Answer a real question; the record stays with each answer |
 | `!bypass`, kept in `state.json` across restarts | `test_sessions`, `test_state`, `test_slack_app` | P9 | none |
@@ -33,3 +34,36 @@ how a reply looks on desktop and on mobile is checked by hand.
 | Configuration: `.env` private, every missing variable named | `test_config` | none | none |
 | One instance at a time | `test_lock`, `test_main` | none | none |
 | The LaunchAgent and the Slack app installed from `docs/setup.md` | `test_main` (the manifest) | none | Follow `docs/setup.md` on a new machine |
+
+## Notifications
+
+Notifications work by mention. The owner sets each channel to Slack's **Just mentions**
+([setup](setup.md#create-a-channel-per-project)), and the bot writes `@channel` only in the
+messages that need the owner:
+
+- A complete reply rings once: the mention ends the footer line, in a closing message posted
+  when the turn ends.
+- An approval request and a question (AskUserQuestion) ring: the mention ends the request.
+- A reply that ends in an error rings, once per failure.
+- Nothing else rings: not `Claude is writing…`, not a rewrite, not the continuation of a reply
+  longer than one message, not a reply ended by `!stop`, a restart or a rebind, and not a reply
+  Claude Code starts on its own to report a background task (the prompt that started the task
+  already rang).
+
+The notification text reads `Reply to: ` and the start of the owner's message. The events follow
+the terminal, which notifies when Claude finishes or waits for a permission.
+
+Why it is built this way. Slack lets a user choose notifications per channel, never per
+message, and its reference says nothing about which bot messages notify. Eleven probe messages
+sent on 2026-09-27 to an iPhone (Slack iOS app, channel on Just mentions) showed:
+
+- only a new message rings: a `chat.update` never does, even one that adds `@channel`, so a reply
+  that is rewritten as it grows cannot ring when it ends, and the end is posted as a message of
+  its own;
+- with `@channel` in the notification text alone the phone stayed silent in most probes, so the
+  mention sits in the message itself, where the channel shows it;
+- `@here` reaches only the members Slack counts as active, so it misses an owner who is away.
+
+What is not covered: a second ringing message from the same channel within about a minute of a
+first one was silent in most probes, which Slack does not document; Android and the desktop
+client were not tested.
