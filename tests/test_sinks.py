@@ -649,7 +649,7 @@ def preview_update(id: str = "e1") -> TaskUpdate:
 
 async def test_with_a_registry_a_preview_opens_and_closes_on_a_click(slack: FakeSlack) -> None:
     # Slack mobile wraps a long diff into something unreadable, and a message cannot tell
-    # which client shows it: the summary shows, the diff waits behind a button.
+    # which client shows it: the summary shows, with an icon on its row that opens the diff.
     registry = sinks.ReplyRegistry()
     sink = ReplySink(slack, channel=CHANNEL, registry=registry)
     await sink.task(preview_update())
@@ -657,23 +657,21 @@ async def test_with_a_registry_a_preview_opens_and_closes_on_a_click(slack: Fake
 
     def shown() -> list[tuple[str, str]]:
         return [
-            (
-                b["type"],
-                b["elements"][0]["text"]["text"] if b["type"] == "actions" else b.get("text", ""),
-            )
+            (b["type"], b["accessory"]["text"]["text"] if b["type"] == "section" else b["text"])
             for b in last_blocks(slack)
-            if b["type"] in ("actions", "markdown")
+            if b["type"] in ("section", "markdown")
         ]
 
-    assert shown() == [("actions", "Show diff")]
-    button = next(b for b in last_blocks(slack) if b["type"] == "actions")["elements"][0]
-    key, _, tool_id = button["value"].partition(":")
+    [line] = [b for b in last_blocks(slack) if b["type"] == "section"]
+    assert line["text"]["text"] == f"✓ `Update(a.txt)`\n{sinks.NESTED}Added 1 line"
+    assert shown() == [("section", texts.PREVIEW_ICONS[0])]
+    key, _, tool_id = line["accessory"]["value"].partition(":")
     assert registry.get(key) is sink and tool_id == "e1"
     assert await sink.toggle("e1")
-    assert [kind for kind, _ in shown()] == ["actions", "markdown"]
-    assert shown()[0][1] == "Hide diff" and shown()[1][1].startswith("```diff\n")
+    assert [kind for kind, _ in shown()] == ["section", "markdown"]
+    assert shown()[0][1] == texts.PREVIEW_ICONS[1] and shown()[1][1].startswith("```diff\n")
     assert await sink.toggle("e1")
-    assert shown() == [("actions", "Show diff")]
+    assert shown() == [("section", texts.PREVIEW_ICONS[0])]
     assert not await sink.toggle("missing")
 
 

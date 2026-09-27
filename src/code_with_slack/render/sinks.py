@@ -98,6 +98,8 @@ def preview_blocks(body: str, language: str = "") -> list[dict[str, Any]]:
 def block_text(block: dict[str, Any]) -> str:
     if block["type"] == "actions":
         return ""
+    if block["type"] == "section":
+        return str(block["text"]["text"])
     if block["type"] == "markdown":
         return str(block["text"])
     return "".join(str(e.get("text", "")) for e in block.get("elements") or [])
@@ -347,29 +349,36 @@ class ReplySink:
                 for index, (shown, group) in enumerate(segments):
                     last = latest and index == len(segments) - 1
                     for tool in group if shown else [None]:
+                        if tool and self._key and tool.update.preview and tool.update.preview.body:
+                            blocks += self._preview(tool, len(blocks))
+                            continue
                         lines = [tool.line()] if tool else tool_lines(group, latest=last)
                         blocks += self._tool_blocks(lines, len(blocks))
                         if tool and tool.update.preview and tool.update.preview.body:
-                            blocks += self._preview(tool, len(blocks))
+                            view = tool.update.preview
+                            blocks += preview_blocks(view.body, view.language)
         return blocks
 
     def _preview(self, tool: _Tool, index: int) -> list[dict[str, Any]]:
-        """A call's preview: at once without a registry, else behind Show and Hide."""
+        """A call with a preview: its line, with an icon on the same row that opens the preview
+        inside the reply and closes it. A context block holds no button (block reference, read
+        2026-09-27), so the line is a section's text and the icon its accessory."""
         view = tool.update.preview
         assert view is not None
-        opened = preview_blocks(view.body, view.language)
-        if self._key is None:
-            return opened
         expanded = tool.update.id in self._expanded
-        labels = texts.PREVIEW_DIFF if view.language == "diff" else texts.PREVIEW_FILE
         button = {
             "type": "button",
             "action_id": PREVIEW_ACTION,
             "value": f"{self._key}:{tool.update.id}",
-            "text": {"type": "plain_text", "text": labels[expanded]},
+            "text": {"type": "plain_text", "text": texts.PREVIEW_ICONS[expanded]},
         }
-        actions = {"type": "actions", "block_id": f"preview-{index}", "elements": [button]}
-        return [actions, *opened] if expanded else [actions]
+        line = {
+            "type": "section",
+            "block_id": f"preview-{index}",
+            "text": {"type": "mrkdwn", "text": mrkdwn_escape(tool.line())[:CONTEXT_LIMIT]},
+            "accessory": button,
+        }
+        return [line, *preview_blocks(view.body, view.language)] if expanded else [line]
 
     @staticmethod
     def _tool_blocks(lines: list[str], start: int) -> list[dict[str, Any]]:

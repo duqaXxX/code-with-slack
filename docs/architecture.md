@@ -125,8 +125,9 @@ failed ones after `✗`, in the terminal's words where the terminal has words
 (`render.previews.folded`: `✓ Ran 3 shell commands · Read 1 file · WebFetch · ✗ Ran 1 shell
 command`) and by the tool's name for any other tool. A finished `Edit` or `Write` does not fold:
 it shows as the terminal shows it (`render.previews.preview`), its line (`✓ Update(notes.txt)`,
-then `⎿ Added 1 line, removed 1 line`) and a **Show diff** button (**Show lines** for a new
-file). A click opens the preview inside the reply, and **Hide diff** closes it: a `markdown` code
+then `⎿ Added 1 line, removed 1 line`), with a `▸` on the same row: a context block holds no
+button, so this line is a section's text and the icon its accessory. A click opens the preview
+inside the reply, and `▾` closes it: a `markdown` code
 block with the numbered diff, fenced as `diff`, which Slack desktop colours (each changed line
 also carries a red or green square after its sign, since Slack mobile colours nothing), or a new
 file's first 10 lines and `… +N lines`. The preview waits for a click because Slack mobile wraps

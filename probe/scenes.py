@@ -153,7 +153,8 @@ class Stage:
             for method, args in self.slack.calls[mark[1] :]
             if method in ("chat.postMessage", "chat.update")
             for b in args.get("blocks") or []
-            if str(b.get("block_id", "")).startswith("tools-")
+            # A call with a preview has its line in a section of its own, with its icon.
+            if str(b.get("block_id", "")).startswith(("tools-", "preview-"))
         )
 
     def asked_since(self, mark: tuple[int, int, int]) -> list[str]:

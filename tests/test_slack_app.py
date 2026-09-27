@@ -924,8 +924,8 @@ async def preview_reply(world: World) -> tuple[Any, str]:
     await reply.task(TaskUpdate("e1", "Edit: a.txt", "complete", name="Edit", preview=edit))
     await reply.finish([], None)
     [posted] = world.slack.calls_to("chat.postMessage")  # a reply's first write posts it
-    button = next(b for b in posted["blocks"] if b["type"] == "actions")
-    return reply, str(button["elements"][0]["value"])
+    line = next(b for b in posted["blocks"] if b["type"] == "section")
+    return reply, str(line["accessory"]["value"])
 
 
 async def test_the_owner_opens_a_preview(world: World) -> None:
