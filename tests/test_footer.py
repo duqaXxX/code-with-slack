@@ -78,7 +78,7 @@ def test_full_footer() -> None:
         usage=usage,
     )
     assert format_footer(data, NOW) == (
-        "⚡ bypass · main · claude-opus-5-5 · ctx 6% · 12.3k tok · 5h 3% ↻ 2h · 7d 25%"
+        "⚡ bypass · claude-opus-5-5 · 12.3k tok · main\nctx 6% · 5h 3% ↻ 2h · 7d 25%"
     )
 
 
@@ -103,11 +103,11 @@ def test_status_fields_list_the_footer_s_values_one_per_line() -> None:
     )
     # Bypass and the folder are left out: the status's Mode and Directory lines show them.
     assert format_status_fields(data, NOW) == [
-        "Branch: `main`",
         "Model: `claude-opus-5-5`",
         "Effort: `high`",
-        "Context: `6%`",
         "Session tokens: `12.3k`",
+        "Branch: `main`",
+        "Context: `6%`",
         "5h limit: `3% ↻ 2h`",
         "7d limit: `25%`",
     ]
@@ -123,7 +123,7 @@ def test_the_weekly_limit_shows_its_reset_in_the_footer_and_the_status() -> None
         session_tokens=None,
         usage=Usage(None, week),
     )
-    assert format_footer(data, NOW) == "7d 45% ↻ 3d 4h"
+    assert format_footer(data, NOW) == "7d 45% ↻ 3d 4h"  # the second line, alone
     assert format_status_fields(data, NOW) == ["7d limit: `45% ↻ 3d 4h`"]
 
 
@@ -151,11 +151,11 @@ def test_the_changes_follow_the_branch_in_the_footer_and_the_status() -> None:
         usage=None,
         changes=(42, 10),
     )
-    assert format_footer(data, NOW) == "main · (+42,-10) · claude-opus-5-5"
+    assert format_footer(data, NOW) == "claude-opus-5-5 · main · (+42,-10)"
     assert format_status_fields(data, NOW) == [
+        "Model: `claude-opus-5-5`",
         "Branch: `main`",
         "Uncommitted: `(+42,-10)`",
-        "Model: `claude-opus-5-5`",
     ]
 
 
@@ -293,7 +293,7 @@ def test_the_footer_shows_the_effort_after_the_model() -> None:
         usage=None,
         effort="high",
     )
-    assert format_footer(data, NOW) == "main · claude-opus-5-5 · effort high"
+    assert format_footer(data, NOW) == "claude-opus-5-5 · effort high · main"
 
 
 async def test_a_usage_probe_with_no_answer_gives_up_and_closes(
@@ -316,7 +316,7 @@ async def test_a_usage_probe_with_no_answer_gives_up_and_closes(
     ("directory", "shown"),
     [("/srv/alice/code/app", "code/app"), ("/app", "app"), ("/", None), ("code/app", "code/app")],
 )
-def test_the_footer_ends_with_the_folder_s_last_two_names(directory: str, shown: str) -> None:
+def test_the_folder_s_last_two_names_come_before_the_branch(directory: str, shown: str) -> None:
     # As the owner's terminal status line shows it (ccstatusline current-working-dir, 2 segments;
     # the maintainer, 2026-09-25).
     data = FooterData(
@@ -328,7 +328,7 @@ def test_the_footer_ends_with_the_folder_s_last_two_names(directory: str, shown:
         usage=None,
         directory=Path(directory),
     )
-    assert format_footer(data, NOW) == " · ".join(p for p in ("main", shown) if p)
+    assert format_footer(data, NOW) == " · ".join(p for p in (shown, "main") if p)
 
 
 def test_the_folder_and_the_branch_are_shown_as_written() -> None:
@@ -341,7 +341,7 @@ def test_the_folder_and_the_branch_are_shown_as_written() -> None:
         usage=None,
         directory=Path("/srv/alice/R&D/<x>"),
     )
-    assert format_footer(data, NOW) == "fix/&lt;a&gt;&amp;b · R&amp;D/&lt;x&gt;"
+    assert format_footer(data, NOW) == "R&amp;D/&lt;x&gt; · fix/&lt;a&gt;&amp;b"
 
 
 async def test_git_changes_do_not_run_the_repo_s_fsmonitor(repo: Path, tmp_path: Path) -> None:

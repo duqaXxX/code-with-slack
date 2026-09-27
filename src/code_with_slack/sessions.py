@@ -465,9 +465,10 @@ class ChannelSession:
         if self._closed:
             raise SessionClosed
         fields = format_status_fields(data, datetime.now().astimezone()) if data else []
-        if data and data.directory and data.directory != self.directory:
+        here = self.working_directory
+        if data and here and here != self.directory:
             # The branch and the changes below describe this folder, not the channel's.
-            fields.insert(0, texts.STATUS_WORKING.format(directory=data.directory))
+            fields.insert(0, texts.STATUS_WORKING.format(directory=here))
         if running := self._running_kinds():
             fields.append(texts.STATUS_BACKGROUND.format(counts=running))
         stored = self._deps.state.get(self.channel_id)
@@ -905,7 +906,7 @@ class ChannelSession:
             session_tokens=tokens,
             usage=self._deps.usage.current,
             effort=(self.effort or "default") if self.effort_reported else None,
-            directory=here,
+            directory=self.directory,
             changes=changes,
         )
 

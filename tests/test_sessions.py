@@ -1117,7 +1117,8 @@ async def test_the_footer_names_the_bound_folder(harness_for: Callable[..., Harn
     h = harness_for({"turns": [sdk_messages("tools")]})
     await asyncio.wait_for((await h.session().submit("list the files")).done.wait(), 2)
     folder = h.tmp_path.resolve()
-    assert statuses(h)[-1].endswith(f" · {folder.parent.name}/{folder.name}")
+    first_line = statuses(h)[-1].splitlines()[0]
+    assert first_line.endswith(f" · {folder.parent.name}/{folder.name}")
 
 
 @pytest.fixture
@@ -1131,21 +1132,20 @@ def repo(tmp_path: Path) -> Path:
 async def test_the_footer_follows_the_folder_the_session_works_in(
     harness_for: Callable[..., Harness], tmp_path: Path, repo: Path
 ) -> None:
-    # The layout where the bound folder's branch was always missing (#37).
+    # The layout where the bound folder's branch was always missing (#37). The folder shown
+    # stays the channel's, where the owner bound it; the branch is the session's.
     moved = {**sdk_json("stop-hook"), "cwd": str(repo)}
     h = harness_for({"turns": [with_stop_hook(sdk_messages("tools"), moved)]})
     session = h.session()
     await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
-    footer = statuses(h)[-1]
-    assert footer.startswith("feature-x · (+0,-0) · ")
-    assert footer.endswith(f" · {tmp_path.name}/app")
+    first_line, second_line = statuses(h)[-1].splitlines()
+    assert first_line.endswith(f" · {tmp_path.parent.name}/{tmp_path.name} · feature-x · (+0,-0)")
+    assert second_line.startswith("ctx ")
     lines = (await session.status()).splitlines()
     assert lines[0] == f"Directory: `{tmp_path}`"
-    assert lines[lines.index("Now: idle") + 1 :][:3] == [
-        f"Working in: `{repo}`",
-        "Branch: `feature-x`",
-        "Uncommitted: `(+0,-0)`",
-    ]
+    values = lines[lines.index("Now: idle") + 1 :]
+    assert values[0] == f"Working in: `{repo}`"
+    assert "Branch: `feature-x`" in values and "Uncommitted: `(+0,-0)`" in values
 
 
 async def test_a_restarted_client_starts_again_in_the_bound_folder(
@@ -1178,8 +1178,8 @@ async def test_status_lists_the_footer_s_values_of_the_latest_reply(
     assert lines[lines.index("Now: idle") + 1 :] == [
         "Model: `claude-haiku-4-5-20251001`",
         "Effort: `medium`",
-        "Context: `7%`",
         f"Session tokens: `{tokens.group(1)}`",
+        "Context: `7%`",
         "5h limit: `5%`",
     ]
 
