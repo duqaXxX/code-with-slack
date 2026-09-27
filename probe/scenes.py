@@ -17,7 +17,7 @@ import zlib
 from collections.abc import Awaitable, Callable, Coroutine
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from claude_agent_sdk import (
     ClaudeAgentOptions,
@@ -58,6 +58,9 @@ def bash_line(lines: str) -> bool:
     return "Bash" in lines or "shell command" in lines
 
 
+# Failures of the machine the probe runs on, not of the SDK: a turn past TURN_LIMIT, the network.
+# Such a scene learned nothing, so its claims are UNPROVEN rather than BROKEN.
+ENVIRONMENT = (TimeoutError, ConnectionError, OSError)
 Log = Callable[[str], None]
 CanUseTool = Callable[[str, dict[str, Any], ToolPermissionContext], Awaitable[PermissionResult]]
 
@@ -85,6 +88,14 @@ def one_pixel_png() -> bytes:
     pixels = zlib.compress(b"\x00\xff\x00\x00")
     png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", pixels)
     return png + chunk(b"IEND", b"")
+
+
+class Mark(NamedTuple):
+    """Where the channel stands before a scene: what came after it is the scene's."""
+
+    posted: int  # messages posted
+    calls: int  # Slack calls made
+    asked: int  # permission requests received
 
 
 class Stage:
@@ -137,27 +148,26 @@ class Stage:
         assert session is not None
         return session
 
-    def mark(self) -> tuple[int, int, int]:
-        """Where the channel stands: messages posted, Slack calls, permission requests."""
-        return len(self.slack.posted_ts), len(self.slack.calls), len(self.asked)
+    def mark(self) -> Mark:
+        return Mark(len(self.slack.posted_ts), len(self.slack.calls), len(self.asked))
 
-    def replies_since(self, mark: tuple[int, int, int]) -> str:
+    def replies_since(self, mark: Mark) -> str:
         """The text of every message posted since `mark`: the turn's reply, wherever an approval
         request or a notice came in between."""
-        return "\n".join(self.slack.message_texts()[mark[0] :])
+        return "\n".join(self.slack.message_texts()[mark.posted :])
 
-    def tool_lines_since(self, mark: tuple[int, int, int]) -> str:
+    def tool_lines_since(self, mark: Mark) -> str:
         """Every tool line a reply showed since `mark`, even one folded when its turn ended."""
         return "\n".join(
             json.dumps(b, ensure_ascii=False)
-            for method, args in self.slack.calls[mark[1] :]
+            for method, args in self.slack.calls[mark.calls :]
             if method in ("chat.postMessage", "chat.update")
             for b in args.get("blocks") or []
             if str(b.get("block_id", "")).startswith("tools-")
         )
 
-    def asked_since(self, mark: tuple[int, int, int]) -> list[str]:
-        return self.asked[mark[2] :]
+    def asked_since(self, mark: Mark) -> list[str]:
+        return self.asked[mark.asked :]
 
     def shown_now(self) -> str:
         """What the channel shows now: each message's last blocks, footer and running line
@@ -178,6 +188,13 @@ class Stage:
         await asyncio.wait_for(turn.done.wait(), TURN_LIMIT)
         return turn
 
+    async def recover(self) -> None:
+        """After a scene that raised: stop what it left running, so the next scene starts on an
+        idle channel instead of queueing behind a turn that timed out."""
+        with contextlib.suppress(Exception):
+            await self.session.stop()
+            await until(lambda: self.session.idle, 30)
+
 
 async def until(condition: Callable[[], bool], limit: float) -> bool:
     with contextlib.suppress(TimeoutError):
@@ -189,19 +206,25 @@ async def until(condition: Callable[[], bool], limit: float) -> bool:
 
 async def attempt(
     name: str,
-    claims: list[str],
-    log: Log,
+    s: Stage,
     scene: Coroutine[Any, Any, dict[str, Observation]],
 ) -> dict[str, Observation]:
-    """A scene that raises did cause its events and saw them fail: the likeliest form a break
-    in the SDK takes is a call that raises. Its claims record the exception."""
-    log(f"scene: {name}")
+    """Run a scene. One that raises did cause its events and saw them fail, since a break in the
+    SDK most often shows as a call that raises; a failure of the machine instead (a timeout, the
+    network) learned nothing. Its claims record which, with the exception."""
+    claims = SCENES[name]
+    s.log(f"scene: {name}")
     try:
-        return await scene
+        seen = await scene
     except Exception as exc:
         detail = f"scene raised {type(exc).__name__}: {exc}"
-        log(f"scene {name}: {detail}")
-        return {claim: Observation(True, False, detail) for claim in claims}
+        s.log(f"scene {name}: {detail}")
+        await s.recover()
+        caused = not isinstance(exc, ENVIRONMENT)
+        return {claim: Observation(caused, False, detail) for claim in claims}
+    if unknown := set(seen) - set(claims):
+        raise ValueError(f"scene {name} observed claims it does not own: {sorted(unknown)}")
+    return seen
 
 
 async def first_turn(s: Stage, word: str) -> dict[str, Observation]:
@@ -220,7 +243,12 @@ async def image_turn(s: Stage) -> dict[str, Observation]:
     image = [("image/png", one_pixel_png())]
     await s.turn(prompt_for("Reply with one word: what colour is this image?", image, []))
     reply = s.replies_since(mark)
-    return {"P4": Observation(True, bool(reply.strip()) and "reported an error" not in reply)}
+    # The pixel is red: naming its colour shows Claude received the image. A reply alone does not,
+    # since an error such as `API Error: 400` is a reply too.
+    start = " ".join(reply.split())[:80]
+    return {
+        "P4": Observation(True, "red" in reply.lower(), "" if "red" in reply.lower() else start)
+    }
 
 
 async def file_turn(s: Stage, folder: Path) -> dict[str, Observation]:
@@ -272,7 +300,9 @@ async def background_stop(s: Stage) -> dict[str, Observation]:
         return {"P12": Observation(False, False, "no background command started")}
     stopped = await s.session.stop()
     gone = await until(lambda: RUNNING_SHELL not in s.shown_now(), 30)
-    return {"P12": Observation(True, stopped and gone)}
+    detail = "" if stopped else "!stop found nothing to stop"
+    detail = detail or ("" if gone else "the running line still shows the command after 30 s")
+    return {"P12": Observation(True, stopped and gone, detail)}
 
 
 def counted(text: str) -> set[int]:
@@ -295,7 +325,14 @@ async def interrupt(s: Stage) -> dict[str, Observation]:
     stopped = await s.session.stop()
     ended = await until(turn.done.is_set, 60)
     finished = COUNT_TO in counted(s.replies_since(mark))
-    detail = f"the reply ran to {COUNT_TO}: the interrupt did nothing" if finished else ""
+    if finished:
+        detail = f"the reply ran to {COUNT_TO}: the interrupt did nothing"
+    elif not stopped:
+        detail = "!stop found no turn running"
+    elif not ended:
+        detail = "the turn did not end within 60 s of the stop"
+    else:
+        detail = ""
     return {"P8": Observation(True, stopped and ended and not finished, detail)}
 
 
@@ -319,9 +356,9 @@ async def resume(s: Stage, word: str) -> dict[str, Observation]:
 
 
 async def bypass(s: Stage) -> dict[str, Observation]:
-    # Neither `!status` (the stored switch) nor the CLI's server info (unchanged by a mode set
-    # on a live client, measured 2026-09-27 on 2.1.283) shows the mode: its one effect is a
-    # command that runs with no permission request.
+    # `!status` shows the switch this daemon stored, whatever the CLI does with it, and the CLI's
+    # server info keeps the mode the session started in (measured 2026-09-27 on 2.1.283): the
+    # CLI's mode shows only as a command that runs with no permission request.
     await s.session.set_bypass(True)
     mark, marker = s.mark(), s.workdir / "bypass-ran.txt"
     try:
@@ -350,13 +387,31 @@ def folders(root: str) -> tuple[Path, Path]:
     return workdir, uploads
 
 
-def forget_sessions(workdir: Path) -> None:
+def forget_sessions(workdir: Path, log: Log) -> None:
     """Remove the transcripts the probe's sessions left under ~/.claude/projects: only the one
-    folder named after this run's temporary directory, whose name is random."""
+    folder named after this run's temporary directory, whose name is random. Anything else is
+    left alone, and said."""
     projects = Path.home() / ".claude" / "projects"
     matches = [p for p in projects.glob(f"*{workdir.name}") if p.is_dir()]
     if len(matches) == 1:
         shutil.rmtree(matches[0])
+    else:
+        log(f"left the probe's transcripts in place: {len(matches)} folders match {workdir.name}")
+
+
+# Each scene and the claims it observes: the one place a claim id meets its scene.
+# `tests/test_probe.py` checks that together they cover `probe.claims.CLAIMS` exactly.
+SCENES: dict[str, tuple[str, ...]] = {
+    "first turn": ("P1", "P2", "P3"),
+    "image": ("P4",),
+    "file": ("P5",),
+    "bash and approval": ("P10", "P11"),
+    "previews": ("P13",),
+    "background and stop": ("P12",),
+    "interrupt": ("P8",),
+    "resume": ("P6", "P7"),
+    "bypass": ("P9",),
+}
 
 
 async def run_scenes(log: Log) -> dict[str, Observation]:
@@ -366,16 +421,16 @@ async def run_scenes(log: Log) -> dict[str, Observation]:
         s = Stage(workdir, log)
         word = secrets.token_hex(3)
         try:
-            seen |= await attempt("first turn", ["P1", "P2", "P3"], log, first_turn(s, word))
-            seen |= await attempt("image", ["P4"], log, image_turn(s))
-            seen |= await attempt("file", ["P5"], log, file_turn(s, uploads))
-            seen |= await attempt("bash and approval", ["P10", "P11"], log, bash_turn(s))
-            seen |= await attempt("previews", ["P13"], log, previews(s))
-            seen |= await attempt("background and stop", ["P12"], log, background_stop(s))
-            seen |= await attempt("interrupt", ["P8"], log, interrupt(s))
-            seen |= await attempt("resume", ["P6", "P7"], log, resume(s, word))
-            seen |= await attempt("bypass", ["P9"], log, bypass(s))
+            seen |= await attempt("first turn", s, first_turn(s, word))
+            seen |= await attempt("image", s, image_turn(s))
+            seen |= await attempt("file", s, file_turn(s, uploads))
+            seen |= await attempt("bash and approval", s, bash_turn(s))
+            seen |= await attempt("previews", s, previews(s))
+            seen |= await attempt("background and stop", s, background_stop(s))
+            seen |= await attempt("interrupt", s, interrupt(s))
+            seen |= await attempt("resume", s, resume(s, word))
+            seen |= await attempt("bypass", s, bypass(s))
         finally:
             await s.manager.close_all()
-            forget_sessions(workdir)
+            forget_sessions(workdir, log)
     return seen

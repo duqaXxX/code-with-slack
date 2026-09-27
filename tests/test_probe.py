@@ -1,11 +1,15 @@
 import importlib
+import json
+from pathlib import Path
 
 import pytest
 
+from probe.__main__ import certified, pinned_to
 from probe.claims import (
     CLAIMS,
     Claim,
     Observation,
+    Result,
     broken,
     can_certify,
     certificate,
@@ -13,8 +17,8 @@ from probe.claims import (
     evaluate,
 )
 
-GESTURE = Claim("G", "gesture", "a gesture", "code_with_slack.sessions.SessionManager", "do it")
-MODEL = Claim("M", "model", "a model act", "code_with_slack.approvals.Approvals", "ask for it")
+GESTURE = Claim("P90", "gesture", "a gesture", "code_with_slack.sessions.SessionManager", "do it")
+MODEL = Claim("P91", "model", "a model act", "code_with_slack.approvals.Approvals", "ask for it")
 
 
 @pytest.mark.parametrize(
@@ -37,7 +41,7 @@ def test_an_observation_becomes_an_outcome(
 
 
 def test_a_retired_claim_stays_retired_whatever_the_run_saw() -> None:
-    retired = Claim("R", "gesture", "gone", "code_with_slack.sessions", "n/a", retired="measured")
+    retired = Claim("P92", "gesture", "gone", "code_with_slack.sessions", "n/a", retired="measured")
     assert evaluate(retired, Observation(caused=True, holds=False)).outcome == "RETIRED"
 
 
@@ -54,7 +58,7 @@ def test_a_release_is_certified_only_when_every_gesture_claim_holds() -> None:
 def test_the_checklist_lists_what_the_run_could_not_prove() -> None:
     results = [evaluate(GESTURE, Observation(True, True)), evaluate(MODEL, None)]
     text = checklist(results)
-    assert "M a model act" in text and "ask for it" in text and "Approvals" in text
+    assert "P91 a model act" in text and "ask for it" in text and "Approvals" in text
     assert "a gesture" not in text
     assert checklist(results[:1]) == ""
 
@@ -64,8 +68,8 @@ def test_the_certificate_holds_ids_and_versions_only() -> None:
     assert certificate(results, "2.1.283", "2026-09-27") == {
         "cli": "2.1.283",
         "date": "2026-09-27",
-        "holds": ["G"],
-        "open": ["M"],
+        "holds": ["P90"],
+        "open": ["P91"],
         "retired": [],
     }
 
@@ -87,3 +91,47 @@ def test_every_claim_names_a_symbol_that_exists(claim: Claim) -> None:
 
 def test_claim_ids_are_unique() -> None:
     assert len({c.id for c in CLAIMS}) == len(CLAIMS)
+
+
+def test_every_claim_belongs_to_exactly_one_scene() -> None:
+    from probe.scenes import SCENES
+
+    owned = [claim for claims in SCENES.values() for claim in claims]
+    assert sorted(owned) == sorted(c.id for c in CLAIMS)
+
+
+def test_a_model_claim_cannot_be_made_broken_by_hand() -> None:
+    with pytest.raises(ValueError):
+        Result(MODEL, "BROKEN", "")
+
+
+def test_a_behaviour_cannot_hold_without_its_event() -> None:
+    with pytest.raises(ValueError):
+        Observation(caused=False, holds=True)
+
+
+@pytest.mark.parametrize("id", ["p1", "P0", "1", "P1 "])
+def test_a_claim_id_is_p_and_a_number(id: str) -> None:
+    with pytest.raises(ValueError):
+        Claim(id, "gesture", "t", "code_with_slack.sessions", "how")
+
+
+def test_the_pin_moves_only_when_there_is_exactly_one() -> None:
+    assert pinned_to('deps = ["claude-agent-sdk==0.2.160"]', "0.2.161") == (
+        'deps = ["claude-agent-sdk==0.2.161"]'
+    )
+    # A pin written another way would leave the old SDK installed and certify it as the new one.
+    for other in ('["claude-agent-sdk>=0.2.160"]', '["claude-agent-sdk[x]==0.2.160"]', ""):
+        with pytest.raises(ValueError):
+            pinned_to(other, "0.2.161")
+
+
+def test_a_certificate_file_of_another_shape_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "certified-versions.json"
+    assert certified(path) == {}
+    entry = {"cli": "2.1.283", "date": "2026-09-27", "holds": [], "open": [], "retired": []}
+    path.write_text(json.dumps({"0.2.160": entry}))
+    assert certified(path) == {"0.2.160": entry}
+    path.write_text(json.dumps({"0.2.160": {"cli": "2.1.283"}}))
+    with pytest.raises(ValueError):
+        certified(path)
