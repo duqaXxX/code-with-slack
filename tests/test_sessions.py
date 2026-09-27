@@ -1118,7 +1118,7 @@ async def test_the_footer_names_the_bound_folder(harness_for: Callable[..., Harn
     await asyncio.wait_for((await h.session().submit("list the files")).done.wait(), 2)
     folder = h.tmp_path.resolve()
     place = statuses(h)[-1].splitlines()[1]
-    assert place == f"{folder.parent.name}/{folder.name}"
+    assert place == folder.name
 
 
 @pytest.fixture
@@ -1139,8 +1139,8 @@ async def test_the_footer_follows_the_folder_the_session_works_in(
     session = h.session()
     await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
     _, place, usage = statuses(h)[-1].splitlines()
-    assert place == f"{tmp_path.parent.name}/{tmp_path.name} · feature-x · (+0,-0)"
-    assert usage.startswith("ctx ")
+    assert place == f"{tmp_path.name} · feature-x · (+0,-0)"
+    assert re.match(r"[\d.]+[kM]? tok · ctx ", usage)
     lines = (await session.status()).splitlines()
     assert lines[0] == f"Directory: `{tmp_path}`"
     values = lines[lines.index("Now: idle") + 1 :]

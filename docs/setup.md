@@ -322,15 +322,15 @@ in the terminal: that reply opens with Claude Code's own line for the task's end
 The channel's latest reply ends with a footer of three lines, which moves to each new reply:
 
 ```
-⚡ bypass · claude-opus-5-5 · effort medium · 10.2M tok
-code/my-project · main · (+42,-10)
-ctx 15% · 5h 16% ↻ 43m · 7d 46% ↻ 3d 4h
+⚡ bypass · claude-opus-5-5 · effort medium
+my-project · main · (+42,-10)
+10.2M tok · ctx 15% · 5h 16% ↻ 43m · 7d 46% ↻ 3d 4h
 ```
 
-The first line holds `⚡ bypass` when bypass is on, the model, the effort level and the session's
-tokens. The second holds the channel's folder by its last two names, the git branch and the lines
-changed since the last commit (untracked files not counted). The third holds the context used and
-the 5-hour and weekly limits with the time to each reset, which exist only with a claude.ai
+The first line holds `⚡ bypass` when bypass is on, the model and the effort level. The second
+holds the name of the channel's folder (its whole path is on `!status`), the git branch and the
+lines changed since the last commit (untracked files not counted). The third holds the session's
+tokens, the context used and the 5-hour and weekly limits with the time to each reset, which exist only with a claude.ai
 subscription. A line with nothing known is left out.
 The folder is the one the channel is bound to. The branch and the changes are those of the folder
 the session works in: the channel's at first, then the one Claude moved to with `cd` or a

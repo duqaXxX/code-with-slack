@@ -282,7 +282,7 @@ def format_limit(limit: Limit, now: datetime) -> str:
 @dataclass(frozen=True)
 class FooterField:
     """One of the footer's values: `!status` shows `label: value`, the footer `short` on its
-    `line`: 0 the session, 1 where it works (after the folder), 2 context and limits."""
+    `line`: 0 the session, 1 where it works (after the folder), 2 tokens, context and limits."""
 
     label: str
     value: str
@@ -300,7 +300,7 @@ def footer_fields(data: FooterData, now: datetime) -> list[FooterField]:
         fields.append(FooterField("Effort", data.effort, f"effort {data.effort}"))
     if data.session_tokens is not None:
         tokens = format_tokens(data.session_tokens)
-        fields.append(FooterField("Session tokens", tokens, f"{tokens} tok"))
+        fields.append(FooterField("Session tokens", tokens, f"{tokens} tok", line=2))
     if data.branch:
         fields.append(FooterField("Branch", data.branch, mrkdwn_escape(data.branch), line=1))
     if data.changes is not None:
@@ -325,14 +325,12 @@ def format_status_fields(data: FooterData, now: datetime) -> list[str]:
 
 
 def format_footer(data: FooterData, now: datetime) -> str:
-    """Three lines, so a phone never wraps a field (the owner's layout): bypass, model, effort
-    and tokens; the channel's folder, branch and changes; context and limits."""
+    """Three lines, so a phone never wraps a field (the owner's layout): bypass, model and
+    effort; the channel's folder, branch and changes; tokens, context and limits."""
     lines: list[list[str]] = [["⚡ bypass"] if data.bypass else [], [], []]
-    if data.directory is not None:
-        # Its last two names, as the owner's terminal status line shows a folder.
-        names = [part for part in data.directory.parts if part != data.directory.anchor][-2:]
-        if names:
-            lines[1].append(mrkdwn_escape("/".join(names)))
+    if data.directory is not None and data.directory.name:
+        # Its name alone, the project's: the whole path is on `!status`'s Directory line.
+        lines[1].append(mrkdwn_escape(data.directory.name))
     for field in footer_fields(data, now):
         lines[field.line].append(field.short)
     return "\n".join(" · ".join(parts) for parts in lines if parts)

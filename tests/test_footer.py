@@ -78,7 +78,7 @@ def test_full_footer() -> None:
         usage=usage,
     )
     assert format_footer(data, NOW) == (
-        "⚡ bypass · claude-opus-5-5 · 12.3k tok\nmain\nctx 6% · 5h 3% ↻ 2h · 7d 25%"
+        "⚡ bypass · claude-opus-5-5\nmain\n12.3k tok · ctx 6% · 5h 3% ↻ 2h · 7d 25%"
     )
 
 
@@ -314,11 +314,10 @@ async def test_a_usage_probe_with_no_answer_gives_up_and_closes(
 
 @pytest.mark.parametrize(
     ("directory", "shown"),
-    [("/srv/alice/code/app", "code/app"), ("/app", "app"), ("/", None), ("code/app", "code/app")],
+    [("/srv/alice/code/app", "app"), ("/app", "app"), ("/", None), ("code/app", "app")],
 )
-def test_the_folder_s_last_two_names_open_the_second_line(directory: str, shown: str) -> None:
-    # As the owner's terminal status line shows it (ccstatusline current-working-dir, 2 segments;
-    # the maintainer, 2026-09-25).
+def test_the_folder_s_name_opens_the_second_line(directory: str, shown: str) -> None:
+    # The project's name alone, not its path (the maintainer, 2026-09-27).
     data = FooterData(
         bypass=False,
         branch="main",
@@ -339,9 +338,9 @@ def test_the_folder_and_the_branch_are_shown_as_written() -> None:
         context_percent=None,
         session_tokens=None,
         usage=None,
-        directory=Path("/srv/alice/R&D/<x>"),
+        directory=Path("/srv/alice/R&D <x>"),
     )
-    assert format_footer(data, NOW) == "R&amp;D/&lt;x&gt; · fix/&lt;a&gt;&amp;b"
+    assert format_footer(data, NOW) == "R&amp;D &lt;x&gt; · fix/&lt;a&gt;&amp;b"
 
 
 async def test_git_changes_do_not_run_the_repo_s_fsmonitor(repo: Path, tmp_path: Path) -> None:
