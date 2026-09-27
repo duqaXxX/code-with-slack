@@ -47,6 +47,17 @@ from tests.fakes import FakeSlack
 PROBE_MODEL = "claude-haiku-4-5-20251001"
 CHANNEL, OWNER, TEAM, BOT = "C000PROBE", "U000PROBE", "T000PROBE", "U000PROBEBOT"
 TURN_LIMIT = 180.0
+COUNT_TO = 2000
+# The running line of a background command (`texts.RUNNING`), unlike `Ran 1 shell command`.
+RUNNING_SHELL = "⏳ 1 shell"
+
+
+def bash_line(lines: str) -> bool:
+    """A Bash call on a reply's tool lines: whole it names Bash, folded it reads as the
+    terminal's `Ran N shell command(s)`."""
+    return "Bash" in lines or "shell command" in lines
+
+
 Log = Callable[[str], None]
 CanUseTool = Callable[[str, dict[str, Any], ToolPermissionContext], Awaitable[PermissionResult]]
 
@@ -231,9 +242,25 @@ async def bash_turn(s: Stage) -> dict[str, Observation]:
     called = "Bash" in s.asked_since(mark)
     detail = "" if called else f"permission requests: {s.asked_since(mark) or 'none'}"
     return {
-        "P10": Observation(called, "Bash" in s.tool_lines_since(mark), detail),
+        "P10": Observation(called, bash_line(s.tool_lines_since(mark)), detail),
         "P11": Observation(called, marker.exists(), detail),
     }
+
+
+async def previews(s: Stage) -> dict[str, Observation]:
+    mark = s.mark()
+    await s.turn(
+        "One tool call per step. 1) Use the Write tool to create preview.txt with the lines "
+        "alpha, beta and gamma. 2) Use the Edit tool on preview.txt to replace beta with delta. "
+        "Then reply: done"
+    )
+    asked = s.asked_since(mark)
+    called = "Write" in asked and "Edit" in asked
+    lines = s.tool_lines_since(mark)
+    # Both previews built: the shapes they read are still the measured ones.
+    shown = "Write(preview.txt)" in lines and "Update(preview.txt)" in lines
+    shown = shown and "Wrote 3 lines" in lines and "Added 1 line, removed 1 line" in lines
+    return {"P13": Observation(called, shown, "" if called else f"permission requests: {asked}")}
 
 
 async def background_stop(s: Stage) -> dict[str, Observation]:
@@ -241,26 +268,34 @@ async def background_stop(s: Stage) -> dict[str, Observation]:
         "Use the Bash tool with run_in_background set to true to run: tail -f /dev/null\n"
         "Do not wait for it. Reply: started"
     )
-    if not await until(lambda: "1 shell" in s.shown_now(), 20):
+    if not await until(lambda: RUNNING_SHELL in s.shown_now(), 20):
         return {"P12": Observation(False, False, "no background command started")}
     stopped = await s.session.stop()
-    gone = await until(lambda: "1 shell" not in s.shown_now(), 30)
+    gone = await until(lambda: RUNNING_SHELL not in s.shown_now(), 30)
     return {"P12": Observation(True, stopped and gone)}
+
+
+def counted(text: str) -> set[int]:
+    """The numbers written one per line: a sentence that names a number (`from 1 to 2000`)
+    does not count as having written it."""
+    return {int(line) for line in (x.strip() for x in text.splitlines()) if line.isdigit()}
 
 
 async def interrupt(s: Stage) -> dict[str, Observation]:
     mark = s.mark()
+    # Long enough that Haiku cannot finish it in the second or two a stop takes to arrive, since
+    # the reply reaches Slack at most once per DEBOUNCE_SECONDS.
     turn = await s.session.submit(
-        "Write the numbers from 1 to 400, one per line, and nothing else."
+        f"Without using any tool, reply with the numbers from 1 to {COUNT_TO}, one per line, "
+        "and nothing else."
     )
-    # Stop once the reply is under way, well before it could end on its own.
-    writing = await until(lambda: "\n20\n" in f"\n{s.replies_since(mark)}\n", 60)
-    if not writing:
-        return {"P8": Observation(False, False, "the reply never reached 20")}
+    if not await until(lambda: 20 in counted(s.replies_since(mark)), 60):
+        start = " ".join(s.replies_since(mark).split())[:80]
+        return {"P8": Observation(False, False, f"the reply never reached 20: {start!r}")}
     stopped = await s.session.stop()
     ended = await until(turn.done.is_set, 60)
-    finished = "400" in s.replies_since(mark).split()
-    detail = "the reply ran to 400: the interrupt did nothing" if finished else ""
+    finished = COUNT_TO in counted(s.replies_since(mark))
+    detail = f"the reply ran to {COUNT_TO}: the interrupt did nothing" if finished else ""
     return {"P8": Observation(True, stopped and ended and not finished, detail)}
 
 
@@ -296,7 +331,7 @@ async def bypass(s: Stage) -> dict[str, Observation]:
         )
     finally:
         await s.session.set_bypass(False)
-    called = "Bash" in s.tool_lines_since(mark) and marker.exists()
+    called = bash_line(s.tool_lines_since(mark)) and marker.exists()
     asked = s.asked_since(mark)
     return {
         "P9": Observation(
@@ -335,6 +370,7 @@ async def run_scenes(log: Log) -> dict[str, Observation]:
             seen |= await attempt("image", ["P4"], log, image_turn(s))
             seen |= await attempt("file", ["P5"], log, file_turn(s, uploads))
             seen |= await attempt("bash and approval", ["P10", "P11"], log, bash_turn(s))
+            seen |= await attempt("previews", ["P13"], log, previews(s))
             seen |= await attempt("background and stop", ["P12"], log, background_stop(s))
             seen |= await attempt("interrupt", ["P8"], log, interrupt(s))
             seen |= await attempt("resume", ["P6", "P7"], log, resume(s, word))

@@ -103,6 +103,10 @@ BYPASS_ON = (
 BYPASS_RESTARTING = "code-with-slack is restarting: bypass stays on in this channel."
 BYPASS_OFF = "Bypass is off. Claude Code is back in its `{mode}` mode."
 STOPPED = "Stopped the current turn."
+# An answered question, as the terminal keeps it in the transcript.
+ANSWERED = "User answered Claude's questions:"
+# Slack drops plain spaces at the start of a line; no-break spaces stay and make the indent.
+NESTED = "\u00a0" * 4 + "⎿ "
 STOPPED_CHANNEL = "Stopped what was running in this channel."
 RESTART_WAITS = (
     "code-with-slack is restarting once these background tasks end: {counts}. "

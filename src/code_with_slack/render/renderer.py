@@ -1,6 +1,7 @@
 """Turn SDK messages into what the owner sees: text as it is written, and one task per tool
 call or background task. Generic over message types: no branch names a tool, so a tool Claude
-Code adds tomorrow renders with no change here."""
+Code adds tomorrow renders with no change here. The few tools the terminal shows in words of its
+own live in `previews`, which falls back to this generic view for any other."""
 
 from dataclasses import dataclass, replace
 from typing import Any, Literal, Protocol
@@ -27,6 +28,7 @@ from claude_agent_sdk.types import (
 
 from code_with_slack import texts
 from code_with_slack.footer import format_tokens
+from code_with_slack.render.previews import Preview, preview
 
 TaskStatus = Literal["pending", "in_progress", "complete", "error"]
 TITLE_LIMIT = 80
@@ -47,6 +49,7 @@ class TaskUpdate:
     name: str = ""  # the tool's name, for a line folded into a summary
     task: bool = False  # a subagent's or a background command's line: never folded
     calls: int = 0  # calls made inside it (a subagent's), counted on its line
+    preview: Preview | None = None  # the terminal's own view of a finished call: never folded
 
 
 class Sink(Protocol):
@@ -106,8 +109,9 @@ def terminal_status(status: str) -> tuple[TaskStatus, str | None]:
 
 
 class TurnRenderer:
-    def __init__(self, sink: Sink) -> None:
+    def __init__(self, sink: Sink, cwd: str | None = None) -> None:
         self._sink = sink
+        self._cwd = cwd  # the session's folder, which previews name paths from
         self._lines: dict[str, TaskUpdate] = {}
         self._root_of: dict[str, str] = {}
         self._children: dict[str, list[str]] = {}
@@ -130,8 +134,11 @@ class TurnRenderer:
             case AssistantMessage():
                 await self._assistant(message)
             case UserMessage(content=list() as blocks):
+                # One `tool_use_result` per message: it belongs to a result only when it is alone.
+                results = [b for b in blocks if isinstance(b, ToolResultBlock)]
+                result = message.tool_use_result if len(results) == 1 else None
                 for block in blocks:
-                    await self._block(block, message.parent_tool_use_id)
+                    await self._block(block, message.parent_tool_use_id, result)
             case TaskStartedMessage():
                 await self._task_started(message)
             case TaskProgressMessage():
@@ -219,7 +226,7 @@ class TurnRenderer:
         for block in message.content:
             await self._block(block, message.parent_tool_use_id)
 
-    async def _block(self, block: object, parent: str | None) -> None:
+    async def _block(self, block: object, parent: str | None, result: object = None) -> None:
         if isinstance(block, ToolUseBlock | ServerToolUseBlock):
             title = task_title(block.name, block.input)
             root = self._root_of.get(parent, parent) if parent else None
@@ -246,11 +253,13 @@ class TurnRenderer:
                 return
             elif entry is not None:
                 failed = isinstance(block, ToolResultBlock) and bool(block.is_error)
+                shown = None if failed else preview(entry.name, result, self._cwd)
                 await self._set(
                     replace(
                         entry,
                         status="error" if failed else "complete",
                         output=result_summary(block.content),
+                        preview=shown,
                     )
                 )
 

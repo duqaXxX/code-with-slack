@@ -1,0 +1,117 @@
+"""The few tools the terminal shows in words of its own, and nothing else.
+
+Rendering stays generic: a tool not named here shows as its name, counted when it ran more
+than once, and its line, with no change anywhere. For the tools below, the terminal writes a
+sentence or a preview instead, and this module reproduces it from what the SDK stream carries.
+The shapes read here come from `UserMessage.tool_use_result`, which the SDK types as
+`dict[str, Any]` and does not document: measured on Claude Code 2.1.283 (2026-09-27,
+`tests/fixtures/sdk/edit-write.jsonl`), and guarded by the release probe. Any other shape gives
+None, and the generic line is shown instead.
+"""
+
+from dataclasses import dataclass
+from pathlib import PurePosixPath
+from typing import Any
+
+# How the terminal folds finished calls of these tools (measured on 2.1.283): every Bash call,
+# whatever the command, reads as a shell command here; the terminal's own `Listed` and `Searched`
+# come from a classification of the command that it does not document.
+WORDS = {
+    "Bash": ("Ran {n} shell command", "Ran {n} shell commands"),
+    "Read": ("Read {n} file", "Read {n} files"),
+}
+# The terminal shows a new file's first lines, then how many it leaves out.
+NEW_FILE_LINES = 10
+
+
+@dataclass(frozen=True)
+class Preview:
+    title: str  # `Update(notes.txt)`
+    summary: str  # `Added 1 line, removed 1 line`
+    body: str  # numbered lines, as the terminal prints them
+
+
+def folded(name: str, n: int) -> str:
+    """How `n` finished calls of `name` read in a folded line."""
+    words = WORDS.get(name)
+    if words is None:
+        return name if n == 1 else f"{name} \u00d7{n}"
+    return (words[0] if n == 1 else words[1]).format(n=n)
+
+
+def _lines(n: int, noun: str = "line") -> str:
+    return f"{n} {noun}{'' if n == 1 else 's'}"
+
+
+def _shown(path: str, cwd: str | None) -> str:
+    """The path as the terminal names it: relative to the session's folder when inside it."""
+    if cwd:
+        try:
+            return str(PurePosixPath(path).relative_to(cwd))
+        except ValueError:
+            pass
+    return path
+
+
+def _diff(patch: list[Any]) -> tuple[int, int, list[str]] | None:
+    """Lines added and removed, and the hunks numbered as the terminal numbers them: a removed
+    line by its old number, any other by its new one, `...` between hunks."""
+    added = removed = 0
+    rows: list[tuple[int, str]] = []
+    for index, hunk in enumerate(patch):
+        if not isinstance(hunk, dict):
+            return None
+        old, new, lines = hunk.get("oldStart"), hunk.get("newStart"), hunk.get("lines")
+        if not isinstance(old, int) or not isinstance(new, int) or not isinstance(lines, list):
+            return None
+        if index:
+            rows.append((0, "..."))
+        for line in lines:
+            if not isinstance(line, str) or not line:
+                return None
+            sign, text = line[0], line[1:]
+            if sign == "-":
+                rows.append((old, f"-{text}"))
+                old, removed = old + 1, removed + 1
+            elif sign == "+":
+                rows.append((new, f"+{text}"))
+                new, added = new + 1, added + 1
+            else:
+                rows.append((new, f" {text}"))
+                old, new = old + 1, new + 1
+    width = len(str(max((n for n, _ in rows), default=0)))
+    return added, removed, [text if n == 0 else f"{n:>{width}} {text}" for n, text in rows]
+
+
+def _changed(added: int, removed: int) -> str:
+    parts = [f"Added {_lines(added)}"] if added else []
+    if removed:
+        parts.append(f"removed {_lines(removed)}" if parts else f"Removed {_lines(removed)}")
+    return ", ".join(parts) or "No change"
+
+
+def preview(name: str, result: Any, cwd: str | None) -> Preview | None:
+    """The terminal's view of a finished `Edit` or `Write`, or None for any other tool or shape."""
+    if not isinstance(result, dict) or not isinstance(result.get("filePath"), str):
+        return None
+    path = _shown(result["filePath"], cwd)
+    patch = result.get("structuredPatch")
+    if name == "Write" and result.get("type") == "create":
+        content = result.get("content")
+        if not isinstance(content, str):
+            return None
+        lines = content.splitlines()
+        width = len(str(min(len(lines), NEW_FILE_LINES)))
+        body = [f"{i:>{width}} {line}" for i, line in enumerate(lines[:NEW_FILE_LINES], 1)]
+        if len(lines) > NEW_FILE_LINES:
+            body.append(f"… +{_lines(len(lines) - NEW_FILE_LINES)}")
+        return Preview(f"Write({path})", f"Wrote {_lines(len(lines))} to {path}", "\n".join(body))
+    if name in ("Edit", "Write") and isinstance(patch, list) and patch:
+        diff = _diff(patch)
+        if diff is None:
+            return None
+        added, removed, body = diff
+        # The terminal names an edit `Update`, and a Write over an existing file keeps `Write`.
+        title = f"{'Update' if name == 'Edit' else 'Write'}({path})"
+        return Preview(title, _changed(added, removed), "\n".join(body))
+    return None

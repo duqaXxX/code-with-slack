@@ -39,6 +39,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Tool lines read closer to the terminal (Claude Code 2.1.283, measured 2026-09-27). Finished
+  calls fold in the terminal's words for Bash and Read (`Ran 2 shell commands · Read 1 file`), by
+  name for any other tool. A finished `Edit` or `Write` no longer folds: it shows as `Update(path)`
+  or `Write(path)` with `Added N lines, removed M lines` or `Wrote N lines to path`, and a code
+  block with the numbered diff, or a new file's first 10 lines. An answered question stays in the
+  channel as `User answered Claude's questions:` with each answer, instead of being deleted.
 - `!stop` also stops the channel's background commands and agents (`ClaudeSDKClient.stop_task`),
   besides the running turn and its pending approvals, and answers
   `Stopped what was running in this channel.` Claude Code starts no turn to report a task stopped
@@ -82,8 +88,9 @@ First release.
 
 - A probe for new `claude-agent-sdk` releases, `uv run python -m probe`, described in
   `CONTRIBUTING.md`. It drives the daemon's `SessionManager` against the real bundled CLI, with
-  Slack faked, through twelve claims: a session starts, `!status`, a text, image and file prompt,
-  `!resume`, `!stop` on a turn and on a background command, approvals and bypass. A release is
+  Slack faked, through thirteen claims: a session starts, `!status`, a text, image and file prompt,
+  `!resume`, `!stop` on a turn and on a background command, approvals, bypass, and the Edit and
+  Write previews. A release is
   certified in `probe/certified-versions.json` when every claim the probe causes itself holds.
   The SDK release watch's issue now asks for the probe instead of the checks by hand.
 - Package scaffold: `pyproject.toml` with pinned dependencies, MIT license, docs test.

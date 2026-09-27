@@ -17,6 +17,7 @@ from slack_sdk.web.async_client import AsyncWebClient
 
 from code_with_slack import texts
 from code_with_slack.render.escape import mrkdwn_escape
+from code_with_slack.render.previews import folded
 from code_with_slack.render.renderer import STOPPED, TaskUpdate
 
 logger = logging.getLogger(__name__)
@@ -37,8 +38,7 @@ BLOCKS_LIMIT = 45
 REFUSED_CONTENT = {"invalid_blocks", "invalid_blocks_format", "msg_too_long", "invalid_arguments"}
 # ⏳ marks what is still running, as the footer marks running tasks (`⏳ 1 shell`).
 ICONS = {"pending": "⏳", "in_progress": "⏳", "complete": "✓", "error": "✗"}
-# Slack drops plain spaces at the start of a line; no-break spaces stay and make the indent.
-NESTED = "\u00a0" * 4 + "⎿ "
+NESTED = texts.NESTED
 
 
 def describe(exc: Exception) -> str:
@@ -74,6 +74,13 @@ def tools_block(lines: list[str], index: int) -> dict[str, Any]:
     return {**block, "block_id": f"tools-{index}"}
 
 
+def preview_blocks(body: str) -> list[dict[str, Any]]:
+    """A call's preview (a diff, a new file's first lines) as code blocks, split where a block
+    would pass its limit. A fence inside the file must not close the block early."""
+    body = body.replace("```", "`\u200b``")
+    return [{"type": "markdown", "text": f"```\n{chunk}\n```"} for chunk in split(body) if chunk]
+
+
 def block_text(block: dict[str, Any]) -> str:
     if block["type"] == "markdown":
         return str(block["text"])
@@ -102,10 +109,15 @@ class _Tool:
 
     def line(self, *, icon: bool = True) -> str:
         update = self.update
-        line = f"{ICONS[update.status]} `{update.title}`" if icon else f"`{update.title}`"
+        title = update.preview.title if update.preview else update.title
+        line = f"{ICONS[update.status]} `{title}`" if icon else f"`{title}`"
         if update.calls:
             # How much a subagent has done: its latest call alone does not say.
             line += f" · {update.calls} call{'' if update.calls == 1 else 's'}"
+        if update.preview is not None:
+            # The terminal's sentence under the call (`⎿  Added 1 line, removed 1 line`); the
+            # lines themselves follow the tool line in a block of their own.
+            return f"{line}\n{NESTED}{update.preview.summary}"
         if (update.status == "error" and update.output) or update.output == STOPPED:
             line += f" · {update.output}"
         elif update.status == "in_progress" and update.details:
@@ -115,9 +127,10 @@ class _Tool:
 
 
 def tool_lines(tools: list[_Tool], *, latest: bool = False) -> list[str]:
-    """A run of tool lines as shown: the calls that ended fold into one first line of tool
-    names, each counted when it ran more than once, whatever the tool (`✓ Bash · Read ·
-    ✗ Bash`), as the terminal folds them. A running call, a task and a stopped line stay whole
+    """A run of tool lines as shown: the calls that ended fold into one first line, in the
+    terminal's words for the tools it has words for (`✓ Ran 2 shell commands · Read 1 file ·
+    WebFetch · ✗ Ran 1 shell command`), as the terminal folds them. A call with a preview
+    never folds. A running call, a task and a stopped line stay whole
     below it, in order: they outlive the moment or say why they ended. With `latest`, for the
     run Claude is still in, its last call stays whole too until it is no longer the last: a
     call that ends within a second of starting would otherwise never show."""
@@ -130,6 +143,7 @@ def tool_lines(tools: list[_Tool], *, latest: bool = False) -> list[str]:
             update.status in counts
             and update.name
             and not update.task
+            and update.preview is None
             and update.output != STOPPED
             and not last
         ):
@@ -142,8 +156,7 @@ def tool_lines(tools: list[_Tool], *, latest: bool = False) -> list[str]:
         else:
             whole.append(tool.line())
     groups = [
-        f"{ICONS[status]} "
-        + " · ".join(name if n == 1 else f"{name} \u00d7{n}" for name, n in names.items())
+        f"{ICONS[status]} " + " · ".join(folded(name, n) for name, n in names.items())
         for status, names in counts.items()
         if names
     ]
@@ -281,17 +294,37 @@ class ReplySink:
             else:
                 tools = [p for p in run if isinstance(p, _Tool)]
                 latest = not self._finished and position == len(runs) - 1
-                lines = tool_lines(tools, latest=latest)
-                # Escaped first: Slack's limit counts the text it receives.
-                lines = [mrkdwn_escape(line) for line in lines]
-                chunk: list[str] = []
-                for line in lines:
-                    if chunk and sum(len(x) + 1 for x in chunk) + len(line) > CONTEXT_LIMIT:
-                        blocks.append(tools_block(chunk, len(blocks)))
-                        chunk = []
-                    chunk.append(line[:CONTEXT_LIMIT])
-                if chunk:
-                    blocks.append(tools_block(chunk, len(blocks)))
+                # A call with a preview splits the fold, as in the terminal: the calls before it
+                # fold on their own, then its line and its preview, then the calls after it.
+                segments = [
+                    (shown, list(group))
+                    for shown, group in itertools.groupby(
+                        tools, key=lambda t: t.update.preview is not None
+                    )
+                ]
+                for index, (shown, group) in enumerate(segments):
+                    last = latest and index == len(segments) - 1
+                    for tool in group if shown else [None]:
+                        lines = [tool.line()] if tool else tool_lines(group, latest=last)
+                        blocks += self._tool_blocks(lines, len(blocks))
+                        if tool and tool.update.preview and tool.update.preview.body:
+                            blocks += preview_blocks(tool.update.preview.body)
+        return blocks
+
+    @staticmethod
+    def _tool_blocks(lines: list[str], start: int) -> list[dict[str, Any]]:
+        """Tool lines as context blocks, each under Slack's size limit."""
+        # Escaped first: Slack's limit counts the text it receives.
+        lines = [mrkdwn_escape(line) for line in lines]
+        blocks: list[dict[str, Any]] = []
+        chunk: list[str] = []
+        for line in lines:
+            if chunk and sum(len(x) + 1 for x in chunk) + len(line) > CONTEXT_LIMIT:
+                blocks.append(tools_block(chunk, start + len(blocks)))
+                chunk = []
+            chunk.append(line[:CONTEXT_LIMIT])
+        if chunk:
+            blocks.append(tools_block(chunk, start + len(blocks)))
         return blocks
 
     def _render(self, final: bool, footer: str | None) -> list[list[dict[str, Any]]]:

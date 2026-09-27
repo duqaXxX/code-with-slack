@@ -185,6 +185,21 @@ QUESTION_FORM = "question_form"
 TYPED_LIMIT = 300
 
 
+def answered_blocks(
+    questions: list[dict[str, Any]], answers: dict[str, str | list[str]]
+) -> list[dict[str, Any]]:
+    """An answered request as the terminal keeps it: `User answered Claude's questions:`, then
+    `· question → answer` per question, with no buttons left to press."""
+    lines = [texts.ANSWERED]
+    for q in questions:
+        answer = answers.get(q["question"], "")
+        shown = ", ".join(answer) if isinstance(answer, list) else answer
+        lines.append(
+            f"{texts.NESTED}· {shown_as_written(q['question'])} → {shown_as_written(shown)}"
+        )
+    return [{"type": "context", "elements": [{"type": "mrkdwn", "text": "\n".join(lines)}]}]
+
+
 def question_blocks(approval_id: str, questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The request in the channel: one line naming the questions, with Answer (which opens the
     form) and Skip. It stays one line however many questions Claude asks."""

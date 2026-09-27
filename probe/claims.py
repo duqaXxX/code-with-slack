@@ -127,6 +127,13 @@ CLAIMS = [
         "code_with_slack.sessions.ChannelSession.stop",
         "ask Claude to run `tail -f` on a file in the background, then send `!stop`",
     ),
+    Claim(
+        "P13",
+        "model",
+        "a Write and an Edit show the terminal's preview (undocumented tool_use_result)",
+        "code_with_slack.render.previews.preview",
+        "ask Claude to create a file and then edit it; each call shows its lines under it",
+    ),
 ]
 
 

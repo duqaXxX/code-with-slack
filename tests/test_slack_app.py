@@ -414,7 +414,7 @@ async def test_next_with_an_answer_moves_to_the_next_question(world: World) -> N
     assert not pending.future.done()
 
 
-async def test_a_complete_submit_answers_claude_and_removes_the_request(world: World) -> None:
+async def test_a_complete_submit_answers_claude_and_keeps_the_answers(world: World) -> None:
     approval_id, pending = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
     pending.message_ts = "1790000000.000009"
     draft = Draft(approval_id, CHANNEL, active=1, picks={0: [1]})
@@ -424,7 +424,14 @@ async def test_a_complete_submit_answers_claude_and_removes_the_request(world: W
     }
     await world.dispatch(form_body("view_submission", draft, values))
     assert pending.future.result() == Answer({"Colour?": "blue", "Sizes?": ["s", "xl"]})
-    assert [a["ts"] for a in world.slack.calls_to("chat.delete")] == ["1790000000.000009"]
+    # The request stays as the terminal's record of the answers (terminal, CLI 2.1.283:
+    # `User answered Claude's questions:` then `⎿  · Which colour do you prefer? → Red`).
+    assert world.slack.calls_to("chat.delete") == []
+    [update] = world.slack.calls_to("chat.update")
+    assert update["ts"] == "1790000000.000009"
+    assert update["blocks"][0]["elements"][0]["text"] == (
+        f"{texts.ANSWERED}\n{texts.NESTED}· Colour? → blue\n{texts.NESTED}· Sizes? → s, xl"
+    )
 
 
 async def test_nobody_else_can_submit_the_form(world: World) -> None:
