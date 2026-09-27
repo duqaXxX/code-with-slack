@@ -171,7 +171,11 @@ def injected_turn(result: ResultMessage) -> bool:
 
 
 def client_options(
-    directory: Path, session_id: str | None, can_use_tool: CanUseTool, on_stop: HookCallback
+    directory: Path,
+    session_id: str | None,
+    can_use_tool: CanUseTool,
+    on_stop: HookCallback,
+    on_tool_done: HookCallback,
 ) -> ClaudeAgentOptions:
     return ClaudeAgentOptions(
         cwd=str(directory),
@@ -180,8 +184,13 @@ def client_options(
         include_partial_messages=True,
         can_use_tool=can_use_tool,
         # The Stop hook's input carries the effort level Claude Code runs at: the footer's
-        # only source for it, since no message reports it.
-        hooks={"Stop": [HookMatcher(hooks=[on_stop])]},
+        # only source for it, since no message reports it. Every hook input carries the `cwd`
+        # the session works in; PostToolUse reports it after each tool, so a turn stopped or
+        # failed before its Stop still moves the footer's branch.
+        hooks={
+            "Stop": [HookMatcher(hooks=[on_stop])],
+            "PostToolUse": [HookMatcher(hooks=[on_tool_done])],
+        },
         # Makes bypass possible, not active: `!bypass on` switches it on the live client.
         extra_args={"allow-dangerously-skip-permissions": None},
         # CLI stderr may quote the conversation: keep it out of the log unless debugging.
@@ -295,8 +304,8 @@ class ChannelSession:
         # Whether Claude Code has reported the level since the client started: until then it is
         # not known, since the settings do not decide it (measured 2026-09-25).
         self.effort_reported = False
-        # Where the session works as its Stop hook last reported (`cwd` follows a `cd` and a
-        # worktree, measured 2026-09-27 on 2.1.283); None until then, which means `directory`.
+        # Where the session works as its hooks last reported (`cwd` follows a `cd` and a worktree;
+        # Stop and PostToolUse measured 2026-09-27 on 2.1.283); None until then: `directory`.
         self.working_directory: Path | None = None
         # The session's token count as the client's last result reported it, for `!status`.
         self.session_tokens: int | None = None
@@ -535,7 +544,9 @@ class ChannelSession:
             logger.warning("could not close Claude Code in %s: %s", self.channel_id, describe(exc))
 
     async def _connect(self, session_id: str | None) -> ClaudeClient:
-        options = client_options(self.directory, session_id, self._can_use_tool, self._on_stop)
+        options = client_options(
+            self.directory, session_id, self._can_use_tool, self._on_stop, self._on_tool_done
+        )
         client = self._deps.client_factory(options)
         await client.connect()
         return client
@@ -918,9 +929,19 @@ class ChannelSession:
         effort = cast(dict[str, Any], hook_input).get("effort")
         self.effort = effort.get("level") if isinstance(effort, dict) else None
         self.effort_reported = True
-        cwd = hook_input.get("cwd")
-        self.working_directory = Path(cwd) if cwd else None
+        self._note_cwd(hook_input)
         return {}
+
+    async def _on_tool_done(
+        self, hook_input: HookInput, tool_use_id: str | None, context: HookContext
+    ) -> HookJSONOutput:
+        self._note_cwd(hook_input)
+        return {}
+
+    def _note_cwd(self, hook_input: HookInput) -> None:
+        cwd = hook_input.get("cwd")
+        if cwd:
+            self.working_directory = Path(cwd)
 
     async def _can_use_tool(
         self, tool_name: str, tool_input: dict[str, Any], context: ToolPermissionContext

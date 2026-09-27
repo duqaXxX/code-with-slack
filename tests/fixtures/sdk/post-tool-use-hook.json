@@ -1,0 +1,22 @@
+{
+  "session_id": "68da9311-c5e1-4465-a7e5-75d74e30aaa4",
+  "transcript_path": "/home/dev/.claude/projects/-home-dev-project/68da9311-c5e1-4465-a7e5-75d74e30aaa4.jsonl",
+  "cwd": "/home/dev/project",
+  "prompt_id": "00000000-0000-4000-8000-000000000001",
+  "permission_mode": "bypassPermissions",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "echo ok",
+    "description": "Verify basic command execution"
+  },
+  "tool_response": {
+    "stdout": "ok",
+    "stderr": "",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false
+  },
+  "tool_use_id": "toolu_01AAAAAAAAAAAAAAAAAAAAAA",
+  "duration_ms": 49
+}

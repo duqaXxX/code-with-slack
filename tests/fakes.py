@@ -69,10 +69,12 @@ class CanUseToolCall:
 
 
 @dataclass(frozen=True)
-class StopHook:
-    """A point in a scripted turn where the CLI runs the host's Stop hooks, before the result."""
+class HookRun:
+    """A point in a scripted turn where the CLI runs the host's hooks for `event`: Stop before
+    the result, PostToolUse after a tool."""
 
     input: dict[str, Any]
+    event: str = "Stop"
 
 
 class FakeClaudeClient:
@@ -82,7 +84,7 @@ class FakeClaudeClient:
         self,
         options: ClaudeAgentOptions,
         *,
-        turns: list[list[Message | CanUseToolCall | StopHook | EndOfStream]] | None = None,
+        turns: list[list[Message | CanUseToolCall | HookRun | EndOfStream]] | None = None,
         server_info: dict[str, Any] | None = None,
         context_usage: dict[str, Any] | None = None,
         connect_error: Exception | None = None,
@@ -93,7 +95,7 @@ class FakeClaudeClient:
     ) -> None:
         self.options = options
         self._turns = list(turns or [])
-        self._feed: asyncio.Queue[list[Message | CanUseToolCall | StopHook | EndOfStream]] = (
+        self._feed: asyncio.Queue[list[Message | CanUseToolCall | HookRun | EndOfStream]] = (
             asyncio.Queue()
         )
         self._server_info = server_info or {
@@ -132,7 +134,7 @@ class FakeClaudeClient:
         if self._turns:
             self._feed.put_nowait(self._turns.pop(0))
 
-    def inject(self, batch: list[Message | CanUseToolCall | StopHook | EndOfStream]) -> None:
+    def inject(self, batch: list[Message | CanUseToolCall | HookRun | EndOfStream]) -> None:
         """Deliver a turn nobody asked for, as the CLI does for a background-task notification."""
         self._feed.put_nowait(batch)
 
@@ -150,8 +152,8 @@ class FakeClaudeClient:
                         ToolPermissionContext(tool_use_id=item.tool_use_id),
                     )
                     self.permission_results.append(result)
-                elif isinstance(item, StopHook):
-                    for matcher in (self.options.hooks or {}).get("Stop", []):
+                elif isinstance(item, HookRun):
+                    for matcher in (self.options.hooks or {}).get(item.event, []):
                         for callback in matcher.hooks:
                             await callback(item.input, None, {"signal": None})  # type: ignore[arg-type]
                 else:

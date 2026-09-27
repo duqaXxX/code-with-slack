@@ -16,7 +16,9 @@ from claude_agent_sdk import (
     RateLimitEvent,
     ResultError,
     ResultMessage,
+    ToolResultBlock,
     ToolUseBlock,
+    UserMessage,
 )
 from claude_agent_sdk._internal.message_parser import parse_message
 from claude_agent_sdk.types import (
@@ -44,7 +46,7 @@ from tests.fakes import (
     EndOfStream,
     FakeClaudeClient,
     FakeSlack,
-    StopHook,
+    HookRun,
     sdk_json,
     sdk_messages,
     split_turns,
@@ -824,7 +826,7 @@ async def test_the_footer_follows_an_effort_set_from_slack(
 
 def with_stop_hook(turn: list[Message], hook_input: dict[str, Any]) -> list[Any]:
     """A recorded turn with the CLI's Stop hook call where the CLI makes it: before the result."""
-    return [*turn[:-1], StopHook(hook_input), turn[-1]]
+    return [*turn[:-1], HookRun(hook_input), turn[-1]]
 
 
 async def test_the_footer_shows_the_effort_claude_code_reports(
@@ -1147,6 +1149,29 @@ async def test_the_footer_follows_the_folder_the_session_works_in(
     values = lines[lines.index("Now: idle") + 1 :]
     assert values[0] == f"Working in: `{repo}`"
     assert "Branch: `feature-x`" in values and "Uncommitted: `(+0,-0)`" in values
+
+
+async def test_a_tool_s_hook_moves_the_branch_when_no_stop_hook_runs(
+    harness_for: Callable[..., Harness], tmp_path: Path, repo: Path
+) -> None:
+    # A turn stopped or failed runs no Stop hook; PostToolUse still reports where the session
+    # went after the tool (measured 2026-09-27 on 2.1.283), so the footer is not left behind.
+    messages = sdk_messages("tools")
+    first_result = next(
+        i
+        for i, m in enumerate(messages)
+        if isinstance(m, UserMessage)
+        and isinstance(m.content, list)
+        and any(isinstance(b, ToolResultBlock) for b in m.content)
+    )
+    moved = {**sdk_json("post-tool-use-hook"), "cwd": str(repo)}
+    hook = HookRun(moved, "PostToolUse")
+    turn = [*messages[: first_result + 1], hook, *messages[first_result + 1 :]]
+    h = harness_for({"turns": [turn]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
+    assert f" · {tmp_path.name} · feature-x · (+0,-0) · " in statuses(h)[-1]
+    assert session.working_directory == repo
 
 
 async def test_a_restarted_client_starts_again_in_the_bound_folder(

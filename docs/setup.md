@@ -337,7 +337,7 @@ limits with the time to each reset, which exist only with a claude.ai subscripti
 (`effort`, `tok`, `ctx`, `5h`, `7d`) are bold. A field that is not known is left out.
 The folder is the one the channel is bound to. The branch and the changes are those of the folder
 the session works in: the channel's at first, then the one Claude moved to with `cd` or a
-worktree, as Claude Code reported it at the end of the last turn; `!status` names that folder when
+worktree, as Claude Code reported it after its last tool; `!status` names that folder when
 it is not the channel's. The effort level is the
 one Claude Code reported at the end of the last turn, or the one set since with `!effort` (or
 `!model`); it reads `default` on a model that takes no effort level, and is left out after a

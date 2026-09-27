@@ -10,7 +10,7 @@ All notable changes to this project are documented here. The format follows
 - The footer and `!status` show the lines changed since the last commit next to the branch,
   `(+42,-10)`, counted as the terminal's ccstatusline counts them (#39), and the time to the
   weekly limit's reset, `7d 45% ↻ 3d 4h`, as they already did for the 5-hour one (#42).
-- Probe claim P14: the Stop hook's `cwd` follows a `cd`, which the footer's branch depends on.
+- Probe claim P14: a hook's `cwd` follows a `cd`, which the footer's branch depends on.
 
 ### Changed
 
@@ -28,7 +28,8 @@ All notable changes to this project are documented here. The format follows
 - The footer's branch read the channel's folder, not the folder the session works in: a channel
   bound to a folder holding its repo one level down showed no branch, and a session that moved
   to a worktree showed the old one (#37). The branch and the changes now follow the `cwd` Claude
-  Code reports at the end of each turn, while the folder shown stays the channel's, and
+  Code reports after each tool and at the end of each turn, while the folder shown stays the
+  channel's, and
   `!status` names the session's folder when it is not the channel's.
 
 - A background task that never ends (a dev server, a watcher) held a restart for the full 29

@@ -39,7 +39,8 @@ RESET = re.compile(
 EFFORT_OUTPUT = re.compile(r"^(?:Set effort level to|Effort level set to) ([a-z0-9-]+)", re.I)
 MODEL_OUTPUT = re.compile(r"^Set model to\b(?:.*? with ([a-z0-9-]+) effort)?", re.I | re.S)
 MONTHS = {name: i for i, name in enumerate(calendar.month_abbr) if name}
-# ` 2 files changed, 42 insertions(+), 10 deletions(-)`, git 2.54 (2026-09-27).
+# ` 2 files changed, 42 insertions(+), 10 deletions(-)`, as every --shortstat writes it, git 2.54
+# (2026-09-27).
 SHORTSTAT_INSERTIONS = re.compile(r"(\d+) insertions?\(\+\)")
 SHORTSTAT_DELETIONS = re.compile(r"(\d+) deletions?\(-\)")
 
@@ -191,7 +192,7 @@ async def git_branch(cwd: Path) -> str | None:
 
 
 def shortstat_lines(out: str) -> tuple[int, int]:
-    """Insertions and deletions from `git diff --shortstat`, which leaves out a zero count."""
+    """Insertions and deletions from a `--shortstat`, which leaves out a zero count."""
     insertions = SHORTSTAT_INSERTIONS.search(out)
     deletions = SHORTSTAT_DELETIONS.search(out)
     return (int(insertions[1]) if insertions else 0, int(deletions[1]) if deletions else 0)
@@ -199,12 +200,23 @@ def shortstat_lines(out: str) -> tuple[int, int]:
 
 async def git_changes(cwd: Path) -> tuple[int, int] | None:
     """Lines inserted and deleted since the last commit, staged and unstaged, as ccstatusline's
-    git-changes counts them for the terminal (untracked files not counted). None outside a repo."""
-    unstaged, staged = await asyncio.gather(
-        _git(cwd, "diff", "--shortstat"), _git(cwd, "diff", "--cached", "--shortstat")
-    )
-    if unstaged is None or staged is None:
+    git-changes counts them for the terminal (untracked files not counted). None outside a repo.
+
+    Plumbing only: `git diff` refreshes and rewrites the index under `index.lock` (measured on
+    git 2.54, `--no-optional-locks` included), and a lock left by a killed diff would stop every
+    `git add` and commit in the repo. `diff-files` and `diff-index` never write it."""
+    unstaged = await _git(cwd, "diff-files", "--shortstat")
+    if unstaged is None:
         return None
+    staged = await _git(cwd, "diff-index", "--cached", "--shortstat", "HEAD")
+    if staged is None:
+        # No commit yet: what is staged is compared with the empty tree, as `git diff --cached`.
+        empty = await _git(cwd, "hash-object", "-t", "tree", "/dev/null")
+        if empty is None:
+            return None
+        staged = await _git(cwd, "diff-index", "--cached", "--shortstat", empty.strip())
+        if staged is None:
+            return None
     (added, removed), (added_staged, removed_staged) = map(shortstat_lines, (unstaged, staged))
     return added + added_staged, removed + removed_staged
 

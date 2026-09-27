@@ -1,5 +1,7 @@
 import logging
+import os
 import subprocess
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -351,3 +353,17 @@ async def test_git_changes_do_not_run_the_repo_s_fsmonitor(repo: Path, tmp_path:
     git(repo, "config", "core.fsmonitor", f"touch {marker}; false")
     assert await git_changes(repo) == (1, 0)
     assert not marker.exists()
+
+
+async def test_git_changes_never_write_the_index(repo: Path) -> None:
+    # `git diff` would refresh a stale index under index.lock; a killed one would leave the lock
+    # and stop every commit in the repo (measured on git 2.54, 2026-09-27).
+    (repo / "a.txt").write_text("one\n")
+    git(repo, "add", ".")
+    git(repo, "-c", "user.name=alice", "-c", "user.email=alice@example.com", "commit", "-qm", "x")
+    index = repo / ".git" / "index"
+    before = index.stat().st_mtime_ns
+    later = time.time() + 10
+    os.utime(repo / "a.txt", (later, later))  # stat-dirty: a refresh would rewrite the index
+    assert await git_changes(repo) == (0, 0)
+    assert index.stat().st_mtime_ns == before

@@ -197,11 +197,15 @@ the model from the SDK's `get_context_usage()`, the effort level, the name of th
 directory, the git branch and the uncommitted changes of the folder the session works in, the
 session's tokens from the turn's `ResultMessage.model_usage`, the context percentage from
 `get_context_usage()`, and the 5-hour and weekly limits with the time to each reset. The folder the session works in is
-the `cwd` of the same `Stop` hook's input, which follows a `cd` and a worktree
-(`ChannelSession.working_directory`); until a turn reports it, and again after the client
-restarts, it is the channel's directory. The changes are the lines inserted and deleted since the
-last commit, staged and unstaged (`git diff --shortstat` and `git diff --cached --shortstat`,
-untracked files not counted), as ccstatusline's git-changes counts them; git runs there with
+the `cwd` of the latest hook input, which follows a `cd` and a worktree
+(`ChannelSession.working_directory`): the same `Stop` hook, and a `PostToolUse` hook after every
+tool, so a turn stopped or failed before its `Stop` still moves it. Until a hook reports it, and
+again after the client restarts, it is the channel's directory. The changes are the lines
+inserted and deleted since the last commit, staged and unstaged, untracked files not counted, as
+ccstatusline's git-changes counts them. They come from plumbing commands (`git diff-files
+--shortstat` and `git diff-index --cached --shortstat HEAD`, the empty tree before a first
+commit), which never write the index: `git diff` refreshes it under `index.lock`, and a diff
+killed at `GIT_TIMEOUT` would leave the lock behind and stop every commit. git runs there with
 `core.fsmonitor` off, so a repo's own configuration runs no command. The effort level is the one Claude Code reports in the input of a
 `Stop` hook the daemon registers on each client (`effort.level`); `/effort` and `/model` run no
 hook, so after one of them the footer follows its output (`Set effort level to ...`). Until Claude

@@ -154,8 +154,8 @@ CLAIMS = [
     Claim(
         "P14",
         "model",
-        "the Stop hook's `cwd` follows a `cd`, so the footer shows that folder's branch",
-        "code_with_slack.sessions.ChannelSession._on_stop",
+        "a hook's `cwd` follows a `cd`, so the footer shows that folder's branch",
+        "code_with_slack.sessions.ChannelSession._note_cwd",
         "bind a folder holding a repo one level down, ask Claude to `cd` into it; the footer "
         "shows the repo's branch",
     ),
