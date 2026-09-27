@@ -25,8 +25,6 @@ USAGE_TTL = 300.0
 # `/usage` answers in seconds; past this the probe gives up, so the footer never stops refreshing.
 USAGE_TIMEOUT = 60.0
 GIT_TIMEOUT = 5.0
-# The fields that follow the folder at the end of the footer's first line.
-PLACE = ("Branch", "Uncommitted")
 # Wording measured on Claude Code 2.1.280 (2026-09-23). A change hides the field, nothing more.
 SESSION_LINE = re.compile(r"^Current session: (\d+)% used(?: · resets (.+))?$", re.M)
 WEEK_LINE = re.compile(r"^Current week \(all models\): (\d+)% used(?: · resets (.+))?$", re.M)
@@ -283,13 +281,13 @@ def format_limit(limit: Limit, now: datetime) -> str:
 
 @dataclass(frozen=True)
 class FooterField:
-    """One of the footer's values: `!status` shows `label: value`, the footer `short`. `usage`
-    fields (context and limits) make the footer's second line, the others its first."""
+    """One of the footer's values: `!status` shows `label: value`, the footer `short` on its
+    `line`: 0 the session, 1 where it works (after the folder), 2 context and limits."""
 
     label: str
     value: str
     short: str
-    usage: bool = False
+    line: int = 0
 
 
 def footer_fields(data: FooterData, now: datetime) -> list[FooterField]:
@@ -304,19 +302,19 @@ def footer_fields(data: FooterData, now: datetime) -> list[FooterField]:
         tokens = format_tokens(data.session_tokens)
         fields.append(FooterField("Session tokens", tokens, f"{tokens} tok"))
     if data.branch:
-        fields.append(FooterField("Branch", data.branch, mrkdwn_escape(data.branch)))
+        fields.append(FooterField("Branch", data.branch, mrkdwn_escape(data.branch), line=1))
     if data.changes is not None:
         changes = f"(+{data.changes[0]},-{data.changes[1]})"
-        fields.append(FooterField("Uncommitted", changes, changes))
+        fields.append(FooterField("Uncommitted", changes, changes, line=1))
     if data.context_percent is not None:
         context = f"{data.context_percent:.0f}%"
-        fields.append(FooterField("Context", context, f"ctx {context}", usage=True))
+        fields.append(FooterField("Context", context, f"ctx {context}", line=2))
     if data.usage and data.usage.session:
         session = format_limit(data.usage.session, now)
-        fields.append(FooterField("5h limit", session, f"5h {session}", usage=True))
+        fields.append(FooterField("5h limit", session, f"5h {session}", line=2))
     if data.usage and data.usage.week:
         week = format_limit(data.usage.week, now)
-        fields.append(FooterField("7d limit", week, f"7d {week}", usage=True))
+        fields.append(FooterField("7d limit", week, f"7d {week}", line=2))
     return fields
 
 
@@ -327,16 +325,14 @@ def format_status_fields(data: FooterData, now: datetime) -> list[str]:
 
 
 def format_footer(data: FooterData, now: datetime) -> str:
-    """Two lines: bypass, model, effort, tokens, then the channel's folder, branch and changes;
-    below, context and limits, which a phone would otherwise cut mid-line (the owner's layout)."""
-    fields = footer_fields(data, now)
-    first = ["⚡ bypass"] if data.bypass else []
-    first += [f.short for f in fields if not f.usage and f.label not in PLACE]
+    """Three lines, so a phone never wraps a field (the owner's layout): bypass, model, effort
+    and tokens; the channel's folder, branch and changes; context and limits."""
+    lines: list[list[str]] = [["⚡ bypass"] if data.bypass else [], [], []]
     if data.directory is not None:
         # Its last two names, as the owner's terminal status line shows a folder.
         names = [part for part in data.directory.parts if part != data.directory.anchor][-2:]
         if names:
-            first.append(mrkdwn_escape("/".join(names)))
-    first += [f.short for f in fields if f.label in PLACE]
-    second = [f.short for f in fields if f.usage]
-    return "\n".join(filter(None, (" · ".join(first), " · ".join(second))))
+            lines[1].append(mrkdwn_escape("/".join(names)))
+    for field in footer_fields(data, now):
+        lines[field.line].append(field.short)
+    return "\n".join(" · ".join(parts) for parts in lines if parts)

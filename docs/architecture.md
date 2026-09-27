@@ -192,13 +192,13 @@ shown, and the tool's line records the denial.
 
 ## Footer
 
-Every reply ends with a context block of two lines (`footer.format_footer`). The first: `⚡ bypass`
-when bypass is on, the model from the SDK's `get_context_usage()`, the effort level, the session's
-tokens from the turn's `ResultMessage.model_usage`, the last two names of the channel's directory
-(as a terminal status line such as ccstatusline shows a folder), then the git branch and the
-uncommitted changes of the folder the session works in. The second: the context percentage from
-`get_context_usage()` and the 5-hour and weekly limits with the time to each reset; a `FooterField`
-marked `usage` goes there. The folder the session works in is
+Every reply ends with a context block of three lines (`footer.format_footer`), each field on the
+line its `FooterField.line` names. The first: `⚡ bypass` when bypass is on, the model from the
+SDK's `get_context_usage()`, the effort level, the session's tokens from the turn's
+`ResultMessage.model_usage`. The second: the last two names of the channel's directory (as a
+terminal status line such as ccstatusline shows a folder), then the git branch and the
+uncommitted changes of the folder the session works in. The third: the context percentage from
+`get_context_usage()` and the 5-hour and weekly limits with the time to each reset. The folder the session works in is
 the `cwd` of the same `Stop` hook's input, which follows a `cd` and a worktree
 (`ChannelSession.working_directory`); until a turn reports it, and again after the client
 restarts, it is the channel's directory. The changes are the lines inserted and deleted since the

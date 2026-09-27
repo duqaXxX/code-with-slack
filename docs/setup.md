@@ -319,17 +319,19 @@ in the terminal: that reply opens with Claude Code's own line for the task's end
 `✓ Agent "review" finished · 3m 59s`. While tasks run, the footer counts them, such as
 `⏳ 1 shell · 1 agent`.
 
-The channel's latest reply ends with a footer of two lines, which moves to each new reply:
+The channel's latest reply ends with a footer of three lines, which moves to each new reply:
 
 ```
-⚡ bypass · claude-opus-5-5 · effort medium · 10.2M tok · code/my-project · main · (+42,-10)
+⚡ bypass · claude-opus-5-5 · effort medium · 10.2M tok
+code/my-project · main · (+42,-10)
 ctx 15% · 5h 16% ↻ 43m · 7d 46% ↻ 3d 4h
 ```
 
-The first line holds `⚡ bypass` when bypass is on, the model, the effort level, the session's
-tokens, the channel's folder by its last two names, the git branch and the lines changed since
-the last commit (untracked files not counted). The second holds the context used and the 5-hour
-and weekly limits with the time to each reset, which exist only with a claude.ai subscription.
+The first line holds `⚡ bypass` when bypass is on, the model, the effort level and the session's
+tokens. The second holds the channel's folder by its last two names, the git branch and the lines
+changed since the last commit (untracked files not counted). The third holds the context used and
+the 5-hour and weekly limits with the time to each reset, which exist only with a claude.ai
+subscription. A line with nothing known is left out.
 The folder is the one the channel is bound to. The branch and the changes are those of the folder
 the session works in: the channel's at first, then the one Claude moved to with `cd` or a
 worktree, as Claude Code reported it at the end of the last turn; `!status` names that folder when

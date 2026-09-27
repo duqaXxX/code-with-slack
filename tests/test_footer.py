@@ -78,7 +78,7 @@ def test_full_footer() -> None:
         usage=usage,
     )
     assert format_footer(data, NOW) == (
-        "⚡ bypass · claude-opus-5-5 · 12.3k tok · main\nctx 6% · 5h 3% ↻ 2h · 7d 25%"
+        "⚡ bypass · claude-opus-5-5 · 12.3k tok\nmain\nctx 6% · 5h 3% ↻ 2h · 7d 25%"
     )
 
 
@@ -151,7 +151,7 @@ def test_the_changes_follow_the_branch_in_the_footer_and_the_status() -> None:
         usage=None,
         changes=(42, 10),
     )
-    assert format_footer(data, NOW) == "claude-opus-5-5 · main · (+42,-10)"
+    assert format_footer(data, NOW) == "claude-opus-5-5\nmain · (+42,-10)"
     assert format_status_fields(data, NOW) == [
         "Model: `claude-opus-5-5`",
         "Branch: `main`",
@@ -293,7 +293,7 @@ def test_the_footer_shows_the_effort_after_the_model() -> None:
         usage=None,
         effort="high",
     )
-    assert format_footer(data, NOW) == "claude-opus-5-5 · effort high · main"
+    assert format_footer(data, NOW) == "claude-opus-5-5 · effort high\nmain"
 
 
 async def test_a_usage_probe_with_no_answer_gives_up_and_closes(
@@ -316,7 +316,7 @@ async def test_a_usage_probe_with_no_answer_gives_up_and_closes(
     ("directory", "shown"),
     [("/srv/alice/code/app", "code/app"), ("/app", "app"), ("/", None), ("code/app", "code/app")],
 )
-def test_the_folder_s_last_two_names_come_before_the_branch(directory: str, shown: str) -> None:
+def test_the_folder_s_last_two_names_open_the_second_line(directory: str, shown: str) -> None:
     # As the owner's terminal status line shows it (ccstatusline current-working-dir, 2 segments;
     # the maintainer, 2026-09-25).
     data = FooterData(
