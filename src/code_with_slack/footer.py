@@ -283,7 +283,8 @@ def format_limit(limit: Limit, now: datetime) -> str:
 
 @dataclass(frozen=True)
 class FooterField:
-    """One of the footer's values: `!status` shows `label: value`, the footer `short`."""
+    """One of the footer's values: `!status` shows `label: value`, the footer `short`, whose
+    label is bold (`*ctx* 15%`, the owner's choice)."""
 
     label: str
     value: str
@@ -297,7 +298,7 @@ def footer_fields(data: FooterData, now: datetime) -> list[FooterField]:
     if data.model:
         fields.append(FooterField("Model", data.model, data.model))
     if data.effort:
-        fields.append(FooterField("Effort", data.effort, f"effort {data.effort}"))
+        fields.append(FooterField("Effort", data.effort, f"*effort* {data.effort}"))
     if data.branch:
         fields.append(FooterField("Branch", data.branch, mrkdwn_escape(data.branch)))
     if data.changes is not None:
@@ -305,16 +306,16 @@ def footer_fields(data: FooterData, now: datetime) -> list[FooterField]:
         fields.append(FooterField("Uncommitted", changes, changes))
     if data.session_tokens is not None:
         tokens = format_tokens(data.session_tokens)
-        fields.append(FooterField("Session tokens", tokens, f"{tokens} tok"))
+        fields.append(FooterField("Session tokens", tokens, f"{tokens} *tok*"))
     if data.context_percent is not None:
         context = f"{data.context_percent:.0f}%"
-        fields.append(FooterField("Context", context, f"ctx {context}"))
+        fields.append(FooterField("Context", context, f"*ctx* {context}"))
     if data.usage and data.usage.session:
         session = format_limit(data.usage.session, now)
-        fields.append(FooterField("5h limit", session, f"5h {session}"))
+        fields.append(FooterField("5h limit", session, f"*5h* {session}"))
     if data.usage and data.usage.week:
         week = format_limit(data.usage.week, now)
-        fields.append(FooterField("7d limit", week, f"7d {week}"))
+        fields.append(FooterField("7d limit", week, f"*7d* {week}"))
     return fields
 
 

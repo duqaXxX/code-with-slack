@@ -79,7 +79,7 @@ def test_full_footer() -> None:
         usage=usage,
     )
     assert format_footer(data, NOW) == (
-        "⚡ bypass · claude-opus-5-5 · main · 12.3k tok · ctx 6% · 5h 3% ↻ 2h · 7d 25%"
+        "⚡ bypass · claude-opus-5-5 · main · 12.3k *tok* · *ctx* 6% · *5h* 3% ↻ 2h · *7d* 25%"
     )
 
 
@@ -124,7 +124,7 @@ def test_the_weekly_limit_shows_its_reset_in_the_footer_and_the_status() -> None
         session_tokens=None,
         usage=Usage(None, week),
     )
-    assert format_footer(data, NOW) == "7d 45% ↻ 3d 4h"  # the second line, alone
+    assert format_footer(data, NOW) == "*7d* 45% ↻ 3d 4h"
     assert format_status_fields(data, NOW) == ["7d limit: `45% ↻ 3d 4h`"]
 
 
@@ -294,7 +294,7 @@ def test_the_footer_shows_the_effort_after_the_model() -> None:
         usage=None,
         effort="high",
     )
-    assert format_footer(data, NOW) == "claude-opus-5-5 · effort high · main"
+    assert format_footer(data, NOW) == "claude-opus-5-5 · *effort* high · main"
 
 
 async def test_a_usage_probe_with_no_answer_gives_up_and_closes(

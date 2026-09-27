@@ -328,8 +328,8 @@ The channel's latest reply ends with a footer, which moves to each new reply:
 It holds `⚡ bypass` when bypass is on, the model, the effort level, the name of the channel's
 folder (its whole path is on `!status`), the git branch, the lines changed since the last commit
 (untracked files not counted), the session's tokens, the context used, and the 5-hour and weekly
-limits with the time to each reset, which exist only with a claude.ai subscription. A field that
-is not known is left out.
+limits with the time to each reset, which exist only with a claude.ai subscription. The labels
+(`effort`, `tok`, `ctx`, `5h`, `7d`) are bold. A field that is not known is left out.
 The folder is the one the channel is bound to. The branch and the changes are those of the folder
 the session works in: the channel's at first, then the one Claude moved to with `cd` or a
 worktree, as Claude Code reported it at the end of the last turn; `!status` names that folder when

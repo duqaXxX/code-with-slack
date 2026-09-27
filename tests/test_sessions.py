@@ -819,7 +819,7 @@ async def test_the_footer_follows_an_effort_set_from_slack(
     session = h.session()
     await asyncio.wait_for((await session.submit("/effort high")).done.wait(), 2)
     await asyncio.wait_for((await session.submit("next")).done.wait(), 2)
-    assert "effort high" in statuses(h)[-1]
+    assert "*effort* high" in statuses(h)[-1]
 
 
 def with_stop_hook(turn: list[Message], hook_input: dict[str, Any]) -> list[Any]:
@@ -837,7 +837,7 @@ async def test_the_footer_shows_the_effort_claude_code_reports(
     hook_input = sdk_json("stop-hook")
     h = harness_for({"turns": [with_stop_hook(sdk_messages("tools"), hook_input)]})
     await asyncio.wait_for((await h.session().submit("list the files")).done.wait(), 2)
-    assert "effort medium" in statuses(h)[-1]
+    assert "*effort* medium" in statuses(h)[-1]
 
 
 async def test_the_footer_leaves_out_the_effort_until_claude_code_reports_it(
@@ -856,7 +856,7 @@ async def test_the_footer_says_default_when_claude_code_reports_no_effort(
     hook_input = {k: v for k, v in sdk_json("stop-hook").items() if k != "effort"}
     h = harness_for({"turns": [with_stop_hook(sdk_messages("tools"), hook_input)]})
     await asyncio.wait_for((await h.session().submit("list the files")).done.wait(), 2)
-    assert "effort default" in statuses(h)[-1]
+    assert "*effort* default" in statuses(h)[-1]
 
 
 async def test_an_effort_set_before_a_restart_is_not_carried_over(
@@ -877,10 +877,10 @@ async def test_an_effort_set_before_a_restart_is_not_carried_over(
         {"turns": [with_stop_hook(sdk_messages("tools"), sdk_json("stop-hook"))]},
     )
     await asyncio.wait_for((await h.session().submit("/effort low")).done.wait(), 2)
-    assert "effort low" in statuses(h)[-1]
+    assert "*effort* low" in statuses(h)[-1]
     await h.manager.close_all()
     await asyncio.wait_for((await h.session().submit("next")).done.wait(), 2)
-    assert "effort medium" in statuses(h)[-1]
+    assert "*effort* medium" in statuses(h)[-1]
 
 
 async def test_an_approval_slack_refuses_to_show_is_denied_and_logged(
@@ -933,7 +933,7 @@ async def test_a_usage_entry_without_a_token_count_still_gets_a_footer(
     h = harness_for({"turns": [[*messages[:-1], trimmed]]})
     turn = await h.session().submit("list the files")
     await asyncio.wait_for(turn.done.wait(), 2)
-    assert "1.5k tok" in statuses(h)[-1]
+    assert "1.5k *tok*" in statuses(h)[-1]
 
 
 async def test_a_context_usage_failure_is_logged(
@@ -1139,7 +1139,7 @@ async def test_the_footer_follows_the_folder_the_session_works_in(
     session = h.session()
     await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
     assert re.search(
-        rf" · {re.escape(tmp_path.name)} · feature-x · \(\+0,-0\) · [\d.]+[kM]? tok · ctx ",
+        rf" · {re.escape(tmp_path.name)} · feature-x · \(\+0,-0\) · [\d.]+[kM]? \*tok\* · \*ctx\* ",
         statuses(h)[-1],
     )
     lines = (await session.status()).splitlines()
@@ -1173,7 +1173,7 @@ async def test_status_lists_the_footer_s_values_of_the_latest_reply(
     await until(lambda: h.usage_fetches == 1)  # the turn's own refresh of the limits
     text = await session.status()
     assert text.startswith("Directory:") and "Claude Code: `2.1.283`" in text
-    tokens = re.search(r"([\d.]+[kM]?) tok", statuses(h)[-1])
+    tokens = re.search(r"([\d.]+[kM]?) \*tok\*", statuses(h)[-1])
     assert tokens is not None
     lines = text.splitlines()
     assert lines[lines.index("Now: idle") + 1 :] == [

@@ -16,7 +16,8 @@ All notable changes to this project are documented here. The format follows
 
 - The footer's order: model and effort, the folder, branch and changes, then tokens, context
   and limits; `!status` lists its values in the same order. The folder shows by its name alone,
-  its whole path staying on `!status`.
+  its whole path staying on `!status`, and the labels (`effort`, `tok`, `ctx`, `5h`, `7d`) are
+  bold.
 
 ### Fixed
 
