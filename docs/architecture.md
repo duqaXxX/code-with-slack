@@ -120,8 +120,20 @@ text as Claude writes it, and the tool calls where they happen. Claude's text is
 block; each run of tool calls between two pieces of text is a `context` block (small, grey text,
 as the terminal dims them), escaped for mrkdwn and marked with a `tools-` block id.
 `sinks.tool_lines` shows such a run the same way while the turn runs and once it ends: the calls
-that ended fold into one first line of tool names and counts, by the tool's name whatever the
-tool, succeeded ones after `✓` and failed ones after `✗` (`✓ Bash ×3 · Read · ✗ Bash`). Below
+that ended fold into one first line of tool names and counts, succeeded ones after `✓` and
+failed ones after `✗`, in the terminal's words where the terminal has words
+(`render.previews.folded`: `✓ Ran 3 shell commands · Read 1 file · WebFetch · ✗ Ran 1 shell
+command`) and by the tool's name for any other tool. A finished `Edit` or `Write` does not fold:
+it shows as the terminal shows it (`render.previews.preview`), its line (`✓ Update(notes.txt)`,
+then `⎿ Added 1 line, removed 1 line`) followed by a `markdown` code block with the numbered diff
+(fenced as `diff`, which Slack desktop colours; each changed line also carries a red or green
+square after its sign, since Slack mobile colours nothing), up to `previews.DIFF_LINES` (20) lines
+and then `… +N lines`, or a new file's first 10 lines and `… +N lines`. The terminal shows a diff
+whole; the cap is there because Slack mobile wraps each long line of a code block into several,
+and Slack offers no horizontal scroll. The calls before and after it fold on their own,
+as in the terminal. The preview reads `UserMessage.tool_use_result`, which the SDK does not
+document; any shape other than the one measured falls back to the generic line, and the release
+probe's claim P13 checks the shape on each new SDK. Below
 it, a line of its own for a call still running (`⏳` and its title), a task
 (`TaskUpdate.task`: a subagent, a background command, with its own `✓` or `✗` and summary once
 it ends) and a stopped call (`Stopped`). While the reply is written, the last call of the last
@@ -169,7 +181,11 @@ The picked labels, with the text typed under Other as the answer itself, go back
 answers. The modal carries no channel: each click in it is checked against the owner, the
 workspace, and the channel its request was posted in. Each request has a random id that only its buttons carry; a click resolves it
 once, only from the channel it was posted in, and only after the identity and channel guards.
-Once decided, the request message is deleted: the tool's line in the reply records the call.
+Once decided, the request message is deleted: the tool's line in the reply records the call. An
+answered question is kept instead, rewritten with no buttons as the terminal keeps it
+(`approvals.answered_blocks`: `User answered Claude's questions:`, then `⎿ · question → answer`,
+cut at Slack's 3,000 characters); if Slack refuses that rewrite, the request is deleted, so no
+button is left that no longer works.
 `!stop` denies every request still pending in the channel and deletes its message. A request
 Slack does not accept is denied at once, with a message telling Claude Code that it could not be
 shown, and the tool's line records the denial.

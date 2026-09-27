@@ -727,10 +727,10 @@ class ChannelSession:
             self._expiry.cancel()
         turn = None if injected else self._sent.popleft()
         if turn is None:
-            renderer = TurnRenderer(await self._sink())
+            renderer = TurnRenderer(await self._sink(), str(self.directory))
             await renderer.feed_notice(self._opening())
         else:
-            renderer = TurnRenderer(turn.sink)
+            renderer = TurnRenderer(turn.sink, str(self.directory))
             await turn.sink.announce(texts.WRITING)
         if self._notice is not None:
             await renderer.feed_notice(self._notice)
@@ -743,7 +743,7 @@ class ChannelSession:
     async def _standalone(self, messages: list[Message]) -> None:
         if not messages:
             return
-        renderer = TurnRenderer(await self._sink())
+        renderer = TurnRenderer(await self._sink(), str(self.directory))
         await renderer.feed_notice(self._opening())
         for message in messages:
             await renderer.feed(message)

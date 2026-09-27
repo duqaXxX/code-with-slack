@@ -235,7 +235,7 @@ async def test_finished_tool_lines_collapse_into_one(slack: FakeSlack) -> None:
         await sink.task(update)
     await sink.text("Done.")
     await sink.finish([], None)
-    assert slack.message_texts() == ["✓ Bash · Read \u00d72 · Grep\n\nDone."]
+    assert slack.message_texts() == ["✓ Ran 1 shell command · Read 2 files · Grep\n\nDone."]
 
 
 async def test_failed_calls_are_counted_and_running_task_and_stopped_lines_stay_whole(
@@ -251,7 +251,8 @@ async def test_failed_calls_are_counted_and_running_task_and_stopped_lines_stay_
     await sink.task(tool("g", "Grep", output=STOPPED))
     await sink.finish([], None)
     assert slack.message_texts() == [
-        "✓ Bash · Read · ✗ Edit · Bash\n⏳ `Bash: b`\n✓ `Agent: d`\n✓ `Grep: g` · Stopped"
+        "✓ Ran 1 shell command · Read 1 file · ✗ Edit · Ran 1 shell command\n"
+        "⏳ `Bash: b`\n✓ `Agent: d`\n✓ `Grep: g` · Stopped"
     ]
 
 
@@ -263,7 +264,7 @@ async def test_a_recorded_turn_counts_its_failed_calls_in_one_line(slack: FakeSl
         await renderer.feed(message)
     await renderer.close(None)
     tools = [b for b in last_blocks(slack) if str(b.get("block_id", "")).startswith("tools-")]
-    assert [sinks.block_text(b) for b in tools] == ["✗ Read · Bash"]
+    assert [sinks.block_text(b) for b in tools] == ["✗ Read 1 file · Ran 1 shell command"]
 
 
 async def test_a_long_command_in_the_foreground_folds_once_it_ends(slack: FakeSlack) -> None:
@@ -273,7 +274,7 @@ async def test_a_long_command_in_the_foreground_folds_once_it_ends(slack: FakeSl
         await renderer.feed(message)
     await renderer.close(None)
     tools = [b for b in last_blocks(slack) if str(b.get("block_id", "")).startswith("tools-")]
-    assert [sinks.block_text(b) for b in tools] == ["✓ Bash"]
+    assert [sinks.block_text(b) for b in tools] == ["✓ Ran 1 shell command"]
 
 
 async def tool_texts_of(slack: FakeSlack, name: str) -> list[str]:
@@ -340,13 +341,13 @@ async def test_lines_fold_while_the_turn_runs(slack: FakeSlack) -> None:
     await sink.task(tool("b", "Bash", "error", output="Exit code 1"))
     await sink.task(tool("c", "Read", "in_progress"))
     await asyncio.sleep(0.05)
-    assert slack.message_texts() == ["✓ Read · ✗ Bash\n⏳ `Read: c`"]
+    assert slack.message_texts() == ["✓ Read 1 file · ✗ Ran 1 shell command\n⏳ `Read: c`"]
     await sink.task(tool("c", "Read"))  # it ended, and it is still the last call: still shown
     await asyncio.sleep(0.05)
-    assert slack.message_texts() == ["✓ Read · ✗ Bash\n`Read: c`"]
+    assert slack.message_texts() == ["✓ Read 1 file · ✗ Ran 1 shell command\n`Read: c`"]
     await sink.task(tool("d", "Bash", "in_progress"))  # a new last call: the previous one folds
     await asyncio.sleep(0.05)
-    assert slack.message_texts() == ["✓ Read \u00d72 · ✗ Bash\n⏳ `Bash: d`"]
+    assert slack.message_texts() == ["✓ Read 2 files · ✗ Ran 1 shell command\n⏳ `Bash: d`"]
 
 
 async def test_the_last_call_keeps_its_icon_and_output_only_when_it_failed(
@@ -356,7 +357,7 @@ async def test_the_last_call_keeps_its_icon_and_output_only_when_it_failed(
     await sink.task(tool("a", "Read"))
     await sink.task(tool("b", "Bash", "error", output="Exit code 1"))
     await asyncio.sleep(0.05)
-    assert slack.message_texts() == ["✓ Read\n✗ `Bash: b` · Exit code 1"]
+    assert slack.message_texts() == ["✓ Read 1 file\n✗ `Bash: b` · Exit code 1"]
 
 
 async def test_the_last_call_folds_once_claude_writes_or_the_reply_ends(slack: FakeSlack) -> None:
@@ -364,13 +365,13 @@ async def test_the_last_call_folds_once_claude_writes_or_the_reply_ends(slack: F
     await sink.task(tool("a", "Read"))
     await sink.task(tool("b", "Read"))
     await asyncio.sleep(0.05)
-    assert slack.message_texts() == ["✓ Read\n`Read: b`"]
+    assert slack.message_texts() == ["✓ Read 1 file\n`Read: b`"]
     await sink.text("Found it.")  # the run is closed: nothing in it is the last call any more
     await asyncio.sleep(0.05)
-    assert slack.message_texts() == ["✓ Read \u00d72\n\nFound it."]
+    assert slack.message_texts() == ["✓ Read 2 files\n\nFound it."]
     await sink.task(tool("c", "Bash"))
     await sink.finish([], None)
-    assert slack.message_texts() == ["✓ Read \u00d72\n\nFound it.\n\n✓ Bash"]
+    assert slack.message_texts() == ["✓ Read 2 files\n\nFound it.\n\n✓ Ran 1 shell command"]
 
 
 async def test_a_reply_that_shrinks_as_calls_end_removes_its_extra_message(
@@ -388,7 +389,7 @@ async def test_a_reply_that_shrinks_as_calls_end_removes_its_extra_message(
     assert len(slack.calls_to("chat.postMessage")) == 2
     await sink.finish(ended, "footer")
     assert [a["ts"] for a in slack.calls_to("chat.delete")] == ["2.2"]
-    assert slack.message_texts()[0] == "✓ Read \u00d7300"
+    assert slack.message_texts()[0] == "✓ Read 300 files"
 
 
 async def test_tool_lines_are_secondary_text_and_claude_s_words_are_not(slack: FakeSlack) -> None:
@@ -399,7 +400,7 @@ async def test_tool_lines_are_secondary_text_and_claude_s_words_are_not(slack: F
     await sink.finish([], None)
     blocks = last_blocks(slack)
     assert [b["type"] for b in blocks] == ["markdown", "context", "markdown"]
-    assert blocks[1]["elements"][0]["text"] == "✓ Read"
+    assert blocks[1]["elements"][0]["text"] == "✓ Read 1 file"
 
 
 async def test_tool_lines_escape_what_slack_mrkdwn_reads_as_markup(slack: FakeSlack) -> None:
@@ -583,3 +584,107 @@ async def test_a_draft_rewrite_that_lands_after_the_end_changes_nothing(slack: F
     before = len(writes(slack))
     await sink._flush(final=False, footer=None)  # a debounced rewrite that was already running
     assert len(writes(slack)) == before
+
+
+async def test_an_edit_and_a_write_show_as_the_terminal_shows_them(slack: FakeSlack) -> None:
+    # edit-write.jsonl (CLI 2.1.283): Write a new file, Read, a failed Edit, an Edit, a Write over
+    # the file. The terminal showed each Edit and Write whole, with its sentence and its lines.
+    sink = reply(slack)
+    renderer = TurnRenderer(sink, "/home/dev/project")
+    for message in sdk_messages("edit-write"):
+        await renderer.feed(message)
+    await renderer.close(None)
+    body = [
+        b
+        for b in last_blocks(slack)
+        if b["type"] == "markdown" or "tools-" in b.get("block_id", "")
+    ]
+    shown = [(b["type"], sinks.block_text(b)) for b in body]
+    lines = [text for kind, text in shown if kind == "context"]
+    assert lines[0] == f"✓ `Write(new.txt)`\n{sinks.NESTED}Wrote 15 lines to new.txt"
+    assert lines[1].startswith("✓ Read 1 file · ✗ Edit")  # the failed Edit folds, as before
+    assert lines[2] == f"✓ `Update(notes.txt)`\n{sinks.NESTED}Added 1 line, removed 1 line"
+    assert lines[3] == f"✓ `Write(notes.txt)`\n{sinks.NESTED}Added 2 lines, removed 3 lines"
+    code = [text for kind, text in shown if kind == "markdown" and text.startswith("```")]
+    assert code[0].splitlines()[1:3] == [" 1 1", " 2 2"] and "… +5 lines" in code[0]
+    assert code[1] == (
+        "```diff\n    1 alpha\n-\U0001f7e5 2 beta\n+\U0001f7e9 2 gamma\n    3 delta\n```"
+    )
+    assert code[2] == (
+        "```diff\n-\U0001f7e5 1 alpha\n-\U0001f7e5 2 gamma\n-\U0001f7e5 3 delta\n"
+        "+\U0001f7e9 1 one\n+\U0001f7e9 2 two\n```"
+    )
+
+
+async def test_a_call_with_a_preview_splits_the_fold_around_it(slack: FakeSlack) -> None:
+    from code_with_slack.render.previews import Preview
+
+    sink = reply(slack)
+    edit = tool("b", "Edit", preview=Preview("Update(a.txt)", "Added 1 line", "1 +x"))
+    for update in [tool("a", "Bash"), edit, tool("c", "Bash"), tool("d", "Bash")]:
+        await sink.task(update)
+    await sink.finish([], None)
+    shown = [
+        sinks.block_text(b) for b in last_blocks(slack) if b["type"] in ("context", "markdown")
+    ]
+    assert shown[:4] == [
+        "✓ Ran 1 shell command",
+        f"✓ `Update(a.txt)`\n{sinks.NESTED}Added 1 line",
+        "```\n1 +x\n```",
+        "✓ Ran 2 shell commands",
+    ]
+
+
+@pytest.mark.parametrize("fence", ["```", "````", "``````", "```x```"])
+def test_a_fence_inside_a_preview_does_not_close_its_block(fence: str) -> None:
+    # Any run of three or more backticks would close the block (a Markdown file's ```` fence).
+    [block] = sinks.preview_blocks(f"a\n{fence}\nb")
+    assert block["text"].count("```") == 2
+
+
+async def test_a_failed_call_shows_its_error_even_if_it_carries_a_preview(slack: FakeSlack) -> None:
+    from code_with_slack.render.previews import Preview
+
+    sink = reply(slack)
+    view = Preview("Update(a.txt)", "Added 1 line", "+x", "diff")
+    await sink.task(tool("e", "Edit", status="error", output="File not found", preview=view))
+    await sink.finish([], None)
+    shown = [sinks.block_text(b) for b in last_blocks(slack)]
+    assert not any("Added 1 line" in t or "```" in t or "Update(" in t for t in shown)
+    assert "✗ Edit" in shown  # folded with the failed calls, as any failed call
+
+
+async def test_a_message_with_two_results_previews_neither(slack: FakeSlack) -> None:
+    # One tool_use_result per message: it cannot be told which of two results it belongs to.
+    import dataclasses
+
+    from claude_agent_sdk import AssistantMessage, ToolResultBlock, ToolUseBlock, UserMessage
+
+    recorded = sdk_messages("edit-write")
+    use = next(
+        (m, b)
+        for m in recorded
+        if isinstance(m, AssistantMessage)
+        for b in m.content
+        if isinstance(b, ToolUseBlock) and b.name == "Edit" and b.input.get("old_string") == "beta"
+    )
+    result = next(
+        m
+        for m in recorded
+        if isinstance(m, UserMessage)
+        and isinstance(m.content, list)
+        and any(isinstance(b, ToolResultBlock) and b.tool_use_id == use[1].id for b in m.content)
+    )
+    twin = dataclasses.replace(use[1], id="twin")
+    calls = dataclasses.replace(use[0], content=[use[1], twin])
+    [block] = [b for b in result.content if isinstance(b, ToolResultBlock)]
+    both = dataclasses.replace(
+        result, content=[block, dataclasses.replace(block, tool_use_id="twin")]
+    )
+    sink = reply(slack)
+    renderer = TurnRenderer(sink, "/home/dev/project")
+    for message in (calls, both):
+        await renderer.feed(message)
+    await renderer.close(None)
+    shown = "\n".join(sinks.block_text(b) for b in last_blocks(slack))
+    assert "Update(" not in shown and "```" not in shown and "Edit \u00d72" in shown

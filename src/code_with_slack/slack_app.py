@@ -24,6 +24,7 @@ from code_with_slack.approvals import (
     Deny,
     Draft,
     absorb,
+    answered_blocks,
     draft_answers,
     first_unanswered,
     is_answered,
@@ -488,6 +489,27 @@ def build_app(
         except Exception as exc:
             logger.warning("could not remove a request in %s: %s", channel, describe(exc))
 
+    async def show_answered(
+        channel: str,
+        ts: str | None,
+        questions: list[dict[str, Any]],
+        answers: dict[str, str | list[str]],
+    ) -> None:
+        # The terminal keeps what was asked and answered; the request becomes that record.
+        if ts is None:
+            return
+        try:
+            await slack.chat_update(
+                channel=channel,
+                ts=ts,
+                text=texts.ANSWERED,
+                blocks=answered_blocks(questions, answers),
+            )
+        except Exception as exc:
+            # The request must not keep buttons that no longer work: remove it, as before.
+            logger.warning("could not record an answer in %s: %s", channel, describe(exc))
+            await remove_request(channel, ts)
+
     @app.action("question_open")
     async def on_question_open(ack: AsyncAck, body: dict[str, Any]) -> None:
         await ack()
@@ -552,7 +574,7 @@ def build_app(
         if approvals.resolve(draft.approval_id, draft.channel_id, Answer(answers)) is None:
             await tell_owner(draft.channel_id, texts.APPROVAL_GONE)
             return
-        await remove_request(draft.channel_id, pending.message_ts)
+        await show_answered(draft.channel_id, pending.message_ts, questions, answers)
 
     @app.error
     async def on_error(error: Exception) -> None:
