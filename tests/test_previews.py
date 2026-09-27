@@ -97,3 +97,20 @@ def test_folded_calls_read_as_the_terminal_for_bash_and_read_only() -> None:
     assert folded("Read", 2) == "Read 2 files"
     assert folded("WebFetch", 1) == "WebFetch"
     assert folded("WebFetch", 2) == "WebFetch \u00d72"
+
+
+def test_a_long_diff_stops_at_twenty_lines() -> None:
+    patch = [
+        {
+            "oldStart": 1,
+            "oldLines": 30,
+            "newStart": 1,
+            "newLines": 0,
+            "lines": [f"-line {i}" for i in range(1, 31)],
+        }
+    ]
+    shown = preview("Edit", {"filePath": "/home/dev/project/f", "structuredPatch": patch}, CWD)
+    assert shown is not None
+    lines = shown.body.splitlines()
+    assert len(lines) == 21 and lines[19] == f"-{RED} 20 line 20" and lines[20] == "… +10 lines"
+    assert shown.summary == "Removed 30 lines"  # the sentence still counts the whole change

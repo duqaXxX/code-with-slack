@@ -127,8 +127,10 @@ command`) and by the tool's name for any other tool. A finished `Edit` or `Write
 it shows as the terminal shows it (`render.previews.preview`), its line (`✓ Update(notes.txt)`,
 then `⎿ Added 1 line, removed 1 line`) followed by a `markdown` code block with the numbered diff
 (fenced as `diff`, which Slack desktop colours; each changed line also carries a red or green
-square after its sign, since Slack mobile colours nothing),
-or a new file's first 10 lines and `… +N lines`. The calls before and after it fold on their own,
+square after its sign, since Slack mobile colours nothing), up to `previews.DIFF_LINES` (20) lines
+and then `… +N lines`, or a new file's first 10 lines and `… +N lines`. The terminal shows a diff
+whole; the cap is there because Slack mobile wraps each long line of a code block into several,
+and Slack offers no horizontal scroll. The calls before and after it fold on their own,
 as in the terminal. The preview reads `UserMessage.tool_use_result`, which the SDK does not
 document; any shape other than the one measured falls back to the generic line, and the release
 probe's claim P13 checks the shape on each new SDK. Below
