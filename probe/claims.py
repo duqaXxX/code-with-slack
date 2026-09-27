@@ -2,10 +2,12 @@
 outcome.
 
 The rules follow seedeep's upgrade guard: presence is conclusive, absence is not. A gesture claim
-is one the probe causes itself, so its absence is proof of a break; a model claim needs Claude to
-act, so its absence proves nothing and is never reported as broken.
+is one the probe causes itself, so once its event happened, the behaviour's absence is proof of a
+break (BROKEN); if the event itself did not happen, nothing was learned (UNPROVEN). A model claim
+needs Claude to act, so its failure proves nothing and is never reported as broken.
 """
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -25,6 +27,12 @@ class Claim:
     # The measurement, with date and version, that shows Claude Code no longer offers the event.
     retired: str | None = None
 
+    def __post_init__(self) -> None:
+        if not re.fullmatch(r"P[1-9]\d*", self.id):
+            raise ValueError(f"a claim id reads P and a number, not {self.id!r}")
+        if self.kind not in ("gesture", "model"):
+            raise ValueError(f"claim {self.id}: kind {self.kind!r} is neither gesture nor model")
+
 
 @dataclass(frozen=True)
 class Observation:
@@ -34,12 +42,21 @@ class Observation:
     holds: bool
     detail: str = ""
 
+    def __post_init__(self) -> None:
+        if self.holds and not self.caused:
+            raise ValueError("a behaviour cannot hold when its event never happened")
+
 
 @dataclass(frozen=True)
 class Result:
     claim: Claim
     outcome: Outcome
     detail: str
+
+    def __post_init__(self) -> None:
+        # The rule the whole probe rests on, kept by the type rather than by `evaluate` alone.
+        if self.outcome == "BROKEN" and self.claim.kind != "gesture":
+            raise ValueError(f"claim {self.claim.id} is a model claim: it is never BROKEN")
 
 
 CLAIMS = [
@@ -67,7 +84,7 @@ CLAIMS = [
     Claim(
         "P4",
         "gesture",
-        "an image prompt, sent as one streaming user message, gets a result",
+        "an image prompt reaches Claude, which names the colour of the pixel",
         "code_with_slack.attachments.prompt_for",
         "attach a screenshot and ask what it shows",
     ),
@@ -130,6 +147,10 @@ CLAIMS = [
 ]
 
 
+if len({c.id for c in CLAIMS}) != len(CLAIMS):
+    raise ValueError("two claims share an id")
+
+
 def evaluate(claim: Claim, seen: Observation | None) -> Result:
     if claim.retired is not None:
         return Result(claim, "RETIRED", claim.retired)
@@ -141,7 +162,7 @@ def evaluate(claim: Claim, seen: Observation | None) -> Result:
 
 
 def can_certify(results: list[Result]) -> bool:
-    """Every gesture claim holds: a run that proved nothing certifies nothing."""
+    """Every gesture claim holds or is retired: a run that proved nothing certifies nothing."""
     return all(r.outcome in ("HOLDS", "RETIRED") for r in results if r.claim.kind == "gesture")
 
 

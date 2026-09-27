@@ -35,8 +35,32 @@ def log(line: str) -> None:
     print(line, file=sys.stderr, flush=True)
 
 
+CERTIFICATE_KEYS = {"cli", "date", "holds", "open", "retired"}
+
+
 def certified(path: Path) -> dict[str, dict[str, object]]:
-    return json.loads(path.read_text()) if path.exists() else {}
+    """The certificates, by SDK version. Raises ValueError on a file of another shape, which a
+    hand edit or an interrupted write could leave: a certificate is never trusted on its looks."""
+    if not path.exists():
+        return {}
+    known = json.loads(path.read_text())
+    if not isinstance(known, dict) or not all(
+        isinstance(entry, dict) and set(entry) == CERTIFICATE_KEYS for entry in known.values()
+    ):
+        raise ValueError(f"{path.name} is not a map of SDK versions to {sorted(CERTIFICATE_KEYS)}")
+    return known
+
+
+def pinned_to(pyproject: str, release: str) -> str:
+    """`pyproject.toml` with the SDK pinned to `release`. Raises ValueError unless exactly one pin
+    was replaced: a pin written another way would leave the old SDK installed, and the probe
+    would certify a release it never ran."""
+    text, replaced = re.subn(
+        r"claude-agent-sdk==[0-9.]+", f"claude-agent-sdk=={release}", pyproject
+    )
+    if replaced != 1:
+        raise ValueError(f"expected one claude-agent-sdk==<version> pin, found {replaced}")
+    return text
 
 
 def latest_release() -> str:
@@ -57,21 +81,16 @@ def on_latest(force: bool) -> int:
         subprocess.run(["git", "worktree", "add", "--detach", str(tree)], cwd=REPO, check=True)
         try:
             pyproject = tree / "pyproject.toml"
-            pyproject.write_text(
-                re.sub(
-                    r"claude-agent-sdk==[0-9.]+",
-                    f"claude-agent-sdk=={latest}",
-                    pyproject.read_text(),
-                )
-            )
+            pyproject.write_text(pinned_to(pyproject.read_text(), latest))
             subprocess.run(["uv", "lock", "--quiet"], cwd=tree, check=True)
             subprocess.run(["uv", "sync", "--quiet"], cwd=tree, check=True)
             command = ["uv", "run", "python", "-m", "probe", "--certificate", str(CERTIFIED)]
             return subprocess.run(command + (["--force"] if force else []), cwd=tree).returncode
         finally:
-            subprocess.run(
-                ["git", "worktree", "remove", "--force", str(tree)], cwd=REPO, check=True
-            )
+            # Not checked: a failed removal must not hide why the run above failed.
+            removed = subprocess.run(["git", "worktree", "remove", "--force", str(tree)], cwd=REPO)
+            if removed.returncode:
+                log(f"could not remove the worktree {tree}: run `git worktree prune`")
 
 
 def run(path: Path, force: bool) -> int:

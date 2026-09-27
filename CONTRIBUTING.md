@@ -44,7 +44,7 @@ request still moves the pin.
 
 The suite replays recorded streams, so it cannot see what a new Claude Code CLI does differently.
 The **probe** can. It runs the daemon's own session code against the real CLI the SDK bundles,
-with Slack faked, and uses your Claude Code login and a few cents of Haiku tokens, so it runs on
+with Slack faked, and uses your Claude Code login and Haiku tokens from your plan, so it runs on
 your machine and is not part of pytest:
 
 ```
@@ -66,6 +66,7 @@ claim in `probe/claims.py` ends in one of four outcomes:
 A **gesture** claim is one the probe causes itself (a prompt, `!stop`, a resume). A **model**
 claim needs Claude to act (call Bash, read a file), so when it fails it is UNPROVEN, never
 BROKEN: Claude may simply have chosen otherwise. The release is certified, and its version
-added to `probe/certified-versions.json`, only when every gesture claim holds. What the run could
-not prove is printed as a checklist of things to try in Slack. The design follows the upgrade
-guard of [seedeep](https://github.com/duqaXxX/seedeep).
+added to `probe/certified-versions.json`, only when every gesture claim holds or is retired. What
+the run could not prove is printed as a checklist of things to try in Slack. A failure of the
+machine rather than the SDK (a turn past its time limit, the network) leaves its claims UNPROVEN.
+The design follows the upgrade guard of [seedeep](https://github.com/duqaXxX/seedeep).
