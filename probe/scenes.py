@@ -2,7 +2,7 @@
 
 Claude Code is real (the SDK's bundled CLI, the owner's login, Haiku); Slack is the test suite's
 FakeSlack, since an SDK release changes nothing on the Slack side. What a claim checks is what the
-owner would see: the text of the replies, the running line, the answer of `!status`.
+owner would see: the text of the replies, the running line, the approvals asked.
 """
 
 import asyncio
@@ -14,12 +14,17 @@ import shutil
 import struct
 import tempfile
 import zlib
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+from claude_agent_sdk import (
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    PermissionResult,
+    ToolPermissionContext,
+)
 
 from code_with_slack.approvals import Approvals, Approve, Deny, Pending
 from code_with_slack.attachments import prompt_for
@@ -43,27 +48,19 @@ PROBE_MODEL = "claude-haiku-4-5-20251001"
 CHANNEL, OWNER, TEAM, BOT = "C000PROBE", "U000PROBE", "T000PROBE", "U000PROBEBOT"
 TURN_LIMIT = 180.0
 Log = Callable[[str], None]
+CanUseTool = Callable[[str, dict[str, Any], ToolPermissionContext], Awaitable[PermissionResult]]
 
 
 class ProbeApprovals(Approvals):
     """Answers every request as the owner would: Approve a tool, Deny a question."""
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.titles: list[str] = []
-
     def open(
         self, channel_id: str, title: str, questions: list[dict[str, Any]] | None = None
     ) -> tuple[str, Pending]:
         approval_id, pending = super().open(channel_id, title, questions)
-        self.titles.append(title)
         decision = Deny() if questions else Approve()
         asyncio.get_running_loop().call_soon(self.resolve, approval_id, channel_id, decision)
         return approval_id, pending
-
-
-def probe_client(options: ClaudeAgentOptions) -> ClaudeClient:
-    return ClaudeSDKClient(dataclasses.replace(options, model=PROBE_MODEL))
 
 
 def one_pixel_png() -> bytes:
@@ -75,9 +72,8 @@ def one_pixel_png() -> bytes:
 
     header = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
     pixels = zlib.compress(b"\x00\xff\x00\x00")
-    return (
-        b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", pixels) + chunk(b"IEND", b"")
-    )
+    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", pixels)
+    return png + chunk(b"IEND", b"")
 
 
 class Stage:
@@ -85,7 +81,8 @@ class Stage:
         self.workdir = workdir
         self.log = log
         self.slack = FakeSlack()
-        self.approvals = ProbeApprovals()
+        # The tool of every permission request the CLI sent, as `can_use_tool` received it.
+        self.asked: list[str] = []
         self.state = StateStore(workdir.parent / "state.json")
         self.state.bind(CHANNEL, workdir)
 
@@ -100,11 +97,27 @@ class Stage:
                 slack=self.slack,
                 identity=Identity(OWNER, TEAM, BOT),
                 state=self.state,
-                approvals=self.approvals,
+                approvals=ProbeApprovals(),
                 usage=UsageCache(no_usage),
-                client_factory=probe_client,
+                client_factory=self.client,
                 workspace_trusted=trusted,
             )
+        )
+
+    def client(self, options: ClaudeAgentOptions) -> ClaudeClient:
+        """The real client, on Haiku, noting which tool each permission request is for."""
+        decide: CanUseTool | None = options.can_use_tool
+
+        async def noted(
+            tool: str, tool_input: dict[str, Any], context: ToolPermissionContext
+        ) -> PermissionResult:
+            self.asked.append(tool)
+            assert decide is not None
+            return await decide(tool, tool_input, context)
+
+        can_use_tool = noted if decide is not None else None
+        return ClaudeSDKClient(
+            dataclasses.replace(options, model=PROBE_MODEL, can_use_tool=can_use_tool)
         )
 
     @property
@@ -113,9 +126,27 @@ class Stage:
         assert session is not None
         return session
 
-    def last_reply(self) -> str:
-        texts = self.slack.message_texts()
-        return texts[-1] if texts else ""
+    def mark(self) -> tuple[int, int, int]:
+        """Where the channel stands: messages posted, Slack calls, permission requests."""
+        return len(self.slack.posted_ts), len(self.slack.calls), len(self.asked)
+
+    def replies_since(self, mark: tuple[int, int, int]) -> str:
+        """The text of every message posted since `mark`: the turn's reply, wherever an approval
+        request or a notice came in between."""
+        return "\n".join(self.slack.message_texts()[mark[0] :])
+
+    def tool_lines_since(self, mark: tuple[int, int, int]) -> str:
+        """Every tool line a reply showed since `mark`, even one folded when its turn ended."""
+        return "\n".join(
+            json.dumps(b, ensure_ascii=False)
+            for method, args in self.slack.calls[mark[1] :]
+            if method in ("chat.postMessage", "chat.update")
+            for b in args.get("blocks") or []
+            if str(b.get("block_id", "")).startswith("tools-")
+        )
+
+    def asked_since(self, mark: tuple[int, int, int]) -> list[str]:
+        return self.asked[mark[2] :]
 
     def shown_now(self) -> str:
         """What the channel shows now: each message's last blocks, footer and running line
@@ -130,17 +161,6 @@ class Stage:
             elif method == "chat.delete":
                 shown.pop(args["ts"], None)
         return "\n".join(shown.values())
-
-    def tool_lines_ever(self, since: int = 0) -> str:
-        """Every tool line a reply showed after call `since`, even one folded into the counts
-        when its turn ended."""
-        return "\n".join(
-            json.dumps(b, ensure_ascii=False)
-            for method, args in self.slack.calls[since:]
-            if method in ("chat.postMessage", "chat.update")
-            for b in args.get("blocks") or []
-            if str(b.get("block_id", "")).startswith("tools-")
-        )
 
     async def turn(self, prompt: Any) -> Turn:
         turn = await self.session.submit(prompt)
@@ -157,15 +177,20 @@ async def until(condition: Callable[[], bool], limit: float) -> bool:
 
 
 async def attempt(
-    name: str, log: Log, scene: Awaitable[dict[str, Observation]]
+    name: str,
+    claims: list[str],
+    log: Log,
+    scene: Coroutine[Any, Any, dict[str, Observation]],
 ) -> dict[str, Observation]:
-    """A scene that raises proves nothing about the claims it did not reach."""
+    """A scene that raises did cause its events and saw them fail: the likeliest form a break
+    in the SDK takes is a call that raises. Its claims record the exception."""
     log(f"scene: {name}")
     try:
         return await scene
     except Exception as exc:
-        log(f"scene {name} stopped: {type(exc).__name__}: {exc}")
-        return {}
+        detail = f"scene raised {type(exc).__name__}: {exc}"
+        log(f"scene {name}: {detail}")
+        return {claim: Observation(True, False, detail) for claim in claims}
 
 
 async def first_turn(s: Stage, word: str) -> dict[str, Observation]:
@@ -180,44 +205,34 @@ async def first_turn(s: Stage, word: str) -> dict[str, Observation]:
 
 
 async def image_turn(s: Stage) -> dict[str, Observation]:
-    before = len(s.slack.posted_ts)
-    await s.turn(
-        prompt_for(
-            "Reply with one word: what colour is this image?", [("image/png", one_pixel_png())], []
-        )
-    )
-    reply = s.last_reply()
-    return {
-        "P4": Observation(
-            len(s.slack.posted_ts) > before, bool(reply) and "reported an error" not in reply
-        )
-    }
+    mark = s.mark()
+    image = [("image/png", one_pixel_png())]
+    await s.turn(prompt_for("Reply with one word: what colour is this image?", image, []))
+    reply = s.replies_since(mark)
+    return {"P4": Observation(True, bool(reply.strip()) and "reported an error" not in reply)}
 
 
 async def file_turn(s: Stage, folder: Path) -> dict[str, Observation]:
-    token = secrets.token_hex(4)
+    mark, token = s.mark(), secrets.token_hex(4)
     path = folder / "probe-note.txt"
     path.write_text(f"{token}\n")
     await s.turn(prompt_for("Read the attached file and reply with its content only.", [], [path]))
-    return {"P5": Observation(True, token in s.last_reply())}
+    return {"P5": Observation(True, token in s.replies_since(mark))}
 
 
 async def bash_turn(s: Stage) -> dict[str, Observation]:
-    asked, calls = len(s.approvals.titles), len(s.slack.calls)
-    marker = s.workdir / "probe-ran.txt"
+    mark, marker = s.mark(), s.workdir / "probe-ran.txt"
     await s.turn(
         "Use the Bash tool to run exactly this command: echo ok > probe-ran.txt\nThen reply: done"
     )
-    # Claude may write the file with another tool: only a Bash call counts, known by its approval
-    # request. The file shows that it ran. The reply's tool line may show the command only while
-    # it runs, depending on update timing; once folded it still names the tool (`✓ Bash`).
-    bash_asked = any(t.startswith("Bash") for t in s.approvals.titles[asked:])
-    shown = "Bash" in s.tool_lines_ever(since=calls)
+    # A Bash call is known by the permission request the CLI sends for it, whatever its title.
+    # The reply's tool line may show the command only while it runs, depending on update
+    # timing; once folded it still names the tool (`✓ Bash`).
+    called = "Bash" in s.asked_since(mark)
+    detail = "" if called else f"permission requests: {s.asked_since(mark) or 'none'}"
     return {
-        "P10": Observation(bash_asked, shown, "" if bash_asked else "no Bash approval asked"),
-        "P11": Observation(
-            bash_asked, marker.exists(), "" if bash_asked else "no Bash approval asked"
-        ),
+        "P10": Observation(called, "Bash" in s.tool_lines_since(mark), detail),
+        "P11": Observation(called, marker.exists(), detail),
     }
 
 
@@ -226,8 +241,7 @@ async def background_stop(s: Stage) -> dict[str, Observation]:
         "Use the Bash tool with run_in_background set to true to run: tail -f /dev/null\n"
         "Do not wait for it. Reply: started"
     )
-    running = await until(lambda: "1 shell" in s.shown_now(), 20)
-    if not running:
+    if not await until(lambda: "1 shell" in s.shown_now(), 20):
         return {"P12": Observation(False, False, "no background command started")}
     stopped = await s.session.stop()
     gone = await until(lambda: "1 shell" not in s.shown_now(), 30)
@@ -235,38 +249,46 @@ async def background_stop(s: Stage) -> dict[str, Observation]:
 
 
 async def interrupt(s: Stage) -> dict[str, Observation]:
+    mark = s.mark()
     turn = await s.session.submit(
         "Write the numbers from 1 to 400, one per line, and nothing else."
     )
-    writing = await until(lambda: s.session.busy, 60)
-    await asyncio.sleep(2)
-    stopped = await s.session.stop() if writing else False
+    # Stop once the reply is under way, well before it could end on its own.
+    writing = await until(lambda: "\n20\n" in f"\n{s.replies_since(mark)}\n", 60)
+    if not writing:
+        return {"P8": Observation(False, False, "the reply never reached 20")}
+    stopped = await s.session.stop()
     ended = await until(turn.done.is_set, 60)
-    return {"P8": Observation(stopped, ended)}
+    finished = "400" in s.replies_since(mark).split()
+    detail = "the reply ran to 400: the interrupt did nothing" if finished else ""
+    return {"P8": Observation(True, stopped and ended and not finished, detail)}
 
 
 async def resume(s: Stage, word: str) -> dict[str, Observation]:
     stored = s.state.get(CHANNEL)
     session_id = stored.session_id if stored else None
-    listed = await asyncio.to_thread(directory_sessions, s.workdir)
-    picker = json.dumps(resume_blocks(s.workdir, listed, None, datetime.now(UTC)))
     if session_id is None:
         return {"P6": Observation(False, False, "no session id stored")}
+    listed = await asyncio.to_thread(directory_sessions, s.workdir)
+    picker = json.dumps(resume_blocks(s.workdir, listed, None, datetime.now(UTC)))
     in_list = any(i.session_id == session_id for i in listed) and session_id[:8] in picker
     seen = {"P6": Observation(True, in_list)}
+    # A background command an earlier scene failed to stop keeps the channel busy.
+    if not await until(lambda: s.session.idle, 30):
+        return seen | {"P7": Observation(False, False, "the channel never became idle")}
     if not await s.manager.resume(CHANNEL, session_id):
-        return seen
+        return seen | {"P7": Observation(False, False, "the resume was refused")}
+    mark = s.mark()
     await s.turn("What was the code word I gave you? Reply with the word only.")
-    return seen | {"P7": Observation(True, word in s.last_reply())}
+    return seen | {"P7": Observation(True, word in s.replies_since(mark))}
 
 
 async def bypass(s: Stage) -> dict[str, Observation]:
     # Neither `!status` (the stored switch) nor the CLI's server info (unchanged by a mode set
-    # on a live client, measured 2026-09-27 on 2.1.283) shows the mode: its only effect is a
-    # command that runs without asking.
+    # on a live client, measured 2026-09-27 on 2.1.283) shows the mode: its one effect is a
+    # command that runs with no permission request.
     await s.session.set_bypass(True)
-    asked = len(s.approvals.titles)
-    marker = s.workdir / "bypass-ran.txt"
+    mark, marker = s.mark(), s.workdir / "bypass-ran.txt"
     try:
         await s.turn(
             "Use the Bash tool to run exactly this command: echo ok > bypass-ran.txt\n"
@@ -274,18 +296,13 @@ async def bypass(s: Stage) -> dict[str, Observation]:
         )
     finally:
         await s.session.set_bypass(False)
-    ran = marker.exists()
-    unasked = not any(t.startswith("Bash") for t in s.approvals.titles[asked:])
-    return {"P9": Observation(ran, unasked, "" if ran else "no Bash call")}
-
-
-def forget_sessions(workdir: Path) -> None:
-    """Remove the transcripts the probe's sessions left under ~/.claude/projects: only the one
-    folder named after this run's temporary directory, whose name is random."""
-    projects = Path.home() / ".claude" / "projects"
-    matches = [p for p in projects.glob(f"*{workdir.name}") if p.is_dir()]
-    if len(matches) == 1:
-        shutil.rmtree(matches[0])
+    called = "Bash" in s.tool_lines_since(mark) and marker.exists()
+    asked = s.asked_since(mark)
+    return {
+        "P9": Observation(
+            called, not asked, f"asked for {asked}" if asked else "" if called else "no Bash call"
+        )
+    }
 
 
 def folders(root: str) -> tuple[Path, Path]:
@@ -298,22 +315,31 @@ def folders(root: str) -> tuple[Path, Path]:
     return workdir, uploads
 
 
+def forget_sessions(workdir: Path) -> None:
+    """Remove the transcripts the probe's sessions left under ~/.claude/projects: only the one
+    folder named after this run's temporary directory, whose name is random."""
+    projects = Path.home() / ".claude" / "projects"
+    matches = [p for p in projects.glob(f"*{workdir.name}") if p.is_dir()]
+    if len(matches) == 1:
+        shutil.rmtree(matches[0])
+
+
 async def run_scenes(log: Log) -> dict[str, Observation]:
     seen: dict[str, Observation] = {}
     with tempfile.TemporaryDirectory(prefix="cws-probe-") as root:
         workdir, uploads = folders(root)
-        stage = Stage(workdir, log)
+        s = Stage(workdir, log)
         word = secrets.token_hex(3)
         try:
-            seen |= await attempt("first turn", log, first_turn(stage, word))
-            seen |= await attempt("image", log, image_turn(stage))
-            seen |= await attempt("file", log, file_turn(stage, uploads))
-            seen |= await attempt("bash and approval", log, bash_turn(stage))
-            seen |= await attempt("background and stop", log, background_stop(stage))
-            seen |= await attempt("interrupt", log, interrupt(stage))
-            seen |= await attempt("resume", log, resume(stage, word))
-            seen |= await attempt("bypass", log, bypass(stage))
+            seen |= await attempt("first turn", ["P1", "P2", "P3"], log, first_turn(s, word))
+            seen |= await attempt("image", ["P4"], log, image_turn(s))
+            seen |= await attempt("file", ["P5"], log, file_turn(s, uploads))
+            seen |= await attempt("bash and approval", ["P10", "P11"], log, bash_turn(s))
+            seen |= await attempt("background and stop", ["P12"], log, background_stop(s))
+            seen |= await attempt("interrupt", ["P8"], log, interrupt(s))
+            seen |= await attempt("resume", ["P6", "P7"], log, resume(s, word))
+            seen |= await attempt("bypass", ["P9"], log, bypass(s))
         finally:
-            await stage.manager.close_all()
+            await s.manager.close_all()
             forget_sessions(workdir)
     return seen

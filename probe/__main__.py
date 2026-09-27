@@ -1,11 +1,12 @@
 """Does code-with-slack still work on this claude-agent-sdk release?
 
-    uv run python -m probe            run if the bundled Claude Code is not certified yet
+    uv run python -m probe            run if the pinned claude-agent-sdk is not certified yet
     uv run python -m probe --force    run anyway
     uv run python -m probe --latest   run on the newest release on PyPI, in a temporary worktree
 
 It uses the owner's Claude Code login and real tokens (Haiku), which is why it is not part of
-pytest. Exit status: 0 certified, 1 a claim is BROKEN, 2 not every gesture claim could be proven.
+pytest. Exit status: 0 certified, 3 a claim is BROKEN, 2 not every gesture claim could be proven;
+1 is Python's own, for a crash.
 """
 
 import argparse
@@ -76,8 +77,10 @@ def on_latest(force: bool) -> int:
 def run(path: Path, force: bool) -> int:
     sdk = version("claude-agent-sdk")
     known = certified(path)
-    if __cli_version__ in known and not force:
-        log(f"Claude Code {__cli_version__} (claude-agent-sdk {sdk}) is already certified")
+    # Keyed by the SDK release: a new one can bundle a certified CLI and still change the Python
+    # side (its message parser, ClaudeSDKClient).
+    if sdk in known and not force:
+        log(f"claude-agent-sdk {sdk} (Claude Code {__cli_version__}) is already certified")
         return 0
     seen = asyncio.run(run_scenes(log))
     results = [evaluate(claim, seen.get(claim.id)) for claim in CLAIMS]
@@ -86,13 +89,13 @@ def run(path: Path, force: bool) -> int:
         print("\n" + hand)
     if broken(results):
         print("\nNot certified: a claim is BROKEN. Do not pin this release.")
-        return 1
+        return 3
     if not can_certify(results):
         print("\nNot certified: a gesture claim could not be proven.")
         return 2
-    known[__cli_version__] = certificate(results, sdk, date.today().isoformat())
+    known[sdk] = certificate(results, __cli_version__, date.today().isoformat())
     path.write_text(json.dumps(dict(sorted(known.items())), indent=2) + "\n")
-    print(f"\nCertified: Claude Code {__cli_version__} added to {path.name}.")
+    print(f"\nCertified: claude-agent-sdk {sdk} added to {path.name}.")
     return 0
 
 

@@ -61,8 +61,8 @@ def test_the_checklist_lists_what_the_run_could_not_prove() -> None:
 
 def test_the_certificate_holds_ids_and_versions_only() -> None:
     results = [evaluate(GESTURE, Observation(True, True, detail="x")), evaluate(MODEL, None)]
-    assert certificate(results, "0.2.160", "2026-09-27") == {
-        "sdk": "0.2.160",
+    assert certificate(results, "2.1.283", "2026-09-27") == {
+        "cli": "2.1.283",
         "date": "2026-09-27",
         "holds": ["G"],
         "open": ["M"],

@@ -48,7 +48,7 @@ with Slack faked, and uses your Claude Code login and a few cents of Haiku token
 your machine and is not part of pytest:
 
 ```
-uv run python -m probe            # the pinned SDK, if its CLI is not certified yet
+uv run python -m probe            # the pinned SDK, if it is not certified yet
 uv run python -m probe --latest   # the newest release on PyPI, in a temporary git worktree
 uv run python -m probe --force    # run even if already certified
 ```
@@ -65,7 +65,7 @@ claim in `probe/claims.py` ends in one of four outcomes:
 
 A **gesture** claim is one the probe causes itself (a prompt, `!stop`, a resume). A **model**
 claim needs Claude to act (call Bash, read a file), so when it fails it is UNPROVEN, never
-BROKEN: Claude may simply have chosen otherwise. The release is certified, and its CLI version
+BROKEN: Claude may simply have chosen otherwise. The release is certified, and its version
 added to `probe/certified-versions.json`, only when every gesture claim holds. What the run could
 not prove is printed as a checklist of things to try in Slack. The design follows the upgrade
-guard of [seedeep](https://github.com/duqaXxX/seedeep): presence is conclusive, absence is not.
+guard of [seedeep](https://github.com/duqaXxX/seedeep).

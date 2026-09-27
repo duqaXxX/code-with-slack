@@ -172,10 +172,10 @@ def checklist(results: list[Result]) -> str:
     return "\n".join(lines)
 
 
-def certificate(results: list[Result], sdk_version: str, date: str) -> dict[str, object]:
+def certificate(results: list[Result], cli_version: str, date: str) -> dict[str, object]:
     """The entry `certified-versions.json` keeps for a release: ids and versions, no content."""
     return {
-        "sdk": sdk_version,
+        "cli": cli_version,
         "date": date,
         "holds": [r.claim.id for r in results if r.outcome == "HOLDS"],
         "open": [r.claim.id for r in results if r.outcome == "UNPROVEN"],
