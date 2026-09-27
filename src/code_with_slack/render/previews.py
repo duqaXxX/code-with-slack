@@ -20,6 +20,9 @@ WORDS = {
     "Bash": ("Ran {n} shell command", "Ran {n} shell commands"),
     "Read": ("Read {n} file", "Read {n} files"),
 }
+# A diff line's colour where Slack draws none (mobile); an emoji is two columns wide, so a
+# context line gets two spaces and the numbers stay aligned.
+MARKS = {"-": "\U0001f7e5", "+": "\U0001f7e9", " ": "  "}
 # The terminal shows a new file's first lines, then how many it leaves out.
 NEW_FILE_LINES = 10
 
@@ -59,7 +62,8 @@ def _shown(path: str, cwd: str | None) -> str:
 def _diff(patch: list[Any]) -> tuple[int, int, list[str]] | None:
     """Lines added and removed, and the hunks numbered as the terminal numbers them: a removed
     line by its old number, any other by its new one, `...` between hunks. The sign leads the
-    line, where diff highlighting looks for it: `-7 7`, `+7 sette`, ` 8 8`."""
+    line, where Slack desktop's diff highlighting looks for it; a coloured square follows, since
+    Slack mobile does not highlight (both measured 2026-09-27): `-🟥 7 sette`, `+🟩 7 7`."""
     added = removed = 0
     rows: list[tuple[int, str]] = []
     for index, hunk in enumerate(patch):
@@ -87,7 +91,10 @@ def _diff(patch: list[Any]) -> tuple[int, int, list[str]] | None:
     return (
         added,
         removed,
-        [text if n == 0 else f"{text[0]}{n:>{width}} {text[1:]}" for n, text in rows],
+        [
+            text if n == 0 else f"{text[0]}{MARKS[text[0]]} {n:>{width}} {text[1:]}"
+            for n, text in rows
+        ],
     )
 
 
