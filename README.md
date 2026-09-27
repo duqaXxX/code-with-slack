@@ -4,7 +4,8 @@ A local daemon that lets one person drive Claude Code on their own Mac from Slac
 Slack channel is bound to one working directory and holds one Claude Code session there. Nobody
 else can talk to it.
 
-Status: first release. How it fits together: [docs/architecture.md](docs/architecture.md).
+Status: first release. How it fits together: [docs/architecture.md](docs/architecture.md). What
+each feature is checked by: [docs/features.md](docs/features.md).
 
 Powered by Claude, through the
 [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview).

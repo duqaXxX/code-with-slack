@@ -24,6 +24,7 @@ from pathlib import Path
 from claude_agent_sdk._cli_version import __cli_version__
 
 from probe.claims import CLAIMS, broken, can_certify, certificate, checklist, evaluate, report
+from probe.features import by_hand
 from probe.scenes import run_scenes
 
 REPO = Path(__file__).resolve().parents[1]
@@ -106,6 +107,9 @@ def run(path: Path, force: bool) -> int:
     print(report(results, __cli_version__, sdk))
     if hand := checklist(results):
         print("\n" + hand)
+    # What no claim covers at all, from the coverage map: printed on every run, certified or not.
+    if left := by_hand():
+        print("\n" + left)
     if broken(results):
         print("\nNot certified: a claim is BROKEN. Do not pin this release.")
         return 3
