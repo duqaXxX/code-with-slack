@@ -21,7 +21,7 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 
 - The footer is a closing message of its own, posted when the reply ends. A reply that ends
-  below a newer one says which message it answers.
+  below a newer one keeps its closing message, holding `@channel` alone.
 - An Edit or Write diff shows whole, as the terminal shows it, in a collapsible full-width
   container closed by default: the call's line is its title and `Added … lines, removed … lines`
   its subtitle. It no longer stops at 20 lines.
