@@ -607,8 +607,8 @@ async def test_an_edit_and_a_write_show_as_the_terminal_shows_them(slack: FakeSl
     assert lines[3] == f"✓ `Write(notes.txt)`\n{sinks.NESTED}Added 2 lines, removed 3 lines"
     code = [text for kind, text in shown if kind == "markdown" and text.startswith("```")]
     assert code[0].splitlines()[1:3] == [" 1 1", " 2 2"] and "… +5 lines" in code[0]
-    assert code[1] == "```\n1  alpha\n2 -beta\n2 +gamma\n3  delta\n```"
-    assert code[2] == "```\n1 -alpha\n2 -gamma\n3 -delta\n1 +one\n2 +two\n```"
+    assert code[1] == "```diff\n 1 alpha\n-2 beta\n+2 gamma\n 3 delta\n```"
+    assert code[2] == "```diff\n-1 alpha\n-2 gamma\n-3 delta\n+1 one\n+2 two\n```"
 
 
 async def test_a_call_with_a_preview_splits_the_fold_around_it(slack: FakeSlack) -> None:

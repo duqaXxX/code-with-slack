@@ -29,6 +29,9 @@ class Preview:
     title: str  # `Update(notes.txt)`
     summary: str  # `Added 1 line, removed 1 line`
     body: str  # numbered lines, as the terminal prints them
+    # The code block's language: `diff` makes Slack colour the lines a change adds and removes,
+    # as the terminal does (markdown block reference, 2026-09-27: syntax highlighting by tag).
+    language: str = ""
 
 
 def folded(name: str, n: int) -> str:
@@ -55,7 +58,8 @@ def _shown(path: str, cwd: str | None) -> str:
 
 def _diff(patch: list[Any]) -> tuple[int, int, list[str]] | None:
     """Lines added and removed, and the hunks numbered as the terminal numbers them: a removed
-    line by its old number, any other by its new one, `...` between hunks."""
+    line by its old number, any other by its new one, `...` between hunks. The sign leads the
+    line, where diff highlighting looks for it: `-7 7`, `+7 sette`, ` 8 8`."""
     added = removed = 0
     rows: list[tuple[int, str]] = []
     for index, hunk in enumerate(patch):
@@ -80,7 +84,11 @@ def _diff(patch: list[Any]) -> tuple[int, int, list[str]] | None:
                 rows.append((new, f" {text}"))
                 old, new = old + 1, new + 1
     width = len(str(max((n for n, _ in rows), default=0)))
-    return added, removed, [text if n == 0 else f"{n:>{width}} {text}" for n, text in rows]
+    return (
+        added,
+        removed,
+        [text if n == 0 else f"{text[0]}{n:>{width}} {text[1:]}" for n, text in rows],
+    )
 
 
 def _changed(added: int, removed: int) -> str:
@@ -113,5 +121,5 @@ def preview(name: str, result: Any, cwd: str | None) -> Preview | None:
         added, removed, body = diff
         # The terminal names an edit `Update`, and a Write over an existing file keeps `Write`.
         title = f"{'Update' if name == 'Edit' else 'Write'}({path})"
-        return Preview(title, _changed(added, removed), "\n".join(body))
+        return Preview(title, _changed(added, removed), "\n".join(body), "diff")
     return None

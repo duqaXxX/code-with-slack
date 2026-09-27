@@ -42,7 +42,7 @@ def test_an_edit_shows_its_diff_numbered_as_the_terminal() -> None:
     shown = preview("Edit", result, CWD)
     assert shown is not None
     assert (shown.title, shown.summary) == ("Update(notes.txt)", "Added 1 line, removed 1 line")
-    assert shown.body.splitlines() == ["1  alpha", "2 -beta", "2 +gamma", "3  delta"]
+    assert shown.body.splitlines() == [" 1 alpha", "-2 beta", "+2 gamma", " 3 delta"]
 
 
 def test_a_write_over_a_file_shows_the_whole_diff() -> None:
@@ -50,7 +50,7 @@ def test_a_write_over_a_file_shows_the_whole_diff() -> None:
     shown = preview(name, result, CWD)
     assert shown is not None
     assert (shown.title, shown.summary) == ("Write(notes.txt)", "Added 2 lines, removed 3 lines")
-    assert shown.body.splitlines() == ["1 -alpha", "2 -gamma", "3 -delta", "1 +one", "2 +two"]
+    assert shown.body.splitlines() == ["-1 alpha", "-2 gamma", "-3 delta", "+1 one", "+2 two"]
 
 
 def test_hunks_are_separated_as_the_terminal_separates_them() -> None:
@@ -61,7 +61,7 @@ def test_hunks_are_separated_as_the_terminal_separates_them() -> None:
     shown = preview("Edit", {"filePath": "/elsewhere/f.txt", "structuredPatch": patch}, CWD)
     assert shown is not None
     assert shown.title == "Update(/elsewhere/f.txt)"  # outside the folder: the full path
-    assert shown.body.splitlines() == [" 1 -a", " 1 +b", "...", "40  c"]
+    assert shown.body.splitlines() == ["- 1 a", "+ 1 b", "...", " 40 c"]
 
 
 @pytest.mark.parametrize(

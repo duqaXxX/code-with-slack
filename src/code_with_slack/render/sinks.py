@@ -74,11 +74,15 @@ def tools_block(lines: list[str], index: int) -> dict[str, Any]:
     return {**block, "block_id": f"tools-{index}"}
 
 
-def preview_blocks(body: str) -> list[dict[str, Any]]:
+def preview_blocks(body: str, language: str = "") -> list[dict[str, Any]]:
     """A call's preview (a diff, a new file's first lines) as code blocks, split where a block
     would pass its limit. A fence inside the file must not close the block early."""
     body = body.replace("```", "`\u200b``")
-    return [{"type": "markdown", "text": f"```\n{chunk}\n```"} for chunk in split(body) if chunk]
+    return [
+        {"type": "markdown", "text": f"```{language}\n{chunk}\n```"}
+        for chunk in split(body)
+        if chunk
+    ]
 
 
 def block_text(block: dict[str, Any]) -> str:
@@ -308,7 +312,8 @@ class ReplySink:
                         lines = [tool.line()] if tool else tool_lines(group, latest=last)
                         blocks += self._tool_blocks(lines, len(blocks))
                         if tool and tool.update.preview and tool.update.preview.body:
-                            blocks += preview_blocks(tool.update.preview.body)
+                            view = tool.update.preview
+                            blocks += preview_blocks(view.body, view.language)
         return blocks
 
     @staticmethod
