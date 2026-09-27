@@ -15,6 +15,7 @@ from typing import Any
 
 from code_with_slack import texts
 from code_with_slack.render.escape import shown_as_written
+from code_with_slack.render.sinks import context_block
 
 logger = logging.getLogger(__name__)
 FOLDER_ROWS = 20
@@ -101,18 +102,15 @@ def _row(root: Path, index: int, folder: Path, current: bool) -> dict[str, Any]:
 def bind_blocks(root: Path, folders: list[Path], current: Path | None) -> list[dict[str, Any]]:
     """The list: the first FOLDER_ROWS folders in path order, the channel's own marked."""
     shown = sorted(folders[:FOLDER_ROWS])
+    # The list's own lines are the daemon's notices, small and grey; the rows keep their button.
     if not folders:
-        return [_section(texts.BIND_EMPTY.format(root=shown_as_written(str(root))))]
+        return [context_block(texts.BIND_EMPTY.format(root=shown_as_written(str(root))))]
     return [
-        _section(texts.BIND_LIST.format(root=shown_as_written(str(root)))),
+        context_block(texts.BIND_LIST.format(root=shown_as_written(str(root)))),
         *(_row(root, i, f, f == current) for i, f in enumerate(shown)),
         *(
-            [_section(texts.BIND_MORE.format(rows=FOLDER_ROWS))]
+            [context_block(texts.BIND_MORE.format(rows=FOLDER_ROWS))]
             if len(folders) > FOLDER_ROWS
             else []
         ),
     ]
-
-
-def _section(text: str) -> dict[str, Any]:
-    return {"type": "section", "text": {"type": "mrkdwn", "text": text}}

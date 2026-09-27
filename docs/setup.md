@@ -319,6 +319,11 @@ in the terminal: that reply opens with Claude Code's own line for the task's end
 `✓ Agent "review" finished · 3m 59s`. While tasks run, the footer counts them, such as
 `⏳ 1 shell · 1 agent`.
 
+What code-with-slack says on its own (the answer to `!bind`, `!bypass` or `!stop`, a notice that
+it is restarting, a refused attachment, an error) shows small and grey, as the footer does, so it
+reads apart from Claude's replies. `!help`, `!guide`, `!status` and the answer to a resume show at
+full size.
+
 The channel's latest reply ends with a footer, which moves to each new reply:
 
 ```

@@ -333,6 +333,16 @@ does not offer: `code_with_slack.resume` lists the directory's sessions from the
 activity, git branch, size), the first 8 characters of the session id and a Resume button each, or matches
 `!resume <id or name>`. The terminal's picker shows no id; the list shows its start because
 `!resume` takes a full id or any start of one at least 8 characters long (`resume.ID_SHOWN`).
+
+The daemon's notices (the answer to `!bind`, `!bypass` and `!stop`, a resume that did not
+happen, a refused attachment, a restart, and the ephemeral errors) are a context block, small
+and grey as the footer, so they read apart from Claude's replies: `slack_app.build_app`'s
+`notice`, `tell_owner`, and `ChannelSession._post`. The same holds for the lines of the `!bind`
+and `!resume` lists; their rows keep a section, since a context block holds no button. Their
+text is mrkdwn, and what comes from outside (a folder, a file name, a typed target) is escaped
+with `render.escape.mrkdwn_escape`. `!help`, `!guide`, `!status` and the answer to a resume stay
+a markdown block at full size: the first three are read, and a resumed session's title keeps
+every character inside its bold only there, since mrkdwn has no escape for `*`.
 A shorter target is read only as a title.
 The list holds the directory's own sessions, not other worktrees', as the terminal's picker
 starts. Resuming stores the session id for the channel and closes the channel's client, only

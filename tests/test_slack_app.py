@@ -169,7 +169,9 @@ async def test_a_refused_channel_tells_only_the_owner(world: World) -> None:
     await world.dispatch(message())
     assert world.queries() == []
     assert world.ephemerals() == [texts.CHANNEL_REFUSED.format(reason=texts.REASON_MEMBERS)]
-    assert world.slack.calls_to("chat.postEphemeral")[0]["user"] == OWNER
+    (refused,) = world.slack.calls_to("chat.postEphemeral")
+    assert refused["user"] == OWNER
+    assert refused["blocks"][0]["type"] == "context"
 
 
 async def test_an_unbound_channel_explains_how_to_bind(slack: FakeSlack, tmp_path: Path) -> None:
@@ -239,6 +241,26 @@ async def test_bang_bypass_on_switches_the_live_client(world: World) -> None:
     await world.dispatch(message("!bypass on"))
     assert world.clients[0].modes == ["bypassPermissions"]
     assert said(world) == [texts.BYPASS_ON]
+
+
+async def test_a_notice_is_small_and_grey_a_reference_full_size(world: World) -> None:
+    # The daemon's notices read apart from Claude's replies, as the footer does (the owner,
+    # 2026-09-27); `!help`, `!guide` and `!status` stay full size, since they are read.
+    await world.dispatch(message("!bypass on"))
+    await world.dispatch(message("!help"))
+    notice, reference = world.slack.calls_to("chat.postMessage")
+    assert notice["blocks"] == [
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": texts.BYPASS_ON}]}
+    ]
+    assert [b["type"] for b in reference["blocks"]] == ["markdown"]
+
+
+async def test_a_bound_folder_is_shown_as_written_in_the_notice(world: World) -> None:
+    folder = world.root / "R&D"
+    folder.mkdir()
+    await world.dispatch(message(f"!bind {folder}"))
+    (notice,) = world.slack.calls_to("chat.postMessage")
+    assert "R&amp;D" in notice["blocks"][0]["elements"][0]["text"]
 
 
 async def test_bypass_on_while_the_channel_is_rebound_tells_the_owner(world: World) -> None:

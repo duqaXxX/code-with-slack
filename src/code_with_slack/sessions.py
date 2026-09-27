@@ -66,7 +66,7 @@ from code_with_slack.footer import (
 from code_with_slack.guards import Identity
 from code_with_slack.prompt import Prompt, user_message
 from code_with_slack.render.renderer import TurnRenderer, ended_line, one_line, task_title
-from code_with_slack.render.sinks import ReplySink, describe
+from code_with_slack.render.sinks import ReplySink, context_block, describe, notice_text
 from code_with_slack.resume import by_last_activity
 from code_with_slack.state import StateStore
 from code_with_slack.trust import workspace_trusted
@@ -964,9 +964,14 @@ class ChannelSession:
             turn.done.set()
 
     async def _post(self, text: str) -> None:
+        """A notice of the daemon's own, small and grey as the footer."""
         try:
             await self._deps.slack.chat_postMessage(
-                channel=self.channel_id, text=text, unfurl_links=False, unfurl_media=False
+                channel=self.channel_id,
+                text=text,
+                blocks=[context_block(notice_text(text))],
+                unfurl_links=False,
+                unfurl_media=False,
             )
         except Exception as exc:
             logger.error("could not post in %s: %s", self.channel_id, describe(exc))

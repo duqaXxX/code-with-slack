@@ -34,7 +34,7 @@ def test_each_session_is_a_row_with_the_picker_s_columns_and_a_button() -> None:
              git_branch="security-fixes", file_size=1_100_000),
     ]  # fmt: skip
     blocks = resume_blocks(Path("/srv/dev/app"), sessions, None, NOW)
-    assert "/srv/dev/app" in blocks[0]["text"]["text"]
+    assert "/srv/dev/app" in blocks[0]["elements"][0]["text"]
     first, second = rows(blocks)
     # The id's first characters close the row, in plain text like the rest of it.
     assert first["text"]["text"] == "Fix footer effort · 2 hours ago · main · 402.3KB · 68da9311"
@@ -70,7 +70,7 @@ def test_only_the_newest_sessions_are_listed() -> None:
     listed = rows(blocks)
     assert len(listed) == RESUME_ROWS == 20  # the maintainer, 2026-09-25: ten were too few
     assert listed[0]["accessory"]["value"].endswith("000000000000")
-    assert blocks[-1]["text"]["text"] == texts.RESUME_MORE.format(rows=RESUME_ROWS)
+    assert blocks[-1]["elements"][0]["text"] == texts.RESUME_MORE.format(rows=RESUME_ROWS)
     # An untitled session has no title to type: `!resume <id>` reaches it when its id is known.
     assert "!resume <id>" in texts.RESUME_MORE and "<title>" in texts.RESUME_MORE
 
@@ -89,7 +89,7 @@ def test_a_title_is_shown_as_written() -> None:
 
 def test_no_session_yet_says_so() -> None:
     blocks = resume_blocks(Path("/srv/dev/app"), [], None, NOW)
-    assert blocks[0]["text"]["text"] == texts.RESUME_EMPTY.format(directory="/srv/dev/app")
+    assert blocks[0]["elements"][0]["text"] == texts.RESUME_EMPTY.format(directory="/srv/dev/app")
     assert rows(blocks) == []
 
 
@@ -188,7 +188,7 @@ def test_the_branch_and_the_folder_are_shown_as_written() -> None:
     # git accepts `<`, `>` and `&` in a branch name; unescaped, `<!here>` would notify the channel.
     sessions = [info("68da9311-0000-4000-8000-000000000001", "t", 1, git_branch="fix/<!here>")]
     blocks = resume_blocks(Path("/srv/R&D"), sessions, None, NOW)
-    assert "R&amp;D" in blocks[0]["text"]["text"]
+    assert "R&amp;D" in blocks[0]["elements"][0]["text"]
     assert "fix/&lt;!here&gt;" in rows(blocks)[0]["text"]["text"]
 
 

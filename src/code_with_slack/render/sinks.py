@@ -53,6 +53,15 @@ def context_block(text: str) -> dict[str, Any]:
     return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
 
 
+# A text object's limit, as a context block's mrkdwn element holds one (Block Kit reference).
+CONTEXT_LIMIT = 3000
+
+
+def notice_text(text: str) -> str:
+    """A daemon notice fitted into one context element: cut with `…` past its limit."""
+    return text if len(text) <= CONTEXT_LIMIT else text[: CONTEXT_LIMIT - 1] + "…"
+
+
 # An empty line before the footer's divider and after the footer, so replies stand apart: Slack
 # blocks have no margin setting, so a context block holding only a zero-width space makes the gap.
 def spacer(where: str) -> dict[str, Any]:

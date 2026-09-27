@@ -14,6 +14,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- code-with-slack's own notices (the answer to `!bind`, `!bypass` and `!stop`, a restart, a
+  refused attachment, the ephemeral errors, and the lines of the `!bind` and `!resume` lists)
+  are a context block, small and grey as the footer, so they read apart from Claude's replies.
+  `!help`, `!guide`, `!status` and the answer to a resume stay full size.
 - The footer's order: model and effort, the folder, branch and changes, then tokens, context
   and limits; `!status` lists its values in the same order. The folder shows by its name alone,
   its whole path staying on `!status`, and the labels (`effort`, `tok`, `ctx`, `5h`, `7d`) are

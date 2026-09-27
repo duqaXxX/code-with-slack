@@ -1408,8 +1408,9 @@ async def test_a_stop_says_bypass_ends_only_where_it_is_on(
     h = harness_for({})
     await h.session().set_bypass(bypass)
     await asyncio.wait_for(h.manager.drain(asyncio.Event()), 2)
-    posted = [p["text"] for p in h.slack.calls_to("chat.postMessage")]
-    assert posted == ([texts.BYPASS_RESTARTING] if bypass else [])
+    posted = h.slack.calls_to("chat.postMessage")
+    assert [p["text"] for p in posted] == ([texts.BYPASS_RESTARTING] if bypass else [])
+    assert all(p["blocks"][0]["type"] == "context" for p in posted)
 
 
 async def test_an_approval_asked_during_a_stop_stays_open_and_the_turn_finishes(
