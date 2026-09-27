@@ -12,8 +12,9 @@ All notable changes to this project are documented here. The format follows
   weekly limit's reset, `7d 45% ↻ 3d 4h`, as they already did for the 5-hour one (#42).
 - Probe claim P14: a hook's `cwd` follows a `cd`, which the footer's branch depends on.
 - With the channel on Slack's "Just mentions", a reply rings once, when it is complete, and its
-  closing message opens with `@channel · Reply to: ` and the start of the owner's message; an
-  approval request, a question and a reply that ends in an error ring too. Nothing rings while Claude writes, nor for
+  closing message ends its footer with `@channel`, its notification reading `Reply to: ` and the
+  start of the owner's message; an approval request, a question and a reply that ends in an error
+  ring too. Nothing rings while Claude writes, nor for
   `!stop`, a restart or a turn started by a background task (#26). `docs/setup.md` gains the
   channel setting.
 

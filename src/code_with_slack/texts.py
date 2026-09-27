@@ -47,7 +47,6 @@ BACKGROUND_NOTICE = "_Background task update_"
 # owner's phone reliably: an edit that adds it never does, and a mention in `text` alone mostly
 # does not (measured on iOS 2026-09-27, #26). `text` is what the notification shows.
 MENTION = "<!channel>"
-RING_LINE = "<!channel> · Reply to: {prompt}"
 REPLY_TO = "Reply to: {prompt}"
 PROMPT_IMAGE = "an image"
 COMPACTED = "Compacted the conversation: {before} → {after} tokens."

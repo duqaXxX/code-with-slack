@@ -644,6 +644,7 @@ def running_block(blocks: list[dict[str, Any]]) -> str | None:
     blocks = [b for b in blocks if not str(b.get("block_id", "")).startswith("spacer")]
     footer = blocks[-1] if blocks and blocks[-1].get("type") == "context" else None
     text = str(footer["elements"][0]["text"]) if footer else ""
+    text = text.removesuffix(f" · {texts.MENTION}")  # a ringing reply's mention ends the line
     return text[text.index("⏳") :] if "⏳" in text else None
 
 
@@ -1387,7 +1388,7 @@ async def test_status_shows_the_tasks_still_running_as_the_latest_reply_does(
     h = harness_for({"turns": [first]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    assert statuses(h)[-1].endswith("⏳ 1 shell")
+    assert statuses(h)[-1].endswith(f"⏳ 1 shell · {texts.MENTION}")
     assert (await session.status()).endswith("\nBackground: `1 shell`")
 
 

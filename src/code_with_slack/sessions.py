@@ -986,7 +986,7 @@ class ChannelSession:
             else approval_blocks(approval_id, tool_name, tool_input, context)
         )
         # A request stops the turn until the owner answers: it rings, as a question does.
-        blocks = [context_block(texts.MENTION), *blocks]
+        blocks = [*blocks, context_block(texts.MENTION)]
         try:
             try:
                 posted = await self._deps.slack.chat_postMessage(

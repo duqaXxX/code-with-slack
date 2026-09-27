@@ -79,8 +79,8 @@ In Slack, open your profile, choose the **⋮** button, then **Copy member ID** 
    them better, but Slack offers those on paid plans only.
 2. In the channel, run `/invite @code-with-slack`.
 3. Open the channel's notification settings and choose **Just mentions**, with `@channel`
-   mentions not ignored. The bot writes `@channel` only at the end of a complete reply, in an
-   approval request and in a question, so with this setting those ring and nothing else does.
+   mentions not ignored. The bot writes `@channel` only at the end of a complete reply's footer,
+   in an approval request and in a question, so with this setting those ring and nothing else does.
    With **All new posts**, every message the bot posts rings.
 
 The bot sees private channels it was invited to, and nothing else.
@@ -314,12 +314,15 @@ can follow what it does: the call alone, or `✗` and its error when it failed. 
 the footer follow in a closing message of its own. A reply longer than one Slack message continues in the next one.
 
 With the channel on **Just mentions**, a reply rings once, when it is complete: the closing
-message is posted then, and opens with a small grey line, `@channel · Reply to: ` and the start
-of your message; the notification reads `Reply to: ` and the same start. Nothing rings while
-Claude writes, nor for a reply ended by `!stop`, a restart or a background task. A reply that ends
-in an error rings. The closing message goes when a newer reply starts, as the footer does, except
-when the reply ends below a newer one (a message you sent while it ran): then it keeps its
-`@channel` line, which says which message it answers.
+message is posted then, with `@channel` at the end of the footer line, and the notification reads
+`Reply to: ` and the start of your message. Nothing rings while Claude writes, nor for a reply
+ended by `!stop`, a restart or a background task. A reply that ends in an error rings. The closing
+message goes when a newer reply starts, as the footer does, except when the reply ends below a
+newer one (a message you sent while it ran): then it stays, holding `@channel` alone.
+
+A second notification from the channel shortly after a first one may not arrive: of the probe
+messages sent about 40 seconds after a ringing one, most stayed silent. Slack does not document
+this.
 
 An approval request is a message of its own below the reply, and rings, as a question does; once you decide, it disappears and
 the tool's line in the reply records the call. If Slack does not accept the request, Claude Code

@@ -771,7 +771,8 @@ async def test_finish_with_reply_to_posts_a_ringing_closing_message_after_the_bo
     assert len(posts) == 2  # the body, then the closing message
     closing = posts[-1]
     assert closing["text"] == "Reply to: the question?"
-    assert closing["blocks"][0] == sinks.context_block("<!channel> · Reply to: the question?")
+    # No line of its own: the mention ends the footer line.
+    assert sinks.context_block("footer · <!channel>") in closing["blocks"]
     assert rings(closing)
 
 
@@ -807,12 +808,12 @@ async def test_reply_to_on_a_reply_not_latest_at_finish_pins_the_question(
     await sink.text("Done.")
     await sink.set_latest(False)  # superseded before it even finishes
     await sink.finish([], "footer", reply_to="the question?")
-    pinned = sinks.context_block(texts.RING_LINE.format(prompt="the question?"))
+    pinned = sinks.context_block(texts.MENTION)
     assert slack.message_blocks()[-1] == [pinned]  # no footer: it is not the latest reply
     await sink.set_running("⏳ 1 shell")  # still not latest: no effect
     assert slack.message_blocks()[-1] == [pinned]
-    await sink.set_latest(True)  # a later change: the pinned line is kept, not dropped
-    assert pinned in slack.message_blocks()[-1]
+    await sink.set_latest(True)  # a later change: the mention is kept, now after the footer
+    assert sinks.context_block("footer · ⏳ 1 shell · <!channel>") in slack.message_blocks()[-1]
 
 
 async def test_a_failed_closing_post_is_retried_by_the_final_retry(
@@ -839,5 +840,5 @@ async def test_reply_to_with_special_characters_is_escaped(slack: FakeSlack) -> 
     closing = slack.calls_to("chat.postMessage")[-1]
     escaped_prompt = mrkdwn_escape("<a> & <b>")
     assert closing["text"] == texts.REPLY_TO.format(prompt=escaped_prompt)
-    line = texts.RING_LINE.format(prompt=escaped_prompt)
-    assert slack.message_blocks()[-1] == [sinks.context_block(line)]
+    # With no footer, the mention stands alone: the question shows only in the notification.
+    assert slack.message_blocks()[-1] == [sinks.context_block(texts.MENTION)]

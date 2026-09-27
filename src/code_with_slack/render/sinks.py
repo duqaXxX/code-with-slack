@@ -427,17 +427,18 @@ class ReplySink:
         return messages
 
     def _closing_blocks(self) -> list[dict[str, Any]]:
-        """The closing message: the mention line of a reply that rings, then the footer and what
-        still runs. Only the channel's latest reply shows them, so a newer reply removes the
-        closing message, unless it was already newer when this one ended. Empty: none."""
-        blocks = []
-        if self._reply_to is not None and (self._latest or self._ring_kept):
-            line = texts.RING_LINE.format(prompt=mrkdwn_escape(self._reply_to))
-            blocks.append(context_block(line))
-        last_line = " · ".join(filter(None, (self._footer, self._running))) if self._latest else ""
-        if last_line:
-            blocks += [SPACER_ABOVE, {"type": "divider"}, context_block(last_line), SPACER_BELOW]
-        return blocks
+        """The closing message: the footer and what still runs, then the mention of a reply that
+        rings, at the end of the line. Only the channel's latest reply shows them, so a newer
+        reply removes the closing message, unless it was already newer when this one ended: then
+        the mention stands alone. Empty: no closing message."""
+        rings = self._reply_to is not None and (self._latest or self._ring_kept)
+        footer = (self._footer, self._running) if self._latest else ()
+        last_line = " · ".join(filter(None, (*footer, texts.MENTION if rings else None)))
+        if not last_line:
+            return []
+        if not any(footer):
+            return [context_block(last_line)]
+        return [SPACER_ABOVE, {"type": "divider"}, context_block(last_line), SPACER_BELOW]
 
     def _closing_text(self) -> str:
         """What the notification shows: the question a ringing reply answers, or the footer."""

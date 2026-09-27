@@ -156,13 +156,13 @@ The closing message is also the reply's notification. With the channel on "Just 
 bot message rings when it is new and its blocks carry `<!channel>`; a `chat.update` never rings,
 and a mention in `text` alone mostly does not (measured on iOS, 2026-09-27, ten probe messages;
 Slack's reference is silent on all three). So every write while Claude works is silent, and the
-closing message opens with `texts.RING_LINE` in a context block, its `text` reading
+closing message ends its footer line with `texts.MENTION`, its `text` reading
 `texts.REPLY_TO`, when `ReplySink.finish` gets `reply_to`: `ChannelSession._finish` passes the owner's message (`sessions.asked`) for an
 owner turn that was not interrupted, `ChannelSession._fail` for an error (a Claude Code process
 that exits rings once, on the first reply it ends, `ChannelSession._abandon`), never for a stop, a
 restart or a turn Claude Code started for a background task. A ringing reply that ends below a
-newer one keeps its closing message, the mention line alone, which names the message it answers.
-An approval request or a question opens with a context block holding `texts.MENTION`.
+newer one keeps its closing message, the mention alone.
+An approval request or a question ends with a context block holding `texts.MENTION`.
 
 Slack's native streaming API (`chat.startStream`) is not used: in an ordinary channel it works
 only inside a thread, and replies belong in the main window. A write Slack refuses, or cannot
