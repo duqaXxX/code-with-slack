@@ -80,6 +80,13 @@ All notable changes to this project are documented here. The format follows
 
 First release.
 
+- A probe for new `claude-agent-sdk` releases, `uv run python -m probe`, described in
+  `CONTRIBUTING.md`. It drives the daemon's `SessionManager` against the real bundled CLI, with
+  Slack faked, through twelve claims: a session starts, `!status`, a text, image and file prompt,
+  `!resume`, `!stop` on a turn and on a background command, a Bash call's line, approvals and
+  bypass. A release is certified in `probe/certified-versions.json` when every claim the probe
+  causes itself holds or is retired.
+  The SDK release watch's issue now asks for the probe instead of the checks by hand.
 - Package scaffold: `pyproject.toml` with pinned dependencies, MIT license, docs test.
 - CI (sensitive-data scan; tests, types, lint), the published text scan, Dependabot for uv and
   GitHub Actions.

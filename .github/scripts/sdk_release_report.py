@@ -42,6 +42,9 @@ def report(
         return None
     cli_changed = latest_cli != fixture_cli
     steps = [
+        "- [ ] On the owner's machine, `uv run python -m probe --latest` certifies the release; "
+        "work through its hand checklist, if it prints one. Never pin a release with a BROKEN "
+        "claim.",
         "- [ ] Merge the Dependabot pull request that moves the pin, or move it by hand.",
         "- [ ] `uv run pytest -q`, `uv run mypy src`, `uv run ruff check .` pass on the new pin.",
     ]
@@ -50,10 +53,6 @@ def report(
             f"- [ ] The bundled CLI moved from {fixture_cli} to {latest_cli}: re-record the SDK "
             "streams the fixtures hold and compare their shapes."
         )
-    steps.append(
-        "- [ ] Live, in a test workspace: a prompt with tools, an approval, `!resume`, "
-        "an attached image and file."
-    )
     body = "\n".join(
         [
             f"`claude-agent-sdk` {latest} is on PyPI; code-with-slack pins {pinned}.",
