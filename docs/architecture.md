@@ -146,9 +146,23 @@ call that ends within the one-second rewrite would otherwise never show. Then it
 the counts.
 The reply is posted as soon as the owner's message is queued, showing only a status line:
 `Claude is writing…`, or `Waiting for the previous reply…` behind another turn. While the turn
-runs the status stays last; when it ends, a divider and the footer replace it. Only the
-channel's latest reply shows the footer: a new reply takes it over (`ReplySink.set_latest`), so
-it stays at the bottom of the channel as the terminal's status line. A reply longer than about 11,000 characters continues in a new message.
+runs the status stays last; when it ends, the status goes and a closing message is posted below
+the reply, holding a divider and the footer (`ReplySink._write_closing`). Only the channel's
+latest reply shows the footer: a new reply takes it over (`ReplySink.set_latest`), so it stays at
+the bottom of the channel as the terminal's status line, and a closing message left empty is
+deleted. A reply longer than about 11,000 characters continues in a new message.
+
+The closing message is also the reply's notification. With the channel on "Just mentions", a
+bot message rings when it is new and its blocks carry `<!channel>`; a `chat.update` never rings,
+and a mention in `text` alone mostly does not (measured on iOS, 2026-09-27, ten probe messages;
+Slack's reference is silent on all three). So every write while Claude works is silent, and the
+closing message opens with `texts.RING_LINE` in a context block, its `text` reading
+`texts.REPLY_TO`, when `ReplySink.finish` gets `reply_to`: `ChannelSession._finish` passes the owner's message (`sessions.asked`) for an
+owner turn that was not interrupted, `ChannelSession._fail` for an error (a Claude Code process
+that exits rings once, on the first reply it ends, `ChannelSession._abandon`), never for a stop, a
+restart or a turn Claude Code started for a background task. A ringing reply that ends below a
+newer one keeps its closing message, the mention line alone, which names the message it answers.
+An approval request or a question opens with a context block holding `texts.MENTION`.
 
 Slack's native streaming API (`chat.startStream`) is not used: in an ordinary channel it works
 only inside a thread, and replies belong in the main window. A write Slack refuses, or cannot
@@ -157,7 +171,7 @@ stops the Claude Code session. Every message the daemon posts turns link and med
 (`unfurl_links`, `unfurl_media`), so a link in Claude's text is never fetched by Slack on its
 own. The final rewrite has no next one: when Slack refuses its content
 (`invalid_blocks`, `msg_too_long` and the like, not a rate limit), that message is written once
-more as plain text, its text and the footer with no blocks, and the rewrite goes on to the next
+more as plain text, its text with no blocks, and the rewrite goes on to the next
 messages, so none keeps saying `Claude is writing…`. A final rewrite that fails for any other
 reason (the network, or a rate limit slack-sdk has already retried) is tried once more after
 `FINAL_RETRY_SECONDS`.

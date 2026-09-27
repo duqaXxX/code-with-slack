@@ -10,9 +10,10 @@ from slack_sdk.errors import SlackApiError
 
 from code_with_slack import texts
 from code_with_slack.render import sinks
+from code_with_slack.render.escape import mrkdwn_escape
 from code_with_slack.render.renderer import STOPPED, TaskUpdate, TurnRenderer
 from code_with_slack.render.sinks import ReplySink
-from tests.fakes import CHANNEL, FakeSlack, sdk_messages
+from tests.fakes import CHANNEL, FakeSlack, rings, sdk_messages
 
 
 @pytest.fixture(autouse=True)
@@ -33,7 +34,9 @@ def reply(slack: FakeSlack) -> ReplySink:
     return ReplySink(slack, channel=CHANNEL)
 
 
-async def test_a_reply_is_one_message_in_the_main_window(slack: FakeSlack) -> None:
+async def test_a_reply_s_body_is_one_message_and_the_closing_message_follows(
+    slack: FakeSlack,
+) -> None:
     sink = reply(slack)
     await sink.text("Looking at the files.")
     await sink.task(TaskUpdate("t1", "Bash: ls", "in_progress"))
@@ -41,7 +44,8 @@ async def test_a_reply_is_one_message_in_the_main_window(slack: FakeSlack) -> No
     await sink.task(TaskUpdate("t1", "Bash: ls", "complete"))
     await sink.finish([], "main · ctx 6%")
     posts = slack.calls_to("chat.postMessage")
-    assert len(posts) == 1 and posts[0].get("thread_ts") is None
+    # the body, then the closing message that carries the footer; neither is in a thread.
+    assert len(posts) == 2 and all(p.get("thread_ts") is None for p in posts)
     assert all(a["ts"] == slack.posted_ts[0] for a in slack.calls_to("chat.update"))
     assert last_blocks(slack)[-2] == {
         "type": "context",
@@ -112,8 +116,10 @@ async def test_a_long_reply_continues_in_a_new_message(slack: FakeSlack) -> None
     await sink.text(text)
     await sink.finish([], "footer")
     posts = slack.calls_to("chat.postMessage")
-    assert len(posts) >= 3
-    chunks = [next(b["text"] for b in p["blocks"] if b["type"] == "markdown") for p in posts]
+    # the body's messages carry markdown; the closing message that follows them does not.
+    body_posts = [p for p in posts if any(b["type"] == "markdown" for b in p["blocks"])]
+    assert len(body_posts) >= 3
+    chunks = [next(b["text"] for b in p["blocks"] if b["type"] == "markdown") for p in body_posts]
     assert all(len(c) <= sinks.MESSAGE_LIMIT for c in chunks)
     assert "\n".join(chunks) == text
     assert last_blocks(slack)[-2]["elements"][0]["text"] == "footer"
@@ -138,15 +144,17 @@ async def test_a_slack_failure_never_raises(slack: FakeSlack) -> None:
     await sink.finish([], "footer")
 
 
-async def test_a_divider_separates_the_reply_from_its_footer(slack: FakeSlack) -> None:
+async def test_a_divider_separates_the_closing_message_from_the_footer(slack: FakeSlack) -> None:
     sink = reply(slack)
     await sink.text("Done.")
     await sink.finish([], "main · ctx 6%")
-    blocks = last_blocks(slack)
-    assert [b["type"] for b in blocks] == ["markdown", "context", "divider", "context", "context"]
+    body, closing = slack.message_blocks()
+    assert [b["type"] for b in body] == ["markdown"]  # the footer never sits in the body
+    assert [b["type"] for b in closing] == ["context", "divider", "context", "context"]
     assert (
-        blocks[1] == sinks.SPACER_ABOVE and blocks[-1] == sinks.SPACER_BELOW
+        closing[0] == sinks.SPACER_ABOVE and closing[-1] == sinks.SPACER_BELOW
     )  # an empty line before and after the footer
+    assert closing[2] == sinks.context_block("main · ctx 6%")
 
 
 async def test_opening_shows_the_status_before_any_content(slack: FakeSlack) -> None:
@@ -166,11 +174,12 @@ async def test_running_counts_join_the_footer_of_a_finished_reply(slack: FakeSla
     await sink.finish([], "footer")
     await sink.set_running("⏳ 1 shell")
     shown = last_blocks(slack)  # written at once: no rewrite is scheduled after the end
-    assert [b["type"] for b in shown] == ["markdown", "context", "divider", "context", "context"]
+    assert [b["type"] for b in shown] == ["context", "divider", "context", "context"]
     assert shown[-2] == sinks.context_block("footer · ⏳ 1 shell")
     await sink.set_running("")
     assert last_blocks(slack)[-2] == sinks.context_block("footer")
-    assert len(slack.calls_to("chat.postMessage")) == 1
+    # the body posted once, the closing message once: running counts only ever update it.
+    assert len(slack.calls_to("chat.postMessage")) == 2
 
 
 async def test_running_counts_stand_alone_when_a_reply_has_no_footer(slack: FakeSlack) -> None:
@@ -178,13 +187,16 @@ async def test_running_counts_stand_alone_when_a_reply_has_no_footer(slack: Fake
     await sink.text("The command finished.")
     await sink.finish([], None)
     assert [b["type"] for b in last_blocks(slack)] == ["markdown"]
+    # nothing to show yet: no closing message exists until something (here, a running count) does.
+    assert len(slack.calls_to("chat.postMessage")) == 1
     await sink.set_running("⏳ 1 agent")
-    assert last_blocks(slack)[1:] == [
+    assert last_blocks(slack) == [
         sinks.SPACER_ABOVE,
         {"type": "divider"},
         sinks.context_block("⏳ 1 agent"),
         sinks.SPACER_BELOW,
     ]
+    assert len(slack.calls_to("chat.postMessage")) == 2  # the closing message now exists
 
 
 async def test_running_counts_follow_the_status_while_writing(slack: FakeSlack) -> None:
@@ -203,7 +215,7 @@ async def test_unchanged_running_counts_write_nothing(slack: FakeSlack) -> None:
     assert len(writes(slack)) == before
 
 
-async def test_closing_several_lines_writes_the_reply_once(slack: FakeSlack) -> None:
+async def test_closing_several_lines_writes_the_body_once(slack: FakeSlack) -> None:
     sink = reply(slack)
     await sink.text("Working.")
     await asyncio.sleep(0.05)
@@ -211,18 +223,24 @@ async def test_closing_several_lines_writes_the_reply_once(slack: FakeSlack) -> 
     await sink.finish(
         [TaskUpdate(f"t{i}", f"Bash: step {i}", "complete") for i in range(5)], "footer"
     )
-    assert len(writes(slack)) == before + 1
+    # one write for the body's final form, whatever the number of lines closing it, and one more
+    # to post the closing message: never one write per line.
+    assert len(writes(slack)) == before + 2
 
 
-async def test_text_after_the_end_keeps_the_footer(slack: FakeSlack) -> None:
+async def test_text_after_the_end_appends_to_the_body_and_leaves_the_closing_message(
+    slack: FakeSlack,
+) -> None:
     sink = reply(slack)
     await sink.text("Done.")
     await sink.finish([], "footer")
+    posts_before = len(slack.calls_to("chat.postMessage"))  # the body, then the closing message
     await sink.text("\n\nA late error.")
     await asyncio.sleep(0.05)
-    shown = last_blocks(slack)
-    assert "A late error." in shown[0]["text"]
-    assert shown[-2] == sinks.context_block("footer")
+    body, closing = slack.message_blocks()
+    assert "A late error." in body[0]["text"]
+    assert closing[2] == sinks.context_block("footer")
+    assert len(slack.calls_to("chat.postMessage")) == posts_before  # the closing never re-rings
 
 
 def tool(id: str, name: str, status: str = "complete", **fields: Any) -> TaskUpdate:
@@ -410,13 +428,18 @@ async def test_tool_lines_escape_what_slack_mrkdwn_reads_as_markup(slack: FakeSl
     assert last_blocks(slack)[0]["elements"][0]["text"] == "⏳ `Bash: a &lt; b &amp;&amp; c &gt; d`"
 
 
-async def test_a_reply_that_is_no_longer_the_latest_drops_its_footer(slack: FakeSlack) -> None:
+async def test_a_reply_that_is_no_longer_latest_removes_its_closing_message(
+    slack: FakeSlack,
+) -> None:
     sink = reply(slack)
     await sink.text("Done.")
     await sink.finish([], "footer")
     await sink.set_running("⏳ 1 shell")
+    closing_ts = slack.posted_ts[-1]
     await sink.set_latest(False)
-    assert [b["type"] for b in last_blocks(slack)] == ["markdown"]
+    # the body never carried the footer; the closing message, with nothing left to show, goes.
+    assert [b["type"] for b in slack.message_blocks()[0]] == ["markdown"]
+    assert [a["ts"] for a in slack.calls_to("chat.delete")] == [closing_ts]
 
 
 async def test_a_tool_block_stays_under_slack_s_limit_once_escaped(slack: FakeSlack) -> None:
@@ -434,8 +457,12 @@ async def test_an_empty_finished_reply_that_is_no_longer_latest_goes(slack: Fake
     sink = reply(slack)
     await sink.open(texts.WRITING)
     await sink.finish([], "footer")
-    await sink.set_latest(False)
+    # the body carries no text or tool line: it goes at once. The footer still shows in a closing
+    # message, since the reply is (still) the channel's latest.
     assert [a["ts"] for a in slack.calls_to("chat.delete")] == [slack.posted_ts[0]]
+    await sink.set_latest(False)
+    # no longer latest: the closing message has nothing left to show either.
+    assert [a["ts"] for a in slack.calls_to("chat.delete")] == list(slack.posted_ts)
 
 
 async def test_every_block_id_in_a_message_is_unique(slack: FakeSlack) -> None:
@@ -464,10 +491,11 @@ async def test_a_refused_final_write_is_retried_as_plain_text(slack: FakeSlack) 
     await sink.task(TaskUpdate("t1", "Bash: ls", "complete"))
     slack.responses["chat.update"] = [rejected("invalid_blocks"), {"ok": True}]
     await sink.finish([], "main · ctx 6%")
-    final = writes(slack)[-1]
+    final = slack.calls_to("chat.update")[-1]  # the body's plain-text fallback, not the closing
     # No blocks: Slack then renders the text and drops the old ones, "Claude is writing…" too.
+    # The footer lives in the closing message now, so it is not repeated here.
     assert final["blocks"] == []
-    assert final["text"] == "All **done**.\n\nmain · ctx 6%"
+    assert final["text"] == "All **done**."
 
 
 async def test_a_refused_draft_write_is_not_retried(slack: FakeSlack) -> None:
@@ -494,13 +522,16 @@ async def test_a_plain_retry_still_finishes_the_reply_s_later_messages(slack: Fa
     await sink.text("x" * 15_000)  # the status line ends up on a later message
     await asyncio.sleep(0.05)
     assert len(slack.posted_ts) > 1
+    continuation_ts = slack.posted_ts[-1]  # the body's second message, before the closing exists
     # Folding changes the first message only; Slack refuses that write once.
     slack.responses["chat.update"] = [rejected("invalid_blocks"), {"ok": True}]
     await sink.finish([], "main · ctx 6%")
     last_write = {w.get("ts") or w.get("channel"): w for w in slack.calls_to("chat.update")}
-    final = last_write[slack.posted_ts[-1]]
+    final = last_write[continuation_ts]
     assert texts.WRITING not in str(final)
-    assert "main · ctx 6%" in str(final)
+    # the footer now lives in the closing message, posted after the body.
+    closing = slack.message_blocks()[-1]
+    assert sinks.block_text(closing[2]) == "main · ctx 6%"
 
 
 async def test_a_rate_limited_final_write_is_not_turned_into_plain_text(slack: FakeSlack) -> None:
@@ -566,7 +597,8 @@ async def test_ending_a_reply_during_a_write_loses_no_message(
     await asyncio.sleep(0.02)
     gate.set()
     await ending
-    assert len(slack.posted_ts) == 2
+    # the two body messages, and the closing message finish() adds after them: none duplicated.
+    assert len(slack.posted_ts) == 3
     assert all(texts.WRITING not in text for text in slack.message_texts())
 
 
@@ -582,7 +614,7 @@ async def test_a_draft_rewrite_that_lands_after_the_end_changes_nothing(slack: F
     await sink.text("Done.")
     await sink.finish([], "main · ctx 6%")
     before = len(writes(slack))
-    await sink._flush(final=False, footer=None)  # a debounced rewrite that was already running
+    await sink._flush(final=False)  # a debounced rewrite that was already running
     assert len(writes(slack)) == before
 
 
@@ -727,3 +759,85 @@ def test_a_notice_fits_one_context_element() -> None:
     assert sinks.notice_text("short") == "short"
     cut = sinks.notice_text("x" * (sinks.CONTEXT_LIMIT + 10))
     assert len(cut) == sinks.CONTEXT_LIMIT and cut.endswith("…")
+
+
+async def test_finish_with_reply_to_posts_a_ringing_closing_message_after_the_body(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.text("Done.")
+    await sink.finish([], "footer", reply_to="the question?")
+    posts = slack.calls_to("chat.postMessage")
+    assert len(posts) == 2  # the body, then the closing message
+    closing = posts[-1]
+    assert closing["text"] == "Reply to: the question?"
+    assert closing["blocks"][0] == sinks.context_block("<!channel> · Reply to: the question?")
+    assert rings(closing)
+
+
+async def test_finish_without_reply_to_has_no_mention_in_the_closing_text(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.text("Done.")
+    await sink.finish([], "footer")
+    closing = slack.calls_to("chat.postMessage")[-1]
+    assert not rings(closing) and "<!channel>" not in closing["text"]
+
+
+async def test_after_finish_only_updates_and_deletes_follow_no_new_post(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.text("Done.")
+    await sink.finish([], "footer", reply_to="the question?")
+    before = len(slack.calls_to("chat.postMessage"))
+    await sink.set_running("⏳ 1 shell")
+    await sink.set_running("")
+    await sink.set_latest(False)
+    # the closing message rang once, when it was posted: nothing later posts a new one.
+    assert len(slack.calls_to("chat.postMessage")) == before
+    assert slack.calls_to("chat.update") or slack.calls_to("chat.delete")
+
+
+async def test_reply_to_on_a_reply_not_latest_at_finish_pins_the_question(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.text("Done.")
+    await sink.set_latest(False)  # superseded before it even finishes
+    await sink.finish([], "footer", reply_to="the question?")
+    pinned = sinks.context_block(texts.RING_LINE.format(prompt="the question?"))
+    assert slack.message_blocks()[-1] == [pinned]  # no footer: it is not the latest reply
+    await sink.set_running("⏳ 1 shell")  # still not latest: no effect
+    assert slack.message_blocks()[-1] == [pinned]
+    await sink.set_latest(True)  # a later change: the pinned line is kept, not dropped
+    assert pinned in slack.message_blocks()[-1]
+
+
+async def test_a_failed_closing_post_is_retried_by_the_final_retry(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.01)
+    sink = reply(slack)
+    await sink.text("Done.")
+    slack.responses["chat.postMessage"] = [
+        {"ok": True, "ts": "1.1"},  # the body
+        aiohttp.ClientConnectionError("network down"),  # the closing message, once
+        {"ok": True, "ts": "2.2"},  # the retry
+    ]
+    await sink.finish([], "footer")
+    await asyncio.sleep(0.05)
+    assert len(slack.calls_to("chat.postMessage")) == 3  # body, failed attempt, successful retry
+    assert slack.posted_ts == ["1.1", "2.2"]
+
+
+async def test_reply_to_with_special_characters_is_escaped(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.text("Done.")
+    await sink.finish([], None, reply_to="<a> & <b>")
+    closing = slack.calls_to("chat.postMessage")[-1]
+    escaped_prompt = mrkdwn_escape("<a> & <b>")
+    assert closing["text"] == texts.REPLY_TO.format(prompt=escaped_prompt)
+    line = texts.RING_LINE.format(prompt=escaped_prompt)
+    assert slack.message_blocks()[-1] == [sinks.context_block(line)]

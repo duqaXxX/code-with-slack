@@ -62,7 +62,9 @@ class TaskUpdate:
 class Sink(Protocol):
     async def text(self, markdown: str) -> None: ...
     async def task(self, update: TaskUpdate) -> None: ...
-    async def finish(self, closing: list[TaskUpdate], footer: str | None) -> None: ...
+    async def finish(
+        self, closing: list[TaskUpdate], footer: str | None, *, reply_to: str | None = None
+    ) -> None: ...
 
 
 def one_line(value: str, limit: int) -> str:
@@ -181,9 +183,10 @@ class TurnRenderer:
         """Whether this reply holds the line of that tool call, or of the subagent it runs in."""
         return tool_use_id in self._lines or tool_use_id in self._root_of
 
-    async def close(self, footer: str | None) -> None:
+    async def close(self, footer: str | None, *, reply_to: str | None = None) -> None:
         """End the reply: every open tool line is closed, except a task still running, whose line
-        stays open until its own end arrives through `feed` or `stop_running`."""
+        stays open until its own end arrives through `feed` or `stop_running`. `reply_to` makes
+        the end notify the owner (`ReplySink.finish`)."""
         interrupted = self.result is not None and self.result.terminal_reason in INTERRUPTED
         if not self._wrote_text and not self._lines:
             # A command that prints nothing (a local one, say) still gets a visible answer.
@@ -197,7 +200,7 @@ class TurnRenderer:
             if entry.id in running or entry.status in ("pending", "in_progress")
         ]
         self._lines.update((entry.id, entry) for entry in closing)
-        await self._sink.finish(closing, footer)
+        await self._sink.finish(closing, footer, reply_to=reply_to)
 
     async def stop_running(self) -> None:
         """The Claude Code process is gone and its tasks with it: close their lines as stopped."""

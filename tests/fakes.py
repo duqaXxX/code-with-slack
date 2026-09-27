@@ -28,6 +28,11 @@ CHANNEL = "C000CHAN"
 BOT = "U000BOT"
 
 
+def rings(post: dict[str, Any]) -> bool:
+    """Whether a posted message rings the owner on "Just mentions": @channel in its blocks."""
+    return "<!channel>" in json.dumps(post.get("blocks") or [])
+
+
 def sdk_messages(name: str) -> list[Message]:
     out: list[Message] = []
     for line in (FIXTURES / "sdk" / f"{name}.jsonl").read_text().splitlines():

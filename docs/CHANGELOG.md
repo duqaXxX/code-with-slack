@@ -11,9 +11,16 @@ All notable changes to this project are documented here. The format follows
   `(+42,-10)`, counted as the terminal's ccstatusline counts them (#39), and the time to the
   weekly limit's reset, `7d 45% ↻ 3d 4h`, as they already did for the 5-hour one (#42).
 - Probe claim P14: a hook's `cwd` follows a `cd`, which the footer's branch depends on.
+- With the channel on Slack's "Just mentions", a reply rings once, when it is complete, and its
+  closing message opens with `@channel · Reply to: ` and the start of the owner's message; an
+  approval request, a question and a reply that ends in an error ring too. Nothing rings while Claude writes, nor for
+  `!stop`, a restart or a turn started by a background task (#26). `docs/setup.md` gains the
+  channel setting.
 
 ### Changed
 
+- The footer is a closing message of its own, posted when the reply ends. A reply that ends
+  below a newer one says which message it answers.
 - An Edit or Write diff shows whole, as the terminal shows it, in a collapsible full-width
   container closed by default: the call's line is its title and `Added … lines, removed … lines`
   its subtitle. It no longer stops at 20 lines.

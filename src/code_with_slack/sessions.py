@@ -65,7 +65,13 @@ from code_with_slack.footer import (
 )
 from code_with_slack.guards import Identity
 from code_with_slack.prompt import Prompt, user_message
-from code_with_slack.render.renderer import TurnRenderer, ended_line, one_line, task_title
+from code_with_slack.render.renderer import (
+    INTERRUPTED,
+    TurnRenderer,
+    ended_line,
+    one_line,
+    task_title,
+)
 from code_with_slack.render.sinks import ReplySink, context_block, describe, notice_text
 from code_with_slack.resume import by_last_activity
 from code_with_slack.state import StateStore
@@ -103,6 +109,8 @@ SUMMARY_IS_END_LINE = {"local_bash"}
 TASK_REPLIES_KEPT = 100
 # How often a stopping daemon checks whether every channel's turns have ended.
 DRAIN_POLL_SECONDS = 0.5
+# How much of the owner's question a notification quotes.
+ASKED_LIMIT = 100
 
 
 class DirectoryUnavailable(Exception):
@@ -161,6 +169,15 @@ ClientFactory = Callable[[ClaudeAgentOptions], ClaudeClient]
 
 def default_client_factory(options: ClaudeAgentOptions) -> ClaudeClient:
     return ClaudeSDKClient(options)
+
+
+def asked(prompt: Prompt) -> str:
+    """The owner's question on one line, as the notification of its reply quotes it."""
+    if isinstance(prompt, str):
+        text = prompt
+    else:
+        text = " ".join(block["text"] for block in prompt if block["type"] == "text")
+    return one_line(text, ASKED_LIMIT) if text.strip() else texts.PROMPT_IMAGE
 
 
 def injected_turn(result: ResultMessage) -> bool:
@@ -570,13 +587,15 @@ class ChannelSession:
                 await turn.done.wait()
             except DirectoryUnavailable as exc:
                 self._taken = None
-                await self._fail(turn, exc.message)
+                await self._fail(turn, exc.message, notify=True)
             except Exception as exc:  # a failed turn must not stop the channel's queue
                 self._taken = None
                 logger.error("turn failed in %s: %s", self.channel_id, type(exc).__name__)
                 if turn in self._sent:
                     self._sent.remove(turn)
-                await self._fail(turn, texts.ERROR_REPLY.format(error=type(exc).__name__))
+                await self._fail(
+                    turn, texts.ERROR_REPLY.format(error=type(exc).__name__), notify=True
+                )
 
     async def _read(self, client: ClaudeClient) -> None:
         """Follow the client's stream until it ends; whatever ends it, release the channel."""
@@ -597,7 +616,7 @@ class ChannelSession:
         if self._client is client:
             self._client = None
         try:
-            await self._abandon(texts.ERROR_REPLY.format(error=reason))
+            await self._abandon(texts.ERROR_REPLY.format(error=reason), error=True)
         finally:
             with contextlib.suppress(Exception):
                 await client.disconnect()
@@ -769,7 +788,9 @@ class ChannelSession:
             await renderer.feed(message)
         await self._close_reply(renderer, None)
 
-    async def _close_reply(self, renderer: TurnRenderer, footer: str | None) -> None:
+    async def _close_reply(
+        self, renderer: TurnRenderer, footer: str | None, reply_to: str | None = None
+    ) -> None:
         for task_id in renderer.running_tasks:
             self._task_replies[task_id] = renderer
         ended = [t for t, r in self._task_replies.items() if t not in r.running_tasks]
@@ -777,7 +798,7 @@ class ChannelSession:
             del self._task_replies[task_id]
         # Before the close, so the reply's last write already carries the list.
         await self._show_running()
-        await renderer.close(footer)
+        await renderer.close(footer, reply_to=reply_to)
 
     async def _stop_task_replies(self) -> None:
         """The Claude Code process is going away with its tasks: no reply keeps showing one."""
@@ -846,7 +867,12 @@ class ChannelSession:
                     "could not build the footer in %s: %s", self.channel_id, describe(exc)
                 )
                 footer = None
-            await self._close_reply(active.renderer, footer)
+            # The owner's own turn rings once complete; one Claude Code started for a background
+            # task does not (the prompt that started the task rang), nor one `!stop` cut short.
+            turn, stopped = active.turn, result.terminal_reason in INTERRUPTED
+            owner = turn is not None and not injected_turn(result)
+            reply_to = asked(turn.prompt) if turn is not None and owner and not stopped else None
+            await self._close_reply(active.renderer, footer, reply_to)
         finally:
             await self._settle(active.turn, result)
 
@@ -858,7 +884,7 @@ class ChannelSession:
         if turn is None and not injected and self._sent:
             logger.warning("an owner reply in %s went to a background reply", self.channel_id)
             owner = self._sent.popleft()
-            await self._fail(owner, texts.REPLY_ABOVE)
+            await self._fail(owner, texts.REPLY_ABOVE, notify=True)
             self._expect_injected_turn()
         elif turn is not None and injected:
             logger.warning("a background reply in %s went to an owner reply", self.channel_id)
@@ -872,21 +898,26 @@ class ChannelSession:
         else:
             self._settled.set()
 
-    async def _abandon(self, line: str) -> None:
+    async def _abandon(self, line: str, *, error: bool = False) -> None:
         """The client is gone: end the reply that was open, and every sent turn's, with `line`,
-        and release whoever waits on them."""
+        and release whoever waits on them. An `error` rings once, on the first owner reply it
+        ends: one failure, one notification. A close ends them all silently."""
         active, self._active = self._active, None
         sent, self._sent = list(self._sent), deque()
         waiting = ([active.turn] if active and active.turn else []) + sent
         self._injected_expected = False
+        ring = error
         try:
             if active is not None:
+                reply_to = asked(active.turn.prompt) if ring and active.turn else None
+                ring = ring and reply_to is None
                 with contextlib.suppress(Exception):
                     await active.renderer.feed_error(line)
-                    await self._close_reply(active.renderer, None)
+                    await self._close_reply(active.renderer, None, reply_to)
             await self._stop_task_replies()
             for turn in sent:
-                await self._fail(turn, line)
+                await self._fail(turn, line, notify=ring)
+                ring = False
         finally:
             for turn in waiting:
                 turn.done.set()
@@ -954,6 +985,8 @@ class ChannelSession:
             if questions
             else approval_blocks(approval_id, tool_name, tool_input, context)
         )
+        # A request stops the turn until the owner answers: it rings, as a question does.
+        blocks = [context_block(texts.MENTION), *blocks]
         try:
             try:
                 posted = await self._deps.slack.chat_postMessage(
@@ -976,11 +1009,12 @@ class ChannelSession:
             self._deps.approvals.discard(approval_id)
         return to_permission(decision, tool_input, questions)
 
-    async def _fail(self, turn: Turn, text: str) -> None:
-        """End a turn's reply with a line saying why, and release whoever waits on it."""
+    async def _fail(self, turn: Turn, text: str, *, notify: bool = False) -> None:
+        """End a turn's reply with a line saying why, and release whoever waits on it. With
+        `notify` the end rings: an error the owner has to see, not a stop or a restart."""
         try:
             await turn.sink.text(text)
-            await turn.sink.finish([], None)
+            await turn.sink.finish([], None, reply_to=asked(turn.prompt) if notify else None)
         finally:
             turn.done.set()
 

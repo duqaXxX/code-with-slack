@@ -47,6 +47,7 @@ from tests.fakes import (
     FakeClaudeClient,
     FakeSlack,
     HookRun,
+    rings,
     sdk_json,
     sdk_messages,
     split_turns,
@@ -103,6 +104,11 @@ class Harness:
     def replies(self) -> list[str]:
         """The text every posted message ends up showing, in the order they were posted."""
         return self.slack.message_texts()
+
+    def bodies(self) -> list[str]:
+        """Each reply's own text: `replies()` with the empty entries a silent closing message
+        leaves (it carries no markdown or tool line) filtered out."""
+        return [r for r in self.replies() if r]
 
     def written_text(self) -> str:
         return "\n".join(
@@ -264,6 +270,110 @@ async def test_ask_user_question_returns_answers(harness_for: Callable[..., Harn
     assert result.updated_input == {"questions": recorded["input"]["questions"], "answers": answers}
 
 
+async def test_an_owner_turn_that_completes_rings_with_its_prompt(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    turn = await h.session().submit("list the files")
+    await asyncio.wait_for(turn.done.wait(), 2)
+    closing = h.slack.calls_to("chat.postMessage")[-1]
+    assert closing["text"] == texts.REPLY_TO.format(prompt="list the files") and rings(closing)
+
+
+async def test_a_turn_stopped_by_the_owner_does_not_ring(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for(
+        {
+            "turns": [
+                [CanUseToolCall("Bash", {"command": "rm -rf build"}), *sdk_messages("interrupt")]
+            ]
+        }
+    )
+    session = h.session()
+    turn = await session.submit("clean")
+    await until(lambda: bool(h.approvals._pending))
+    assert await session.stop() is True
+    await asyncio.wait_for(turn.done.wait(), 2)
+    closing = h.slack.calls_to("chat.postMessage")[-1]
+    assert not rings(closing)
+
+
+async def test_a_background_turn_s_reply_does_not_ring(
+    harness_for: Callable[..., Harness],
+) -> None:
+    turns = split_turns(sdk_messages("background"))
+    h = harness_for({"turns": [turns[0]]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    for later in turns[1:]:
+        h.clients[0].inject(later)
+    await until(lambda: any(is_report(r) for r in h.replies()))
+    await asyncio.sleep(0.05)
+    closing = h.slack.calls_to("chat.postMessage")[-1]  # the background report's own closing
+    assert not rings(closing)
+
+
+async def test_a_failed_directory_rings_but_a_rebind_ends_silently(
+    harness_for: Callable[..., Harness], tmp_path: Path
+) -> None:
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    h = harness_for({})
+    h.state.bind(CHANNEL, gone)
+    gone.rmdir()
+    failed = await h.session().submit("hello")
+    await asyncio.wait_for(failed.done.wait(), 2)
+    # An error the owner must act on: it rings.
+    failure_closing = h.slack.calls_to("chat.postMessage")[-1]
+    assert rings(failure_closing)
+
+    other = tmp_path / "other"
+    other.mkdir()
+    await h.manager.bind(CHANNEL, other)
+    session = h.session()
+    waiting = await session.submit("world")  # no scripted turn: it never answers on its own
+    await until(lambda: h.clients and h.clients[-1].queries == ["world"])
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    await h.manager.bind(CHANNEL, elsewhere)  # ends the waiting reply, as a restart would
+    await asyncio.wait_for(waiting.done.wait(), 2)
+    # No urgent attention was needed here: it does not ring.
+    ended_closing = h.slack.calls_to("chat.postMessage")[-1]
+    assert not rings(ended_closing)
+
+
+async def test_an_approval_request_rings(harness_for: Callable[..., Harness]) -> None:
+    ask = CanUseToolCall("Bash", {"command": "ls"})
+    h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
+    await h.session().submit("do it")
+    await until(lambda: bool(h.approvals._pending))
+    request = h.slack.calls_to("chat.postMessage")[-1]
+    assert rings(request)
+
+
+async def test_an_ask_user_question_request_rings(harness_for: Callable[..., Harness]) -> None:
+    recorded = sdk_json("ask-can-use-tool")
+    call = CanUseToolCall(recorded["tool_name"], recorded["input"])
+    h = harness_for({"turns": [[call, *sdk_messages("tools")]]})
+    await h.session().submit("ask me")
+    await until(lambda: bool(h.approvals._pending))
+    request = h.slack.calls_to("chat.postMessage")[-1]
+    assert rings(request)
+
+
+def test_asked_cuts_a_long_prompt_and_names_an_image_only_prompt() -> None:
+    long_prompt = "word " * 30  # more characters than ASKED_LIMIT
+    cut = sessions.asked(long_prompt)
+    assert len(cut) == sessions.ASKED_LIMIT and cut.endswith("…")
+    image_only = [
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "x"}}
+    ]
+    assert sessions.asked(image_only) == texts.PROMPT_IMAGE  # type: ignore[arg-type]
+    mixed = [{"type": "text", "text": "look at this"}, image_only[0]]
+    assert sessions.asked(mixed) == "look at this"  # type: ignore[arg-type]
+
+
 async def test_injected_turn_gets_its_own_reply(harness_for: Callable[..., Harness]) -> None:
     turns = split_turns(sdk_messages("background"))
     h = harness_for({"turns": [turns[0]]})
@@ -377,15 +487,17 @@ async def test_a_report_opens_with_claude_code_s_summary_and_takes_the_footer(
     first, notice, injected = split_background()
     h = harness_for({"turns": [first]})
     await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
+    first_closing = h.slack.posted_ts[-1]  # the first reply's own closing message
     h.clients[0].inject(notice + injected)
-    await until(lambda: len(h.replies()) == 2 and bool(h.replies()[1]))
+    await until(lambda: len(h.bodies()) == 2)
     await asyncio.sleep(0.05)
-    report = h.replies()[1]
+    report = h.bodies()[1]
     summary = next(m.summary for m in notice if isinstance(m, TaskNotificationMessage))
     assert report.startswith(f"✓ {summary}")  # Claude Code's own words, as in the terminal
     assert texts.BACKGROUND_NOTICE not in report
-    shown = h.slack.message_blocks()
-    assert {"type": "divider"} in shown[1] and {"type": "divider"} not in shown[0]  # latest only
+    assert first_closing in [a["ts"] for a in h.slack.calls_to("chat.delete")]  # no longer latest
+    closing = h.slack.message_blocks()[-1]  # the report's own closing message
+    assert {"type": "divider"} in closing
 
 
 async def test_an_owner_answer_behind_a_wrong_guess_keeps_its_footer(
@@ -411,7 +523,7 @@ async def test_a_task_type_is_forgotten_when_the_task_ends(
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
     assert session._tasks
     h.clients[0].inject(notice + injected)
-    await until(lambda: len(h.replies()) == 2)
+    await until(lambda: len(h.bodies()) == 2)
     assert session._tasks == {}
 
 
@@ -444,10 +556,10 @@ async def test_a_background_agent_s_end_reads_as_in_the_terminal(
     await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
     assert started.tool_use_id is not None
     h.clients[0].inject([agent_end(started.task_id, started.tool_use_id), *sdk_messages("tools")])
-    await until(lambda: len(h.replies()) == 2 and bool(h.replies()[1]))
+    await until(lambda: len(h.bodies()) == 2)
     await asyncio.sleep(0.05)
-    assert h.replies()[1].startswith(f'✓ Agent "{started.description}" finished · 10s')
-    assert "README.md" not in h.replies()[1].splitlines()[0]
+    assert h.bodies()[1].startswith(f'✓ Agent "{started.description}" finished · 10s')
+    assert "README.md" not in h.bodies()[1].splitlines()[0]
 
 
 async def test_the_task_record_is_bounded(
@@ -522,7 +634,7 @@ async def test_owner_query_waits_for_an_expected_background_turn(
     h.clients[0].inject(injected)
     await asyncio.wait_for(second.done.wait(), 2)
     assert h.clients[0].queries == ["start it", "next"]
-    background = [is_report(r) for r in h.replies()]
+    background = [is_report(r) for r in h.bodies()]
     # The second reply appeared (waiting) when it was sent, before the background report began.
     assert background == [False, False, True]
 
@@ -542,17 +654,21 @@ async def test_running_counts_follow_the_latest_reply(
     h = harness_for({"turns": [first, sdk_messages("tools")]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    shown = h.slack.message_blocks()
-    assert running_block(shown[0]) == "⏳ 1 shell"  # task_type local_bash in the recording
+    # the running count shows in the first reply's own closing message, never in its body.
+    assert running_block(h.slack.message_blocks()[0]) is None
+    shown = h.slack.message_blocks()[-1]
+    assert running_block(shown) == "⏳ 1 shell"  # task_type local_bash in the recording
+    first_closing = h.slack.posted_ts[-1]
     await asyncio.wait_for((await session.submit("next")).done.wait(), 2)
-    shown = h.slack.message_blocks()
-    assert running_block(shown[0]) is None  # moved to the latest reply
-    assert running_block(shown[1]) is not None
+    # it moved to the new latest reply's own closing message; the old one dropped it, then itself.
+    assert first_closing in [a["ts"] for a in h.slack.calls_to("chat.delete")]
+    assert running_block(h.slack.message_blocks()[-1]) == "⏳ 1 shell"
     h.clients[0].inject(notice + injected)
-    await until(lambda: any(is_report(r) for r in h.replies()))
+    await until(lambda: len(h.bodies()) == 3)
     await asyncio.sleep(0.05)
+    assert h.bodies()[0].startswith("✓")  # the line where the task started
+    # the task has ended: no reply's closing message shows a running count any more.
     assert all(running_block(blocks) is None for blocks in h.slack.message_blocks())
-    assert h.replies()[0].startswith("✓")  # the line where the task started
 
 
 async def test_a_background_task_frame_stays_out_of_other_replies(
@@ -720,6 +836,14 @@ async def test_a_cli_that_exits_ends_the_turn_and_the_next_message_reconnects(
     assert [c.queries for c in h.clients] == [["first"], ["second"]]
 
 
+async def test_a_cli_that_exits_mid_turn_rings_once(harness_for: Callable[..., Harness]) -> None:
+    h = harness_for({"turns": [[*sdk_messages("tools")[:3], EndOfStream()]]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("first")).done.wait(), 2)
+    rang = [p for p in h.slack.calls_to("chat.postMessage") if rings(p)]
+    assert [p["text"] for p in rang] == [texts.REPLY_TO.format(prompt="first")]
+
+
 async def test_a_failed_background_post_still_releases_the_queue(
     harness_for: Callable[..., Harness],
     monkeypatch: pytest.MonkeyPatch,
@@ -750,7 +874,9 @@ async def test_a_missing_directory_asks_to_bind_again(
     turn = await h.session().submit("hello")
     await asyncio.wait_for(turn.done.wait(), 2)
     assert h.clients == []
-    assert h.replies() == [texts.DIRECTORY_MISSING.format(directory=gone)]
+    assert h.bodies() == [texts.DIRECTORY_MISSING.format(directory=gone)]
+    closing = h.slack.calls_to("chat.postMessage")[-1]  # an error the owner must act on: it rings
+    assert closing["text"] == texts.REPLY_TO.format(prompt="hello") and rings(closing)
 
 
 async def test_an_unreadable_directory_says_how_to_grant_access(
@@ -767,7 +893,9 @@ async def test_an_unreadable_directory_says_how_to_grant_access(
     finally:
         locked.chmod(0o755)
     assert h.clients == []
-    assert h.replies() == [texts.DIRECTORY_UNREADABLE.format(directory=locked)]
+    assert h.bodies() == [texts.DIRECTORY_UNREADABLE.format(directory=locked)]
+    closing = h.slack.calls_to("chat.postMessage")[-1]  # an error the owner must act on: it rings
+    assert closing["text"] == texts.REPLY_TO.format(prompt="hello") and rings(closing)
 
 
 def statuses(h: Harness) -> list[str]:
@@ -798,9 +926,11 @@ async def test_a_reply_shows_that_claude_is_writing_right_away(
     replies = [
         a
         for a in h.slack.calls_to("chat.postMessage")
-        if a.get("blocks", [{}])[0].get("type") != "section"
+        if not any(b["type"] == "actions" for b in a.get("blocks", []))  # not the request
     ]
-    assert len(replies) == 2  # one message per reply, the placeholder becomes the reply
+    # one message per reply's body (the placeholder becomes it), and one closing message once
+    # each reply ends, ringing for the owner's own prompt.
+    assert len(replies) == 4
 
 
 async def test_the_footer_follows_an_effort_set_from_slack(
@@ -1316,11 +1446,12 @@ async def test_a_skill_typed_as_a_command_shows_its_task_while_it_runs(
     started = next(i for i, m in enumerate(messages) if isinstance(m, TaskStartedMessage))
     h = harness_for({"turns": [messages[: started + 1]]})
     turn = await h.session().submit("/list-files")
-    await until(lambda: "⏳ `/list-files`" in h.replies()[-1])  # before the skill has ended
+    # before the skill has ended: only the body exists yet, so replies() is safe here.
+    await until(lambda: "⏳ `/list-files`" in h.replies()[-1])
     h.clients[0].inject(messages[started + 1 :])
     await asyncio.wait_for(turn.done.wait(), 2)
-    assert "✓ `/list-files`" in h.replies()[-1]
-    assert len(h.replies()) == 1  # one reply: the task's line is the owner's turn's
+    assert "✓ `/list-files`" in h.bodies()[-1]
+    assert len(h.bodies()) == 1  # one reply body: the task's line is the owner's turn's
 
 
 def started_of(name: str) -> TaskStartedMessage:
