@@ -37,3 +37,19 @@ def test_a_changed_header_is_an_error_not_an_empty_map(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         features(table)
     assert FEATURES.name == "features.md"
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        "| A | `test_a` | none |",
+        "| A | `x | y` | none | none |",
+        "| A | `test_a` | P1 | none | extra |",
+    ],
+)
+def test_a_row_with_the_wrong_number_of_cells_is_an_error(tmp_path: Path, row: str) -> None:
+    # A row dropped in silence would leave both the checks and the checklist.
+    table = tmp_path / "features.md"
+    table.write_text("| Feature | Test suite | Probe | By hand |\n|---|---|---|---|\n" + row + "\n")
+    with pytest.raises(ValueError):
+        features(table)

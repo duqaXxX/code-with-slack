@@ -19,13 +19,19 @@ class Feature:
 
 
 def features(path: Path = FEATURES) -> list[Feature]:
-    """The table's rows. Raises ValueError when the table is missing or its header changed."""
+    """The table's rows. Raises ValueError when the table is missing, its header changed, or a
+    row does not have one cell per column: a broken row is an error, never a row left out of the
+    checks and the checklist."""
     rows = [line for line in path.read_text().splitlines() if line.startswith("|")]
     cells = [[c.strip() for c in row.strip("|").split("|")] for row in rows]
     if not cells or tuple(cells[0]) != COLUMNS:
         raise ValueError(f"{path.name}: no table with the columns {COLUMNS}")
+    for row in cells[2:]:
+        if len(row) != len(COLUMNS):
+            # A `|` inside a cell splits it too: write it another way.
+            raise ValueError(f"{path.name}: {len(row)} cells, not {len(COLUMNS)}, in {row[0]!r}")
     out = []
-    for name, tests, claims, by_hand in (row for row in cells[2:] if len(row) == len(COLUMNS)):
+    for name, tests, claims, by_hand in cells[2:]:
         out.append(
             Feature(
                 name,
