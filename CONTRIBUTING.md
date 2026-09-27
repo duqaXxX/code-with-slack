@@ -67,6 +67,9 @@ A **gesture** claim is one the probe causes itself (a prompt, `!stop`, a resume)
 claim needs Claude to act (call Bash, read a file), so when it fails it is UNPROVEN, never
 BROKEN: Claude may simply have chosen otherwise. The release is certified, and its version
 added to `probe/certified-versions.json`, only when every gesture claim holds or is retired. What
-the run could not prove is printed as a checklist of things to try in Slack. A failure of the
-machine rather than the SDK (a turn past its time limit, the network) leaves its claims UNPROVEN.
-The design follows the upgrade guard of [seedeep](https://github.com/duqaXxX/seedeep).
+the run could not prove is printed as a checklist of things to try in Slack, followed by the By
+hand column of [docs/features.md](docs/features.md), which maps every feature to its tests, its
+probe claims and what nothing checks automatically; a new feature or claim adds its row there. A
+failure of the machine rather than the SDK (a turn past its time limit, the network) leaves its
+claims UNPROVEN. The design follows the upgrade guard of
+[seedeep](https://github.com/duqaXxX/seedeep).

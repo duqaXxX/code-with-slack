@@ -24,6 +24,7 @@ from pathlib import Path
 from claude_agent_sdk._cli_version import __cli_version__
 
 from probe.claims import CLAIMS, broken, can_certify, certificate, checklist, evaluate, report
+from probe.features import by_hand
 from probe.scenes import run_scenes
 
 REPO = Path(__file__).resolve().parents[1]
@@ -101,11 +102,17 @@ def run(path: Path, force: bool) -> int:
     if sdk in known and not force:
         log(f"claude-agent-sdk {sdk} (Claude Code {__cli_version__}) is already certified")
         return 0
+    # Read before the scenes: a broken map stops the run before it spends tokens, and cannot
+    # come between a finished run and its verdict.
+    left = by_hand()
     seen = asyncio.run(run_scenes(log))
     results = [evaluate(claim, seen.get(claim.id)) for claim in CLAIMS]
     print(report(results, __cli_version__, sdk))
     if hand := checklist(results):
         print("\n" + hand)
+    # What no claim covers at all, from the coverage map: printed on every run, certified or not.
+    if left:
+        print("\n" + left)
     if broken(results):
         print("\nNot certified: a claim is BROKEN. Do not pin this release.")
         return 3

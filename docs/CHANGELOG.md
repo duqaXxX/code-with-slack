@@ -86,6 +86,9 @@ All notable changes to this project are documented here. The format follows
 
 First release.
 
+- `docs/features.md`: every feature the owner sees, with the tests, the probe claims and the
+  checks by hand that cover it. `tests/test_features.py` keeps its probe column in step with
+  `probe/claims.py`, and the probe prints its By hand column after every run.
 - A probe for new `claude-agent-sdk` releases, `uv run python -m probe`, described in
   `CONTRIBUTING.md`. It drives the daemon's `SessionManager` against the real bundled CLI, with
   Slack faked, through thirteen claims: a session starts, `!status`, a text, image and file prompt,
