@@ -120,6 +120,7 @@ STATUS = (
 ACTIVITY_IDLE = "idle"
 VERSION_PENDING = "started, version shown after the first turn"
 STATUS_BACKGROUND = "Background: `{counts}`"
+STATUS_WORKING = "Working in: `{directory}`"
 RUNNING = "⏳ {counts}"
 ACTIVITY_BUSY = "running a turn, {queued} queued"
 HELP_OWN = "**code-with-slack**"

@@ -65,9 +65,9 @@ from code_with_slack.guards import (
     message_actor,
 )
 from code_with_slack.prompt import Prompt
-from code_with_slack.render.escape import markdown_escape
+from code_with_slack.render.escape import markdown_escape, mrkdwn_escape
 from code_with_slack.render.renderer import one_line
-from code_with_slack.render.sinks import FALLBACK_LIMIT, describe, split
+from code_with_slack.render.sinks import FALLBACK_LIMIT, context_block, describe, notice_text, split
 from code_with_slack.resume import RESUME_ACTION, TITLE_LIMIT, matching, resume_blocks
 from code_with_slack.sessions import (
     ChannelSession,
@@ -106,9 +106,11 @@ def bound_text(directory: Path, bypass: bool, unavailable: DirectoryUnavailable 
     """The answer to a bind: what keeps a session from starting in the folder, if anything, and
     that bypass ended with the old session when it was on."""
     bound = (
-        texts.BIND_OK.format(directory=directory)
+        texts.BIND_OK.format(directory=mrkdwn_escape(str(directory)))
         if unavailable is None
-        else texts.BIND_UNAVAILABLE.format(directory=directory, reason=unavailable.message)
+        else texts.BIND_UNAVAILABLE.format(
+            directory=mrkdwn_escape(str(directory)), reason=unavailable.message
+        )
     )
     return bound + (texts.BIND_BYPASS_OFF if bypass else "")
 
@@ -150,7 +152,12 @@ def build_app(
 
     async def tell_owner(channel: str, text: str) -> None:
         try:
-            await slack.chat_postEphemeral(channel=channel, user=identity.owner_user_id, text=text)
+            await slack.chat_postEphemeral(
+                channel=channel,
+                user=identity.owner_user_id,
+                text=text,
+                blocks=[context_block(notice_text(text))],
+            )
         except Exception as exc:
             logger.warning("could not reach the owner in %s: %s", channel, describe(exc))
 
@@ -174,9 +181,20 @@ def build_app(
             return False
         return True
 
+    async def notice(channel: str, text: str) -> None:
+        """One of the daemon's own notices (a bind, a resume, a restart), small and grey as the
+        footer, so it reads apart from Claude's replies. `text` is mrkdwn."""
+        await slack.chat_postMessage(
+            channel=channel,
+            text=text[:FALLBACK_LIMIT],
+            blocks=[context_block(notice_text(text))],
+            unfurl_links=False,
+            unfurl_media=False,
+        )
+
     async def say(channel: str, text: str) -> None:
-        """An answer to one of the daemon's own words, as messages in the channel: a long
-        `!help` continues in a new message past a markdown block's limit."""
+        """A reference the owner reads (`!help`, `!guide`, `!status`), at full size in the
+        channel: a long `!help` continues in a new message past a markdown block's limit."""
         for chunk in split(text):
             await slack.chat_postMessage(
                 channel=channel,
@@ -223,7 +241,7 @@ def build_app(
             # own now, and send nothing if the folder changed under the message.
             current = sessions.get(channel)
             if current is None or current.directory != directory:
-                await say(channel, texts.PROMPT_REBOUND)
+                await notice(channel, texts.PROMPT_REBOUND)
                 return
             if isinstance(command, Passthrough):
                 await current.ensure_connected()
@@ -234,7 +252,7 @@ def build_app(
             # The daemon's words still work meanwhile (`!stop` shortens the wait); a new turn
             # would not finish, and Slack does not send this event again to the next instance.
             if sessions.draining:
-                await say(channel, texts.RESTARTING)
+                await notice(channel, texts.RESTARTING)
                 return
             await current.submit(prompt)
 
@@ -259,7 +277,7 @@ def build_app(
                 match command:
                     case Bypass(on=on):
                         await session.set_bypass(on)
-                        await say(
+                        await notice(
                             channel,
                             texts.BYPASS_ON
                             if on
@@ -268,7 +286,7 @@ def build_app(
                     case Status():
                         await say(channel, await session.status())
                     case Stop():
-                        await say(
+                        await notice(
                             channel,
                             texts.STOPPED_CHANNEL
                             if await session.stop()
@@ -314,8 +332,8 @@ def build_app(
         cannot reach Claude: the message is sent whole or not at all."""
 
         async def refuse(file: dict[str, Any], reason: str) -> None:
-            name = markdown_escape(str(file.get("name") or file.get("id")))
-            await say(channel, texts.UPLOAD_FAILED.format(name=name, reason=reason))
+            name = mrkdwn_escape(str(file.get("name") or file.get("id")))
+            await notice(channel, texts.UPLOAD_FAILED.format(name=name, reason=reason))
 
         for file in files:
             reason = refusal(file)
@@ -324,7 +342,7 @@ def build_app(
                 return None
         together = images_refusal(files)
         if together is not None:
-            await say(channel, together)
+            await notice(channel, together)
             return None
         fetched = await asyncio.gather(
             *(
@@ -364,12 +382,13 @@ def build_app(
             bypass = sessions.bypass_on(channel)
             await sessions.bind(channel, directory)
             unavailable = await sessions.unavailable(directory)
-            await say(channel, bound_text(directory, bypass, unavailable))
+            await notice(channel, bound_text(directory, bypass, unavailable))
 
     async def folder_named(channel: str, path: str) -> Path | None:
         directory = resolve_directory(path, config.allowed_root)
         if directory is None:
-            await say(channel, texts.BIND_OUTSIDE.format(path=path, root=config.allowed_root))
+            root = mrkdwn_escape(str(config.allowed_root))
+            await notice(channel, texts.BIND_OUTSIDE.format(path=mrkdwn_escape(path), root=root))
         return directory
 
     async def list_folders(channel: str) -> None:
@@ -402,15 +421,16 @@ def build_app(
             return
         current = sessions.get(channel)
         if current is not None and current.directory == directory:
-            await say(channel, texts.BIND_ALREADY.format(directory=directory))
+            shown = mrkdwn_escape(str(directory))
+            await notice(channel, texts.BIND_ALREADY.format(directory=shown))
             return
         # A list can be old: unlike a typed `!bind`, a click never ends work in flight.
         bypass = sessions.bypass_on(channel)
         if not await sessions.bind_when_idle(channel, directory):
-            await say(channel, texts.BIND_BUSY)
+            await notice(channel, texts.BIND_BUSY)
             return
         unavailable = await sessions.unavailable(directory)
-        await say(channel, bound_text(directory, bypass, unavailable))
+        await notice(channel, bound_text(directory, bypass, unavailable))
         await remove_request(channel, body["message"]["ts"])
 
     async def handle_resume(channel: str, session: ChannelSession, target: str) -> None:
@@ -430,7 +450,12 @@ def build_app(
         found = matching(stored, target)
         if len(found) != 1:
             template = texts.RESUME_AMBIGUOUS if found else texts.RESUME_NONE
-            await say(channel, template.format(directory=session.directory, target=target))
+            await notice(
+                channel,
+                template.format(
+                    directory=mrkdwn_escape(str(session.directory)), target=mrkdwn_escape(target)
+                ),
+            )
             return
         await resume_session(channel, found[0], session.directory)
 
@@ -445,10 +470,10 @@ def build_app(
             return False
         if chosen.session_id == sessions.current_session(channel):
             # Resuming it again would close the live client and turn bypass off for nothing.
-            await say(channel, texts.RESUME_ALREADY)
+            await notice(channel, texts.RESUME_ALREADY)
             return False
         if not await sessions.resume(channel, chosen.session_id):
-            await say(channel, texts.RESUME_BUSY)
+            await notice(channel, texts.RESUME_BUSY)
             return False
         # A markdown block, not mrkdwn: the title is escaped so it cannot close or open the bold.
         title = markdown_escape(one_line(chosen.summary, TITLE_LIMIT)) or chosen.session_id

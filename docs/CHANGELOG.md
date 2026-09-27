@@ -5,7 +5,32 @@ All notable changes to this project are documented here. The format follows
 
 ## Unreleased
 
+### Added
+
+- The footer and `!status` show the lines changed since the last commit next to the branch,
+  `(+42,-10)`, counted as the terminal's ccstatusline counts them (#39), and the time to the
+  weekly limit's reset, `7d 45% ↻ 3d 4h`, as they already did for the 5-hour one (#42).
+- Probe claim P14: a hook's `cwd` follows a `cd`, which the footer's branch depends on.
+
+### Changed
+
+- code-with-slack's own notices (the answer to `!bind`, `!bypass` and `!stop`, a restart, a
+  refused attachment, the ephemeral errors, and the lines of the `!bind` and `!resume` lists)
+  are a context block, small and grey as the footer, so they read apart from Claude's replies.
+  `!help`, `!guide`, `!status` and the answer to a resume stay full size.
+- The footer's order: model and effort, the folder, branch and changes, then tokens, context
+  and limits; `!status` lists its values in the same order. The folder shows by its name alone,
+  its whole path staying on `!status`, and the labels (`effort`, `tok`, `ctx`, `5h`, `7d`) are
+  bold.
+
 ### Fixed
+
+- The footer's branch read the channel's folder, not the folder the session works in: a channel
+  bound to a folder holding its repo one level down showed no branch, and a session that moved
+  to a worktree showed the old one (#37). The branch and the changes now follow the `cwd` Claude
+  Code reports after each tool and at the end of each turn, while the folder shown stays the
+  channel's, and
+  `!status` names the session's folder when it is not the channel's.
 
 - A background task that never ends (a dev server, a watcher) held a restart for the full 29
   minutes, with nothing in Slack saying why. During a restart, a channel left with only background

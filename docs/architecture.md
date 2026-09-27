@@ -192,11 +192,21 @@ shown, and the tool's line records the denial.
 
 ## Footer
 
-Every reply ends with one context line: `⚡ bypass` when bypass is on, the git branch of the
-channel's directory, the model and the context percentage from the SDK's
-`get_context_usage()`, the effort level, the session's tokens from the turn's `ResultMessage.model_usage`, the
-5-hour and weekly limits, and last the last two names of the channel's directory, as a terminal
-status line such as ccstatusline shows the working directory. The effort level is the one Claude Code reports in the input of a
+Every reply ends with one context line (`footer.format_footer`): `⚡ bypass` when bypass is on,
+the model from the SDK's `get_context_usage()`, the effort level, the name of the channel's
+directory, the git branch and the uncommitted changes of the folder the session works in, the
+session's tokens from the turn's `ResultMessage.model_usage`, the context percentage from
+`get_context_usage()`, and the 5-hour and weekly limits with the time to each reset. The folder the session works in is
+the `cwd` of the latest hook input, which follows a `cd` and a worktree
+(`ChannelSession.working_directory`): the same `Stop` hook, and a `PostToolUse` hook after every
+tool, so a turn stopped or failed before its `Stop` still moves it. Until a hook reports it, and
+again after the client restarts, it is the channel's directory. The changes are the lines
+inserted and deleted since the last commit, staged and unstaged, untracked files not counted, as
+ccstatusline's git-changes counts them. They come from plumbing commands (`git diff-files
+--shortstat` and `git diff-index --cached --shortstat HEAD`, the empty tree before a first
+commit), which never write the index: `git diff` refreshes it under `index.lock`, and a diff
+killed at `GIT_TIMEOUT` would leave the lock behind and stop every commit. git runs there with
+`core.fsmonitor` off, so a repo's own configuration runs no command. The effort level is the one Claude Code reports in the input of a
 `Stop` hook the daemon registers on each client (`effort.level`); `/effort` and `/model` run no
 hook, so after one of them the footer follows its output (`Set effort level to ...`). Until Claude
 Code reports a level on the running client the footer leaves it out, and when the model takes no
@@ -209,7 +219,8 @@ left out.
 `!status` lists the same values one per line (`Model: ...`, `Context: ...`), read by the same
 `ChannelSession._footer_data` and written from the same list, `footer.footer_fields`, as the
 footer writes them, then the running tasks; bypass and the folder are left out, since its Mode and Directory
-lines show them. It starts the channel's client when none is running, since the model and the
+lines show them. When the session works in another folder than the channel's, a `Working in:`
+line names it before the values. It starts the channel's client when none is running, since the model and the
 context come from it (`get_context_usage()` answers before a session's first turn and during a
 turn: measured on claude-agent-sdk 0.2.158, bundled CLI 2.1.280, 2026-09-25). The session tokens
 are those of the client's last result, left out until its first turn and after a result that
@@ -326,6 +337,16 @@ does not offer: `code_with_slack.resume` lists the directory's sessions from the
 activity, git branch, size), the first 8 characters of the session id and a Resume button each, or matches
 `!resume <id or name>`. The terminal's picker shows no id; the list shows its start because
 `!resume` takes a full id or any start of one at least 8 characters long (`resume.ID_SHOWN`).
+
+The daemon's notices (the answer to `!bind`, `!bypass` and `!stop`, a resume that did not
+happen, a refused attachment, a restart, and the ephemeral errors) are a context block, small
+and grey as the footer, so they read apart from Claude's replies: `slack_app.build_app`'s
+`notice`, `tell_owner`, and `ChannelSession._post`. The same holds for the lines of the `!bind`
+and `!resume` lists; their rows keep a section, since a context block holds no button. Their
+text is mrkdwn, and what comes from outside (a folder, a file name, a typed target) is escaped
+with `render.escape.mrkdwn_escape`. `!help`, `!guide`, `!status` and the answer to a resume stay
+a markdown block at full size: the first three are read, and a resumed session's title keeps
+every character inside its bold only there, since mrkdwn has no escape for `*`.
 A shorter target is read only as a title.
 The list holds the directory's own sessions, not other worktrees', as the terminal's picker
 starts. Resuming stores the session id for the channel and closes the channel's client, only

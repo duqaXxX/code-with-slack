@@ -60,12 +60,13 @@ from code_with_slack.footer import (
     format_footer,
     format_status_fields,
     git_branch,
+    git_changes,
     session_tokens,
 )
 from code_with_slack.guards import Identity
 from code_with_slack.prompt import Prompt, user_message
 from code_with_slack.render.renderer import TurnRenderer, ended_line, one_line, task_title
-from code_with_slack.render.sinks import ReplySink, describe
+from code_with_slack.render.sinks import ReplySink, context_block, describe, notice_text
 from code_with_slack.resume import by_last_activity
 from code_with_slack.state import StateStore
 from code_with_slack.trust import workspace_trusted
@@ -170,7 +171,11 @@ def injected_turn(result: ResultMessage) -> bool:
 
 
 def client_options(
-    directory: Path, session_id: str | None, can_use_tool: CanUseTool, on_stop: HookCallback
+    directory: Path,
+    session_id: str | None,
+    can_use_tool: CanUseTool,
+    on_stop: HookCallback,
+    on_tool_done: HookCallback,
 ) -> ClaudeAgentOptions:
     return ClaudeAgentOptions(
         cwd=str(directory),
@@ -179,8 +184,13 @@ def client_options(
         include_partial_messages=True,
         can_use_tool=can_use_tool,
         # The Stop hook's input carries the effort level Claude Code runs at: the footer's
-        # only source for it, since no message reports it.
-        hooks={"Stop": [HookMatcher(hooks=[on_stop])]},
+        # only source for it, since no message reports it. Every hook input carries the `cwd`
+        # the session works in; PostToolUse reports it after each tool, so a turn stopped or
+        # failed before its Stop still moves the footer's branch.
+        hooks={
+            "Stop": [HookMatcher(hooks=[on_stop])],
+            "PostToolUse": [HookMatcher(hooks=[on_tool_done])],
+        },
         # Makes bypass possible, not active: `!bypass on` switches it on the live client.
         extra_args={"allow-dangerously-skip-permissions": None},
         # CLI stderr may quote the conversation: keep it out of the log unless debugging.
@@ -294,6 +304,9 @@ class ChannelSession:
         # Whether Claude Code has reported the level since the client started: until then it is
         # not known, since the settings do not decide it (measured 2026-09-25).
         self.effort_reported = False
+        # Where the session works as its hooks last reported (`cwd` follows a `cd` and a worktree;
+        # Stop and PostToolUse measured 2026-09-27 on 2.1.283); None until then: `directory`.
+        self.working_directory: Path | None = None
         # The session's token count as the client's last result reported it, for `!status`.
         self.session_tokens: int | None = None
         # Set when the daemon stops: the turns already sent finish, no other one starts.
@@ -380,6 +393,7 @@ class ChannelSession:
             self._client = client
             # A resumed session runs at the settings' level (measured), unknown until reported.
             self.effort, self.effort_reported = None, False
+            self.working_directory = None  # the new process starts in the bound folder
             self.session_tokens = None  # counted by the client process, which starts at zero
             self._reader = asyncio.create_task(self._read(client), name=f"reader-{self.channel_id}")
             return client
@@ -460,6 +474,10 @@ class ChannelSession:
         if self._closed:
             raise SessionClosed
         fields = format_status_fields(data, datetime.now().astimezone()) if data else []
+        here = self.working_directory
+        if data and here and here != self.directory:
+            # The branch and the changes below describe this folder, not the channel's.
+            fields.insert(0, texts.STATUS_WORKING.format(directory=here))
         if running := self._running_kinds():
             fields.append(texts.STATUS_BACKGROUND.format(counts=running))
         stored = self._deps.state.get(self.channel_id)
@@ -526,7 +544,9 @@ class ChannelSession:
             logger.warning("could not close Claude Code in %s: %s", self.channel_id, describe(exc))
 
     async def _connect(self, session_id: str | None) -> ClaudeClient:
-        options = client_options(self.directory, session_id, self._can_use_tool, self._on_stop)
+        options = client_options(
+            self.directory, session_id, self._can_use_tool, self._on_stop, self._on_tool_done
+        )
         client = self._deps.client_factory(options)
         await client.connect()
         return client
@@ -887,15 +907,18 @@ class ChannelSession:
                 logger.warning(
                     "could not read the context usage in %s: %s", self.channel_id, describe(exc)
                 )
+        here = self.working_directory or self.directory
+        branch, changes = await asyncio.gather(git_branch(here), git_changes(here))
         return FooterData(
             bypass=self.bypass or self.native_mode == "bypassPermissions",
-            branch=await git_branch(self.directory),
+            branch=branch,
             model=context.get("model"),
             context_percent=context.get("percentage"),
             session_tokens=tokens,
             usage=self._deps.usage.current,
             effort=(self.effort or "default") if self.effort_reported else None,
             directory=self.directory,
+            changes=changes,
         )
 
     async def _on_stop(
@@ -906,7 +929,19 @@ class ChannelSession:
         effort = cast(dict[str, Any], hook_input).get("effort")
         self.effort = effort.get("level") if isinstance(effort, dict) else None
         self.effort_reported = True
+        self._note_cwd(hook_input)
         return {}
+
+    async def _on_tool_done(
+        self, hook_input: HookInput, tool_use_id: str | None, context: HookContext
+    ) -> HookJSONOutput:
+        self._note_cwd(hook_input)
+        return {}
+
+    def _note_cwd(self, hook_input: HookInput) -> None:
+        cwd = hook_input.get("cwd")
+        if cwd:
+            self.working_directory = Path(cwd)
 
     async def _can_use_tool(
         self, tool_name: str, tool_input: dict[str, Any], context: ToolPermissionContext
@@ -950,9 +985,14 @@ class ChannelSession:
             turn.done.set()
 
     async def _post(self, text: str) -> None:
+        """A notice of the daemon's own, small and grey as the footer."""
         try:
             await self._deps.slack.chat_postMessage(
-                channel=self.channel_id, text=text, unfurl_links=False, unfurl_media=False
+                channel=self.channel_id,
+                text=text,
+                blocks=[context_block(notice_text(text))],
+                unfurl_links=False,
+                unfurl_media=False,
             )
         except Exception as exc:
             logger.error("could not post in %s: %s", self.channel_id, describe(exc))

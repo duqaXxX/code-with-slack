@@ -688,3 +688,9 @@ async def test_a_message_with_two_results_previews_neither(slack: FakeSlack) -> 
     await renderer.close(None)
     shown = "\n".join(sinks.block_text(b) for b in last_blocks(slack))
     assert "Update(" not in shown and "```" not in shown and "Edit \u00d72" in shown
+
+
+def test_a_notice_fits_one_context_element() -> None:
+    assert sinks.notice_text("short") == "short"
+    cut = sinks.notice_text("x" * (sinks.CONTEXT_LIMIT + 10))
+    assert len(cut) == sinks.CONTEXT_LIMIT and cut.endswith("…")

@@ -1,5 +1,7 @@
 import logging
+import os
 import subprocess
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -17,7 +19,9 @@ from code_with_slack.footer import (
     effort_change,
     format_footer,
     format_status_fields,
+    format_until,
     git_branch,
+    git_changes,
     parse_usage,
     session_tokens,
 )
@@ -66,6 +70,7 @@ def test_unknown_wording_fails_soft() -> None:
 
 
 def test_full_footer() -> None:
+    # The owner's order: bypass, model, effort, folder, branch, changes, tokens, context, limits.
     usage = Usage(Limit(3, NOW + timedelta(hours=2, minutes=10)), Limit(25, None))
     data = FooterData(
         bypass=True,
@@ -76,7 +81,7 @@ def test_full_footer() -> None:
         usage=usage,
     )
     assert format_footer(data, NOW) == (
-        "⚡ bypass · main · claude-opus-5-5 · ctx 6% · 12.3k tok · 5h 3% ↻ 2h · 7d 25%"
+        "⚡ bypass · claude-opus-5-5 · main · 12.3k *tok* · *ctx* 6% · *5h* 3% ↻ 2h · *7d* 25%"
     )
 
 
@@ -101,13 +106,59 @@ def test_status_fields_list_the_footer_s_values_one_per_line() -> None:
     )
     # Bypass and the folder are left out: the status's Mode and Directory lines show them.
     assert format_status_fields(data, NOW) == [
-        "Branch: `main`",
         "Model: `claude-opus-5-5`",
         "Effort: `high`",
-        "Context: `6%`",
+        "Branch: `main`",
         "Session tokens: `12.3k`",
+        "Context: `6%`",
         "5h limit: `3% ↻ 2h`",
         "7d limit: `25%`",
+    ]
+
+
+def test_the_weekly_limit_shows_its_reset_in_the_footer_and_the_status() -> None:
+    week = Limit(45, NOW + timedelta(days=3, hours=4, minutes=12))
+    data = FooterData(
+        bypass=False,
+        branch=None,
+        model=None,
+        context_percent=None,
+        session_tokens=None,
+        usage=Usage(None, week),
+    )
+    assert format_footer(data, NOW) == "*7d* 45% ↻ 3d 4h"
+    assert format_status_fields(data, NOW) == ["7d limit: `45% ↻ 3d 4h`"]
+
+
+@pytest.mark.parametrize(
+    ("delta", "shown"),
+    [
+        (timedelta(minutes=59), "59m"),
+        (timedelta(hours=47, minutes=59), "47h"),
+        (timedelta(days=2), "2d"),
+        (timedelta(days=6, hours=23, minutes=59), "6d 23h"),
+        (timedelta(minutes=-5), "0m"),
+    ],
+)
+def test_format_until(delta: timedelta, shown: str) -> None:
+    assert format_until(delta) == shown
+
+
+def test_the_changes_follow_the_branch_in_the_footer_and_the_status() -> None:
+    data = FooterData(
+        bypass=False,
+        branch="main",
+        model="claude-opus-5-5",
+        context_percent=None,
+        session_tokens=None,
+        usage=None,
+        changes=(42, 10),
+    )
+    assert format_footer(data, NOW) == "claude-opus-5-5 · main · (+42,-10)"
+    assert format_status_fields(data, NOW) == [
+        "Model: `claude-opus-5-5`",
+        "Branch: `main`",
+        "Uncommitted: `(+42,-10)`",
     ]
 
 
@@ -193,6 +244,29 @@ async def test_git_branch(repo: Path) -> None:
     assert await git_branch(repo / "missing") is None
 
 
+def git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+
+async def test_git_changes_add_staged_and_unstaged_lines(repo: Path) -> None:
+    assert await git_changes(repo) == (0, 0)  # no commit yet, nothing written
+    (repo / "a.txt").write_text("one\ntwo\n")
+    (repo / "b.txt").write_text("keep\n")
+    git(repo, "add", ".")
+    git(repo, "-c", "user.name=alice", "-c", "user.email=alice@example.com", "commit", "-qm", "x")
+    assert await git_changes(repo) == (0, 0)
+    (repo / "a.txt").write_text("one\nthree\nfour\n")  # unstaged: 2 in, 1 out
+    (repo / "b.txt").write_text("")  # staged: 1 out
+    git(repo, "add", "b.txt")
+    (repo / "new.txt").write_text("untracked\n")  # not counted, as in the terminal
+    assert await git_changes(repo) == (2, 2)
+
+
+async def test_git_changes_outside_a_repo_is_unknown(tmp_path: Path) -> None:
+    assert await git_changes(tmp_path) is None
+    assert await git_changes(tmp_path / "missing") is None
+
+
 @pytest.mark.parametrize(
     ("output", "expected"),
     [
@@ -222,7 +296,7 @@ def test_the_footer_shows_the_effort_after_the_model() -> None:
         usage=None,
         effort="high",
     )
-    assert format_footer(data, NOW) == "main · claude-opus-5-5 · effort high"
+    assert format_footer(data, NOW) == "claude-opus-5-5 · *effort* high · main"
 
 
 async def test_a_usage_probe_with_no_answer_gives_up_and_closes(
@@ -243,11 +317,10 @@ async def test_a_usage_probe_with_no_answer_gives_up_and_closes(
 
 @pytest.mark.parametrize(
     ("directory", "shown"),
-    [("/srv/alice/code/app", "code/app"), ("/app", "app"), ("/", None), ("code/app", "code/app")],
+    [("/srv/alice/code/app", "app"), ("/app", "app"), ("/", None), ("code/app", "app")],
 )
-def test_the_footer_ends_with_the_folder_s_last_two_names(directory: str, shown: str) -> None:
-    # As the owner's terminal status line shows it (ccstatusline current-working-dir, 2 segments;
-    # the maintainer, 2026-09-25).
+def test_the_folder_s_name_comes_before_the_branch(directory: str, shown: str) -> None:
+    # The project's name alone, not its path (the maintainer, 2026-09-27).
     data = FooterData(
         bypass=False,
         branch="main",
@@ -257,7 +330,7 @@ def test_the_footer_ends_with_the_folder_s_last_two_names(directory: str, shown:
         usage=None,
         directory=Path(directory),
     )
-    assert format_footer(data, NOW) == " · ".join(p for p in ("main", shown) if p)
+    assert format_footer(data, NOW) == " · ".join(p for p in (shown, "main") if p)
 
 
 def test_the_folder_and_the_branch_are_shown_as_written() -> None:
@@ -268,6 +341,29 @@ def test_the_folder_and_the_branch_are_shown_as_written() -> None:
         context_percent=None,
         session_tokens=None,
         usage=None,
-        directory=Path("/srv/alice/R&D/<x>"),
+        directory=Path("/srv/alice/R&D <x>"),
     )
-    assert format_footer(data, NOW) == "fix/&lt;a&gt;&amp;b · R&amp;D/&lt;x&gt;"
+    assert format_footer(data, NOW) == "R&amp;D &lt;x&gt; · fix/&lt;a&gt;&amp;b"
+
+
+async def test_git_changes_do_not_run_the_repo_s_fsmonitor(repo: Path, tmp_path: Path) -> None:
+    marker = tmp_path.parent / f"{tmp_path.name}-fsmonitor-ran"
+    (repo / "a.txt").write_text("one\n")
+    git(repo, "add", ".")
+    git(repo, "config", "core.fsmonitor", f"touch {marker}; false")
+    assert await git_changes(repo) == (1, 0)
+    assert not marker.exists()
+
+
+async def test_git_changes_never_write_the_index(repo: Path) -> None:
+    # `git diff` would refresh a stale index under index.lock; a killed one would leave the lock
+    # and stop every commit in the repo (measured on git 2.54, 2026-09-27).
+    (repo / "a.txt").write_text("one\n")
+    git(repo, "add", ".")
+    git(repo, "-c", "user.name=alice", "-c", "user.email=alice@example.com", "commit", "-qm", "x")
+    index = repo / ".git" / "index"
+    before = index.stat().st_mtime_ns
+    later = time.time() + 10
+    os.utime(repo / "a.txt", (later, later))  # stat-dirty: a refresh would rewrite the index
+    assert await git_changes(repo) == (0, 0)
+    assert index.stat().st_mtime_ns == before

@@ -67,7 +67,7 @@ async def test_stops_one_past_the_rows_shown(tmp_path: Path) -> None:
 def test_each_folder_is_a_row_with_a_bind_button_the_current_one_marked(tmp_path: Path) -> None:
     folders = [tmp_path / "a", tmp_path / "b" / "c&d"]
     blocks = bind_blocks(tmp_path, folders, current=tmp_path / "a")
-    assert blocks[0]["text"]["text"] == texts.BIND_LIST.format(root=tmp_path)
+    assert blocks[0]["elements"][0]["text"] == texts.BIND_LIST.format(root=tmp_path)
     first, second = rows(blocks)
     assert first["text"]["text"] == "`a`" + texts.BIND_CURRENT and "accessory" not in first
     assert second["text"]["text"] == "`b/c&amp;d`"
@@ -79,12 +79,12 @@ def test_more_folders_than_rows_says_how_to_reach_the_others(tmp_path: Path) -> 
     folders = [tmp_path / f"f{i:02}" for i in range(FOLDER_ROWS + 1)]
     blocks = bind_blocks(tmp_path, folders, current=None)
     assert len(rows(blocks)) == FOLDER_ROWS
-    assert blocks[-1]["text"]["text"] == texts.BIND_MORE.format(rows=FOLDER_ROWS)
+    assert blocks[-1]["elements"][0]["text"] == texts.BIND_MORE.format(rows=FOLDER_ROWS)
 
 
 def test_no_trusted_folder_says_how_to_trust_one(tmp_path: Path) -> None:
     (only,) = bind_blocks(tmp_path, [], current=None)
-    assert only["text"]["text"] == texts.BIND_EMPTY.format(root=tmp_path)
+    assert only["elements"][0]["text"] == texts.BIND_EMPTY.format(root=tmp_path)
 
 
 async def test_the_root_is_listed_and_a_repository_root_alone(tmp_path: Path) -> None:
@@ -129,8 +129,8 @@ async def test_trust_is_checked_a_batch_at_a_time(tmp_path: Path) -> None:
 
 def test_the_root_is_shown_as_written(tmp_path: Path) -> None:
     root = tmp_path / "R&D"
-    assert "R&amp;D" in bind_blocks(root, [root / "a"], current=None)[0]["text"]["text"]
-    assert "R&amp;D" in bind_blocks(root, [], current=None)[0]["text"]["text"]
+    assert "R&amp;D" in bind_blocks(root, [root / "a"], current=None)[0]["elements"][0]["text"]
+    assert "R&amp;D" in bind_blocks(root, [], current=None)[0]["elements"][0]["text"]
 
 
 async def test_an_unreadable_root_is_an_error_not_an_empty_list(tmp_path: Path) -> None:

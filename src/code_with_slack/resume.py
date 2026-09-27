@@ -26,6 +26,7 @@ from claude_agent_sdk._internal.sessions import _canonicalize_path, _find_projec
 from code_with_slack import texts
 from code_with_slack.render.escape import shown_as_written
 from code_with_slack.render.renderer import one_line
+from code_with_slack.render.sinks import context_block
 
 logger = logging.getLogger(__name__)
 RESUME_ROWS = 20
@@ -155,15 +156,16 @@ def resume_blocks(
     directory: Path, sessions: list[SDKSessionInfo], current: str | None, now: datetime
 ) -> list[dict[str, Any]]:
     """The picker: the newest RESUME_ROWS sessions of `directory`, the channel's own marked."""
+    # The list's own lines are the daemon's notices, small and grey; the rows keep their button.
+    shown = shown_as_written(str(directory))
     if not sessions:
-        text = texts.RESUME_EMPTY.format(directory=directory)
-        return [{"type": "section", "text": {"type": "mrkdwn", "text": text}}]
-    header = texts.RESUME_LIST.format(directory=shown_as_written(str(directory)))
+        return [context_block(texts.RESUME_EMPTY.format(directory=shown))]
+    header = texts.RESUME_LIST.format(directory=shown)
     blocks = [
-        {"type": "section", "text": {"type": "mrkdwn", "text": header}},
+        context_block(header),
         *(_row(s, s.session_id == current, now) for s in sessions[:RESUME_ROWS]),
     ]
     if len(sessions) > RESUME_ROWS:
         more = texts.RESUME_MORE.format(rows=RESUME_ROWS)
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": more}})
+        blocks.append(context_block(more))
     return blocks
