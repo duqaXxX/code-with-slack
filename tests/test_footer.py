@@ -68,6 +68,7 @@ def test_unknown_wording_fails_soft() -> None:
 
 
 def test_full_footer() -> None:
+    # The owner's order: bypass, model, effort, folder, branch, changes, tokens, context, limits.
     usage = Usage(Limit(3, NOW + timedelta(hours=2, minutes=10)), Limit(25, None))
     data = FooterData(
         bypass=True,
@@ -78,7 +79,7 @@ def test_full_footer() -> None:
         usage=usage,
     )
     assert format_footer(data, NOW) == (
-        "⚡ bypass · claude-opus-5-5\nmain\n12.3k tok · ctx 6% · 5h 3% ↻ 2h · 7d 25%"
+        "⚡ bypass · claude-opus-5-5 · main · 12.3k tok · ctx 6% · 5h 3% ↻ 2h · 7d 25%"
     )
 
 
@@ -105,8 +106,8 @@ def test_status_fields_list_the_footer_s_values_one_per_line() -> None:
     assert format_status_fields(data, NOW) == [
         "Model: `claude-opus-5-5`",
         "Effort: `high`",
-        "Session tokens: `12.3k`",
         "Branch: `main`",
+        "Session tokens: `12.3k`",
         "Context: `6%`",
         "5h limit: `3% ↻ 2h`",
         "7d limit: `25%`",
@@ -151,7 +152,7 @@ def test_the_changes_follow_the_branch_in_the_footer_and_the_status() -> None:
         usage=None,
         changes=(42, 10),
     )
-    assert format_footer(data, NOW) == "claude-opus-5-5\nmain · (+42,-10)"
+    assert format_footer(data, NOW) == "claude-opus-5-5 · main · (+42,-10)"
     assert format_status_fields(data, NOW) == [
         "Model: `claude-opus-5-5`",
         "Branch: `main`",
@@ -293,7 +294,7 @@ def test_the_footer_shows_the_effort_after_the_model() -> None:
         usage=None,
         effort="high",
     )
-    assert format_footer(data, NOW) == "claude-opus-5-5 · effort high\nmain"
+    assert format_footer(data, NOW) == "claude-opus-5-5 · effort high · main"
 
 
 async def test_a_usage_probe_with_no_answer_gives_up_and_closes(
@@ -316,7 +317,7 @@ async def test_a_usage_probe_with_no_answer_gives_up_and_closes(
     ("directory", "shown"),
     [("/srv/alice/code/app", "app"), ("/app", "app"), ("/", None), ("code/app", "app")],
 )
-def test_the_folder_s_name_opens_the_second_line(directory: str, shown: str) -> None:
+def test_the_folder_s_name_comes_before_the_branch(directory: str, shown: str) -> None:
     # The project's name alone, not its path (the maintainer, 2026-09-27).
     data = FooterData(
         bypass=False,

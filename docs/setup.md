@@ -319,19 +319,17 @@ in the terminal: that reply opens with Claude Code's own line for the task's end
 `✓ Agent "review" finished · 3m 59s`. While tasks run, the footer counts them, such as
 `⏳ 1 shell · 1 agent`.
 
-The channel's latest reply ends with a footer of three lines, which moves to each new reply:
+The channel's latest reply ends with a footer, which moves to each new reply:
 
 ```
-⚡ bypass · claude-opus-5-5 · effort medium
-my-project · main · (+42,-10)
-10.2M tok · ctx 15% · 5h 16% ↻ 43m · 7d 46% ↻ 3d 4h
+⚡ bypass · claude-opus-5-5 · effort medium · my-project · main · (+42,-10) · 10.2M tok · ctx 15% · 5h 16% ↻ 43m · 7d 46% ↻ 3d 4h
 ```
 
-The first line holds `⚡ bypass` when bypass is on, the model and the effort level. The second
-holds the name of the channel's folder (its whole path is on `!status`), the git branch and the
-lines changed since the last commit (untracked files not counted). The third holds the session's
-tokens, the context used and the 5-hour and weekly limits with the time to each reset, which exist only with a claude.ai
-subscription. A line with nothing known is left out.
+It holds `⚡ bypass` when bypass is on, the model, the effort level, the name of the channel's
+folder (its whole path is on `!status`), the git branch, the lines changed since the last commit
+(untracked files not counted), the session's tokens, the context used, and the 5-hour and weekly
+limits with the time to each reset, which exist only with a claude.ai subscription. A field that
+is not known is left out.
 The folder is the one the channel is bound to. The branch and the changes are those of the folder
 the session works in: the channel's at first, then the one Claude moved to with `cd` or a
 worktree, as Claude Code reported it at the end of the last turn; `!status` names that folder when

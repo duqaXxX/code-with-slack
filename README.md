@@ -39,7 +39,7 @@ From then on:
 - A message is a prompt. The reply appears below it and grows as Claude works: Claude's text, a
   line per tool call, subagent and background task, and a footer with the branch and the lines
   changed since the last commit, the model, the effort level, the context used, the usage limits
-  with their resets, and the channel's folder, on three lines.
+  with their resets, and the channel's folder.
 - Whatever Claude Code asks approval for arrives as **Approve** and **Deny** buttons; a question
   from Claude opens a form.
 - `!<command>` runs a Claude Code command, such as `!compact` or `!model opus`. `!help` lists the

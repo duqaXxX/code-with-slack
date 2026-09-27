@@ -1117,8 +1117,8 @@ async def test_the_footer_names_the_bound_folder(harness_for: Callable[..., Harn
     h = harness_for({"turns": [sdk_messages("tools")]})
     await asyncio.wait_for((await h.session().submit("list the files")).done.wait(), 2)
     folder = h.tmp_path.resolve()
-    place = statuses(h)[-1].splitlines()[1]
-    assert place == folder.name
+    assert statuses(h)[-1].startswith("claude-haiku-4-5-20251001 · ")
+    assert f" · {folder.name} · " in statuses(h)[-1]
 
 
 @pytest.fixture
@@ -1138,9 +1138,10 @@ async def test_the_footer_follows_the_folder_the_session_works_in(
     h = harness_for({"turns": [with_stop_hook(sdk_messages("tools"), moved)]})
     session = h.session()
     await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
-    _, place, usage = statuses(h)[-1].splitlines()
-    assert place == f"{tmp_path.name} · feature-x · (+0,-0)"
-    assert re.match(r"[\d.]+[kM]? tok · ctx ", usage)
+    assert re.search(
+        rf" · {re.escape(tmp_path.name)} · feature-x · \(\+0,-0\) · [\d.]+[kM]? tok · ctx ",
+        statuses(h)[-1],
+    )
     lines = (await session.status()).splitlines()
     assert lines[0] == f"Directory: `{tmp_path}`"
     values = lines[lines.index("Now: idle") + 1 :]

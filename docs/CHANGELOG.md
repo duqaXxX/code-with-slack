@@ -14,8 +14,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
-- The footer takes three lines, so a phone no longer wraps it mid-field: model and effort;
-  folder, branch and changes; tokens, context and limits. The folder shows by its name alone,
+- The footer's order: model and effort, the folder, branch and changes, then tokens, context
+  and limits; `!status` lists its values in the same order. The folder shows by its name alone,
   its whole path staying on `!status`.
 
 ### Fixed

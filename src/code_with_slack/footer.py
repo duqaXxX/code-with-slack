@@ -25,6 +25,8 @@ USAGE_TTL = 300.0
 # `/usage` answers in seconds; past this the probe gives up, so the footer never stops refreshing.
 USAGE_TIMEOUT = 60.0
 GIT_TIMEOUT = 5.0
+# The footer's fields that come before the folder.
+SESSION = ("Model", "Effort")
 # Wording measured on Claude Code 2.1.280 (2026-09-23). A change hides the field, nothing more.
 SESSION_LINE = re.compile(r"^Current session: (\d+)% used(?: · resets (.+))?$", re.M)
 WEEK_LINE = re.compile(r"^Current week \(all models\): (\d+)% used(?: · resets (.+))?$", re.M)
@@ -281,13 +283,11 @@ def format_limit(limit: Limit, now: datetime) -> str:
 
 @dataclass(frozen=True)
 class FooterField:
-    """One of the footer's values: `!status` shows `label: value`, the footer `short` on its
-    `line`: 0 the session, 1 where it works (after the folder), 2 tokens, context and limits."""
+    """One of the footer's values: `!status` shows `label: value`, the footer `short`."""
 
     label: str
     value: str
     short: str
-    line: int = 0
 
 
 def footer_fields(data: FooterData, now: datetime) -> list[FooterField]:
@@ -298,23 +298,23 @@ def footer_fields(data: FooterData, now: datetime) -> list[FooterField]:
         fields.append(FooterField("Model", data.model, data.model))
     if data.effort:
         fields.append(FooterField("Effort", data.effort, f"effort {data.effort}"))
-    if data.session_tokens is not None:
-        tokens = format_tokens(data.session_tokens)
-        fields.append(FooterField("Session tokens", tokens, f"{tokens} tok", line=2))
     if data.branch:
-        fields.append(FooterField("Branch", data.branch, mrkdwn_escape(data.branch), line=1))
+        fields.append(FooterField("Branch", data.branch, mrkdwn_escape(data.branch)))
     if data.changes is not None:
         changes = f"(+{data.changes[0]},-{data.changes[1]})"
-        fields.append(FooterField("Uncommitted", changes, changes, line=1))
+        fields.append(FooterField("Uncommitted", changes, changes))
+    if data.session_tokens is not None:
+        tokens = format_tokens(data.session_tokens)
+        fields.append(FooterField("Session tokens", tokens, f"{tokens} tok"))
     if data.context_percent is not None:
         context = f"{data.context_percent:.0f}%"
-        fields.append(FooterField("Context", context, f"ctx {context}", line=2))
+        fields.append(FooterField("Context", context, f"ctx {context}"))
     if data.usage and data.usage.session:
         session = format_limit(data.usage.session, now)
-        fields.append(FooterField("5h limit", session, f"5h {session}", line=2))
+        fields.append(FooterField("5h limit", session, f"5h {session}"))
     if data.usage and data.usage.week:
         week = format_limit(data.usage.week, now)
-        fields.append(FooterField("7d limit", week, f"7d {week}", line=2))
+        fields.append(FooterField("7d limit", week, f"7d {week}"))
     return fields
 
 
@@ -325,12 +325,13 @@ def format_status_fields(data: FooterData, now: datetime) -> list[str]:
 
 
 def format_footer(data: FooterData, now: datetime) -> str:
-    """Three lines, so a phone never wraps a field (the owner's layout): bypass, model and
-    effort; the channel's folder, branch and changes; tokens, context and limits."""
-    lines: list[list[str]] = [["⚡ bypass"] if data.bypass else [], [], []]
+    """One line: bypass, model and effort, the channel's folder, then branch, changes, tokens,
+    context and limits (the owner's order)."""
+    fields = footer_fields(data, now)
+    parts = ["⚡ bypass"] if data.bypass else []
+    parts += [f.short for f in fields if f.label in SESSION]
     if data.directory is not None and data.directory.name:
         # Its name alone, the project's: the whole path is on `!status`'s Directory line.
-        lines[1].append(mrkdwn_escape(data.directory.name))
-    for field in footer_fields(data, now):
-        lines[field.line].append(field.short)
-    return "\n".join(" · ".join(parts) for parts in lines if parts)
+        parts.append(mrkdwn_escape(data.directory.name))
+    parts += [f.short for f in fields if f.label not in SESSION]
+    return " · ".join(parts)
