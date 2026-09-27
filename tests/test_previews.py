@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 from claude_agent_sdk import AssistantMessage, ToolResultBlock, ToolUseBlock, UserMessage
 
-from code_with_slack.render.previews import Preview, columns, folded, preview
+from code_with_slack.render.previews import Preview, folded, preview
 from tests.fakes import sdk_messages
 
 CWD = "/home/dev/project"
@@ -43,7 +43,7 @@ def test_an_edit_shows_its_diff_numbered_as_the_terminal() -> None:
     shown = preview("Edit", result, CWD)
     assert shown is not None
     assert (shown.title, shown.summary) == ("Update(notes.txt)", "Added 1 line, removed 1 line")
-    assert [line.rstrip() for line in shown.body.splitlines()] == [
+    assert shown.body.splitlines() == [
         "    1 alpha",
         f"-{RED} 2 beta",
         f"+{GREEN} 2 gamma",
@@ -56,7 +56,7 @@ def test_a_write_over_a_file_shows_the_whole_diff() -> None:
     shown = preview(name, result, CWD)
     assert shown is not None
     assert (shown.title, shown.summary) == ("Write(notes.txt)", "Added 2 lines, removed 3 lines")
-    assert [line.rstrip() for line in shown.body.splitlines()] == [
+    assert shown.body.splitlines() == [
         f"-{RED} 1 alpha",
         f"-{RED} 2 gamma",
         f"-{RED} 3 delta",
@@ -73,12 +73,7 @@ def test_hunks_are_separated_as_the_terminal_separates_them() -> None:
     shown = preview("Edit", {"filePath": "/elsewhere/f.txt", "structuredPatch": patch}, CWD)
     assert shown is not None
     assert shown.title == "Update(/elsewhere/f.txt)"  # outside the folder: the full path
-    assert [line.rstrip() for line in shown.body.splitlines()] == [
-        f"-{RED}  1 a",
-        f"+{GREEN}  1 b",
-        "...",
-        "    40 c",
-    ]
+    assert shown.body.splitlines() == [f"-{RED}  1 a", f"+{GREEN}  1 b", "...", "    40 c"]
 
 
 @pytest.mark.parametrize(
@@ -102,20 +97,3 @@ def test_folded_calls_read_as_the_terminal_for_bash_and_read_only() -> None:
     assert folded("Read", 2) == "Read 2 files"
     assert folded("WebFetch", 1) == "WebFetch"
     assert folded("WebFetch", 2) == "WebFetch \u00d72"
-
-
-def test_changed_lines_reach_the_longest_line_so_their_colour_is_one_bar() -> None:
-    patch = [
-        {
-            "oldStart": 1,
-            "oldLines": 2,
-            "newStart": 1,
-            "newLines": 2,
-            "lines": [" a long unchanged line", "-x", "+yy"],
-        }
-    ]
-    shown = preview("Edit", {"filePath": "/home/dev/project/f", "structuredPatch": patch}, CWD)
-    assert shown is not None
-    context, removed, added = shown.body.splitlines()
-    assert columns(removed) == columns(added) == columns(context)
-    assert removed.rstrip() == f"-{RED} 2 x" and added.rstrip() == f"+{GREEN} 2 yy"

@@ -88,22 +88,14 @@ def _diff(patch: list[Any]) -> tuple[int, int, list[str]] | None:
                 rows.append((new, f" {text}"))
                 old, new = old + 1, new + 1
     width = len(str(max((n for n, _ in rows), default=0)))
-    shown = [
-        text if n == 0 else f"{text[0]}{MARKS[text[0]]} {n:>{width}} {text[1:]}" for n, text in rows
-    ]
-    # Slack desktop colours a changed line's text only: trailing spaces up to the longest line
-    # carry the colour across, so the changed lines read as bars of one width.
-    longest = max((columns(line) for line in shown), default=0)
     return (
         added,
         removed,
-        [line + " " * (longest - columns(line)) if line[:1] in "-+" else line for line in shown],
+        [
+            text if n == 0 else f"{text[0]}{MARKS[text[0]]} {n:>{width}} {text[1:]}"
+            for n, text in rows
+        ],
     )
-
-
-def columns(line: str) -> int:
-    """How wide a diff line shows: a changed line's square is two columns and one character."""
-    return len(line) + (1 if line[:1] in "-+" else 0)
 
 
 def _changed(added: int, removed: int) -> str:
