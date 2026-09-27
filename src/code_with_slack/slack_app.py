@@ -67,7 +67,7 @@ from code_with_slack.guards import (
 from code_with_slack.prompt import Prompt
 from code_with_slack.render.escape import markdown_escape
 from code_with_slack.render.renderer import one_line
-from code_with_slack.render.sinks import FALLBACK_LIMIT, PREVIEW_ACTION, describe, split
+from code_with_slack.render.sinks import FALLBACK_LIMIT, describe, split
 from code_with_slack.resume import RESUME_ACTION, TITLE_LIMIT, matching, resume_blocks
 from code_with_slack.sessions import (
     ChannelSession,
@@ -507,21 +507,6 @@ def build_app(
             )
         except Exception as exc:
             logger.warning("could not record an answer in %s: %s", channel, describe(exc))
-
-    @app.action(PREVIEW_ACTION)
-    async def on_preview(ack: AsyncAck, body: dict[str, Any]) -> None:
-        await ack()
-        user, team = interaction_actor(body)
-        channel = (body.get("channel") or {}).get("id")
-        if not await admitted(user, team, channel):
-            return
-        assert channel is not None
-        key, _, tool_id = str(body["actions"][0].get("value", "")).partition(":")
-        # The button names a reply by a random key: it is honoured only in the channel the
-        # reply was written in, like every other button.
-        reply = sessions.replies.get(key)
-        if reply is None or reply.channel != channel or not await reply.toggle(tool_id):
-            await tell_owner(channel, texts.PREVIEW_GONE)
 
     @app.action("question_open")
     async def on_question_open(ack: AsyncAck, body: dict[str, Any]) -> None:

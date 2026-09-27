@@ -125,17 +125,10 @@ failed ones after `✗`, in the terminal's words where the terminal has words
 (`render.previews.folded`: `✓ Ran 3 shell commands · Read 1 file · WebFetch · ✗ Ran 1 shell
 command`) and by the tool's name for any other tool. A finished `Edit` or `Write` does not fold:
 it shows as the terminal shows it (`render.previews.preview`), its line (`✓ Update(notes.txt)`,
-then `⎿ Added 1 line, removed 1 line`), with a `▸` on the same row: a context block holds no
-button, so this line is a section's text and the icon its accessory. A click opens the preview
-inside the reply, and `▾` closes it: a `markdown` code
-block with the numbered diff, fenced as `diff`, which Slack desktop colours (each changed line
-also carries a red or green square after its sign, since Slack mobile colours nothing), or a new
-file's first 10 lines and `… +N lines`. The preview waits for a click because Slack mobile wraps
-a long diff into something unreadable, and a message cannot tell which client shows it. The
-reply redraws itself (`ReplySink.toggle`); `sinks.ReplyRegistry` keeps the latest
-`sinks.REPLIES_KEPT` replies with a preview, in memory only, and a click on an older one, or
-after a restart, gets `texts.PREVIEW_GONE`. The click goes through the owner and channel checks
-of every button. The calls before and after it fold on their own,
+then `⎿ Added 1 line, removed 1 line`) followed by a `markdown` code block with the numbered diff
+(fenced as `diff`, which Slack desktop colours; each changed line also carries a red or green
+square after its sign, since Slack mobile colours nothing),
+or a new file's first 10 lines and `… +N lines`. The calls before and after it fold on their own,
 as in the terminal. The preview reads `UserMessage.tool_use_result`, which the SDK does not
 document; any shape other than the one measured falls back to the generic line, and the release
 probe's claim P13 checks the shape on each new SDK. Below

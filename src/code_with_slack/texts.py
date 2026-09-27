@@ -178,9 +178,6 @@ RESUME_AMBIGUOUS = (
     "More than one session in `{directory}` is named or starts with `{target}`: pick one from "
     "`!resume`."
 )
-# A preview's icon, closed and open, as a tree view's disclosure triangle.
-PREVIEW_ICONS = ("\u25b8", "\u25be")
-PREVIEW_GONE = "That preview is no longer kept: only the latest replies are, until a restart."
 RESUME_GONE = "That session is not in this channel's directory any more: `!resume` lists them."
 # `!guide`: how to use the bot, in the owner's words. tests/test_commands.py fails when a word of
 # the daemon is missing here; keep the tone plain and every line true of the current behaviour.

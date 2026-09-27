@@ -9,8 +9,6 @@ whole instead, at most once per DEBOUNCE_SECONDS: chat.update allows "50+ per mi
 import asyncio
 import itertools
 import logging
-import secrets
-from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
@@ -41,14 +39,6 @@ REFUSED_CONTENT = {"invalid_blocks", "invalid_blocks_format", "msg_too_long", "i
 # ⏳ marks what is still running, as the footer marks running tasks (`⏳ 1 shell`).
 ICONS = {"pending": "⏳", "in_progress": "⏳", "complete": "✓", "error": "✗"}
 NESTED = texts.NESTED
-
-
-# A preview's button: its value is `<reply key>:<tool call id>`.
-PREVIEW_ACTION = "preview_toggle"
-# Replies whose preview a click can still open. A redraw needs the reply's own parts, which live
-# in memory only (nothing is written to disk): past this many, or after a restart, a click is
-# answered with `texts.PREVIEW_GONE`.
-REPLIES_KEPT = 50
 
 
 def describe(exc: Exception) -> str:
@@ -96,10 +86,6 @@ def preview_blocks(body: str, language: str = "") -> list[dict[str, Any]]:
 
 
 def block_text(block: dict[str, Any]) -> str:
-    if block["type"] == "actions":
-        return ""
-    if block["type"] == "section":
-        return str(block["text"]["text"])
     if block["type"] == "markdown":
         return str(block["text"])
     return "".join(str(e.get("text", "")) for e in block.get("elements") or [])
@@ -203,17 +189,9 @@ class ReplySink:
     continues in a new message. Never raises: a write that fails is retried with the whole reply
     at the next flush, the final one after FINAL_RETRY_SECONDS, and the session goes on."""
 
-    def __init__(
-        self, slack: AsyncWebClient, *, channel: str, registry: "ReplyRegistry | None" = None
-    ) -> None:
+    def __init__(self, slack: AsyncWebClient, *, channel: str) -> None:
         self._slack = slack
         self._channel = channel
-        # With a registry, a preview opens on a click (Slack mobile wraps a long diff into
-        # something unreadable, and a message cannot tell which client shows it); without
-        # one, it shows at once.
-        self._registry = registry
-        self._key: str | None = None
-        self._expanded: set[str] = set()
         self._parts: list[_Text | _Tool] = []
         self._tools: dict[str, _Tool] = {}
         self._messages: list[str] = []  # ts of each message this reply has posted
@@ -226,22 +204,6 @@ class ReplySink:
         self._footer: str | None = None
         self._running = ""
         self._latest = True
-
-    @property
-    def channel(self) -> str:
-        return self._channel
-
-    async def toggle(self, tool_id: str) -> bool:
-        """Open or close one call's preview and redraw the reply; False if it has none."""
-        tool = self._tools.get(tool_id)
-        if tool is None or tool.update.preview is None:
-            return False
-        self._expanded ^= {tool_id}
-        if self._finished:
-            await self._flush(final=True, footer=self._footer)
-        else:
-            self._schedule()
-        return True
 
     async def open(self, status: str) -> None:
         """Post the reply at once, showing only its status: the owner sees an answer is coming."""
@@ -267,8 +229,6 @@ class ReplySink:
             self._parts.append(tool)
         else:
             tool.update = update
-        if update.preview is not None and self._registry is not None and self._key is None:
-            self._key = self._registry.add(self)
         await self._changed()
 
     async def set_running(self, counts: str) -> None:
@@ -349,36 +309,12 @@ class ReplySink:
                 for index, (shown, group) in enumerate(segments):
                     last = latest and index == len(segments) - 1
                     for tool in group if shown else [None]:
-                        if tool and self._key and tool.update.preview and tool.update.preview.body:
-                            blocks += self._preview(tool, len(blocks))
-                            continue
                         lines = [tool.line()] if tool else tool_lines(group, latest=last)
                         blocks += self._tool_blocks(lines, len(blocks))
                         if tool and tool.update.preview and tool.update.preview.body:
                             view = tool.update.preview
                             blocks += preview_blocks(view.body, view.language)
         return blocks
-
-    def _preview(self, tool: _Tool, index: int) -> list[dict[str, Any]]:
-        """A call with a preview: its line, with an icon on the same row that opens the preview
-        inside the reply and closes it. A context block holds no button (block reference, read
-        2026-09-27), so the line is a section's text and the icon its accessory."""
-        view = tool.update.preview
-        assert view is not None
-        expanded = tool.update.id in self._expanded
-        button = {
-            "type": "button",
-            "action_id": PREVIEW_ACTION,
-            "value": f"{self._key}:{tool.update.id}",
-            "text": {"type": "plain_text", "text": texts.PREVIEW_ICONS[expanded]},
-        }
-        line = {
-            "type": "section",
-            "block_id": f"preview-{index}",
-            "text": {"type": "mrkdwn", "text": mrkdwn_escape(tool.line())[:CONTEXT_LIMIT]},
-            "accessory": button,
-        }
-        return [line, *preview_blocks(view.body, view.language)] if expanded else [line]
 
     @staticmethod
     def _tool_blocks(lines: list[str], start: int) -> list[dict[str, Any]]:
@@ -491,22 +427,3 @@ class ReplySink:
                 self._messages.pop()
                 self._shown.pop()
         return True
-
-
-class ReplyRegistry:
-    """The latest REPLIES_KEPT replies that show a preview button, by the key the button carries,
-    so a click can redraw its reply. In memory only."""
-
-    def __init__(self, kept: int = REPLIES_KEPT) -> None:
-        self._replies: OrderedDict[str, ReplySink] = OrderedDict()
-        self._kept = kept
-
-    def add(self, sink: ReplySink) -> str:
-        key = secrets.token_hex(6)
-        self._replies[key] = sink
-        while len(self._replies) > self._kept:
-            self._replies.popitem(last=False)
-        return key
-
-    def get(self, key: str) -> ReplySink | None:
-        return self._replies.get(key)
