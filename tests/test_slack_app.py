@@ -16,6 +16,7 @@ from code_with_slack.attachments import DownloadFailed
 from code_with_slack.config import Config
 from code_with_slack.footer import UsageCache
 from code_with_slack.guards import ChannelGuard, Identity
+from code_with_slack.render.sinks import PREVIEW_ACTION
 from code_with_slack.sessions import SessionDeps, SessionManager
 from code_with_slack.slack_app import build_app, slack_unescape
 from code_with_slack.state import StateStore
@@ -911,3 +912,36 @@ async def test_a_bind_to_an_untrusted_folder_says_no_session_can_start_yet(
     assert said(world)[-1] == texts.BIND_UNAVAILABLE.format(directory=docs, reason=reason)
     assert world.state.get(CHANNEL).directory == docs
     await world.sessions.close_all()
+
+
+async def preview_reply(world: World) -> tuple[Any, str]:
+    from code_with_slack.render.previews import Preview
+    from code_with_slack.render.renderer import TaskUpdate
+    from code_with_slack.render.sinks import ReplySink
+
+    reply = ReplySink(world.slack, channel=CHANNEL, registry=world.sessions.replies)
+    edit = Preview("Update(a.txt)", "Added 1 line", "+x", "diff")
+    await reply.task(TaskUpdate("e1", "Edit: a.txt", "complete", name="Edit", preview=edit))
+    await reply.finish([], None)
+    [posted] = world.slack.calls_to("chat.postMessage")  # a reply's first write posts it
+    button = next(b for b in posted["blocks"] if b["type"] == "actions")
+    return reply, str(button["elements"][0]["value"])
+
+
+async def test_the_owner_opens_a_preview(world: World) -> None:
+    _, value = await preview_reply(world)
+    await world.dispatch(click(PREVIEW_ACTION, value))
+    blocks = world.slack.calls_to("chat.update")[-1]["blocks"]
+    assert any(b["type"] == "markdown" and b["text"].startswith("```diff") for b in blocks)
+
+
+async def test_nobody_else_opens_a_preview(world: World) -> None:
+    _, value = await preview_reply(world)
+    updates = len(world.slack.calls_to("chat.update"))
+    await world.dispatch(click(PREVIEW_ACTION, value, id=STRANGER))
+    assert len(world.slack.calls_to("chat.update")) == updates
+
+
+async def test_a_forgotten_preview_says_so(world: World) -> None:
+    await world.dispatch(click(PREVIEW_ACTION, "unknownkey:e1"))
+    assert world.ephemerals() == [texts.PREVIEW_GONE]

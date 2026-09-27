@@ -42,8 +42,9 @@ All notable changes to this project are documented here. The format follows
 - Tool lines read closer to the terminal (Claude Code 2.1.283, measured 2026-09-27). Finished
   calls fold in the terminal's words for Bash and Read (`Ran 2 shell commands · Read 1 file`), by
   name for any other tool. A finished `Edit` or `Write` no longer folds: it shows as `Update(path)`
-  or `Write(path)` with `Added N lines, removed M lines` or `Wrote N lines to path`, and a code
-  block with the numbered diff, or a new file's first 10 lines. An answered question stays in the
+  or `Write(path)` with `Added N lines, removed M lines` or `Wrote N lines to path`, and a
+  **Show diff** button that opens, inside the reply, the numbered diff (coloured on Slack desktop,
+  a red or green square on each changed line for mobile) or a new file's first 10 lines. An answered question stays in the
   channel as `User answered Claude's questions:` with each answer, instead of being deleted.
 - `!stop` also stops the channel's background commands and agents (`ClaudeSDKClient.stop_task`),
   besides the running turn and its pending approvals, and answers

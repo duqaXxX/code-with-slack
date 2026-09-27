@@ -178,6 +178,10 @@ RESUME_AMBIGUOUS = (
     "More than one session in `{directory}` is named or starts with `{target}`: pick one from "
     "`!resume`."
 )
+# A preview's button, closed and open, for a diff and for a new file's lines.
+PREVIEW_DIFF = ("Show diff", "Hide diff")
+PREVIEW_FILE = ("Show lines", "Hide lines")
+PREVIEW_GONE = "That preview is no longer kept: only the latest replies are, until a restart."
 RESUME_GONE = "That session is not in this channel's directory any more: `!resume` lists them."
 # `!guide`: how to use the bot, in the owner's words. tests/test_commands.py fails when a word of
 # the daemon is missing here; keep the tone plain and every line true of the current behaviour.

@@ -65,7 +65,7 @@ from code_with_slack.footer import (
 from code_with_slack.guards import Identity
 from code_with_slack.prompt import Prompt, user_message
 from code_with_slack.render.renderer import TurnRenderer, ended_line, one_line, task_title
-from code_with_slack.render.sinks import ReplySink, describe
+from code_with_slack.render.sinks import ReplyRegistry, ReplySink, describe
 from code_with_slack.resume import by_last_activity
 from code_with_slack.state import StateStore
 from code_with_slack.trust import workspace_trusted
@@ -214,6 +214,8 @@ class SessionDeps:
     client_factory: ClientFactory = default_client_factory
     workspace_trusted: Callable[[Path], Awaitable[bool]] = workspace_trusted
     sessions_of: Callable[[Path], list[SDKSessionInfo]] = directory_sessions
+    # The replies whose previews a click can open, shared with the Slack handlers.
+    replies: ReplyRegistry = field(default_factory=ReplyRegistry)
 
 
 @dataclass
@@ -801,7 +803,7 @@ class ChannelSession:
 
     async def _sink(self) -> ReplySink:
         """A new reply, which becomes the channel's latest and takes over the running list."""
-        sink = ReplySink(self._deps.slack, channel=self.channel_id)
+        sink = ReplySink(self._deps.slack, channel=self.channel_id, registry=self._deps.replies)
         previous, self._latest = self._latest, sink
         await sink.set_running(self._running_counts())
         if previous is not None:
@@ -972,6 +974,10 @@ class SessionManager:
         self._deps = deps
         self._sessions: dict[str, ChannelSession] = {}
         self.draining = False
+
+    @property
+    def replies(self) -> ReplyRegistry:
+        return self._deps.replies
 
     def get(self, channel_id: str) -> ChannelSession | None:
         stored = self._deps.state.get(channel_id)

@@ -638,3 +638,48 @@ async def test_a_call_with_a_preview_splits_the_fold_around_it(slack: FakeSlack)
 def test_a_fence_inside_a_preview_does_not_close_its_block() -> None:
     [block] = sinks.preview_blocks("a\n```\nb")
     assert block["text"].count("```") == 2
+
+
+def preview_update(id: str = "e1") -> TaskUpdate:
+    from code_with_slack.render.previews import Preview
+
+    body = "    6 6\n-\U0001f7e5 7 7\n+\U0001f7e9 7 sette"
+    return tool(id, "Edit", preview=Preview("Update(a.txt)", "Added 1 line", body, "diff"))
+
+
+async def test_with_a_registry_a_preview_opens_and_closes_on_a_click(slack: FakeSlack) -> None:
+    # Slack mobile wraps a long diff into something unreadable, and a message cannot tell
+    # which client shows it: the summary shows, the diff waits behind a button.
+    registry = sinks.ReplyRegistry()
+    sink = ReplySink(slack, channel=CHANNEL, registry=registry)
+    await sink.task(preview_update())
+    await sink.finish([], None)
+
+    def shown() -> list[tuple[str, str]]:
+        return [
+            (
+                b["type"],
+                b["elements"][0]["text"]["text"] if b["type"] == "actions" else b.get("text", ""),
+            )
+            for b in last_blocks(slack)
+            if b["type"] in ("actions", "markdown")
+        ]
+
+    assert shown() == [("actions", "Show diff")]
+    button = next(b for b in last_blocks(slack) if b["type"] == "actions")["elements"][0]
+    key, _, tool_id = button["value"].partition(":")
+    assert registry.get(key) is sink and tool_id == "e1"
+    assert await sink.toggle("e1")
+    assert [kind for kind, _ in shown()] == ["actions", "markdown"]
+    assert shown()[0][1] == "Hide diff" and shown()[1][1].startswith("```diff\n")
+    assert await sink.toggle("e1")
+    assert shown() == [("actions", "Show diff")]
+    assert not await sink.toggle("missing")
+
+
+def test_the_registry_keeps_only_the_latest_replies(slack: FakeSlack) -> None:
+    registry = sinks.ReplyRegistry(kept=2)
+    first, second, third = (ReplySink(slack, channel=CHANNEL) for _ in range(3))
+    keys = [registry.add(s) for s in (first, second, third)]
+    assert registry.get(keys[0]) is None
+    assert registry.get(keys[1]) is second and registry.get(keys[2]) is third
