@@ -99,7 +99,7 @@ def test_folded_calls_read_as_the_terminal_for_bash_and_read_only() -> None:
     assert folded("WebFetch", 2) == "WebFetch \u00d72"
 
 
-def test_a_long_diff_stops_at_twenty_lines() -> None:
+def test_a_long_diff_shows_whole() -> None:
     patch = [
         {
             "oldStart": 1,
@@ -111,9 +111,10 @@ def test_a_long_diff_stops_at_twenty_lines() -> None:
     ]
     shown = preview("Edit", {"filePath": "/home/dev/project/f", "structuredPatch": patch}, CWD)
     assert shown is not None
+    # As the terminal shows it: every line, since the diff is collapsed until the owner opens it.
     lines = shown.body.splitlines()
-    assert len(lines) == 21 and lines[19] == f"-{RED} 20 line 20" and lines[20] == "… +10 lines"
-    assert shown.summary == "Removed 30 lines"  # the sentence still counts the whole change
+    assert len(lines) == 30 and lines[29] == f"-{RED} 30 line 30"
+    assert shown.summary == "Removed 30 lines"
 
 
 def test_a_missing_final_newline_is_not_a_line_of_the_file() -> None:

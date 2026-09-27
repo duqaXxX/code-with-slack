@@ -27,9 +27,6 @@ WORDS = {
 MARKS = {"-": "\U0001f7e5", "+": "\U0001f7e9", " ": "  "}
 # The terminal shows a new file's first lines, then how many it leaves out.
 NEW_FILE_LINES = 10
-# A diff's lines shown before `… +N lines`. The terminal shows a diff whole; here the owner chose a
-# cap (2026-09-27), since Slack mobile wraps each long line into several.
-DIFF_LINES = 20
 
 
 @dataclass(frozen=True)
@@ -37,8 +34,8 @@ class Preview:
     title: str  # `Update(notes.txt)`
     summary: str  # `Added 1 line, removed 1 line`
     body: str  # numbered lines, as the terminal prints them
-    # The code block's language: `diff` makes Slack colour the lines a change adds and removes,
-    # as the terminal does (markdown block reference, 2026-09-27: syntax highlighting by tag).
+    # `diff` for a diff, which shows collapsed under its call's line, in a code block Slack
+    # colours as a diff (rich text preformatted element reference, 2026-09-27: `language`).
     language: Literal["", "diff"] = ""
 
 
@@ -133,8 +130,6 @@ def preview(name: str, result: Any, cwd: str | None) -> Preview | None:
         if diff is None:
             return None
         added, removed, body = diff
-        if len(body) > DIFF_LINES:
-            body = [*body[:DIFF_LINES], f"… +{_lines(len(body) - DIFF_LINES)}"]
         # The terminal names an edit `Update`, and a Write over an existing file keeps `Write`.
         title = f"{'Update' if name == 'Edit' else 'Write'}({path})"
         return Preview(title, _changed(added, removed), "\n".join(body), "diff")
