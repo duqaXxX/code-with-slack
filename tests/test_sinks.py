@@ -635,6 +635,56 @@ async def test_a_call_with_a_preview_splits_the_fold_around_it(slack: FakeSlack)
     ]
 
 
-def test_a_fence_inside_a_preview_does_not_close_its_block() -> None:
-    [block] = sinks.preview_blocks("a\n```\nb")
+@pytest.mark.parametrize("fence", ["```", "````", "``````", "```x```"])
+def test_a_fence_inside_a_preview_does_not_close_its_block(fence: str) -> None:
+    # Any run of three or more backticks would close the block (a Markdown file's ```` fence).
+    [block] = sinks.preview_blocks(f"a\n{fence}\nb")
     assert block["text"].count("```") == 2
+
+
+async def test_a_failed_call_shows_its_error_even_if_it_carries_a_preview(slack: FakeSlack) -> None:
+    from code_with_slack.render.previews import Preview
+
+    sink = reply(slack)
+    view = Preview("Update(a.txt)", "Added 1 line", "+x", "diff")
+    await sink.task(tool("e", "Edit", status="error", output="File not found", preview=view))
+    await sink.finish([], None)
+    shown = [sinks.block_text(b) for b in last_blocks(slack)]
+    assert not any("Added 1 line" in t or "```" in t or "Update(" in t for t in shown)
+    assert "✗ Edit" in shown  # folded with the failed calls, as any failed call
+
+
+async def test_a_message_with_two_results_previews_neither(slack: FakeSlack) -> None:
+    # One tool_use_result per message: it cannot be told which of two results it belongs to.
+    import dataclasses
+
+    from claude_agent_sdk import AssistantMessage, ToolResultBlock, ToolUseBlock, UserMessage
+
+    recorded = sdk_messages("edit-write")
+    use = next(
+        (m, b)
+        for m in recorded
+        if isinstance(m, AssistantMessage)
+        for b in m.content
+        if isinstance(b, ToolUseBlock) and b.name == "Edit" and b.input.get("old_string") == "beta"
+    )
+    result = next(
+        m
+        for m in recorded
+        if isinstance(m, UserMessage)
+        and isinstance(m.content, list)
+        and any(isinstance(b, ToolResultBlock) and b.tool_use_id == use[1].id for b in m.content)
+    )
+    twin = dataclasses.replace(use[1], id="twin")
+    calls = dataclasses.replace(use[0], content=[use[1], twin])
+    [block] = [b for b in result.content if isinstance(b, ToolResultBlock)]
+    both = dataclasses.replace(
+        result, content=[block, dataclasses.replace(block, tool_use_id="twin")]
+    )
+    sink = reply(slack)
+    renderer = TurnRenderer(sink, "/home/dev/project")
+    for message in (calls, both):
+        await renderer.feed(message)
+    await renderer.close(None)
+    shown = "\n".join(sinks.block_text(b) for b in last_blocks(slack))
+    assert "Update(" not in shown and "```" not in shown and "Edit \u00d72" in shown

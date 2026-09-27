@@ -51,6 +51,13 @@ class TaskUpdate:
     calls: int = 0  # calls made inside it (a subagent's), counted on its line
     preview: Preview | None = None  # the terminal's own view of a finished call: never folded
 
+    @property
+    def shown_preview(self) -> Preview | None:
+        """The preview, on a call that finished well and only there: a failed, running or task
+        line keeps its own view whatever it carries, so no path can show a preview over an
+        error."""
+        return self.preview if self.status == "complete" and not self.task else None
+
 
 class Sink(Protocol):
     async def text(self, markdown: str) -> None: ...

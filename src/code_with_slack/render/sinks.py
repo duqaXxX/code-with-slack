@@ -9,6 +9,7 @@ whole instead, at most once per DEBOUNCE_SECONDS: chat.update allows "50+ per mi
 import asyncio
 import itertools
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -76,8 +77,9 @@ def tools_block(lines: list[str], index: int) -> dict[str, Any]:
 
 def preview_blocks(body: str, language: str = "") -> list[dict[str, Any]]:
     """A call's preview (a diff, a new file's first lines) as code blocks, split where a block
-    would pass its limit. A fence inside the file must not close the block early."""
-    body = body.replace("```", "`\u200b``")
+    would pass its limit. A fence inside the file must not close the block early: every run of
+    three or more backticks is broken up, as `escape.shown_as_written` breaks every one."""
+    body = re.sub(r"`{3,}", lambda run: "\u200b".join(run.group()), body)
     return [
         {"type": "markdown", "text": f"```{language}\n{chunk}\n```"}
         for chunk in split(body)
@@ -113,15 +115,15 @@ class _Tool:
 
     def line(self, *, icon: bool = True) -> str:
         update = self.update
-        title = update.preview.title if update.preview else update.title
+        title = update.shown_preview.title if update.shown_preview else update.title
         line = f"{ICONS[update.status]} `{title}`" if icon else f"`{title}`"
         if update.calls:
             # How much a subagent has done: its latest call alone does not say.
             line += f" · {update.calls} call{'' if update.calls == 1 else 's'}"
-        if update.preview is not None:
-            # The terminal's sentence under the call (`⎿  Added 1 line, removed 1 line`); the
+        if update.shown_preview is not None:
+            # The terminal's sentence under the call (`⎿ Added 1 line, removed 1 line`); the
             # lines themselves follow the tool line in a block of their own.
-            return f"{line}\n{NESTED}{update.preview.summary}"
+            return f"{line}\n{NESTED}{update.shown_preview.summary}"
         if (update.status == "error" and update.output) or update.output == STOPPED:
             line += f" · {update.output}"
         elif update.status == "in_progress" and update.details:
@@ -147,7 +149,7 @@ def tool_lines(tools: list[_Tool], *, latest: bool = False) -> list[str]:
             update.status in counts
             and update.name
             and not update.task
-            and update.preview is None
+            and update.shown_preview is None
             and update.output != STOPPED
             and not last
         ):
@@ -303,7 +305,7 @@ class ReplySink:
                 segments = [
                     (shown, list(group))
                     for shown, group in itertools.groupby(
-                        tools, key=lambda t: t.update.preview is not None
+                        tools, key=lambda t: t.update.shown_preview is not None
                     )
                 ]
                 for index, (shown, group) in enumerate(segments):
@@ -311,8 +313,8 @@ class ReplySink:
                     for tool in group if shown else [None]:
                         lines = [tool.line()] if tool else tool_lines(group, latest=last)
                         blocks += self._tool_blocks(lines, len(blocks))
-                        if tool and tool.update.preview and tool.update.preview.body:
-                            view = tool.update.preview
+                        if tool and tool.update.shown_preview and tool.update.shown_preview.body:
+                            view = tool.update.shown_preview
                             blocks += preview_blocks(view.body, view.language)
         return blocks
 

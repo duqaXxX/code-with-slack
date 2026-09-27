@@ -288,7 +288,14 @@ async def previews(s: Stage) -> dict[str, Observation]:
     # Both previews built: the shapes they read are still the measured ones.
     shown = "Write(preview.txt)" in lines and "Update(preview.txt)" in lines
     shown = shown and "Wrote 3 lines" in lines and "Added 1 line, removed 1 line" in lines
-    return {"P13": Observation(called, shown, "" if called else f"permission requests: {asked}")}
+    if not called:
+        detail = f"permission requests: {asked}"
+    elif not shown:
+        # What the lines showed instead: a changed wording or shape is visible at once.
+        detail = f"tool lines showed: {' '.join(lines.split())[:160]!r}"
+    else:
+        detail = ""
+    return {"P13": Observation(called, shown, detail)}
 
 
 async def background_stop(s: Stage) -> dict[str, Observation]:

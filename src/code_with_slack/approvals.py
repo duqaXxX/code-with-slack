@@ -197,7 +197,11 @@ def answered_blocks(
         lines.append(
             f"{texts.NESTED}· {shown_as_written(q['question'])} → {shown_as_written(shown)}"
         )
-    return [{"type": "context", "elements": [{"type": "mrkdwn", "text": "\n".join(lines)}]}]
+    # A context element holds at most 3,000 characters; long questions and answers are cut.
+    text = "\n".join(lines)
+    if len(text) > SECTION_LIMIT:
+        text = text[: SECTION_LIMIT - 1] + "…"
+    return [{"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}]
 
 
 def question_blocks(approval_id: str, questions: list[dict[str, Any]]) -> list[dict[str, Any]]:

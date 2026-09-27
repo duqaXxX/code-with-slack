@@ -183,7 +183,9 @@ workspace, and the channel its request was posted in. Each request has a random 
 once, only from the channel it was posted in, and only after the identity and channel guards.
 Once decided, the request message is deleted: the tool's line in the reply records the call. An
 answered question is kept instead, rewritten with no buttons as the terminal keeps it
-(`approvals.answered_blocks`: `User answered Claude's questions:`, then `⎿ · question → answer`).
+(`approvals.answered_blocks`: `User answered Claude's questions:`, then `⎿ · question → answer`,
+cut at Slack's 3,000 characters); if Slack refuses that rewrite, the request is deleted, so no
+button is left that no longer works.
 `!stop` denies every request still pending in the channel and deletes its message. A request
 Slack does not accept is denied at once, with a message telling Claude Code that it could not be
 shown, and the tool's line records the denial.

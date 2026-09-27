@@ -506,7 +506,9 @@ def build_app(
                 blocks=answered_blocks(questions, answers),
             )
         except Exception as exc:
+            # The request must not keep buttons that no longer work: remove it, as before.
             logger.warning("could not record an answer in %s: %s", channel, describe(exc))
+            await remove_request(channel, ts)
 
     @app.action("question_open")
     async def on_question_open(ack: AsyncAck, body: dict[str, Any]) -> None:

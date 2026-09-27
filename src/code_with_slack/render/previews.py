@@ -11,11 +11,13 @@ None, and the generic line is shown instead.
 
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, Literal
 
-# How the terminal folds finished calls of these tools (measured on 2.1.283): every Bash call,
-# whatever the command, reads as a shell command here; the terminal's own `Listed` and `Searched`
-# come from a classification of the command that it does not document.
+# How the terminal folds finished calls of these tools. Captured from the terminal on Claude Code
+# 2.1.283 (2026-09-27), where Bash also does the searching (the CLI has no Grep or Glob tool):
+# `echo hi` read `Ran 1 shell command`, `ls` `Listed 1 directory`, a grep `Searched for 1
+# pattern`. That classification of the command is undocumented, so every Bash call reads here as
+# a shell command.
 WORDS = {
     "Bash": ("Ran {n} shell command", "Ran {n} shell commands"),
     "Read": ("Read {n} file", "Read {n} files"),
@@ -37,7 +39,7 @@ class Preview:
     body: str  # numbered lines, as the terminal prints them
     # The code block's language: `diff` makes Slack colour the lines a change adds and removes,
     # as the terminal does (markdown block reference, 2026-09-27: syntax highlighting by tag).
-    language: str = ""
+    language: Literal["", "diff"] = ""
 
 
 def folded(name: str, n: int) -> str:
@@ -87,9 +89,11 @@ def _diff(patch: list[Any]) -> tuple[int, int, list[str]] | None:
             elif sign == "+":
                 rows.append((new, f"+{text}"))
                 new, added = new + 1, added + 1
-            else:
+            elif sign == " ":
                 rows.append((new, f" {text}"))
                 old, new = old + 1, new + 1
+            elif sign != "\\":  # `\ No newline at end of file` is about the line above: skipped
+                return None
     width = len(str(max((n for n, _ in rows), default=0)))
     return (
         added,

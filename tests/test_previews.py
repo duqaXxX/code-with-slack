@@ -114,3 +114,25 @@ def test_a_long_diff_stops_at_twenty_lines() -> None:
     lines = shown.body.splitlines()
     assert len(lines) == 21 and lines[19] == f"-{RED} 20 line 20" and lines[20] == "… +10 lines"
     assert shown.summary == "Removed 30 lines"  # the sentence still counts the whole change
+
+
+def test_a_missing_final_newline_is_not_a_line_of_the_file() -> None:
+    patch = [
+        {
+            "oldStart": 1,
+            "oldLines": 1,
+            "newStart": 1,
+            "newLines": 2,
+            "lines": ["-a", "\\ No newline at end of file", "+a", "+b"],
+        }
+    ]
+    shown = preview("Edit", {"filePath": "/home/dev/project/f", "structuredPatch": patch}, CWD)
+    assert shown is not None
+    assert shown.body.splitlines() == [f"-{RED} 1 a", f"+{GREEN} 1 a", f"+{GREEN} 2 b"]
+
+
+def test_an_unknown_line_shape_falls_back_to_the_generic_line() -> None:
+    patch = [{"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 1, "lines": ["~a"]}]
+    assert (
+        preview("Edit", {"filePath": "/home/dev/project/f", "structuredPatch": patch}, CWD) is None
+    )

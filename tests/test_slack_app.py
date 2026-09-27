@@ -425,7 +425,7 @@ async def test_a_complete_submit_answers_claude_and_keeps_the_answers(world: Wor
     await world.dispatch(form_body("view_submission", draft, values))
     assert pending.future.result() == Answer({"Colour?": "blue", "Sizes?": ["s", "xl"]})
     # The request stays as the terminal's record of the answers (terminal, CLI 2.1.283:
-    # `User answered Claude's questions:` then `⎿  · Which colour do you prefer? → Red`).
+    # `User answered Claude's questions:` then `⎿ · Which colour do you prefer? → Red`).
     assert world.slack.calls_to("chat.delete") == []
     [update] = world.slack.calls_to("chat.update")
     assert update["ts"] == "1790000000.000009"
@@ -911,3 +911,27 @@ async def test_a_bind_to_an_untrusted_folder_says_no_session_can_start_yet(
     assert said(world)[-1] == texts.BIND_UNAVAILABLE.format(directory=docs, reason=reason)
     assert world.state.get(CHANNEL).directory == docs
     await world.sessions.close_all()
+
+
+def test_long_answers_fit_slack_s_limit() -> None:
+    from code_with_slack.approvals import SECTION_LIMIT, answered_blocks
+
+    questions = [{"question": "q" * 900} for _ in range(4)]
+    answers: dict[str, str | list[str]] = {"q" * 900: "a" * 300}
+    [block] = answered_blocks(questions, answers)
+    assert len(block["elements"][0]["text"]) <= SECTION_LIMIT
+
+
+async def test_an_answer_slack_will_not_record_removes_the_request(world: World) -> None:
+    approval_id, pending = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
+    pending.message_ts = "1790000000.000009"
+    draft = Draft(approval_id, CHANNEL, active=1, picks={0: [1]})
+    values = {
+        "q1": {"answer": {"type": "checkboxes", "selected_options": [{"value": "0"}]}},
+        "o1": {"other": {"type": "plain_text_input", "value": "xl"}},
+    }
+    world.slack.responses["chat.update"] = {"ok": False, "error": "msg_too_long"}
+    await world.dispatch(form_body("view_submission", draft, values))
+    assert pending.future.done()
+    # Its buttons would no longer work: the request goes, as before this record existed.
+    assert [a["ts"] for a in world.slack.calls_to("chat.delete")] == ["1790000000.000009"]
