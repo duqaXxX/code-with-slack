@@ -26,11 +26,9 @@ TEAM = "T000TEAM"
 OTHER_TEAM = "T000OTHER"
 CHANNEL = "C000CHAN"
 BOT = "U000BOT"
-
-
-def rings(post: dict[str, Any]) -> bool:
-    """Whether a posted message rings the owner on "Just mentions": @channel in its blocks."""
-    return "<!channel>" in json.dumps(post.get("blocks") or [])
+# The root message's ts of a synthetic thread: a Slack thread_ts is that message's own epoch time.
+THREAD = "1780000000.000001"
+OTHER_THREAD = "1780000000.000002"
 
 
 def sdk_messages(name: str) -> list[Message]:

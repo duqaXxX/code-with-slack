@@ -250,9 +250,10 @@ class ReplySink:
     notifies. Never raises: a write that fails is retried with the whole reply at the next flush,
     the final one after FINAL_RETRY_SECONDS, and the session goes on."""
 
-    def __init__(self, slack: AsyncWebClient, *, channel: str) -> None:
+    def __init__(self, slack: AsyncWebClient, *, channel: str, thread_ts: str) -> None:
         self._slack = slack
         self._channel = channel
+        self._thread_ts = thread_ts
         self._parts: list[_Text | _Tool] = []
         self._tools: dict[str, _Tool] = {}
         self._messages: list[str] = []  # ts of each message this reply has posted
@@ -267,8 +268,8 @@ class ReplySink:
         self._latest = True
         self._closing: str | None = None  # ts of the closing message, once posted
         self._closing_shown: list[dict[str, Any]] = []
-        self._reply_to: str | None = None  # the owner's question, when the end must ring
-        self._ring_kept = False  # whether the mention line outlives the footer
+        self._reply_to: str | None = None  # the owner's question: the closing message's text
+        self._notify_kept = False  # whether the closing message still owes its notification
 
     async def open(self, status: str) -> None:
         """Post the reply at once, showing only its status: the owner sees an answer is coming."""
@@ -325,9 +326,9 @@ class ReplySink:
         if self._pending is not None:
             self._pending.cancel()
         self._finished, self._footer, self._reply_to = True, footer, reply_to
-        # A reply that ends below a newer one has no footer to show: its mention line is the
-        # whole closing message, and stays.
-        self._ring_kept = not self._latest
+        # A reply already superseded when it ends still owes its notification: nothing later
+        # takes that back, even once `set_latest` drops the footer for good.
+        self._notify_kept = not self._latest
         if not await self._flush(final=True):
             self._retry = asyncio.create_task(self._retry_final())
 
@@ -427,17 +428,16 @@ class ReplySink:
         return messages
 
     def _closing_blocks(self) -> list[dict[str, Any]]:
-        """The closing message: the footer and what still runs, then the mention of a reply that
-        rings, at the end of the line. Only the channel's latest reply shows them, so a newer
-        reply removes the closing message, unless it was already newer when this one ended: then
-        the mention stands alone. Empty: no closing message."""
-        rings = self._reply_to is not None and (self._latest or self._ring_kept)
+        """The closing message: the footer and what still runs. Only the channel's latest reply
+        shows them, so a newer reply removes the closing message, unless it was already newer
+        when this one ended: a reply the owner asked something still has to post, since a new
+        message in the thread is what notifies here, so a bare line stands in for the footer.
+        Empty: no closing message."""
+        notifies = self._reply_to is not None and (self._latest or self._notify_kept)
         footer = (self._footer, self._running) if self._latest else ()
-        last_line = " · ".join(filter(None, (*footer, texts.MENTION if rings else None)))
+        last_line = " · ".join(filter(None, footer))
         if not last_line:
-            return []
-        if not any(footer):
-            return [context_block(last_line)]
+            return [context_block("​")] if notifies else []
         return [SPACER_ABOVE, {"type": "divider"}, context_block(last_line), SPACER_BELOW]
 
     def _closing_text(self) -> str:
@@ -453,6 +453,7 @@ class ReplySink:
             if blocks and self._closing is None:
                 posted = await self._slack.chat_postMessage(
                     channel=self._channel,
+                    thread_ts=self._thread_ts,
                     text=self._closing_text(),
                     blocks=blocks,
                     unfurl_links=False,
@@ -518,6 +519,7 @@ class ReplySink:
                         # it for a preview: no previews for anything the daemon posts.
                         posted = await self._slack.chat_postMessage(
                             channel=self._channel,
+                            thread_ts=self._thread_ts,
                             text=fallback,
                             blocks=blocks,
                             unfurl_links=False,

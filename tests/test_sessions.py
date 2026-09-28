@@ -40,14 +40,15 @@ from code_with_slack.state import StateStore
 from tests.fakes import (
     BOT,
     CHANNEL,
+    OTHER_THREAD,
     OWNER,
     TEAM,
+    THREAD,
     CanUseToolCall,
     EndOfStream,
     FakeClaudeClient,
     FakeSlack,
     HookRun,
-    rings,
     sdk_json,
     sdk_messages,
     split_turns,
@@ -96,8 +97,9 @@ class Harness:
         self.clients.append(client)
         return client
 
-    def session(self) -> Any:
-        session = self.manager.get(CHANNEL)
+    def session(self, thread: str = THREAD) -> Any:
+        """The live session of `thread`, opened as a top-level owner message would."""
+        session = self.manager.open(CHANNEL, thread)
         assert session is not None
         return session
 
@@ -133,7 +135,7 @@ async def harness_for(slack: FakeSlack, tmp_path: Path) -> AsyncIterator[Callabl
         await harness.manager.close_all()
 
 
-async def test_a_turn_replies_in_the_main_window_and_records_the_session(
+async def test_a_turn_replies_in_the_thread_and_records_the_session(
     harness_for: Callable[..., Harness],
 ) -> None:
     turn_messages = sdk_messages("tools")
@@ -141,10 +143,10 @@ async def test_a_turn_replies_in_the_main_window_and_records_the_session(
     turn = await h.session().submit("list the files")
     await asyncio.wait_for(turn.done.wait(), 2)
     assert h.clients[0].queries == ["list the files"]
-    assert all(a.get("thread_ts") is None for a in h.slack.calls_to("chat.postMessage"))
+    assert all(a.get("thread_ts") == THREAD for a in h.slack.calls_to("chat.postMessage"))
     result = turn_messages[-1]
     assert isinstance(result, ResultMessage)
-    assert h.state.get(CHANNEL).session_id == result.session_id
+    assert h.state.thread(CHANNEL, THREAD).session_id == result.session_id
     last = [a for m, a in h.slack.calls if m in ("chat.postMessage", "chat.update")][-1]
     assert last["blocks"][-1]["type"] == "context"  # the footer closes the reply
 
@@ -166,7 +168,8 @@ async def test_the_client_is_launched_as_the_design_says(
 
 async def test_a_restart_resumes_the_stored_session(harness_for: Callable[..., Harness]) -> None:
     h = harness_for({})
-    h.state.set_session(CHANNEL, "stored-session")
+    h.session()  # opens the thread
+    h.state.set_session(CHANNEL, THREAD, "stored-session")
     await h.session().ensure_connected()
     assert h.clients[0].options.resume == "stored-session"
 
@@ -178,10 +181,11 @@ async def test_clear_records_the_new_session_id(harness_for: Callable[..., Harne
     await asyncio.wait_for((await session.submit("hi")).done.wait(), 2)
     await asyncio.wait_for((await session.submit("/clear")).done.wait(), 2)
     assert isinstance(second[-1], ResultMessage)
-    assert h.state.get(CHANNEL).session_id == second[-1].session_id
+    assert h.state.thread(CHANNEL, THREAD).session_id == second[-1].session_id
 
 
-async def test_stale_session_starts_fresh_and_says_so(harness_for: Callable[..., Harness]) -> None:
+async def test_a_gone_session_is_removed_and_says_so(harness_for: Callable[..., Harness]) -> None:
+    # D7: a stored session id that fails to resume no longer falls back to a fresh session.
     gone = ResultError(
         "Claude Code returned an error result: No conversation found",
         data={
@@ -190,32 +194,39 @@ async def test_stale_session_starts_fresh_and_says_so(harness_for: Callable[...,
             "errors": ["No conversation found with session ID: gone"],
         },
     )
-    h = harness_for({"connect_error": gone}, {"turns": [sdk_messages("tools")]})
-    h.state.set_session(CHANNEL, "gone")
+    h = harness_for({"connect_error": gone})
+    h.session()  # opens the thread
+    h.state.set_session(CHANNEL, THREAD, "gone")
     turn = await h.session().submit("hello")
     await asyncio.wait_for(turn.done.wait(), 2)
-    assert [c.options.resume for c in h.clients] == ["gone", None]
-    assert "could not be resumed" in h.written_text()
-    assert h.state.get(CHANNEL).session_id not in (None, "gone")
+    assert [c.options.resume for c in h.clients] == ["gone"]
+    assert h.bodies() == [texts.SESSION_GONE]
+    assert h.state.thread(CHANNEL, THREAD) is None
+    assert h.manager.get(CHANNEL, THREAD) is None
+    # The body, then a closing message: posting in the thread is what notifies here.
+    posts = h.slack.calls_to("chat.postMessage")
+    assert len(posts) == 2
+    assert posts[-1]["text"] == texts.REPLY_TO.format(prompt="hello")
 
 
-async def test_bypass_survives_a_restart(
+async def test_a_restart_rebuilds_a_stored_thread_with_its_bypass(
     harness_for: Callable[..., Harness], tmp_path: Path
 ) -> None:
     h = harness_for({}, {})
     session = h.session()
     await session.set_bypass(True)
     assert h.clients[0].modes == ["bypassPermissions"] and session.bypass
-    assert json.loads((tmp_path / "state.json").read_text())["channels"][CHANNEL]["bypass"]
+    stored = json.loads((tmp_path / "state.json").read_text())
+    assert stored["channels"][CHANNEL]["threads"][THREAD]["bypass"]
     # A new daemon: state.json read again, a new manager, a new Claude Code process.
     reloaded = dataclasses.replace(h.deps, state=StateStore(tmp_path / "state.json"))
-    restarted = SessionManager(reloaded).get(CHANNEL)
+    restarted = SessionManager(reloaded).get(CHANNEL, THREAD)
     assert restarted is not None and restarted.bypass
     await restarted.ensure_connected()
     assert h.clients[1].modes == ["bypassPermissions"]
     await restarted.set_bypass(False)
     assert h.clients[1].modes[-1] == "default"
-    assert not StateStore(tmp_path / "state.json").get(CHANNEL).bypass
+    assert not StateStore(tmp_path / "state.json").thread(CHANNEL, THREAD).bypass
     await restarted.close()
 
 
@@ -229,7 +240,7 @@ async def test_queue_waits_while_approval_pending(harness_for: Callable[..., Har
     await asyncio.sleep(0.05)
     assert h.clients[0].queries == ["first"] and session.busy
     approval_id = next(iter(h.approvals._pending))
-    assert h.approvals.resolve(approval_id, CHANNEL, Approve()) is not None
+    assert h.approvals.resolve(approval_id, CHANNEL, THREAD, Approve()) is not None
     await asyncio.wait_for(second.done.wait(), 2)
     assert first.done.is_set()
     assert h.clients[0].queries == ["first", "second"]
@@ -263,24 +274,24 @@ async def test_ask_user_question_returns_answers(harness_for: Callable[..., Harn
     await until(lambda: bool(h.approvals._pending))
     approval_id = next(iter(h.approvals._pending))
     answers = {q["question"]: q["options"][0]["label"] for q in recorded["input"]["questions"]}
-    h.approvals.resolve(approval_id, CHANNEL, Answer(answers))
+    h.approvals.resolve(approval_id, CHANNEL, THREAD, Answer(answers))
     await asyncio.wait_for(turn.done.wait(), 2)
     result = h.clients[0].permission_results[0]
     assert isinstance(result, PermissionResultAllow)
     assert result.updated_input == {"questions": recorded["input"]["questions"], "answers": answers}
 
 
-async def test_an_owner_turn_that_completes_rings_with_its_prompt(
+async def test_an_owner_turn_that_completes_closes_with_its_prompt_as_the_notification(
     harness_for: Callable[..., Harness],
 ) -> None:
     h = harness_for({"turns": [sdk_messages("tools")]})
     turn = await h.session().submit("list the files")
     await asyncio.wait_for(turn.done.wait(), 2)
     closing = h.slack.calls_to("chat.postMessage")[-1]
-    assert closing["text"] == texts.REPLY_TO.format(prompt="list the files") and rings(closing)
+    assert closing["text"] == texts.REPLY_TO.format(prompt="list the files")
 
 
-async def test_a_turn_stopped_by_the_owner_does_not_ring(
+async def test_a_turn_stopped_by_the_owner_has_no_reply_to_notification(
     harness_for: Callable[..., Harness],
 ) -> None:
     h = harness_for(
@@ -296,10 +307,10 @@ async def test_a_turn_stopped_by_the_owner_does_not_ring(
     assert await session.stop() is True
     await asyncio.wait_for(turn.done.wait(), 2)
     closing = h.slack.calls_to("chat.postMessage")[-1]
-    assert not rings(closing)
+    assert "Reply to:" not in closing["text"]
 
 
-async def test_a_background_turn_s_reply_does_not_ring(
+async def test_a_background_turn_s_reply_has_no_reply_to_notification(
     harness_for: Callable[..., Harness],
 ) -> None:
     turns = split_turns(sdk_messages("background"))
@@ -311,10 +322,10 @@ async def test_a_background_turn_s_reply_does_not_ring(
     await until(lambda: any(is_report(r) for r in h.replies()))
     await asyncio.sleep(0.05)
     closing = h.slack.calls_to("chat.postMessage")[-1]  # the background report's own closing
-    assert not rings(closing)
+    assert "Reply to:" not in closing["text"]
 
 
-async def test_a_failed_directory_rings_but_a_rebind_ends_silently(
+async def test_a_failed_directory_closes_with_the_prompt_as_the_notification(
     harness_for: Callable[..., Harness], tmp_path: Path
 ) -> None:
     gone = tmp_path / "gone"
@@ -324,42 +335,9 @@ async def test_a_failed_directory_rings_but_a_rebind_ends_silently(
     gone.rmdir()
     failed = await h.session().submit("hello")
     await asyncio.wait_for(failed.done.wait(), 2)
-    # An error the owner must act on: it rings.
+    # An error the owner must act on: its notification carries the prompt.
     failure_closing = h.slack.calls_to("chat.postMessage")[-1]
-    assert rings(failure_closing)
-
-    other = tmp_path / "other"
-    other.mkdir()
-    await h.manager.bind(CHANNEL, other)
-    session = h.session()
-    waiting = await session.submit("world")  # no scripted turn: it never answers on its own
-    await until(lambda: h.clients and h.clients[-1].queries == ["world"])
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-    await h.manager.bind(CHANNEL, elsewhere)  # ends the waiting reply, as a restart would
-    await asyncio.wait_for(waiting.done.wait(), 2)
-    # No urgent attention was needed here: it does not ring.
-    ended_closing = h.slack.calls_to("chat.postMessage")[-1]
-    assert not rings(ended_closing)
-
-
-async def test_an_approval_request_rings(harness_for: Callable[..., Harness]) -> None:
-    ask = CanUseToolCall("Bash", {"command": "ls"})
-    h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
-    await h.session().submit("do it")
-    await until(lambda: bool(h.approvals._pending))
-    request = h.slack.calls_to("chat.postMessage")[-1]
-    assert rings(request)
-
-
-async def test_an_ask_user_question_request_rings(harness_for: Callable[..., Harness]) -> None:
-    recorded = sdk_json("ask-can-use-tool")
-    call = CanUseToolCall(recorded["tool_name"], recorded["input"])
-    h = harness_for({"turns": [[call, *sdk_messages("tools")]]})
-    await h.session().submit("ask me")
-    await until(lambda: bool(h.approvals._pending))
-    request = h.slack.calls_to("chat.postMessage")[-1]
-    assert rings(request)
+    assert failure_closing["text"] == texts.REPLY_TO.format(prompt="hello")
 
 
 def test_asked_cuts_a_long_prompt_and_names_an_image_only_prompt() -> None:
@@ -410,51 +388,72 @@ async def test_logs_hold_no_message_content(
     assert "SECRET-PROMPT-CONTENT" not in caplog.text
 
 
-async def test_rebinding_closes_the_client_and_forgets_the_session(
+async def test_bind_is_refused_while_a_thread_of_the_channel_is_busy(
     harness_for: Callable[..., Harness], tmp_path: Path
 ) -> None:
-    h = harness_for({}, {})
-    h.state.set_session(CHANNEL, "old")
-    await h.session().ensure_connected()
-    other = tmp_path / "other"
-    other.mkdir()
-    await h.manager.bind(CHANNEL, other)
-    assert h.clients[0].connected is False
-    assert h.state.get(CHANNEL).session_id is None
-    assert h.session().directory == other
-
-
-async def test_rebinding_ends_the_waiting_replies_and_says_why(
-    harness_for: Callable[..., Harness], tmp_path: Path
-) -> None:
-    h = harness_for({})  # no scripted turn: the first query never answers
+    ask = CanUseToolCall("Bash", {"command": "ls"})
+    h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
     session = h.session()
-    first = await session.submit("one")
-    second = await session.submit("two")
-    await until(lambda: h.clients and h.clients[0].queries == ["one"])
+    await session.submit("list the files")
+    await until(lambda: bool(h.approvals._pending))
     other = tmp_path / "other"
     other.mkdir()
-    await h.manager.bind(CHANNEL, other)
-    await asyncio.wait_for(asyncio.gather(first.done.wait(), second.done.wait()), 2)
-    ended = texts.ENDED.format(reason=texts.ENDED_REBOUND)
-    assert all(ended in r for r in h.replies())
-    shown = [blocks[-1] for blocks in h.slack.message_blocks()]
-    assert all(texts.WRITING not in str(b) and texts.WAITING not in str(b) for b in shown)
+    assert await h.manager.bind(CHANNEL, other) is False
+    assert h.state.channel(CHANNEL).directory == h.tmp_path
+    h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, THREAD, Approve())
+    await until(lambda: session.idle)
 
 
-async def test_a_message_during_a_bind_gets_the_new_directory(
+async def test_bind_accepted_when_every_thread_is_idle_keeps_the_old_thread_s_folder(
     harness_for: Callable[..., Harness], tmp_path: Path
 ) -> None:
-    h = harness_for({}, {})
-    await h.session().ensure_connected()
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
     other = tmp_path / "other"
     other.mkdir()
-    binding = asyncio.create_task(h.manager.bind(CHANNEL, other))
-    await asyncio.sleep(0)  # the bind is closing the old session
-    during = h.manager.get(CHANNEL)
-    await binding
-    assert during is not None and during.directory == other
-    assert h.manager.get(CHANNEL) is during
+    assert await h.manager.bind(CHANNEL, other) is True
+    assert h.state.channel(CHANNEL).directory == other
+    # The thread already open is untouched: same folder, same live session, no closing.
+    assert h.state.thread(CHANNEL, THREAD).directory == h.tmp_path
+    assert session.directory == h.tmp_path and h.session() is session
+    assert h.clients[0].connected is True
+    # A thread opened after the bind gets the new folder.
+    fresh = h.manager.open(CHANNEL, OTHER_THREAD)
+    assert fresh is not None and fresh.directory == other
+
+
+async def test_two_threads_of_one_channel_are_two_sessions_with_separate_clients(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"turns": [sdk_messages("tools")]}, {"turns": [sdk_messages("tools")]})
+    first = h.manager.open(CHANNEL, THREAD)
+    second = h.manager.open(CHANNEL, OTHER_THREAD)
+    assert first is not None and second is not None and first is not second
+    assert h.manager.get(CHANNEL, THREAD) is first  # the same live session, not rebuilt
+    await asyncio.wait_for((await first.submit("a")).done.wait(), 2)
+    await asyncio.wait_for((await second.submit("b")).done.wait(), 2)
+    assert len(h.clients) == 2
+    assert h.clients[0].queries == ["a"] and h.clients[1].queries == ["b"]
+    assert set(h.manager.sessions_of(CHANNEL)) == {first, second}
+    posts = h.slack.calls_to("chat.postMessage")
+    assert {p.get("thread_ts") for p in posts} == {THREAD, OTHER_THREAD}
+
+
+async def test_stop_channel_stops_every_busy_session_of_the_channel(
+    harness_for: Callable[..., Harness],
+) -> None:
+    turn = [CanUseToolCall("Bash", {"command": "rm -rf build"}), *sdk_messages("interrupt")]
+    h = harness_for({"turns": [turn]}, {"turns": [turn]})
+    first = h.manager.open(CHANNEL, THREAD)
+    second = h.manager.open(CHANNEL, OTHER_THREAD)
+    a = await first.submit("a")
+    b = await second.submit("b")
+    await until(lambda: len(h.approvals._pending) == 2)
+    assert await h.manager.stop_channel(CHANNEL) is True
+    await asyncio.wait_for(asyncio.gather(a.done.wait(), b.done.wait()), 2)
+    assert h.clients[0].interrupts == 1 and h.clients[1].interrupts == 1
+    assert await h.manager.stop_channel(CHANNEL) is False
 
 
 def test_resolve_directory(tmp_path: Path) -> None:
@@ -644,7 +643,6 @@ def running_block(blocks: list[dict[str, Any]]) -> str | None:
     blocks = [b for b in blocks if not str(b.get("block_id", "")).startswith("spacer")]
     footer = blocks[-1] if blocks and blocks[-1].get("type") == "context" else None
     text = str(footer["elements"][0]["text"]) if footer else ""
-    text = text.removesuffix(f" · {texts.MENTION}")  # a ringing reply's mention ends the line
     return text[text.index("⏳") :] if "⏳" in text else None
 
 
@@ -837,12 +835,16 @@ async def test_a_cli_that_exits_ends_the_turn_and_the_next_message_reconnects(
     assert [c.queries for c in h.clients] == [["first"], ["second"]]
 
 
-async def test_a_cli_that_exits_mid_turn_rings_once(harness_for: Callable[..., Harness]) -> None:
+async def test_a_cli_that_exits_mid_turn_notifies_once(
+    harness_for: Callable[..., Harness],
+) -> None:
     h = harness_for({"turns": [[*sdk_messages("tools")[:3], EndOfStream()]]})
     session = h.session()
     await asyncio.wait_for((await session.submit("first")).done.wait(), 2)
-    rang = [p for p in h.slack.calls_to("chat.postMessage") if rings(p)]
-    assert [p["text"] for p in rang] == [texts.REPLY_TO.format(prompt="first")]
+    notifying = [
+        p for p in h.slack.calls_to("chat.postMessage") if p["text"].startswith("Reply to:")
+    ]
+    assert [p["text"] for p in notifying] == [texts.REPLY_TO.format(prompt="first")]
 
 
 async def test_a_failed_background_post_still_releases_the_queue(
@@ -876,8 +878,8 @@ async def test_a_missing_directory_asks_to_bind_again(
     await asyncio.wait_for(turn.done.wait(), 2)
     assert h.clients == []
     assert h.bodies() == [texts.DIRECTORY_MISSING.format(directory=gone)]
-    closing = h.slack.calls_to("chat.postMessage")[-1]  # an error the owner must act on: it rings
-    assert closing["text"] == texts.REPLY_TO.format(prompt="hello") and rings(closing)
+    closing = h.slack.calls_to("chat.postMessage")[-1]  # its notification carries the prompt
+    assert closing["text"] == texts.REPLY_TO.format(prompt="hello")
 
 
 async def test_an_unreadable_directory_says_how_to_grant_access(
@@ -895,8 +897,8 @@ async def test_an_unreadable_directory_says_how_to_grant_access(
         locked.chmod(0o755)
     assert h.clients == []
     assert h.bodies() == [texts.DIRECTORY_UNREADABLE.format(directory=locked)]
-    closing = h.slack.calls_to("chat.postMessage")[-1]  # an error the owner must act on: it rings
-    assert closing["text"] == texts.REPLY_TO.format(prompt="hello") and rings(closing)
+    closing = h.slack.calls_to("chat.postMessage")[-1]  # its notification carries the prompt
+    assert closing["text"] == texts.REPLY_TO.format(prompt="hello")
 
 
 def statuses(h: Harness) -> list[str]:
@@ -921,7 +923,7 @@ async def test_a_reply_shows_that_claude_is_writing_right_away(
     second = await session.submit("second")
     await until(lambda: bool(h.approvals._pending))
     assert statuses(h)[:2] == [texts.WRITING, texts.WAITING]
-    h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, Approve())
+    h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, THREAD, Approve())
     await asyncio.wait_for(second.done.wait(), 2)
     assert first.done.is_set()
     replies = [
@@ -1111,20 +1113,21 @@ async def test_a_setup_failure_after_connect_closes_the_client(
     assert len(h.clients) == 2 and h.clients[1].connected
 
 
-async def test_a_rebind_never_records_the_old_directory_s_session(
+async def test_a_bind_after_a_turn_never_touches_that_thread_s_own_record(
     harness_for: Callable[..., Harness], tmp_path: Path
 ) -> None:
     messages = sdk_messages("tools")
-    h = harness_for({"turns": [messages[:-1]]})
-    await h.session().submit("list the files")
-    await until(lambda: len(h.clients) == 1 and h.clients[0].queries == ["list the files"])
-    await asyncio.sleep(0.05)
+    h = harness_for({"turns": [messages]})
+    result = messages[-1]
+    assert isinstance(result, ResultMessage)
+    await asyncio.wait_for((await h.session().submit("list the files")).done.wait(), 2)
+    assert h.state.thread(CHANNEL, THREAD).session_id == result.session_id
     other = tmp_path / "other"
     other.mkdir()
-    h.clients[0].inject([messages[-1]])  # the old turn's result is waiting to be read
-    await h.manager.bind(CHANNEL, other)
-    stored = h.state.get(CHANNEL)
-    assert stored is not None and stored.directory == other and stored.session_id is None
+    assert await h.manager.bind(CHANNEL, other) is True  # affects only the channel's next thread
+    assert h.state.channel(CHANNEL).directory == other
+    assert h.state.thread(CHANNEL, THREAD).directory == h.tmp_path
+    assert h.state.thread(CHANNEL, THREAD).session_id == result.session_id
 
 
 def test_a_relative_bind_path_is_read_under_the_allowed_root(tmp_path: Path) -> None:
@@ -1170,64 +1173,61 @@ async def test_every_message_is_posted_without_link_previews(
     h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
     turn = await h.session().submit("list the files")
     await until(lambda: len(h.approvals._pending) == 1)
-    h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, Approve())
+    h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, THREAD, Approve())
     await asyncio.wait_for(turn.done.wait(), 2)
     posts = h.slack.calls_to("chat.postMessage")
     assert len(posts) >= 2
     assert all(p.get("unfurl_links") is False and p.get("unfurl_media") is False for p in posts)
 
 
-async def test_resume_points_the_channel_at_another_session_of_its_directory(
+async def test_resume_creates_a_new_thread_already_on_the_given_session(
     harness_for: Callable[..., Harness],
 ) -> None:
     h = harness_for({"turns": [sdk_messages("tools")]}, {})
     await asyncio.wait_for((await h.session().submit("list the files")).done.wait(), 2)
     other = "68da9311-0000-4000-8000-00000000abcd"
-    assert await h.manager.resume(CHANNEL, other)
-    assert h.state.get(CHANNEL).session_id == other
-    await h.session().ensure_connected()  # the next message starts Claude Code on that session
+    resumed = await h.manager.resume(CHANNEL, OTHER_THREAD, other)
+    assert resumed is not None
+    assert h.state.thread(CHANNEL, OTHER_THREAD).session_id == other
+    assert h.state.thread(CHANNEL, THREAD).session_id != other  # the original thread is untouched
+    await resumed.ensure_connected()  # the next message on the new thread starts on that session
     assert h.clients[-1].options.resume == other
 
 
-async def test_resume_keeps_bypass_as_the_terminal_s_resume_does(
+async def test_resume_creates_a_thread_with_bypass_off_regardless_of_others(
     harness_for: Callable[..., Harness],
 ) -> None:
     h = harness_for({}, {})
-    await h.session().set_bypass(True)
-    assert await h.manager.resume(CHANNEL, "68da9311-0000-4000-8000-00000000abcd")
-    assert h.manager.bypass_on(CHANNEL)
-    await h.session().ensure_connected()
-    assert h.clients[-1].modes == ["bypassPermissions"]
+    await h.session().set_bypass(True)  # bypass is per thread (D3): only the original thread's
+    resumed = await h.manager.resume(CHANNEL, OTHER_THREAD, "68da9311-0000-4000-8000-00000000abcd")
+    assert resumed is not None and not resumed.bypass
+    await resumed.ensure_connected()
+    assert h.clients[-1].modes == []
 
 
-async def test_resume_without_bypass_leaves_the_mode_alone(
+async def test_resume_creates_an_independent_thread_even_while_another_is_busy(
     harness_for: Callable[..., Harness],
 ) -> None:
-    h = harness_for({}, {})
-    await h.session().ensure_connected()
-    assert await h.manager.resume(CHANNEL, "68da9311-0000-4000-8000-00000000abcd")
-    await h.session().ensure_connected()
-    assert h.clients[-1].modes == [] and not h.manager.bypass_on(CHANNEL)
-
-
-async def test_resume_waits_for_an_idle_channel(harness_for: Callable[..., Harness]) -> None:
     ask = CanUseToolCall("Bash", {"command": "ls"})
     h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
     await h.session().submit("list the files")
     await until(lambda: len(h.approvals._pending) == 1)
-    before = h.state.get(CHANNEL).session_id
-    assert not await h.manager.resume(CHANNEL, "68da9311-0000-4000-8000-00000000abcd")
-    assert h.state.get(CHANNEL).session_id == before and h.session().busy
+    resumed = await h.manager.resume(CHANNEL, OTHER_THREAD, "68da9311-0000-4000-8000-00000000abcd")
+    assert resumed is not None
+    assert h.state.thread(CHANNEL, OTHER_THREAD) is not None
+    assert h.session().busy  # the original thread's turn is unaffected
 
 
-async def test_resume_waits_for_background_tasks_to_end(
+async def test_resume_returns_none_when_the_channel_is_unbound(
     harness_for: Callable[..., Harness],
 ) -> None:
-    first, _, _ = split_background()
-    h = harness_for({"turns": [first]})
-    await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
-    assert h.session()._running_counts()  # the recorded background shell still runs
-    assert not await h.manager.resume(CHANNEL, "68da9311-0000-4000-8000-00000000abcd")
+    h = harness_for()
+    assert await h.manager.resume("C000OTHER", THREAD, "some-session") is None
+
+
+def test_open_returns_none_when_the_channel_is_unbound(harness_for: Callable[..., Harness]) -> None:
+    h = harness_for()
+    assert h.manager.open("C000OTHER", THREAD) is None
 
 
 def test_the_list_holds_only_this_directory_s_worktree(
@@ -1388,7 +1388,7 @@ async def test_status_shows_the_tasks_still_running_as_the_latest_reply_does(
     h = harness_for({"turns": [first]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    assert statuses(h)[-1].endswith(f"⏳ 1 shell · {texts.MENTION}")
+    assert statuses(h)[-1].endswith("⏳ 1 shell")
     assert (await session.status()).endswith("\nBackground: `1 shell`")
 
 
@@ -1529,7 +1529,7 @@ async def test_a_stop_lets_the_running_turn_finish_and_ends_the_queued_one(
     assert first.done.is_set()
     assert h.clients[0].queries == ["first"]
     assert texts.ENDED.format(reason=texts.ENDED_RESTARTING) in h.replies()[1]
-    assert h.state.get(CHANNEL).session_id == result.session_id
+    assert h.state.thread(CHANNEL, THREAD).session_id == result.session_id
 
 
 async def test_a_stop_waits_for_the_reply_s_final_write(
@@ -1581,7 +1581,8 @@ async def test_an_approval_asked_during_a_stop_stays_open_and_the_turn_finishes(
     await asyncio.sleep(0.05)
     assert not drained.done() and not turn.done.is_set()
     # The owner answers while the daemon stops, as a Slack session that restarted it would need.
-    assert h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, Approve()) is not None
+    approval_id = next(iter(h.approvals._pending))
+    assert h.approvals.resolve(approval_id, CHANNEL, THREAD, Approve()) is not None
     await asyncio.wait_for(drained, 2)
     assert turn.done.is_set()
     assert isinstance(h.clients[0].permission_results[0], PermissionResultAllow)
@@ -1725,33 +1726,6 @@ async def test_bang_stop_ends_background_tasks_outside_a_stop_too(
     assert h.clients[0].interrupts == 0  # no turn was running
 
 
-async def swap(h: Harness, how: str, tmp_path: Path) -> None:
-    if how == "bind":
-        other = tmp_path / "other"
-        other.mkdir()
-        await h.manager.bind(CHANNEL, other)
-    else:
-        assert await h.manager.resume(CHANNEL, "another")
-
-
-@pytest.mark.parametrize("how", ["bind", "resume"])
-async def test_a_swap_while_a_word_starts_the_client_leaves_no_process(
-    harness_for: Callable[..., Harness], tmp_path: Path, how: str
-) -> None:
-    # `!help` or `!status` starts the client in its own task, outside the prompt queue.
-    gate = asyncio.Event()
-    h = harness_for({"connect_gate": gate})
-    word = asyncio.create_task(h.session().ensure_connected())
-    await until(lambda: len(h.clients) == 1)
-    swapping = asyncio.create_task(swap(h, how, tmp_path))
-    await asyncio.sleep(0.05)
-    assert not swapping.done()  # the close waits for the connect in progress
-    gate.set()
-    await asyncio.wait_for(swapping, 2)
-    await asyncio.wait_for(word, 2)
-    assert len(h.clients) == 1 and h.clients[0].connected is False
-
-
 async def test_a_closed_session_starts_no_client(harness_for: Callable[..., Harness]) -> None:
     h = harness_for()
     session = h.session()
@@ -1759,41 +1733,6 @@ async def test_a_closed_session_starts_no_client(harness_for: Callable[..., Harn
     with pytest.raises(sessions.SessionClosed):
         await session.ensure_connected()
     assert h.clients == []
-
-
-async def test_bypass_asked_on_a_session_rebound_meanwhile_is_not_stored(
-    harness_for: Callable[..., Harness], tmp_path: Path
-) -> None:
-    gate = asyncio.Event()
-    h = harness_for({"connect_gate": gate})
-    word = asyncio.create_task(h.session().set_bypass(True))
-    await until(lambda: len(h.clients) == 1)
-    swapping = asyncio.create_task(swap(h, "bind", tmp_path))
-    await asyncio.sleep(0.05)
-    gate.set()
-    await asyncio.wait_for(swapping, 2)
-    with pytest.raises(sessions.SessionClosed):
-        await asyncio.wait_for(word, 2)
-    stored = h.state.get(CHANNEL)
-    assert stored is not None and stored.bypass is False
-
-
-async def test_the_status_of_a_session_closed_meanwhile_is_not_given(
-    harness_for: Callable[..., Harness], tmp_path: Path
-) -> None:
-    gate = asyncio.Event()
-    h = harness_for({"connect_gate": gate})
-    session = h.session()
-    word = asyncio.create_task(session.status())
-    await until(lambda: len(h.clients) == 1)
-    swapping = asyncio.create_task(swap(h, "bind", tmp_path))
-    await asyncio.sleep(0.05)
-    gate.set()
-    await asyncio.wait_for(swapping, 2)
-    with pytest.raises(sessions.SessionClosed):  # connected before the close, read after it
-        await asyncio.wait_for(word, 2)
-    with pytest.raises(sessions.SessionClosed):
-        await session.status()
 
 
 async def test_bypass_whose_client_closes_under_it_says_the_session_closed(
@@ -1810,5 +1749,5 @@ async def test_bypass_whose_client_closes_under_it_says_the_session_closed(
     client.set_permission_mode = closing
     with pytest.raises(sessions.SessionClosed):
         await session.set_bypass(True)
-    stored = h.state.get(CHANNEL)
+    stored = h.state.thread(CHANNEL, THREAD)
     assert stored is not None and stored.bypass is False
