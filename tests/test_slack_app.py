@@ -1657,6 +1657,19 @@ async def test_a_top_level_stop_of_the_channel_cancels_the_hold(world: World) ->
     assert texts.NOT_SENT in said(world)
 
 
+async def test_a_top_level_stop_with_only_a_cancelled_hold_says_nothing_else(
+    world: World,
+) -> None:
+    # The busy session lives in ANOTHER channel here, so this channel's own `!stop` cancels the
+    # hold and stops nothing else: `stop_channel`'s own `None` must not read as "nothing
+    # stopped" and add a second, contradicting notice on top of `Not sent.`.
+    await start_a_hold(world, other_channel=OTHER_CHANNEL)
+    await world.dispatch(message("!stop"))
+    assert texts.NOT_SENT in said(world)
+    assert texts.NOTHING_TO_STOP not in said(world)
+    assert texts.STOPPED_CHANNEL not in said(world)
+
+
 async def test_a_drain_cancels_the_hold(world: World) -> None:
     await start_a_hold(world)
     cut_short = asyncio.Event()

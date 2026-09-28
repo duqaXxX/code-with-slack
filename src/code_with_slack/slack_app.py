@@ -506,11 +506,15 @@ def build_app(
             case Stop():
                 if session is None:
                     stopped = await sessions.stop_channel(channel)
-                    await notice(
-                        channel,
-                        thread_ts,
-                        texts.STOPPED_CHANNEL if stopped else texts.NOTHING_TO_STOP,
-                    )
+                    # None: only a D8 hold was cancelled somewhere in the channel (`Not sent.`,
+                    # from its own waiter); no second notice, since nothing Claude Code was doing
+                    # stopped.
+                    if stopped is not None:
+                        await notice(
+                            channel,
+                            thread_ts,
+                            texts.STOPPED_CHANNEL if stopped else texts.NOTHING_TO_STOP,
+                        )
                 else:
                     thread_stopped = await session.stop()
                     # None: only a D8 hold was here, cancelled already (`Not sent.`, from the

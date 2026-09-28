@@ -1833,13 +1833,22 @@ class SessionManager:
         self._deps.state.bind(channel_id, directory)
         return True
 
-    async def stop_channel(self, channel_id: str) -> bool:
-        """`stop()` on every live session of the channel; True if any stopped something."""
+    async def stop_channel(self, channel_id: str) -> bool | None:
+        """`stop()` on every live session of the channel; True if any stopped something. None
+        when nothing did except cancel a D8 hold: the caller adds no further notice of its own
+        then, the same as `ThreadSession.stop`'s own `None`, since the held thread already got
+        `Not sent.`."""
         stopped = False
+        held_only = False
         for session in self.sessions_of(channel_id):
-            if await session.stop():
+            result = await session.stop()
+            if result:
                 stopped = True
-        return stopped
+            elif result is None:
+                held_only = True
+        if stopped:
+            return True
+        return None if held_only else False
 
     async def resume(
         self, channel_id: str, thread_ts: str, session_id: str
