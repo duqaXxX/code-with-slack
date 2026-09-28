@@ -119,6 +119,13 @@ class Stage:
         self.asked: list[str] = []
         self.state = StateStore(workdir.parent / "state.json")
         self.state.bind(CHANNEL, workdir)
+        # Session ids allowed to resume with no explicit `model=`: only the "model and effort
+        # resume" scene's own (P15/P16). Whether a model passed at connect time, rather than set
+        # with `/model` inside a turn, survives a resume with no `model=` sent again is not
+        # itself measured anywhere in this codebase (`client_options`'s docstring only claims
+        # this for a model set with `/model`); every other resume must keep forcing PROBE_MODEL,
+        # or it risks silently reconnecting at the settings' own default model.
+        self._model_free_resumes: set[str] = set()
 
         async def trusted(directory: Path) -> bool:
             return directory == workdir
@@ -140,10 +147,20 @@ class Stage:
         opened = self.manager.open(CHANNEL, THREAD)
         assert opened is not None
 
+    def allow_model_free_resume(self, session_id: str) -> None:
+        """Let `session_id` resume with no explicit `model=` on `client()`: the "model and
+        effort resume" scene's own opt-in, once it knows its session id, so P15's resumed
+        connect reflects the CLI's own remembered model rather than our own flag overriding it.
+        No other scene's resume goes through this path."""
+        self._model_free_resumes.add(session_id)
+
     def client(self, options: ClaudeAgentOptions) -> ClaudeClient:
-        """The real client. Haiku on a fresh connect; a resumed connect passes no explicit model, so
-        the CLI keeps whichever model that session last used, unclobbered by our own flag — exactly
-        what `client_options()` itself does, and what P15 checks still holds."""
+        """The real client, on Haiku for every connect except a resume of a session
+        `allow_model_free_resume` named: there, no explicit model is passed, so the CLI keeps
+        whichever model that session last used, unclobbered by our own flag. Every other resume
+        (the "resume" scene's P6/P7 included) keeps forcing Haiku exactly as before this session
+        ever ran `/model`, since a model passed at connect surviving a resume with no `model=`
+        sent again is not itself a measured fact."""
         decide: CanUseTool | None = options.can_use_tool
 
         async def noted(
@@ -154,7 +171,8 @@ class Stage:
             return await decide(tool, tool_input, context)
 
         can_use_tool = noted if decide is not None else None
-        model = None if options.resume else PROBE_MODEL
+        model_free = options.resume is not None and options.resume in self._model_free_resumes
+        model = None if model_free else PROBE_MODEL
         return ClaudeSDKClient(dataclasses.replace(options, model=model, can_use_tool=can_use_tool))
 
     @property
@@ -397,6 +415,7 @@ async def model_effort_resume(s: Stage) -> dict[str, Observation]:
     if session_id is None:
         detail = "no session id stored"
         return {"P15": Observation(False, False, detail), "P16": Observation(False, False, detail)}
+    s.allow_model_free_resume(session_id)
 
     lost = await s.manager.resume(CHANNEL, MODEL_RESUME_THREAD, session_id)
     if lost is None:
@@ -413,7 +432,7 @@ async def model_effort_resume(s: Stage) -> dict[str, Observation]:
         detail = "the second resume was refused"
         return {
             "P15": Observation(True, model_kept, "" if model_kept else status[:160]),
-            "P16": Observation(True, False, detail),
+            "P16": Observation(False, False, detail),
         }
     s.state.set_effort(CHANNEL, MODEL_RESUME_THREAD2, "low")
     await s.turn_on(restored, "Reply with the single word: ok")
