@@ -1124,7 +1124,9 @@ async def test_a_session_closed_during_a_slow_download_is_retried_on_a_fresh_one
     await session.close()  # something else closes it while the download is still running
     await dispatching
     await asyncio.sleep(0.3)  # let the slow download finish and the retried submit run
-    assert world.queries() != []
+    queries = world.queries()
+    assert len(queries) == 1  # the retry queues the prompt once, never twice
+    assert str(queries[0]).startswith(body["event"]["text"])
     rebuilt = world.sessions.get(CHANNEL, file_thread)
     assert rebuilt is not None and rebuilt is not session
 

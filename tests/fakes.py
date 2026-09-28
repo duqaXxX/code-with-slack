@@ -196,6 +196,8 @@ class FakeSlack(AsyncWebClient):
         super().__init__(token="xox" + "b-fake")
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.posted_ts: list[str] = []  # the ts of every chat.postMessage, in order
+        # Every call waits this long before answering, as a slow Slack API round trip would.
+        self.delay = 0.0
         # A response may be an exception: the call raises it, as a network failure would.
         self.responses: dict[str, Any] = {
             "auth.test": slack_payload("api-auth-test"),
@@ -215,6 +217,8 @@ class FakeSlack(AsyncWebClient):
         data: Any = None,
         **_: Any,
     ) -> AsyncSlackResponse:
+        if self.delay:
+            await asyncio.sleep(self.delay)
         args = {**(params or {}), **(json or {}), **(data if isinstance(data, dict) else {})}
         self.calls.append((api_method, args))
         answer = self.responses.get(api_method, {"ok": True})

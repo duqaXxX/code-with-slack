@@ -2252,3 +2252,124 @@ async def test_drain_suppresses_the_idle_close(
     session.draining = True
     await asyncio.sleep(0.1)
     assert not session.closed
+
+
+# D9 fix round 2: close() must signal done_closing even when a step inside it raises, the
+# predecessor chain must hold past an unconnected middle generation, submit's own awaits must
+# not be closeable under it, and a few more missed re-arm points.
+
+
+async def test_close_sets_done_closing_even_if_a_step_inside_it_raises(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h = harness_for({})
+    session = h.session()
+    await session.ensure_connected()
+
+    async def boom() -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(session, "_stop_task_replies", boom)
+    with pytest.raises(RuntimeError):
+        await session.close()
+    assert session.done_closing.is_set()
+    assert h.manager.sessions_of(CHANNEL) == []  # on_closed still ran too
+
+
+async def test_close_all_waits_for_a_predecessor_evicted_before_it_but_still_disconnecting(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # A (idle-closing, gated) is evicted by a lookup that builds B; B never connects. close_all
+    # only ever sees B in `_sessions`, yet must still wait for A's own disconnect to finish.
+    gate = asyncio.Event()
+    h = harness_for({"disconnect_gate": gate})
+    session_a = h.session()
+    await session_a.ensure_connected()
+    closing_a = asyncio.create_task(session_a.close())
+    await asyncio.sleep(0.05)  # A is now blocked inside the gated disconnect
+    assert session_a.closed and h.clients[0].connected is True
+    session_b = h.manager.get(CHANNEL, THREAD)
+    assert session_b is not None and session_b is not session_a
+    closing_all = asyncio.create_task(h.manager.close_all())
+    await asyncio.sleep(0.05)
+    assert not closing_all.done()  # chained through B, waiting on A's still-gated disconnect
+    gate.set()
+    await asyncio.wait_for(closing_a, 2)
+    await asyncio.wait_for(closing_all, 2)
+    assert h.clients[0].connected is False
+
+
+async def test_a_third_generation_session_waits_through_an_unconnected_middle_one(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # A disconnecting (gated); B is built as its replacement but closes before ever connecting
+    # (so it never itself waited on A); C must still wait for A, through B's own close().
+    gate = asyncio.Event()
+    h = harness_for({"disconnect_gate": gate}, {"turns": [sdk_messages("tools")]})
+    session_a = h.session()
+    await session_a.ensure_connected()
+    h.state.set_session(CHANNEL, THREAD, "prior")
+    closing_a = asyncio.create_task(session_a.close())
+    await asyncio.sleep(0.05)  # A is now blocked inside the gated disconnect
+    assert session_a.closed and h.clients[0].connected is True
+    session_b = h.manager.get(CHANNEL, THREAD)
+    assert session_b is not None and session_b is not session_a
+    closing_b = asyncio.create_task(session_b.close())
+    await asyncio.sleep(0.05)
+    assert not closing_b.done()  # B's own close is chained behind A's still-open disconnect
+    session_c = h.manager.get(CHANNEL, THREAD)
+    assert session_c is not None and session_c not in (session_a, session_b)
+    connecting_c = asyncio.create_task(session_c.ensure_connected())
+    await asyncio.sleep(0.05)
+    assert not connecting_c.done()  # must not resume the same id while A is still exiting
+    assert len(h.clients) == 1
+    gate.set()
+    await asyncio.wait_for(closing_a, 2)
+    await asyncio.wait_for(closing_b, 2)
+    await asyncio.wait_for(connecting_c, 2)
+    assert len(h.clients) == 2
+    assert h.clients[1].options.resume == "prior"
+
+
+async def test_the_idle_close_cannot_fire_during_submit_s_own_awaits(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    h = harness_for({"turns": [sdk_messages("tools"), sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("hi")).done.wait(), 2)
+    # `submit`'s own chat.postMessage calls (through `_sink`/`sink.open`) now take longer than
+    # the idle delay: without the fix, the timer armed at submit's own entry would reset instead
+    # of staying cancelled, and fire while `submit` is still awaiting one of them.
+    h.slack.delay = 0.2
+    turn = await session.submit("again")
+    await asyncio.wait_for(turn.done.wait(), 2)
+    assert h.clients[0].queries == ["hi", "again"]
+
+
+async def test_the_crash_tail_re_arms_the_idle_close(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    h = harness_for({"turns": [[*sdk_messages("tools")[:3], EndOfStream()]]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("first")).done.wait(), 2)
+    await until(lambda: session._client is None, limit=1)  # the reader's crash tail ran
+    await until(lambda: session.closed, limit=1)  # ...and re-armed the timer there
+
+
+async def test_a_failed_query_re_arms_the_idle_close(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    h = harness_for({})
+    session = h.session()
+    await session.ensure_connected()
+
+    async def boom(prompt: Any) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(h.clients[0], "query", boom)
+    turn = await session.submit("hi")
+    await asyncio.wait_for(turn.done.wait(), 2)
+    await until(lambda: session.closed, limit=1)
