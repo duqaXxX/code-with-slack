@@ -359,7 +359,7 @@ def build_app(
             # actually shows it.
             held: ThreadSession | None = None
             if not session.busy:
-                other = sessions.working_in(session.directory, besides=session)
+                other = sessions.working_in(besides=session)
                 if other is not None:
                     if not await hold_before_sending(channel, thread_ts, session, other):
                         return

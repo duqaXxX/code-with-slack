@@ -327,6 +327,10 @@ class ThreadSession:
         self.channel_id = channel_id
         self.thread_ts = thread_ts
         self.directory = directory
+        # D8: resolved once here, not by `SessionManager.working_in` on every live session for
+        # every message (`directory` never changes after this object is built: a rebind only
+        # takes effect for a thread not open yet).
+        self._resolved_directory = directory.resolve()
         self._deps = deps
         # D10: one reaction on the session's root message, which `thread_ts` always is (a
         # top-level owner message, or the root of a `!resume` thread, the owner's own message).
@@ -1807,11 +1811,13 @@ class SessionManager:
         a gone resume) is left out even before the next lookup evicts it."""
         return [s for (c, _), s in self._sessions.items() if c == channel_id and not s.closed]
 
-    def working_in(self, directory: Path, *, besides: ThreadSession) -> ThreadSession | None:
-        """D8: a live session of any channel, other than `besides`, whose resolved folder is
-        `directory` and is not idle (a background task counts as working, same as `idle` already
-        treats it). The first one found is enough: the question links to it."""
-        resolved = directory.resolve()
+    def working_in(self, *, besides: ThreadSession) -> ThreadSession | None:
+        """D8: a live session of any channel, other than `besides`, whose folder resolves to the
+        same one as `besides`'s own and is not idle (a background task counts as working, same
+        as `idle` already treats it). Each session's own `_resolved_directory` is cached once, at
+        construction: comparing it avoids a `Path.resolve()` syscall per live session on every
+        message. The first one found is enough: the question links to it."""
+        resolved = besides._resolved_directory
         return next(
             (
                 s
@@ -1819,7 +1825,7 @@ class SessionManager:
                 if s is not besides
                 and not s.closed
                 and not s.idle
-                and s.directory.resolve() == resolved
+                and s._resolved_directory == resolved
             ),
             None,
         )

@@ -3277,3 +3277,28 @@ async def test_cancel_while_another_approval_is_open_shows_waiting_not_working(
     approval_id = next(iter(h.approvals._pending))
     assert h.approvals.resolve(approval_id, CHANNEL, THREAD, Approve()) is not None
     await asyncio.wait_for(turn.done.wait(), 2)
+
+
+async def test_working_in_does_not_resolve_a_path_on_every_lookup(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `working_in` used to call `Path.resolve()` on the event loop for every live session on
+    # every message; each session's folder is now cached once, at construction.
+    h = harness_for(
+        {"turns": [[CanUseToolCall("Bash", {"command": "ls"}), *sdk_messages("tools")]]}
+    )
+    first = h.session(THREAD)
+    second = h.session(OTHER_THREAD)
+    await first.submit("clean")
+    await until(lambda: bool(h.approvals._pending))  # first is genuinely busy now
+
+    def boom(self: Path, *args: Any, **kwargs: Any) -> Path:
+        raise AssertionError("working_in must not resolve a path on every lookup")
+
+    monkeypatch.setattr(Path, "resolve", boom)
+    try:
+        assert h.manager.working_in(besides=second) is first
+    finally:
+        monkeypatch.undo()
+    approval_id = next(iter(h.approvals._pending))
+    assert h.approvals.resolve(approval_id, CHANNEL, THREAD, Approve()) is not None
