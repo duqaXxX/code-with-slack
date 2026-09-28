@@ -522,7 +522,13 @@ async def test_exactly_one_new_message_per_turn_background_task_approval_and_que
     await until(lambda: is_report(h.bodies()[0]))
     await asyncio.sleep(0.05)
     posts = h.slack.calls_to("chat.postMessage")
-    assert len(posts) == 4, [p["text"] for p in posts]
+    # D1 fix round 2 (systematic): exactly these four, in this order, nothing else.
+    assert [p["text"] for p in posts] == [
+        texts.WRITING,
+        "Bash: ls",
+        "AskUserQuestion",
+        texts.REPLY_TO.format(prompt="do it and start something"),
+    ]
 
 
 async def test_an_owner_turn_that_completes_closes_with_its_prompt_as_the_notification(
@@ -913,6 +919,22 @@ async def test_a_suppressed_notification_s_closing_still_posts_eventually(
     await until(lambda: a.closed_out, limit=1.0)
 
 
+async def test_the_unreported_expiry_timer_does_not_outlive_close(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # D1 fix round 2: `_expire_unreported`'s own task lives in `_background`, which `close`
+    # must cancel along with everything else, or it would try to post through a session that
+    # is already gone once its (real, 30s) wait finally elapses.
+    first, notice, _ = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    h.clients[0].inject([m for m in notice if not isinstance(m, TaskNotificationMessage)])
+    await until(lambda: bool(session._unreported))
+    await session.close(reason=texts.ENDED_IDLE)
+    assert not any(not t.done() for t in session._background)
+
+
 def split_background() -> tuple[list[Any], list[Any], list[Any]]:
     """The recorded background run: the owner's turn, the notification that arrives while idle,
     and the turn the CLI injects to report it."""
@@ -1128,16 +1150,19 @@ async def test_closing_the_session_stops_the_lines_of_running_tasks(
 async def test_shutdown_with_a_deferred_closing_closes_silently(
     harness_for: Callable[..., Harness],
 ) -> None:
-    # D1 fix round 1 (IMPORTANT 1): an idle close (like a restart or SessionGone) forces the
-    # still-deferred closing message out at once, but it must never ring.
+    # D1 fix round 2 (I1): an idle close (like a restart or SessionGone) forces the
+    # still-deferred closing message out at once, but it must never ring: no new message at
+    # all, not even a footer-only one, and the footer shows in the body's own last update.
     first, _, _ = split_background()
     h = harness_for({"turns": [first]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    n = len(h.slack.posted_ts)
+    posts_before = len(h.slack.calls_to("chat.postMessage"))
     await session.close(reason=texts.ENDED_IDLE)
-    posts = h.slack.calls_to("chat.postMessage")[n:]
-    assert not any("Reply to:" in p["text"] for p in posts)
+    assert len(h.slack.calls_to("chat.postMessage")) == posts_before
+    assert {"type": "divider"} in h.slack.message_blocks()[-1]
+    for _, args in h.slack.calls:
+        assert "Reply to:" not in json.dumps(args)
 
 
 async def test_a_notification_with_no_turn_updates_its_line_and_releases_the_queue(
@@ -2090,37 +2115,38 @@ async def test_a_stop_held_by_a_background_task_says_so_and_bang_stop_ends_it(
 async def test_a_stop_of_a_background_task_posts_no_new_message_until_it_ends(
     harness_for: Callable[..., Harness],
 ) -> None:
-    # D1: the reply's closing message waits for the task; `!stop` alone does not post one, and
-    # stopping the task posts exactly the one closing message, once.
+    # D1 fix round 2 (I1): stopping the task never posts a new message either, even once its
+    # own end finally lets the closing through: its footer joins the body's own last message
+    # with chat.update instead, since any new message in the thread would still ring.
     first, notice, _ = split_background()
     h = harness_for({"turns": [first]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    posted_before = len(h.slack.posted_ts)
+    posts_before = len(h.slack.calls_to("chat.postMessage"))
     assert await session.stop()
     await asyncio.sleep(0.05)
-    assert len(h.slack.posted_ts) == posted_before
+    assert len(h.slack.calls_to("chat.postMessage")) == posts_before
     h.clients[0].inject(stopped_end(notice))
-    await until(lambda: len(h.slack.posted_ts) == posted_before + 1)
-    await asyncio.sleep(0.05)
-    assert len(h.slack.posted_ts) == posted_before + 1
+    await until(lambda: {"type": "divider"} in h.slack.message_blocks()[-1])
+    assert len(h.slack.calls_to("chat.postMessage")) == posts_before
 
 
 async def test_bang_stop_of_a_background_task_closes_silently(
     harness_for: Callable[..., Harness],
 ) -> None:
-    # D1 fix round 1 (IMPORTANT 1): the brief's rule is closed at once and silently; the closing
-    # message the stopped task's own end finally allows must not carry "Reply to:".
+    # D1 fix round 2 (I1): the brief's rule is closed at once and silently: no new message at
+    # all, and nothing anywhere carries "Reply to:" once the stopped task's own end closes it.
     first, notice, _ = split_background()
     h = harness_for({"turns": [first]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    n = len(h.slack.posted_ts)
+    posts_before = len(h.slack.calls_to("chat.postMessage"))
     assert await session.stop()
     h.clients[0].inject(stopped_end(notice))
-    await until(lambda: len(h.slack.posted_ts) == n + 1)
-    text = h.slack.calls_to("chat.postMessage")[-1]["text"]
-    assert "Reply to:" not in text
+    await until(lambda: {"type": "divider"} in h.slack.message_blocks()[-1])
+    assert len(h.slack.calls_to("chat.postMessage")) == posts_before
+    for _, args in h.slack.calls:
+        assert "Reply to:" not in json.dumps(args)
 
 
 async def test_the_next_prompt_after_bang_stop_does_not_wait_for_a_report(

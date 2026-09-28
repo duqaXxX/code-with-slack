@@ -63,7 +63,9 @@ class Sink(Protocol):
     async def text(self, markdown: str) -> None: ...
     async def task(self, update: TaskUpdate) -> None: ...
     async def finish(self, closing: list[TaskUpdate]) -> None: ...
-    async def close_out(self, footer: str | None, reply_to: str | None = None) -> None: ...
+    async def close_out(
+        self, footer: str | None, reply_to: str | None = None, *, silent: bool = False
+    ) -> None: ...
     async def resume(self) -> None: ...
 
 
@@ -222,11 +224,13 @@ class TurnRenderer:
 
     async def close_out(self, *, silent: bool = False) -> None:
         """Post the reply's closing message, with the footer `close` last decided; call after
-        `close`. With `silent` the notification is dropped even if a `reply_to` is owed (a stop,
-        an error handled elsewhere, a restart or an idle close never rings for this one). A
-        second call is a no-op."""
+        `close`. With `silent` the closing never becomes a message of its own either, even to
+        carry the footer alone (a stop, an error handled elsewhere, a restart or an idle close
+        never rings, and a new message rings whatever it says): the footer, if any, joins the
+        body's own last message instead (D1 fix round 2, I1). A second call, silent or not, is
+        a no-op."""
         self._closed_out = True
-        await self._sink.close_out(self._footer, None if silent else self._reply_to)
+        await self._sink.close_out(self._footer, self._reply_to, silent=silent)
 
     async def resume(self) -> None:
         """Reopen this reply for a report turn's own writes to debounce again

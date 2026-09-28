@@ -26,7 +26,7 @@ class RecordingSink:
         self.texts: list[str] = []
         self.tasks: list[TaskUpdate] = []
         self.finished: list[TaskUpdate] | None = None
-        self.closed_out: tuple[str | None, str | None] | None = None
+        self.closed_out: tuple[str | None, str | None, bool] | None = None
 
     async def text(self, markdown: str) -> None:
         self.texts.append(markdown)
@@ -37,8 +37,10 @@ class RecordingSink:
     async def finish(self, closing: list[TaskUpdate]) -> None:
         self.finished = closing
 
-    async def close_out(self, footer: str | None, reply_to: str | None = None) -> None:
-        self.closed_out = (footer, reply_to)
+    async def close_out(
+        self, footer: str | None, reply_to: str | None = None, *, silent: bool = False
+    ) -> None:
+        self.closed_out = (footer, reply_to, silent)
 
     async def resume(self) -> None:
         self.finished = None
@@ -74,7 +76,7 @@ async def test_tools_turn_streams_text_and_one_line_per_tool() -> None:
     assert ids and {t.id for t in sink.tasks} == set(ids)
     finals = {t.id: t for t in sink.tasks}
     assert all(finals[i].status == "complete" for i in ids)
-    assert sink.finished == [] and sink.closed_out == ("footer", None)
+    assert sink.finished == [] and sink.closed_out == ("footer", None, False)
     assert renderer.result is not None
 
 

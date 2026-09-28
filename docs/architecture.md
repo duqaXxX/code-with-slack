@@ -172,13 +172,15 @@ notification altogether, so past that wait `ThreadSession._expire_unreported` gi
 divider and the footer (`ReplySink._write_closing`). A report turn can name only the reply of the
 first task it covers when several end together; `ThreadSession._sweep_closed_out`, run after
 every turn and after `ThreadSession._expire_injected_turn`, closes out every other reply left
-eligible. A `!stop`, an error, a restart, an idle close or `SessionGone` closes a reply at once
-instead of waiting further, with whatever footer its own turn had already decided but never its
-notification (`TurnRenderer.close_out(silent=True)`). Only the thread's latest reply shows the
-footer: a new reply takes it over (`ReplySink.set_latest`), so it stays at the bottom of the
-thread as the terminal's status line, and a closing message left with nothing to show (no
-footer, and no notification owed) is deleted. A reply longer than about 11,000 characters
-continues in a new message.
+eligible. A `!stop`, an error, a restart, an idle close or `SessionGone` closes a reply at once instead of
+waiting further, with no message of its own either (`TurnRenderer.close_out(silent=True)`): even
+a footer with no notification to carry would still be a new message, and a new message in a
+thread the owner started rings whatever it says. The footer, if the reply is still latest, joins
+the body's own last message instead (`ReplySink._render`), written through the ordinary flush,
+since an edit never rings. Only the thread's latest reply shows the footer: a new reply takes it
+over (`ReplySink.set_latest`), so it stays at the bottom of the thread as the terminal's status
+line, and a closing message left with nothing to show (no footer, and no notification owed) is
+deleted. A reply longer than about 11,000 characters continues in a new message.
 
 The closing message is also the reply's notification: Slack notifies the owner on any new message
 in a thread it started, mention or none, and a `chat.update` rewrite never notifies (measured on

@@ -66,7 +66,9 @@ So, inside a thread:
   own to report a background task edits the reply that started it, never a message of its own),
   not the continuation of a reply longer than one message, and not a reply ended by `!stop`, a
   restart, an idle close or a lost session: these close at once instead of waiting further, with
-  whatever footer the turn had already decided, but never with the notification.
+  no message of their own either. The footer, if the reply is still the thread's latest, joins
+  the body's own last message with an edit instead: any new message would still ring, whatever
+  it said, since a `chat.update` rewrite never does.
 
 The notification text reads `Reply to: ` and the start of the owner's message.
 

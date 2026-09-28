@@ -745,10 +745,19 @@ class ThreadSession:
 
     async def _cancel_tasks(self) -> None:
         # Every task is cancelled before any is awaited: a reader left running while the worker
-        # stops could still end a turn and record its session after a rebind.
+        # stops could still end a turn and record its session after a rebind. `_background`'s
+        # own fire-and-forget tasks (a usage refresh, D1 fix round 1's `_expire_unreported`) go
+        # too (fix round 2): none should outlive the session, and a stray expiry firing after
+        # would try to post a closing through one that is already gone.
         tasks = [
             t
-            for t in (self._worker, self._reader, self._expiry, self._idle_expiry)
+            for t in (
+                self._worker,
+                self._reader,
+                self._expiry,
+                self._idle_expiry,
+                *self._background,
+            )
             if t is not None
         ]
         for task in tasks:
@@ -1140,9 +1149,12 @@ class ThreadSession:
         for renderer in renderers:
             with contextlib.suppress(Exception):
                 await renderer.stop_running()
+        # Before close_out (D1 fix round 2): the latest reply's own `_running` must already
+        # read empty, or its closing (silent or not) would still show a stale `⏳ 1 shell`.
+        await self._show_running()
+        for renderer in renderers:
             with contextlib.suppress(Exception):
                 await renderer.close_out(silent=True)
-        await self._show_running()
 
     def _origin_of(self, tool_use_id: str) -> TurnRenderer | None:
         return next((r for r in self._task_replies.values() if r.owns(tool_use_id)), None)
@@ -1167,11 +1179,14 @@ class ThreadSession:
         first task it covers when several end together, so every other reply whose own tasks
         also finished is checked here instead, since nothing else rechecks it once the wait
         that deferred it lifts. Only while nothing is still expected or running session-wide:
-        `_close_reply` already handles the renderer whose own turn or report just ended."""
+        `_close_reply` already handles the renderer whose own turn or report just ended, and a
+        currently active one (fix round 2 hardening) is skipped outright, whatever it reads:
+        its own turn has not closed it yet, so nothing here is its call to make."""
         if self._injected_expected or not self._settled.is_set():
             return
+        active = self._active.renderer if self._active is not None else None
         for renderer in set(self._task_replies.values()):
-            if not self._still_owed(renderer):
+            if renderer is not active and not self._still_owed(renderer):
                 await renderer.close_out()
 
     async def _expire_unreported(self, task_id: str) -> None:
