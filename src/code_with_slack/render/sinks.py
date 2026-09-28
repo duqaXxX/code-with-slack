@@ -29,12 +29,13 @@ DEBOUNCE_SECONDS = 1.0
 # The final write has no next rewrite to fix it: one that fails for any reason but its content
 # is tried once more after this pause (slack-sdk has already retried a rate limit by then).
 FINAL_RETRY_SECONDS = 10.0
-# chat.update is Tier 3, "50+ per minute" per app (chat.update reference, read 2026-09-28): a
-# margin below the documented floor, shared by every reply in the process. Paced evenly (a token
-# bucket, not a sliding window) so a busy minute is a steady trickle rather than every reply
-# racing through the budget and then freezing together until it resets (controller ruling,
-# 2026-09-29): the plan only asks to "stay under 45 writes a minute overall".
-UPDATE_LIMIT = 45
+# chat.update is Tier 3, "50+ per minute" per app (chat.update reference, read 2026-09-28). The
+# burst below is folded into this budget, not on top of it: worst case, a process that was
+# already idle can spend UPDATE_LIMIT + UPDATE_BURST = 45 writes in one window, still a real
+# margin under Slack's documented floor. Paced evenly (a token bucket, not a sliding window) past
+# the burst, so a busy minute is a steady trickle rather than every reply racing through the
+# budget together and then freezing until it resets.
+UPDATE_LIMIT = 40
 UPDATE_WINDOW_SECONDS = 60.0
 # How many writes the budget lets through at once before pacing kicks in: enough for a reply
 # that just started to show its first few lines without waiting on threads that were already busy.
@@ -328,6 +329,9 @@ class ReplySink:
         self._closing_shown: list[dict[str, Any]] = []
         self._reply_to: str | None = None  # the owner's question: the closing message's text
         self._notify_kept = False  # whether the closing message still owes its notification
+        # Bumped by `_changed`: `_flush` compares it before and after a pass to notice a change
+        # that arrived while the pass wrote or waited its turn, and runs another pass for it.
+        self._version = 0
 
     async def open(self, status: str) -> None:
         """Post the reply at once, showing only its status: the owner sees an answer is coming."""
@@ -396,6 +400,7 @@ class ReplySink:
         await self._flush(final=True)
 
     async def _changed(self) -> None:
+        self._version += 1
         if self._finished:
             # A background task or subagent after the reply ended: rare, and possibly during
             # shutdown, so written at once in its final form rather than on a timer.
@@ -409,9 +414,18 @@ class ReplySink:
 
     async def _later(self) -> None:
         await asyncio.sleep(DEBOUNCE_SECONDS)
-        # Shielded: `finish` cancels a pending rewrite, and a write cancelled after Slack took it
-        # would lose the message's ts. `finish` waits for the lock instead.
-        await asyncio.shield(self._flush(final=False))
+        while True:
+            version = self._version
+            # Shielded: `finish` cancels a pending rewrite, and a write cancelled after Slack
+            # took it would lose the message's ts. `finish` waits for the lock instead.
+            if not await asyncio.shield(self._flush(final=False)):
+                return
+            if self._version == version:
+                return
+            # The reply changed again while that call wrote or waited its turn, in a way it
+            # never saw (e.g. it grew into a message it did not know it would need): flush again
+            # at once, no debounce, so it still catches up rather than waiting for the next
+            # unrelated event to notice.
 
     def _blocks(self) -> list[dict[str, Any]]:
         """The reply's body in order: Claude's text as markdown, each run of tool lines as
@@ -553,7 +567,13 @@ class ReplySink:
         return True
 
     async def _flush(self, *, final: bool) -> bool:
-        """Write what changed; False when a write failed and the reply is not as rendered."""
+        """Write what changed; False when a write failed and the reply is not as rendered. A
+        write can take real time (the limiter, a chat.update round trip), during which the reply
+        can change again: send what it looks like right now for that index, not the snapshot
+        taken before the wait, so a wait never drops a change. `_later` reschedules this call
+        when `self._version` moved during it, which is how a change too big for this pass's own
+        `rendered` to have known about (growing into a message it did not expect to need) still
+        gets discovered and sent, on the next call's fresh render."""
         async with self._lock:
             if self._finished and not final:
                 return True  # a draft that waited for the lock must not undo the final form
@@ -573,8 +593,8 @@ class ReplySink:
                             return True  # finish() ran while this draft waited its turn
                         # A change can arrive while this write waits its turn: send what the
                         # reply looks like right now rather than the snapshot taken before the
-                        # wait, so a wait never drops it. The latest state, written once, not
-                        # one write queued per change.
+                        # wait. If it grew into a message this pass never saw coming, the version
+                        # check below has `_later` call `_flush` again for that.
                         fresh = self._render(final)
                         if index < len(fresh) and fresh[index]:
                             blocks = fresh[index]

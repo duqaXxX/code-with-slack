@@ -128,8 +128,9 @@ own Slack thread, below the message that asked for it. The message is rewritten 
 at most once a second per reply (Slack allows `chat.update` 50 or more times a minute, per app,
 not per reply). Every `chat.update` in the process also draws from one shared `UpdateLimiter`
 (`sinks.UpdateLimiter`, injected through `SessionDeps`): a token bucket that paces writes evenly
-at 45 per 60 seconds with a small burst, so several busy threads together stay under the app's
-own budget instead of racing through it and then freezing until it resets. Within a reply, writes
+at 40 per 60 seconds, with a burst of 5 folded into that budget (worst case 45 in one window,
+still a real margin under the documented floor), so several busy threads together stay under the
+app's own budget instead of racing through it and then freezing until it resets. Within a reply, writes
 happen in the order things happen: text as Claude writes it, and the tool calls where they
 happen. Claude's text is a `markdown`
 block; each run of tool calls between two pieces of text is a `context` block (small, grey text,

@@ -861,24 +861,32 @@ async def test_update_limiter_never_exceeds_the_budget_in_any_window() -> None:
         assert times[i + limit + burst] - times[i] >= window - 0.03
 
 
-async def test_update_limiter_paces_evenly_after_its_burst() -> None:
+async def test_update_limiter_paces_evenly_after_its_burst(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Even pacing, not a sliding window: past the burst, one token every window/limit seconds,
-    never every reply racing through the whole budget and then freezing together (controller
-    ruling, 2026-09-29)."""
+    never every reply racing through the whole budget and then freezing together. An injected
+    clock, advanced by exactly what the limiter itself sleeps for, so the gaps are exact and this
+    cannot flake on a loaded runner."""
     limit, window, burst = 6, 0.6, 2
-    limiter = UpdateLimiter(limit=limit, window=window, burst=burst)
+    fake_time = [0.0]
+
+    async def fake_sleep(seconds: float) -> None:
+        fake_time[0] += seconds
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    limiter = UpdateLimiter(limit=limit, window=window, burst=burst, clock=lambda: fake_time[0])
     gaps: list[float] = []
     last: float | None = None
     for _ in range(limit):
         await limiter.acquire()
-        now = time.monotonic()
         if last is not None:
-            gaps.append(now - last)
-        last = now
+            gaps.append(fake_time[0] - last)
+        last = fake_time[0]
+
     steady = gaps[burst - 1 :]  # the gaps once the burst is spent
     interval = window / limit
-    assert all(g >= interval * 0.6 for g in steady)  # never far faster than the steady pace
-    assert max(steady) <= interval * 1.6  # ...and never a long stall either
+    assert all(g == pytest.approx(interval) for g in steady)
 
 
 async def test_update_limiter_serves_waiters_in_arrival_order() -> None:
@@ -906,9 +914,8 @@ async def test_update_limiter_releases_its_place_when_a_waiter_is_cancelled() ->
 
 
 async def test_a_change_during_a_limiter_wait_is_not_dropped(slack: FakeSlack) -> None:
-    """Regression for the CRITICAL finding in the P2T1 review: `_flush` rendered before
-    `acquire()`, so a change that arrived while a write waited its turn was lost until the next
-    unrelated event scheduled a new flush."""
+    """A change that arrives while a write is waiting its turn on the shared limiter is not
+    lost: it is not part of the write already in flight, so it must reach the next one."""
     limiter = UpdateLimiter(limit=1, window=0.5, burst=1)
     sink = reply(slack, limiter=limiter)
     await sink.text("one")
@@ -919,6 +926,50 @@ async def test_a_change_during_a_limiter_wait_is_not_dropped(slack: FakeSlack) -
     await sink.text(" three")  # arrives mid-wait; the reply then goes idle
     await asyncio.sleep(0.6)  # past the window: the waiting flush gets its token and writes
     assert "one two three" in slack.message_texts()[-1]
+
+
+async def test_growth_past_the_message_limit_during_a_limiter_wait_is_not_dropped(
+    slack: FakeSlack,
+) -> None:
+    """A change during the wait can be more than new text on the same message: it can push the
+    reply into a second message. The write already in flight only knew about the first."""
+    limiter = UpdateLimiter(limit=1, window=0.5, burst=1)
+    sink = reply(slack, limiter=limiter)
+    await sink.text("one ")
+    await asyncio.sleep(0.05)  # body posted
+    await limiter.acquire()  # another busy reply spends the only token
+    await sink.text("two ")
+    await asyncio.sleep(0.05)  # the debounced flush is now waiting its turn on the limiter
+    # past MESSAGE_LIMIT: this reply now needs a second message, discovered only once the wait
+    # ends and the reply is looked at again, not from the snapshot the wait started with.
+    await sink.text(("word " * 20) + "\n\n" + ("x" * 100 + "\n\n") * 120)
+    await sink.text("TAIL")
+    await asyncio.sleep(1.2)  # past the window: the waiting flush gets its token and catches up
+    assert any("TAIL" in t for t in slack.message_texts())
+
+
+async def test_a_change_during_the_chat_update_round_trip_is_not_dropped(
+    slack: FakeSlack,
+) -> None:
+    """A change can also arrive while a write is in flight (Slack's own round trip), not only
+    while it waits on the limiter: that write does not know about it either."""
+    limiter = UpdateLimiter(limit=100, window=1, burst=100)  # never waits: isolates the round trip
+    sink = reply(slack, limiter=limiter)
+    await sink.text("one")
+    await asyncio.sleep(0.05)  # posted
+    orig_api_call = slack.api_call
+
+    async def slow(api_method: str, **kwargs: Any) -> Any:
+        if api_method == "chat.update":
+            await asyncio.sleep(0.2)
+        return await orig_api_call(api_method, **kwargs)
+
+    slack.api_call = slow  # type: ignore[method-assign]
+    await sink.text(" two")
+    await asyncio.sleep(0.05)  # the rewrite is now in flight, inside its own chat.update call
+    await sink.text(" three")  # arrives during that round trip
+    await asyncio.sleep(0.5)
+    assert "three" in slack.message_texts()[-1]
 
 
 async def test_two_busy_sinks_share_one_limiter_paced_and_each_reaches_its_final_state(
@@ -961,9 +1012,9 @@ async def test_two_busy_sinks_share_one_limiter_paced_and_each_reaches_its_final
         reply_stamps.sort()
         for earlier, later in itertools.pairwise(reply_stamps):
             assert later - earlier >= sinks.DEBOUNCE_SECONDS - 0.005
-    # both replies' final content landed, with no leftover "Claude is writing" status line...
+    # both replies' full final content landed, with no leftover "Claude is writing" status line...
     shown = dict(zip(slack.message_texts(), slack.message_blocks(), strict=True))
-    for content in ("a0 a1 a2 a3", "b0 b1 b2 b3"):
+    for content in ("a0 a1 a2 a3 a4 a5", "b0 b1 b2 b3 b4 b5"):
         (final_text,) = (t for t in shown if content in t)
         assert texts.WRITING not in str(shown[final_text])
     # ...and each reply's closing message was posted (body + closing, once each).
