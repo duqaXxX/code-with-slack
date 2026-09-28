@@ -64,6 +64,7 @@ class Sink(Protocol):
     async def task(self, update: TaskUpdate) -> None: ...
     async def finish(self, closing: list[TaskUpdate]) -> None: ...
     async def close_out(self, footer: str | None, reply_to: str | None = None) -> None: ...
+    async def resume(self) -> None: ...
 
 
 def one_line(value: str, limit: int) -> str:
@@ -136,6 +137,7 @@ class TurnRenderer:
         # (a report turn can close it again): `close_out` posts them once nothing is owed.
         self._footer: str | None = None
         self._reply_to: str | None = None
+        self._closed_out = False
 
     async def feed(self, message: Message) -> None:
         match message:
@@ -207,14 +209,29 @@ class TurnRenderer:
             if entry.id in running or entry.status in ("pending", "in_progress")
         ]
         self._lines.update((entry.id, entry) for entry in closing)
-        self._footer = footer
+        # Both only ever move forward: a report turn passes neither, and must not erase what an
+        # earlier close already decided for a still-deferred closing.
+        self._footer = footer or self._footer
         self._reply_to = reply_to or self._reply_to
         await self._sink.finish(closing)
 
-    async def close_out(self) -> None:
-        """Post the reply's closing message, with the footer and the notification `close`
-        last decided; call after `close`. A second call is a no-op."""
-        await self._sink.close_out(self._footer, self._reply_to)
+    @property
+    def closed_out(self) -> bool:
+        """Whether this reply's closing message has already posted (or been decided moot)."""
+        return self._closed_out
+
+    async def close_out(self, *, silent: bool = False) -> None:
+        """Post the reply's closing message, with the footer `close` last decided; call after
+        `close`. With `silent` the notification is dropped even if a `reply_to` is owed (a stop,
+        an error handled elsewhere, a restart or an idle close never rings for this one). A
+        second call is a no-op."""
+        self._closed_out = True
+        await self._sink.close_out(self._footer, None if silent else self._reply_to)
+
+    async def resume(self) -> None:
+        """Reopen this reply for a report turn's own writes to debounce again
+        (`ReplySink.resume`), before feeding it into an already-closed reply."""
+        await self._sink.resume()
 
     async def stop_running(self) -> None:
         """The Claude Code process is gone and its tasks with it: close their lines as stopped."""

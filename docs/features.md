@@ -65,8 +65,8 @@ So, inside a thread:
 - Nothing else rings: not `Claude is writing…`, not a rewrite (a turn Claude Code starts on its
   own to report a background task edits the reply that started it, never a message of its own),
   not the continuation of a reply longer than one message, and not a reply ended by `!stop`, a
-  restart or an idle close, which close with whatever the turn had already decided, never waiting
-  further.
+  restart, an idle close or a lost session: these close at once instead of waiting further, with
+  whatever footer the turn had already decided, but never with the notification.
 
 The notification text reads `Reply to: ` and the start of the owner's message.
 

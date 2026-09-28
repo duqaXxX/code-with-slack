@@ -40,6 +40,9 @@ class RecordingSink:
     async def close_out(self, footer: str | None, reply_to: str | None = None) -> None:
         self.closed_out = (footer, reply_to)
 
+    async def resume(self) -> None:
+        self.finished = None
+
 
 async def render(
     messages: list[Message], footer: str | None = "footer"

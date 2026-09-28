@@ -55,8 +55,8 @@ All notable changes to this project are documented here. The format follows
 - A reply's closing message, and the notification it carries, now wait for every task it started
   and for the turn Claude Code starts to report one, instead of posting the moment the turn ends;
   that report turn renders into the same reply, appended after its body, rather than opening one
-  of its own. `!stop`, an error, a restart and an idle close still close a reply at once, with no
-  further wait, as before.
+  of its own. `!stop`, an error, a restart, an idle close and a lost session close a reply at
+  once instead of waiting further, but never with the notification.
 
 ### Fixed
 

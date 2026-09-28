@@ -361,6 +361,15 @@ class ReplySink:
         async with self._lock:
             await self._write_closing()
 
+    async def resume(self) -> None:
+        """Reopen an already-finished reply so a report turn's own writes debounce again (D1
+        fix round 1), instead of `_changed` treating `_finished` as "the turn is over, write
+        every change at once" and turning each streamed delta into its own `chat.update`. No
+        status line reappears (`_render` skips an empty one). `finish`, the report turn's own
+        end, marks the reply finished again."""
+        self._finished = False
+        self._status = ""
+
     async def _changed(self) -> None:
         if self._finished:
             # A background task or subagent after the reply ended: rare, and possibly during
@@ -449,7 +458,10 @@ class ReplySink:
             size += length
         if not final:
             status = " · ".join(filter(None, (self._status, self._running)))
-            messages[-1].append(context_block(status))
+            # Empty after `resume` cleared the status for a report turn's own writes (D1 fix
+            # round 1): no status line at all, rather than an empty one.
+            if status:
+                messages[-1].append(context_block(status))
         return messages
 
     def _closing_blocks(self) -> list[dict[str, Any]]:

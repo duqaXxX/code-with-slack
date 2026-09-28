@@ -159,15 +159,20 @@ The reply is posted as soon as the owner's message is queued, showing only a sta
 runs the status stays last; when it ends, the status goes and `ReplySink.finish` writes the
 body's final form, with no closing message yet (D1): a task the turn started can still outlive
 it, and Claude Code can still start a turn of its own to report on it. Once the reply's turn has
-ended and none of its tasks still runs or still waits on such a report
-(`ThreadSession._still_owed`), `ReplySink.close_out` posts the closing message below the reply,
-in the same thread, holding a divider and the footer (`ReplySink._write_closing`); a `!stop`, an
-error, a restart or an idle close closes it at once instead, with whatever footer and
-notification its own turn had already decided. Only the thread's latest reply shows the footer:
-a new reply takes it over (`ReplySink.set_latest`), so it stays at the bottom of the thread as
-the terminal's status line, and a closing message left with nothing to show (no footer, and no
-notification owed) is deleted. A reply longer than about 11,000 characters continues in a new
-message.
+ended and none of its tasks still runs or still waits on such a report, less than
+`sessions.INJECTED_TURN_WAIT` old (`ThreadSession._still_owed`; the CLI can suppress the
+notification altogether, so past that wait `ThreadSession._expire_unreported` gives up on it),
+`ReplySink.close_out` posts the closing message below the reply, in the same thread, holding a
+divider and the footer (`ReplySink._write_closing`). A report turn can name only the reply of the
+first task it covers when several end together; `ThreadSession._sweep_closed_out`, run after
+every turn and after `ThreadSession._expire_injected_turn`, closes out every other reply left
+eligible. A `!stop`, an error, a restart, an idle close or `SessionGone` closes a reply at once
+instead of waiting further, with whatever footer its own turn had already decided but never its
+notification (`TurnRenderer.close_out(silent=True)`). Only the thread's latest reply shows the
+footer: a new reply takes it over (`ReplySink.set_latest`), so it stays at the bottom of the
+thread as the terminal's status line, and a closing message left with nothing to show (no
+footer, and no notification owed) is deleted. A reply longer than about 11,000 characters
+continues in a new message.
 
 The closing message is also the reply's notification: Slack notifies the owner on any new message
 in a thread it started, mention or none, and a `chat.update` rewrite never notifies (measured on
@@ -177,11 +182,13 @@ write while Claude works is silent, and the closing message's `text` reads `text
 line holding a zero-width space: `ThreadSession._finish` passes the owner's message
 (`sessions.asked`) for an owner turn that was not interrupted, `ThreadSession._fail` for an error
 (a Claude Code process that exits rings once, on the first reply it ends, `ThreadSession._abandon`),
-never for a stop, a restart or an idle close. A turn Claude Code starts on its own to report a
-background task carries none either: it renders into the reply that started the task
-(`ThreadSession._opening_target`), so the closing message that eventually follows is still the
-one the original prompt is owed. A reply that already owes this notification when a newer reply
-in the same thread supersedes it keeps owing it, even once the newer reply takes the footer over.
+never for a stop, a restart, an idle close or `SessionGone`. A turn Claude Code starts on its own
+to report a background task carries none either: it renders into the reply that started the task
+(`ThreadSession._opening_target`), reopened so its own writes debounce again
+(`TurnRenderer.resume`, `ReplySink.resume`), so the closing message that eventually follows is
+still the one the original prompt is owed. A reply that already owes this notification when a
+newer reply in the same thread supersedes it keeps owing it, even once the newer reply takes the
+footer over.
 
 Slack's native streaming API (`chat.startStream`) is not used: in an ordinary channel it works
 only inside a thread, `chat.startStream` without `thread_ts` answering `invalid_thread_ts`

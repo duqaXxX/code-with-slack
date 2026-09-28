@@ -16,6 +16,7 @@ from claude_agent_sdk import (
     RateLimitEvent,
     ResultError,
     ResultMessage,
+    StreamEvent,
     ToolResultBlock,
     ToolUseBlock,
     UserMessage,
@@ -40,6 +41,7 @@ from code_with_slack.state import StateStore
 from tests.fakes import (
     BOT,
     CHANNEL,
+    FIXTURES,
     OTHER_THREAD,
     OWNER,
     TEAM,
@@ -491,6 +493,34 @@ async def test_no_reply_ever_carries_a_channel_mention(harness_for: Callable[...
         assert "<!channel>" not in json.dumps(args)
 
 
+async def test_exactly_one_new_message_per_turn_background_task_approval_and_question(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # D1 fix round 1 (minor, systematic): a turn that starts a background task, asks for an
+    # approval and a question, then the report turn for that task, posts exactly the first
+    # reply, the approval request, the question request, and one closing message. Nothing else.
+    first, notice, injected = split_background()
+    recorded = sdk_json("ask-can-use-tool")
+    ask = CanUseToolCall("Bash", {"command": "ls"})
+    question = CanUseToolCall(recorded["tool_name"], recorded["input"])
+    h = harness_for({"turns": [[ask, question, *first]]})
+    session = h.session()
+    turn = await session.submit("do it and start something")
+    await until(lambda: bool(h.approvals._pending))
+    approval_id = next(iter(h.approvals._pending))
+    assert h.approvals.resolve(approval_id, CHANNEL, THREAD, Approve()) is not None
+    await until(lambda: bool(h.approvals._pending))
+    question_id = next(iter(h.approvals._pending))
+    answers = {q["question"]: q["options"][0]["label"] for q in recorded["input"]["questions"]}
+    assert h.approvals.resolve(question_id, CHANNEL, THREAD, Answer(answers)) is not None
+    await asyncio.wait_for(turn.done.wait(), 2)
+    h.clients[0].inject(notice + injected)
+    await until(lambda: is_report(h.bodies()[0]))
+    await asyncio.sleep(0.05)
+    posts = h.slack.calls_to("chat.postMessage")
+    assert len(posts) == 4, [p["text"] for p in posts]
+
+
 async def test_an_owner_turn_that_completes_closes_with_its_prompt_as_the_notification(
     harness_for: Callable[..., Harness],
 ) -> None:
@@ -731,6 +761,31 @@ async def test_a_report_opens_with_claude_code_s_summary_and_takes_the_footer(
     assert {"type": "divider"} in closing
 
 
+async def test_a_report_turn_s_writes_debounce_like_any_other_reply(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # D1 fix round 1 (IMPORTANT 2): the reply it renders into is already `_finished`, which used
+    # to make every streamed delta flush its own `chat.update` instead of debouncing.
+    first, notice, injected = split_background()
+    deltas = sum(
+        1
+        for m in injected
+        if isinstance(m, StreamEvent)
+        and m.event.get("type") == "content_block_delta"
+        and (m.event.get("delta") or {}).get("type") == "text_delta"
+    )
+    assert deltas > 3, "the recording should have enough deltas to prove debouncing"
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    before = len(h.slack.calls_to("chat.update"))
+    h.clients[0].inject(notice + injected)
+    await until(lambda: is_report(h.bodies()[0]))
+    await asyncio.sleep(0.2)
+    updates = len(h.slack.calls_to("chat.update")) - before
+    assert updates <= 3, f"{updates} chat.update calls for one report turn (no debounce)"
+
+
 async def test_an_owner_answer_behind_a_wrong_guess_keeps_its_footer(
     harness_for: Callable[..., Harness],
 ) -> None:
@@ -838,6 +893,22 @@ async def test_the_task_bookkeeping_goes_with_the_process(
     assert session._tasks == {} and session._ended == []
 
 
+async def test_a_suppressed_notification_s_closing_still_posts_eventually(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # D1 fix round 1 (IMPORTANT 3): the CLI can suppress the notification altogether (SDK
+    # TaskUpdatedMessage docstring). Only the terminal task_updated arrives; the closing message
+    # must still post once INJECTED_TURN_WAIT passes, not wait on it forever.
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.2)
+    first, notice, _ = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    a = session._task_replies["bc41naslr"]
+    h.clients[0].inject([m for m in notice if not isinstance(m, TaskNotificationMessage)])
+    await until(lambda: a.closed_out, limit=1.0)
+
+
 def split_background() -> tuple[list[Any], list[Any], list[Any]]:
     """The recorded background run: the owner's turn, the notification that arrives while idle,
     and the turn the CLI injects to report it."""
@@ -848,6 +919,22 @@ def split_background() -> tuple[list[Any], list[Any], list[Any]]:
         if isinstance(m, SystemMessage)
         and m.subtype == "init"
         and not isinstance(m, TaskNotificationMessage)
+    )
+    return first, later[:start], later[start:]
+
+
+def renamed_background() -> tuple[list[Any], list[Any], list[Any]]:
+    """The same recorded background run as `split_background`, with its task and tool ids
+    changed so a second one can run alongside the first with no id collision (D1 fix round 1,
+    CRITICAL 1)."""
+    raw = (FIXTURES / "sdk" / "background.jsonl").read_text()
+    raw = raw.replace("bc41naslr", "bc41other").replace(
+        "toolu_01Uh7Nne3XR1T8n5tWVbhLh4", "toolu_01OTHERxxxxxxxxxxxxxxxxx"
+    )
+    messages = [m for m in (parse_message(json.loads(line)) for line in raw.splitlines()) if m]
+    first, later = split_turns(messages)[:2]
+    start = next(
+        i for i, m in enumerate(later) if isinstance(m, SystemMessage) and m.subtype == "init"
     )
     return first, later[:start], later[start:]
 
@@ -925,6 +1012,32 @@ async def test_two_prompts_in_a_row_each_get_their_own_closing_message(
     # second's own closing is untouched.
     assert len(h.slack.calls_to("chat.postMessage")) == after_second + 1
     assert h.slack.message_blocks()[-1] == [context_block(ZERO_WIDTH_SPACE)]
+
+
+async def test_two_prompts_tasks_ending_together_each_get_their_own_closing_message(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # D1 fix round 1 (CRITICAL 1): the CLI's one report turn opens with the end of every task
+    # that finished together but renders into only the first one's reply; the second must still
+    # get its own closing message, not wait forever for a report turn that was never coming for
+    # it specifically.
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.2)
+    first, notice, injected = split_background()
+    first_b, notice_b, _ = renamed_background()
+    h = harness_for({"turns": [first, first_b]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start A")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("start B")).done.wait(), 2)
+    a = session._task_replies["bc41naslr"]
+    b = session._task_replies["bc41other"]
+    assert a is not b
+    # Both tasks end while idle, then Claude Code's one report turn, which renders into A's
+    # reply (the first of the two ended tasks).
+    h.clients[0].inject(notice + notice_b + injected)
+    await until(lambda: a.closed_out)
+    await until(lambda: b.closed_out)
+    closing = h.slack.calls_to("chat.postMessage")[-1]
+    assert closing["text"] == texts.REPLY_TO.format(prompt="start B")
 
 
 async def test_a_background_task_frame_stays_out_of_other_replies(
@@ -1006,6 +1119,21 @@ async def test_closing_the_session_stops_the_lines_of_running_tasks(
     await h.manager.close_all()
     assert running_block(h.slack.message_blocks()[0]) is None
     assert "Stopped" in h.replies()[0]
+
+
+async def test_shutdown_with_a_deferred_closing_closes_silently(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # D1 fix round 1 (IMPORTANT 1): an idle close (like a restart or SessionGone) forces the
+    # still-deferred closing message out at once, but it must never ring.
+    first, _, _ = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    n = len(h.slack.posted_ts)
+    await session.close(reason=texts.ENDED_IDLE)
+    posts = h.slack.calls_to("chat.postMessage")[n:]
+    assert not any("Reply to:" in p["text"] for p in posts)
 
 
 async def test_a_notification_with_no_turn_updates_its_line_and_releases_the_queue(
@@ -1972,6 +2100,23 @@ async def test_a_stop_of_a_background_task_posts_no_new_message_until_it_ends(
     await until(lambda: len(h.slack.posted_ts) == posted_before + 1)
     await asyncio.sleep(0.05)
     assert len(h.slack.posted_ts) == posted_before + 1
+
+
+async def test_bang_stop_of_a_background_task_closes_silently(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # D1 fix round 1 (IMPORTANT 1): the brief's rule is closed at once and silently; the closing
+    # message the stopped task's own end finally allows must not carry "Reply to:".
+    first, notice, _ = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    n = len(h.slack.posted_ts)
+    assert await session.stop()
+    h.clients[0].inject(stopped_end(notice))
+    await until(lambda: len(h.slack.posted_ts) == n + 1)
+    text = h.slack.calls_to("chat.postMessage")[-1]["text"]
+    assert "Reply to:" not in text
 
 
 async def test_the_next_prompt_after_bang_stop_does_not_wait_for_a_report(
