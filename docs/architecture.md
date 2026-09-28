@@ -331,6 +331,18 @@ where the *next* thread starts, and refuses while any of the channel's threads i
 - Messages are queued and run one at a time; each gets its own reply in the thread.
   `!stop` interrupts the running turn, denies its pending approvals and stops the thread's
   background tasks (`ClaudeSDKClient.stop_task`).
+- Each `ThreadSession` keeps one `render.status.StatusReaction` on its own root message (D10),
+  which `thread_ts` always is: a top-level owner message, or the owner's own `!resume` message.
+  `ThreadSession._react` shows it as a tracked background task, since a reaction must never delay
+  a turn; the one exception is `✅`, awaited right after the closing message it follows, so it
+  never shows first. `⏳` working: a turn is submitted or sent, or a report turn starts. `✋`
+  waiting: an approval or a question is open, back to `⏳` once it is answered and the turn
+  continues. `✅` ended: the closing message of the latest prompt posts with nothing else of the
+  session running, queued or owed (`ThreadSession.idle`); a second prompt queued behind the first
+  keeps it `⏳` until everything has ended. `❌` error: a turn fails, `!stop` stops something,
+  `SessionGone`, or a shutdown's drain cuts short a busy session; D9's own idle close never
+  touches it, so it is left reading `✅`. A top-level word (`!status`, `!stop`, `!bind`) is not a
+  session and gets no reaction of its own.
 - One reader task follows the SDK's message stream for the life of the client. A turn starts
   at its first text or tool message, or earlier at a `TaskStartedMessage` with no
   `tool_use_id` that comes while a message is sent and no report turn is expected: a skill with

@@ -16,7 +16,8 @@
         "groups:history",
         "groups:read",
         "chat:write",
-        "files:read"
+        "files:read",
+        "reactions:write"
       ]
     },
     "pkce_enabled": false

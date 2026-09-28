@@ -36,6 +36,7 @@ from code_with_slack.approvals import Answer, Approvals, Approve
 from code_with_slack.footer import UsageCache
 from code_with_slack.guards import Identity
 from code_with_slack.render.sinks import NESTED, ZERO_WIDTH_SPACE, UpdateLimiter, context_block
+from code_with_slack.render.status import Status
 from code_with_slack.sessions import SessionDeps, SessionManager, resolve_directory
 from code_with_slack.state import StateStore
 from tests.fakes import (
@@ -117,6 +118,15 @@ class Harness:
         """Each reply's own text: `replies()` with the empty entries a silent closing message
         leaves (it carries no markdown or tool line) filtered out."""
         return [r for r in self.replies() if r]
+
+    def reactions(self, thread: str = THREAD) -> list[str]:
+        """Every reaction shown on `thread`'s root message, in order (D10): `reactions.add`
+        alone, since `StatusReaction` always adds the new one before removing the previous."""
+        return [
+            args["name"]
+            for method, args in self.slack.calls
+            if method == "reactions.add" and args["timestamp"] == thread
+        ]
 
     def written_text(self) -> str:
         return "\n".join(
@@ -2818,3 +2828,123 @@ async def test_a_failed_query_re_arms_the_idle_close(
     turn = await session.submit("hi")
     await asyncio.wait_for(turn.done.wait(), 2)
     await until(lambda: session.closed, limit=1)
+
+
+# The status reaction (D10): one on each session's root message, driven by `ThreadSession`
+# itself. `Harness.reactions` reads it from `FakeSlack.calls`, never a session's own internals.
+
+
+async def test_a_plain_turn_shows_working_then_done(harness_for: Callable[..., Harness]) -> None:
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    turn = await h.session().submit("list the files")
+    await asyncio.wait_for(turn.done.wait(), 2)
+    # `turn.done` is set (`_settle`) before the sweep that checks whether the session is now
+    # idle enough for ✅ (both run in `_finish`'s own `finally`, in that order).
+    await until(lambda: h.reactions() == [Status.WORKING.value, Status.DONE.value])
+
+
+async def test_a_turn_with_an_approval_shows_waiting_then_working_again(
+    harness_for: Callable[..., Harness],
+) -> None:
+    ask = CanUseToolCall("Bash", {"command": "ls"})
+    h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
+    turn = await h.session().submit("list the files")
+    await until(lambda: bool(h.approvals._pending))
+    assert h.reactions() == [Status.WORKING.value, Status.WAITING.value]
+    h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, THREAD, Approve())
+    await asyncio.wait_for(turn.done.wait(), 2)
+    expected = [
+        Status.WORKING.value,
+        Status.WAITING.value,
+        Status.WORKING.value,
+        Status.DONE.value,
+    ]
+    await until(lambda: h.reactions() == expected)
+
+
+async def test_a_background_task_outliving_the_turn_stays_working_until_its_report_closes(
+    harness_for: Callable[..., Harness],
+) -> None:
+    first, notice, injected = split_background()
+    h = harness_for({"turns": [first]})
+    await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
+    # The turn itself ended, but the task it started still runs: no ✅ yet.
+    assert h.reactions() == [Status.WORKING.value]
+    h.clients[0].inject(notice + injected)
+    await until(lambda: is_report(h.bodies()[0]))
+    await asyncio.sleep(0.05)
+    assert h.reactions() == [Status.WORKING.value, Status.DONE.value]
+
+
+async def test_a_failed_turn_shows_error(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h = harness_for({})
+    session = h.session()
+    await session.ensure_connected()
+
+    async def boom(prompt: Any) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(h.clients[0], "query", boom)
+    turn = await session.submit("hi")
+    await asyncio.wait_for(turn.done.wait(), 2)
+    assert h.reactions() == [Status.WORKING.value, Status.ERROR.value]
+
+
+async def test_stop_shows_error(harness_for: Callable[..., Harness]) -> None:
+    h = harness_for(
+        {
+            "turns": [
+                [CanUseToolCall("Bash", {"command": "rm -rf build"}), *sdk_messages("interrupt")]
+            ]
+        }
+    )
+    session = h.session()
+    turn = await session.submit("clean")
+    await until(lambda: bool(h.approvals._pending))
+    assert await session.stop() is True
+    await asyncio.wait_for(turn.done.wait(), 2)
+    assert h.reactions()[-1] == Status.ERROR.value
+
+
+async def test_a_gone_session_shows_error(harness_for: Callable[..., Harness]) -> None:
+    gone = ResultError(
+        "Claude Code returned an error result: No conversation found",
+        data={
+            "subtype": "error_during_execution",
+            "is_error": True,
+            "errors": ["No conversation found with session ID: gone"],
+        },
+    )
+    h = harness_for({"connect_error": gone})
+    h.session()  # opens the thread
+    h.state.set_session(CHANNEL, THREAD, "gone")
+    turn = await h.session().submit("hello")
+    await asyncio.wait_for(turn.done.wait(), 2)
+    assert h.reactions()[-1] == Status.ERROR.value
+
+
+async def test_a_drain_that_cuts_a_busy_session_shows_error(
+    harness_for: Callable[..., Harness],
+) -> None:
+    *running, _ = sdk_messages("tools")
+    h = harness_for({"turns": [running]})
+    turn = await h.session().submit("first")
+    await until(lambda: bool(h.clients) and h.clients[0].queries == ["first"])
+    cut_short = asyncio.Event()
+    drained = asyncio.create_task(h.manager.drain(cut_short))
+    await asyncio.sleep(0.05)
+    cut_short.set()
+    await asyncio.wait_for(drained, 2)
+    assert not turn.done.is_set()  # not settled by the drain itself
+    await h.manager.close_all()  # the shutdown that follows a cut-short drain
+    assert h.reactions()[-1] == Status.ERROR.value
+
+
+async def test_a_top_level_status_word_gets_no_reaction(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({})
+    await h.session().status()
+    assert h.reactions() == []

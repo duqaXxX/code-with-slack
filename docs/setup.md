@@ -44,13 +44,15 @@ not the `claude` on your `PATH`. Both read the same login, so logging in once wi
 4. Check the summary and choose **Create**.
 
 The manifest asks for private channels only (`groups:history`, `groups:read`,
-`message.groups`), `chat:write`, and `files:read` to download the files you attach to a message.
+`message.groups`), `chat:write`, `files:read` to download the files you attach to a message, and
+`reactions:write` for the status reaction on a session's root message.
 The app registers no slash command: commands are typed as `!word` messages. Socket Mode is on,
 so the app needs no public URL and your machine opens no inbound port.
 
-An app created before `files:read` was added needs the scope too: on the app's **OAuth &
-Permissions** page add the bot scope `files:read`, then reinstall the app to the workspace.
-Without it, every attached file is refused with `HTTP 302`.
+An app created before `files:read` or `reactions:write` was added needs the scope too: on the
+app's **OAuth & Permissions** page add the missing bot scope, then reinstall the app to the
+workspace. Without `files:read`, every attached file is refused with `HTTP 302`; without
+`reactions:write`, the status reaction is silently skipped (logged, never surfaced).
 
 code-with-slack needs none of the app's agent features: leave **Agent experience** and the
 **Slack Model Context Protocol (MCP) Server** off in the app settings. The MCP server lets an app
