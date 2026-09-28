@@ -352,40 +352,53 @@ def build_app(
             # D8: this message would wake `session` (busy just queues behind what is already
             # running); ask first when another live session, of any channel, is already busy in
             # the same resolved folder. Later messages of this thread queue behind the wait,
-            # since it runs inside the arrival lock.
+            # since it runs inside the arrival lock. `held` is the object a Continue's ✋ was left
+            # standing on (`hold_end(continued=True)` bets on the `submit()` below to replace it
+            # with ⏳): kept apart from `session`, which a `SessionClosed` retry below can
+            # reassign, so a non-submit exit always restores the reaction on the object that
+            # actually shows it.
+            held: ThreadSession | None = None
             if not session.busy:
                 other = sessions.working_in(session.directory, besides=session)
-                if other is not None and not await hold_before_sending(
-                    channel, thread_ts, session, other
-                ):
-                    return
+                if other is not None:
+                    if not await hold_before_sending(channel, thread_ts, session, other):
+                        return
+                    held = session
             # Retried once against a freshly looked-up session: the one this call was handed can
             # still close under it (most likely D9's idle close, though `touch()` at the lookup
             # already guards the common case) during the download above or the steps below.
-            for attempt in range(2):
-                try:
-                    if isinstance(command, Passthrough):
-                        await session.ensure_connected()
-                        known = {str(c.get("name")) for c in session.commands}
-                        name = command.text.split(" ", 1)[0]
-                        prompt = f"/{command.text}" if name in known else text
-                    # Checked last, with no await before the submit: a stop can start during a
-                    # download. The daemon's words still work meanwhile (`!stop` shortens the
-                    # wait); a new turn would not finish, and Slack does not resend this event.
-                    if sessions.draining:
-                        await notice(channel, thread_ts, texts.RESTARTING)
+            try:
+                for attempt in range(2):
+                    try:
+                        if isinstance(command, Passthrough):
+                            await session.ensure_connected()
+                            known = {str(c.get("name")) for c in session.commands}
+                            name = command.text.split(" ", 1)[0]
+                            prompt = f"/{command.text}" if name in known else text
+                        # Checked last, with no await before the submit: a stop can start during a
+                        # download. The daemon's words still work meanwhile (`!stop` shortens the
+                        # wait); a new turn would not finish, and Slack does not resend this event.
+                        if sessions.draining:
+                            await notice(channel, thread_ts, texts.RESTARTING)
+                            if held is not None:
+                                await held.react_hold_abandoned(error=False)
+                            return
+                        await session.submit(prompt)
                         return
-                    await session.submit(prompt)
-                    return
-                except SessionClosed:
-                    if attempt:
-                        raise
-                    fresh = sessions.get(channel, thread_ts)
-                    if fresh is None:
-                        # Not just closed: its thread's own entry is gone too (D7's SessionGone
-                        # close), so a retry would find nothing here again either.
-                        raise SessionGone from None
-                    session = fresh
+                    except SessionClosed:
+                        if attempt:
+                            raise
+                        fresh = sessions.get(channel, thread_ts)
+                        if fresh is None:
+                            # Not just closed: its thread's own entry is gone too (D7's
+                            # SessionGone close), so a retry would find nothing here again either.
+                            raise SessionGone from None
+                        session = fresh
+            except (DirectoryUnavailable, SessionClosed, SessionGone):
+                # None of these ever reached `submit()`: a Continue's ✋ must not stand forever.
+                if held is not None:
+                    await held.react_hold_abandoned(error=True)
+                raise
 
     async def hold_before_sending(
         channel: str, thread_ts: str, session: ThreadSession, other: ThreadSession

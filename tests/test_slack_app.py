@@ -1608,6 +1608,37 @@ async def test_a_click_for_another_channel_is_refused(world: World) -> None:
     assert world.ephemerals()[-1] == texts.HOLD_GONE
 
 
+async def test_a_drain_starting_right_after_continue_does_not_leave_a_stale_raised_hand(
+    world: World,
+) -> None:
+    await start_a_hold(world)
+    hold_id = button_value(posted_blocks(world), HOLD_CONTINUE)
+    world.sessions.draining = True  # as if a drain's own cancellation pass had just run
+    await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, THREAD))
+    assert world.clients[-1].queries == ["busy elsewhere"]  # never sent: no second client
+    session = world.sessions.get(CHANNEL, THREAD)
+    assert session is not None
+    assert session._status.current is None  # restored, not left on ✋: this thread never ran
+
+
+async def test_a_directory_gone_unavailable_after_continue_reacts_error_not_a_raised_hand(
+    world: World,
+) -> None:
+    await world.dispatch(message("busy elsewhere", ts=OTHER_THREAD))
+    await world.dispatch(message("!compact", ts=THREAD))  # a Passthrough: held, `ensure_connected`
+    hold_id = button_value(posted_blocks(world), HOLD_CONTINUE)
+
+    async def untrusted(directory: Path) -> bool:
+        return False
+
+    world.sessions._deps.workspace_trusted = untrusted
+    await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, THREAD))
+    assert world.clients[-1].queries == ["busy elsewhere"]  # never sent: no second client
+    session = world.sessions.get(CHANNEL, THREAD)
+    assert session is not None
+    assert session._status.current is Status.ERROR
+
+
 async def test_stop_in_the_held_thread_cancels_it(world: World) -> None:
     await start_a_hold(world)
     await world.dispatch(reply("!stop", THREAD))
