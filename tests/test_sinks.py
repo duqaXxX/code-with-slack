@@ -82,7 +82,7 @@ async def test_a_second_close_out_call_is_a_no_op(slack: FakeSlack) -> None:
 async def test_a_silent_close_that_would_overflow_the_block_limit_stays_in_one_message(
     slack: FakeSlack,
 ) -> None:
-    # D1 fix round 3: a silent close's footer joins the body's own last message; BLOCKS_LIMIT
+    # D1: a silent close's footer joins the body's own last message; BLOCKS_LIMIT
     # (45) leaves exactly the margin under Slack's own 50-block cap for that, so a message
     # already at BLOCKS_LIMIT still fits the closing blocks without a message of its own.
     sink = reply(slack)

@@ -353,10 +353,10 @@ class ThreadSession:
         # Fire-and-forget tasks this session never waits on, chiefly a usage refresh: never
         # cancelled by `close`, since a usage refresh shares one `UsageProbe` (and its one
         # client) across every session, and cancelling it mid-query would leave that client
-        # answering the next lookup, of any session, late (fix round 3, minor 1).
+        # answering the next lookup, of any session, late.
         self._background: set[asyncio.Task[None]] = set()
         # `_expire_unreported`'s own timers only: this session's alone, so `close` can cancel
-        # them (fix round 2) without touching `_background`'s shared-client tasks.
+        # them without touching `_background`'s shared-client tasks.
         self._expiring: set[asyncio.Task[None]] = set()
         # Approval ids open right now, waiting on the owner's decision (`waiting_for_owner`).
         self._waiting: set[str] = set()
@@ -777,9 +777,9 @@ class ThreadSession:
     async def _cancel_tasks(self) -> None:
         # Every task is cancelled before any is awaited: a reader left running while the worker
         # stops could still end a turn and record its session after a rebind. `_expiring`'s own
-        # timers go too (fix round 3): none should outlive the session, and a stray one firing
+        # timers go too: none should outlive the session, and a stray one firing
         # after would try to post a closing through one that is already gone. `_background`'s
-        # tasks are not cancelled here (fix round 3, minor 1): a usage refresh shares one
+        # tasks are not cancelled here: a usage refresh shares one
         # `UsageProbe` client across every session, and cancelling it mid-query (`UsageProbe`
         # does not catch `CancelledError`) would leave that client answering the next lookup,
         # of any session, late.
@@ -934,7 +934,7 @@ class ThreadSession:
             and not stopped
         ):
             self._unreported[message.task_id] = asyncio.get_running_loop().time()
-            # D1 fix round 1: the CLI can suppress the notification altogether (SDK
+            # D1: the CLI can suppress the notification altogether (SDK
             # TaskUpdatedMessage docstring); nothing else rechecks this reply once the wait
             # that holds it passes, so this schedules that recheck itself.
             expiry = asyncio.create_task(self._expire_unreported(message.task_id))
@@ -962,7 +962,7 @@ class ThreadSession:
             owed = self._still_owed(holder) or self._injected_expected or not self._settled.is_set()
             if not owed:
                 # `stopped`: an owner `!stop` ended this task; its closing follows at once, but
-                # silently, as `!stop` never rings (fix round 1, IMPORTANT 1).
+                # silently, as `!stop` never rings.
                 await holder.close_out(silent=stopped)
                 # D10: `!stop` already reacted itself; its ❌ must stand, not this closing's ✅.
                 if not stopped:
@@ -1068,7 +1068,7 @@ class ThreadSession:
             if held:
                 renderer = target or TurnRenderer(await self._sink(), str(self.directory))
                 if target is not None:
-                    await renderer.resume()  # D1 fix round 1 (IMPORTANT 2): debounce again
+                    await renderer.resume()  # D1: debounce again
                 await self._standalone(held, text, renderer)
         except Exception as exc:
             logger.warning(
@@ -1079,7 +1079,7 @@ class ThreadSession:
             )
         finally:
             self._settled.set()
-            # D1 fix round 1 (CRITICAL 1): catches `target` (nothing more coming for it either,
+            # D1: catches `target` (nothing more coming for it either,
             # when `held` was empty) and any other reply a joint report turn left stranded, since
             # a report only ever renders into the first of the tasks it covers.
             await self._sweep_closed_out()
@@ -1151,7 +1151,7 @@ class ThreadSession:
             text, target = self._opening_target()
             renderer = target or TurnRenderer(await self._sink(), str(self.directory))
             if target is not None:
-                # D1 fix round 1 (IMPORTANT 2): the reply already finished once; without this
+                # D1: the reply already finished once; without this
                 # each streamed delta would flush on its own instead of debouncing.
                 await renderer.resume()
             await renderer.feed_notice(text)
@@ -1185,7 +1185,7 @@ class ThreadSession:
     ) -> None:
         for task_id in renderer.running_tasks:
             self._task_replies[task_id] = renderer
-        # Forgetting one whose reply has not closed out yet (D1 fix round 1, minor 4) would
+        # Forgetting one whose reply has not closed out yet (D1) would
         # strand it exactly as a joint report turn can: `_still_owed`, and the sweep that acts
         # on it, both read this map.
         ended = [
@@ -1198,7 +1198,7 @@ class ThreadSession:
         await renderer.close(footer, reply_to=reply_to)
         # D1: the closing message follows at once unless a task this renderer started outlives
         # this very turn; `force` is a stop, an error or a restart, which never waits for one.
-        # `silent` (fix round 3, IMPORTANT): `_abandon` passes it for a `force` close with no
+        # `silent`: `_abandon` passes it for a `force` close with no
         # `reply_to`, since a background task can still be running here (`_stop_task_replies`
         # stops it only after this call returns) and a non-silent close_out would still post a
         # brand-new, still-ringing message for its stale running count.
@@ -1207,8 +1207,8 @@ class ThreadSession:
 
     async def _stop_task_replies(self) -> None:
         """The Claude Code process is going away with its tasks: no reply keeps showing one, and
-        none is left waiting on a closing message that will now never come. D1 fix round 1
-        (IMPORTANT 1): closed at once and silently, with whatever footer its own turn already
+        none is left waiting on a closing message that will now never come. D1: closed at once
+        and silently, with whatever footer its own turn already
         decided but never its notification, since a stop, a restart, an idle close or
         `SessionGone` never rings; `_abandon` rings, at most once, for a genuine error on its
         own, ahead of this."""
@@ -1221,7 +1221,7 @@ class ThreadSession:
         for renderer in renderers:
             with contextlib.suppress(Exception):
                 await renderer.stop_running()
-        # Before close_out (D1 fix round 2): the latest reply's own `_running` must already
+        # Before close_out (D1): the latest reply's own `_running` must already
         # read empty, or its closing (silent or not) would still show a stale `⏳ 1 shell`.
         await self._show_running()
         for renderer in renderers:
@@ -1235,8 +1235,8 @@ class ThreadSession:
         """D1: whether one of `renderer`'s own tasks still keeps its closing message waiting:
         one still runs, or ended less than INJECTED_TURN_WAIT ago with no notification yet (its
         report, if any, not in yet). The CLI can suppress the notification altogether (SDK
-        TaskUpdatedMessage docstring), so past that wait this stops counting it (fix round 1,
-        IMPORTANT 3): `_expire_unreported` rechecks then, since nothing else would."""
+        TaskUpdatedMessage docstring), so past that wait this stops counting it:
+        `_expire_unreported` rechecks then, since nothing else would."""
         if renderer.running_tasks:
             return True
         now = asyncio.get_running_loop().time()
@@ -1247,12 +1247,12 @@ class ThreadSession:
         )
 
     async def _sweep_closed_out(self) -> None:
-        """D1 fix round 1 (CRITICAL 1): a report turn's opening names only the reply of the
+        """D1: a report turn's opening names only the reply of the
         first task it covers when several end together, so every other reply whose own tasks
         also finished is checked here instead, since nothing else rechecks it once the wait
         that deferred it lifts. Only while nothing is still expected or running session-wide:
         `_close_reply` already handles the renderer whose own turn or report just ended, and a
-        currently active one (fix round 2 hardening) is skipped outright, whatever it reads:
+        currently active one is skipped outright, whatever it reads:
         its own turn has not closed it yet, so nothing here is its call to make."""
         if self._injected_expected or not self._settled.is_set():
             return
@@ -1262,7 +1262,7 @@ class ThreadSession:
                 await renderer.close_out()
 
     async def _expire_unreported(self, task_id: str) -> None:
-        """D1 fix round 1 (IMPORTANT 3): give up waiting on a task's notification after
+        """D1: give up waiting on a task's notification after
         INJECTED_TURN_WAIT (the CLI can suppress it) and sweep for whatever that frees."""
         await asyncio.sleep(INJECTED_TURN_WAIT)
         self._unreported.pop(task_id, None)
@@ -1354,7 +1354,7 @@ class ThreadSession:
             await self._close_reply(active.renderer, footer, reply_to)
         finally:
             await self._settle(active.turn, result)
-            # D1 fix round 1 (CRITICAL 1): a report turn's own reply is `_close_reply`'s
+            # D1: a report turn's own reply is `_close_reply`'s
             # concern above; this catches every other reply a joint one left stranded.
             await self._sweep_closed_out()
         return stopped

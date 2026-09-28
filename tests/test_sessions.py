@@ -510,7 +510,7 @@ async def test_no_reply_ever_carries_a_channel_mention(harness_for: Callable[...
 async def test_exactly_one_new_message_per_turn_background_task_approval_and_question(
     harness_for: Callable[..., Harness],
 ) -> None:
-    # D1 fix round 1 (minor, systematic): a turn that starts a background task, asks for an
+    # D1: a turn that starts a background task, asks for an
     # approval and a question, then the report turn for that task, posts exactly the first
     # reply, the approval request, the question request, and one closing message. Nothing else.
     first, notice, injected = split_background()
@@ -532,7 +532,7 @@ async def test_exactly_one_new_message_per_turn_background_task_approval_and_que
     await until(lambda: is_report(h.bodies()[0]))
     await asyncio.sleep(0.05)
     posts = h.slack.calls_to("chat.postMessage")
-    # D1 fix round 2 (systematic): exactly these four, in this order, nothing else.
+    # D1: exactly these four, in this order, nothing else.
     assert [p["text"] for p in posts] == [
         texts.WRITING,
         "Bash: ls",
@@ -784,7 +784,7 @@ async def test_a_report_opens_with_claude_code_s_summary_and_takes_the_footer(
 async def test_a_report_turn_s_writes_debounce_like_any_other_reply(
     harness_for: Callable[..., Harness],
 ) -> None:
-    # D1 fix round 1 (IMPORTANT 2): the reply it renders into is already `_finished`, which used
+    # D1: the reply it renders into is already `_finished`, which used
     # to make every streamed delta flush its own `chat.update` instead of debouncing.
     first, notice, injected = split_background()
     deltas = sum(
@@ -916,7 +916,7 @@ async def test_the_task_bookkeeping_goes_with_the_process(
 async def test_a_suppressed_notification_s_closing_still_posts_eventually(
     harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # D1 fix round 1 (IMPORTANT 3): the CLI can suppress the notification altogether (SDK
+    # D1: the CLI can suppress the notification altogether (SDK
     # TaskUpdatedMessage docstring). Only the terminal task_updated arrives; the closing message
     # must still post once INJECTED_TURN_WAIT passes, not wait on it forever.
     monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.2)
@@ -932,7 +932,7 @@ async def test_a_suppressed_notification_s_closing_still_posts_eventually(
 async def test_the_unreported_expiry_timer_does_not_outlive_close(
     harness_for: Callable[..., Harness],
 ) -> None:
-    # D1 fix round 2: `_expire_unreported`'s own task lives in `_expiring` (fix round 3: its
+    # D1: `_expire_unreported`'s own task lives in `_expiring` (its
     # own set, kept apart from `_background`'s shared-client tasks), which `close` must cancel
     # along with everything else, or it would try to post through a session that is already
     # gone once its (real, 30s) wait finally elapses.
@@ -949,7 +949,7 @@ async def test_the_unreported_expiry_timer_does_not_outlive_close(
 async def test_closing_a_session_does_not_cancel_a_pending_usage_refresh(
     harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # D1 fix round 3 (minor 1): a usage refresh shares one UsageProbe, and its one client,
+    # D1: a usage refresh shares one UsageProbe, and its one client,
     # across every session; `UsageProbe.__call__` does not handle being cancelled mid-query,
     # which would leave that shared client answering the next lookup, of any session, late.
     # `close` cancels `_expiring`'s own timers, never `_background`'s.
@@ -986,8 +986,7 @@ def split_background() -> tuple[list[Any], list[Any], list[Any]]:
 
 def renamed_background() -> tuple[list[Any], list[Any], list[Any]]:
     """The same recorded background run as `split_background`, with its task and tool ids
-    changed so a second one can run alongside the first with no id collision (D1 fix round 1,
-    CRITICAL 1)."""
+    changed so a second one can run alongside the first with no id collision (D1)."""
     raw = (FIXTURES / "sdk" / "background.jsonl").read_text()
     raw = raw.replace("bc41naslr", "bc41other").replace(
         "toolu_01Uh7Nne3XR1T8n5tWVbhLh4", "toolu_01OTHERxxxxxxxxxxxxxxxxx"
@@ -1078,7 +1077,7 @@ async def test_two_prompts_in_a_row_each_get_their_own_closing_message(
 async def test_two_prompts_tasks_ending_together_each_get_their_own_closing_message(
     harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # D1 fix round 1 (CRITICAL 1): the CLI's one report turn opens with the end of every task
+    # D1: the CLI's one report turn opens with the end of every task
     # that finished together but renders into only the first one's reply; the second must still
     # get its own closing message, not wait forever for a report turn that was never coming for
     # it specifically.
@@ -1185,7 +1184,7 @@ async def test_closing_the_session_stops_the_lines_of_running_tasks(
 async def test_a_shutdown_during_an_active_turn_with_a_background_task_closes_silently(
     harness_for: Callable[..., Harness],
 ) -> None:
-    # D1 fix round 3 (IMPORTANT): a restart or shutdown while a turn is active, with an
+    # D1: a restart or shutdown while a turn is active, with an
     # earlier background task still running, must not post a new (still-ringing) message for
     # that active turn's own closing: `_close_reply(force=True)` runs before
     # `_stop_task_replies` has actually stopped the task, so its non-silent form would still
@@ -1206,7 +1205,7 @@ async def test_a_shutdown_during_an_active_turn_with_a_background_task_closes_si
 async def test_shutdown_with_a_deferred_closing_closes_silently(
     harness_for: Callable[..., Harness],
 ) -> None:
-    # D1 fix round 2 (I1): an idle close (like a restart or SessionGone) forces the
+    # D1: an idle close (like a restart or SessionGone) forces the
     # still-deferred closing message out at once, but it must never ring: no new message at
     # all, not even a footer-only one, and the footer shows in the body's own last update.
     first, _, _ = split_background()
@@ -2171,7 +2170,7 @@ async def test_a_stop_held_by_a_background_task_says_so_and_bang_stop_ends_it(
 async def test_a_stop_of_a_background_task_posts_no_new_message_until_it_ends(
     harness_for: Callable[..., Harness],
 ) -> None:
-    # D1 fix round 2 (I1): stopping the task never posts a new message either, even once its
+    # D1: stopping the task never posts a new message either, even once its
     # own end finally lets the closing through: its footer joins the body's own last message
     # with chat.update instead, since any new message in the thread would still ring.
     first, notice, _ = split_background()
@@ -2190,7 +2189,7 @@ async def test_a_stop_of_a_background_task_posts_no_new_message_until_it_ends(
 async def test_bang_stop_of_a_background_task_closes_silently(
     harness_for: Callable[..., Harness],
 ) -> None:
-    # D1 fix round 2 (I1): the brief's rule is closed at once and silently: no new message at
+    # D1: `!stop` closed at once and silently: no new message at
     # all, and nothing anywhere carries "Reply to:" once the stopped task's own end closes it.
     first, notice, _ = split_background()
     h = harness_for({"turns": [first]})
@@ -2511,8 +2510,8 @@ async def test_a_gone_session_is_left_out_of_sessions_of(
     assert h.manager.sessions_of(CHANNEL) == []
 
 
-# D9 fix round 1: the resume race, the routing race, the two missed re-arm points, the effort
-# edge cases and the eviction leak the reviewer found.
+# D9: the resume race, the routing race, the two missed re-arm points, the effort
+# edge cases and the eviction leak.
 
 
 async def test_ensure_connected_waits_for_the_predecessor_s_disconnect_before_resuming(
@@ -2709,7 +2708,7 @@ async def test_drain_suppresses_the_idle_close(
     assert not session.closed
 
 
-# D9 fix round 2: close() must signal done_closing even when a step inside it raises, the
+# D9: close() must signal done_closing even when a step inside it raises, the
 # predecessor chain must hold past an unconnected middle generation, submit's own awaits must
 # not be closeable under it, and a few more missed re-arm points.
 

@@ -332,7 +332,7 @@ class ReplySink:
         self._notify_kept = False  # whether the closing message still owes its notification
         self._closed_out = False  # whether close_out has run; a second call is a no-op
         self._closing_retry: asyncio.Task[None] | None = None
-        # D1 fix round 2 (I1): a silent close's footer, if any, joins the body's own last
+        # D1: a silent close's footer, if any, joins the body's own last
         # message instead of a message of its own: any new message in a thread the owner
         # started notifies, whatever it says, but an edit never does.
         self._silent_closed = False
@@ -408,7 +408,7 @@ class ReplySink:
         """Post the closing message: the footer and what still runs, once, below the body.
         With `reply_to` (the owner's question, one line) it notifies the owner; without it the
         end is silent. With `silent` the closing never becomes a message of its own either
-        (D1 fix round 2, I1): even a footer with no notification to carry would still be a NEW
+        (D1): even a footer with no notification to carry would still be a NEW
         message, and any new message in a thread the owner started notifies, whatever it says;
         an edit never does (measured 2026-09-27). The footer, if any, joins the body's own last
         message instead, through the ordinary flush path (`_render`, the limiter, retries). A
@@ -436,8 +436,8 @@ class ReplySink:
             await self._write_closing()
 
     async def resume(self) -> None:
-        """Reopen an already-finished reply so a report turn's own writes debounce again (D1
-        fix round 1), instead of `_changed` treating `_finished` as "the turn is over, write
+        """Reopen an already-finished reply so a report turn's own writes debounce again (D1),
+        instead of `_changed` treating `_finished` as "the turn is over, write
         every change at once" and turning each streamed delta into its own `chat.update`. No
         status line reappears (`_render` skips an empty one). `finish`, the report turn's own
         end, marks the reply finished again."""
@@ -545,12 +545,12 @@ class ReplySink:
             size += length
         if not final:
             status = " · ".join(filter(None, (self._status, self._running)))
-            # Empty after `resume` cleared the status for a report turn's own writes (D1 fix
-            # round 1): no status line at all, rather than an empty one.
+            # Empty after `resume` cleared the status for a report turn's own writes (D1):
+            # no status line at all, rather than an empty one.
             if status:
                 messages[-1].append(context_block(status))
         elif self._silent_closed:
-            # A silent close (D1 fix round 2, I1): the footer, if any, joins the body's own
+            # A silent close (D1): the footer, if any, joins the body's own
             # last message instead of a message of its own, through the ordinary flush below.
             messages[-1] += self._closing_blocks()
         return messages
@@ -698,7 +698,7 @@ class ReplySink:
             # After the body, so the closing message is posted below it. Only once `close_out`
             # has run: before that, nothing is known about the footer or the notification yet.
             # A silent close has none of its own: `_render` already folded it into the body
-            # above (D1 fix round 2, I1).
+            # above (D1).
             if final and self._closed_out and not self._silent_closed:
                 return await self._write_closing()
             return True

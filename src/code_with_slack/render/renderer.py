@@ -227,7 +227,7 @@ class TurnRenderer:
         `close`. With `silent` the closing never becomes a message of its own either, even to
         carry the footer alone (a stop, an error handled elsewhere, a restart or an idle close
         never rings, and a new message rings whatever it says): the footer, if any, joins the
-        body's own last message instead (D1 fix round 2, I1). A second call, silent or not, is
+        body's own last message instead (D1). A second call, silent or not, is
         a no-op."""
         self._closed_out = True
         await self._sink.close_out(self._footer, self._reply_to, silent=silent)
