@@ -391,9 +391,6 @@ def build_app(
         for the owner's Continue or Cancel, cancelled the same way by `!stop` (in this thread or
         the whole channel) or a drain. True to send the message on; False when it was not,
         either way telling the owner `Not sent.` already."""
-        if sessions.draining:
-            await notice(channel, thread_ts, texts.RESTARTING)
-            return False
         link = await thread_mrkdwn_link(other.channel_id, other.thread_ts, "Session")
         if sessions.draining:  # a restart could have started during the permalink call above
             await notice(channel, thread_ts, texts.RESTARTING)
