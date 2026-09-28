@@ -1,8 +1,8 @@
 # code-with-slack
 
 A local daemon that lets one person drive Claude Code on their own Mac from Slack. Each private
-Slack channel is bound to one working directory and holds one Claude Code session there. Nobody
-else can talk to it.
+Slack channel is bound to one working directory; each Slack thread in it is its own Claude Code
+session. Nobody else can talk to it.
 
 Status: first release. How it fits together: [docs/architecture.md](docs/architecture.md). What
 each feature is checked by: [docs/features.md](docs/features.md).
@@ -36,24 +36,28 @@ In a private channel with only you and the bot, `!guide` explains how the channe
 `!bind <path>` binds it to a directory.
 From then on:
 
-- A message is a prompt. The reply appears below it and grows as Claude works: Claude's text, a
-  line per tool call, subagent and background task, and a footer with the branch and the lines
-  changed since the last commit, the model, the effort level, the context used, the usage limits
-  with their resets, and the channel's folder.
+- A top-level message opens a new thread and starts a session there; the reply appears in that
+  thread and grows as Claude works: Claude's text, a line per tool call, subagent and background
+  task, and a footer with the branch and the lines changed since the last commit, the model, the
+  effort level, the context used, the usage limits with their resets, and the folder. A reply
+  inside a thread continues that thread's session, even days later.
 - Whatever Claude Code asks approval for arrives as **Approve** and **Deny** buttons; a question
   from Claude opens a form.
-- `!<command>` runs a Claude Code command, such as `!compact` or `!model opus`. `!help` lists the
-  commands the session offers.
-- `!status` shows the channel's directory, session and mode, then the footer's values one per line; `!stop` stops the running turn and the background tasks.
-- `!resume` lists the directory's sessions, from the terminal too, with a Resume button each;
-  `!resume <id or name>` resumes one directly.
+- `!<command>` runs a Claude Code command, such as `!compact` or `!model opus`, inside a
+  session's thread. `!help` lists the commands that session offers.
+- `!status`, typed in the channel, lists every live session with a link to its thread; inside a
+  thread it shows that session's directory and mode, then the footer's values one per line.
+  `!stop`, typed in the channel, stops every session; inside a thread it stops that one.
+- `!resume`, typed in the channel, lists the directory's sessions, from the terminal too, with a
+  Resume button each; `!resume <id or name>` or a click moves that session into a new thread.
 - Images and files attached to a message reach Claude: a JPEG, PNG, GIF or WebP image as an
   image; a text, code, PDF, JSON, XML, YAML or notebook file as a path to a copy saved in a
   private temporary folder. Any other file, and any file past a limit, stops the message, with
   the reason.
-- `!bind` lists the folders under `ALLOWED_ROOT` that Claude Code trusts, with a Bind button
-  each; `!bind <folder>` binds one directly.
-- `!bypass on` switches the channel to `bypassPermissions` until `!bypass off` or a restart.
+- `!bind`, typed in the channel, lists the folders under `ALLOWED_ROOT` that Claude Code trusts,
+  with a Bind button each; `!bind <folder>` binds one directly.
+- `!bypass on`, sent inside a session's thread, switches that session to `bypassPermissions`
+  until `!bypass off` or a restart.
 
 The full list is in [docs/setup.md](docs/setup.md#using-it).
 
@@ -62,7 +66,8 @@ The full list is in [docs/setup.md](docs/setup.md#using-it).
 The bot answers one Slack user in one workspace, and only in private channels whose members are
 that user and the bot. Every message, button and form submission is checked on its own, and a
 session starts only in a folder you have trusted in Claude Code. The tokens live in a mode-600
-file, and nothing else is stored except which directory and which session each channel uses. Whoever controls the owner's Slack account controls the machine: see
+file, and nothing else is stored except each channel's directory and, per thread, its session id,
+bypass switch and effort level. Whoever controls the owner's Slack account controls the machine: see
 [SECURITY.md](SECURITY.md) and the checklist in [docs/setup.md](docs/setup.md).
 
 ## Contributing

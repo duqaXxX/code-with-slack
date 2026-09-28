@@ -1,24 +1,29 @@
 # Architecture
 
 code-with-slack is one Python process. It holds a Slack Socket Mode connection and one Claude
-Agent SDK client per bound channel, all on one asyncio event loop.
+Agent SDK client per live thread session, across every bound channel, all on one asyncio event
+loop.
 
 ## Startup
 
 `code-with-slack` (`code_with_slack.__main__.main`) starts in this order: it loads the
 configuration, so a bad `.env` fails before anything else; takes the single-instance lock, so a
-second daemon fails before it opens a Socket Mode connection; reads `state.json`; calls `auth.test`
-for the workspace id and the bot user id; then opens the Socket Mode connection. On `SIGTERM`, which
+second daemon fails before it opens a Socket Mode connection; reads `state.json` and prunes it
+(`StateStore.prune`): a thread whose session id no longer resumes in its folder, and a
+no-session thread whose root message is more than a day old, are dropped; calls `auth.test`
+for the workspace id and the bot user id; then opens the Socket Mode connection and, once
+connected, posts the v1-to-v2 upgrade notice to each channel that still owes one
+(`__main__._post_upgrade_notices`), as a message of its own, not a reply. On `SIGTERM`, which
 `launchctl kill TERM` and `launchctl bootout` send, `SessionManager.drain` lets the turns already
 sent finish, each up to its reply's final write (footer included), and the background tasks with the turns that report them (a task whose end came without
 its notification is waited for `sessions.INJECTED_TURN_WAIT`, since the CLI can suppress it), and
 sends no other: a new prompt gets `texts.RESTARTING`, a queued or taken turn ends with
 `texts.ENDED_RESTARTING`. Approvals and questions stay open: the Socket Mode connection closes only
-after the drain. A channel left with only background tasks gets `texts.RESTART_WAITS` once, naming
+after the drain. A thread left with only background tasks gets `texts.RESTART_WAITS` once, naming
 them by the footer's counts, since the daemon cannot tell whether a task (a dev server, a watcher)
 ever ends; `!stop` ends them with `ClaudeSDKClient.stop_task`. Claude Code starts no turn to report a
-task stopped this way (measured on 2.1.283), so neither the drain nor the channel's next prompt waits
-`sessions.INJECTED_TURN_WAIT` for one. When no channel is working, after `__main__.DRAIN_LIMIT_SECONDS`, or on a second
+task stopped this way (measured on 2.1.283), so neither the drain nor the thread's next prompt waits
+`sessions.INJECTED_TURN_WAIT` for one. When no session is working, after `__main__.DRAIN_LIMIT_SECONDS`, or on a second
 signal, the daemon closes the connection, then every session. After `bootout` launchd kills the
 daemon once the LaunchAgent's `ExitTimeOut` passes (60 seconds at most), whatever the drain is
 doing. `SIGINT` skips the drain: from a terminal it also reaches the Claude Code processes, which
@@ -34,10 +39,14 @@ refuses tokens of the wrong kind. [setup.md](setup.md) lists the variables.
 
 ## State and the single-instance lock
 
-`code_with_slack.state.StateStore` keeps, for each bound channel, its directory, its Claude
-Code session id and its bypass switch, in `~/.config/code-with-slack/state.json`. Every change is written to a
-temporary file beside it, synced, and renamed over it, so a crash leaves either the old file or
-the new one. A file that cannot be read stops the daemon instead of being replaced.
+`code_with_slack.state.StateStore` keeps, for each bound channel, its directory and, for each of
+its threads, the folder it was opened in, its Claude Code session id, its bypass switch and the
+effort level set with `/effort`, in `~/.config/code-with-slack/state.json` (version 2). Every
+change is written to a temporary file beside it, synced, and renamed over it, so a crash leaves
+either the old file or the new one. A file that cannot be read stops the daemon instead of being
+replaced. A version 1 file (one session id and bypass switch per channel, no threads) is migrated
+on load: each channel keeps its directory, gets an empty thread map and a pending upgrade notice;
+the old session id and bypass switch, which belonged to the channel itself, are dropped.
 
 `code_with_slack.lock.single_instance` holds an exclusive `flock` on the configuration directory
 itself. A second process fails to start. The kernel releases the lock when the holder exits, so
@@ -80,8 +89,9 @@ mode 700, or nothing is written there; at each start the files older than 3 days
 conversation resumed after a restart still finds its files. A refused file or a failed download
 sends nothing and tells the owner which file and why. Prompts, messages with files and Claude Code
 commands enter the queue in the order they were sent, although downloads take a while. A message
-that waited for its turn is sent to the channel's session as it is then; if a `!bind` moved the
-channel to another folder meanwhile, nothing is sent and the owner is told.
+that waited on its files is submitted to the thread's session as it is then; if that session
+closed meanwhile (D9's idle close, most likely), the submit is retried once against a freshly
+looked-up session for the same thread.
 
 ## Rendering
 
@@ -113,8 +123,8 @@ second `TaskStartedMessage`.
 
 ## Writing to Slack
 
-`code_with_slack.render.sinks.ReplySink` writes each reply as one message in the channel's main
-window, below the message that asked for it. The message is rewritten with `chat.update` at most
+`code_with_slack.render.sinks.ReplySink` writes each reply as one message inside the session's
+own Slack thread, below the message that asked for it. The message is rewritten with `chat.update` at most
 once a second (Slack allows `chat.update` 50 or more times a minute), in the order things happen:
 text as Claude writes it, and the tool calls where they happen. Claude's text is a `markdown`
 block; each run of tool calls between two pieces of text is a `context` block (small, grey text,
@@ -147,26 +157,27 @@ the counts.
 The reply is posted as soon as the owner's message is queued, showing only a status line:
 `Claude is writing…`, or `Waiting for the previous reply…` behind another turn. While the turn
 runs the status stays last; when it ends, the status goes and a closing message is posted below
-the reply, holding a divider and the footer (`ReplySink._write_closing`). Only the channel's
-latest reply shows the footer: a new reply takes it over (`ReplySink.set_latest`), so it stays at
-the bottom of the channel as the terminal's status line, and a closing message left empty is
-deleted. A reply longer than about 11,000 characters continues in a new message.
+the reply, in the same thread, holding a divider and the footer (`ReplySink._write_closing`). Only
+the thread's latest reply shows the footer: a new reply takes it over (`ReplySink.set_latest`), so
+it stays at the bottom of the thread as the terminal's status line, and a closing message left
+with nothing to show (no footer, and no notification owed) is deleted. A reply longer than about
+11,000 characters continues in a new message.
 
-The closing message is also the reply's notification. With the channel on "Just mentions", a
-bot message rings when it is new and its blocks carry `<!channel>`; a `chat.update` never rings,
-and a mention in `text` alone mostly does not (measured on iOS, 2026-09-27, ten probe messages;
-Slack's reference is silent on all three). So every write while Claude works is silent, and the
-closing message ends its footer line with `texts.MENTION`, its `text` reading
-`texts.REPLY_TO`, when `ReplySink.finish` gets `reply_to`: `ChannelSession._finish` passes the owner's message (`sessions.asked`) for an
-owner turn that was not interrupted, `ChannelSession._fail` for an error (a Claude Code process
-that exits rings once, on the first reply it ends, `ChannelSession._abandon`), never for a stop, a
-restart or a turn Claude Code started for a background task. A ringing reply that ends below a
-newer one keeps its closing message, the mention alone.
-An approval request or a question ends with a context block holding `texts.MENTION`.
+The closing message is also the reply's notification: Slack notifies the owner on any new message
+in a thread it started, mention or none, and a `chat.update` rewrite never notifies (measured on
+iOS, 2026-09-28, Slack free plan, slack-sdk 3.44.1; Slack's reference is silent on both). So every
+write while Claude works is silent, and the closing message's `text` reads `texts.REPLY_TO` when
+`ReplySink.finish` gets `reply_to`, which makes it post even with no footer to show, as a bare
+line holding a zero-width space: `ThreadSession._finish` passes the owner's message
+(`sessions.asked`) for an owner turn that was not interrupted, `ThreadSession._fail` for an error
+(a Claude Code process that exits rings once, on the first reply it ends, `ThreadSession._abandon`),
+never for a stop, a restart, an idle close or a turn Claude Code started for a background task. A
+reply that already owes this notification when a newer reply in the same thread supersedes it
+keeps owing it, even once the newer reply takes the footer over.
 
 Slack's native streaming API (`chat.startStream`) is not used: in an ordinary channel it works
-only inside a thread, and replies belong in the main window. A write Slack refuses, or cannot
-receive because the network is down, is retried with the whole reply at the next rewrite; it never
+only inside a thread, `chat.startStream` without `thread_ts` answering `invalid_thread_ts`
+(measured 2026-09-23). A write Slack refuses, or cannot receive because the network is down, is retried with the whole reply at the next rewrite; it never
 stops the Claude Code session. Every message the daemon posts turns link and media previews off
 (`unfurl_links`, `unfurl_media`), so a link in Claude's text is never fetched by Slack on its
 own. The final rewrite has no next one: when Slack refuses its content
@@ -195,29 +206,30 @@ otherwise the question gets an error (`response_action: errors`); it reads `Subm
 What was filled travels in the view's `private_metadata` (`approvals.Draft`, under Slack's
 3,000 characters) from one question to the next.
 The picked labels, with the text typed under Other as the answer itself, go back as the tool's
-answers. The modal carries no channel: each click in it is checked against the owner, the
-workspace, and the channel its request was posted in. Each request has a random id that only its buttons carry; a click resolves it
-once, only from the channel it was posted in, and only after the identity and channel guards.
-Once decided, the request message is deleted: the tool's line in the reply records the call. An
-answered question is kept instead, rewritten with no buttons as the terminal keeps it
-(`approvals.answered_blocks`: `User answered Claude's questions:`, then `⎿ · question → answer`,
-cut at Slack's 3,000 characters); if Slack refuses that rewrite, the request is deleted, so no
-button is left that no longer works.
-`!stop` denies every request still pending in the channel and deletes its message. A request
-Slack does not accept is denied at once, with a message telling Claude Code that it could not be
-shown, and the tool's line records the denial.
+answers. The modal carries no channel or thread: each click in it is checked against the owner,
+the workspace, and the channel and thread its request was posted in (`approvals.Draft.thread_ts`,
+alongside its `private_metadata`). Each request has a random id that only its buttons carry; a
+click resolves it once, only from the channel and thread it was posted in, and only after the
+identity and channel guards. Once decided, the request message is deleted: the tool's line in the
+reply records the call. An answered question is kept instead, rewritten with no buttons as the
+terminal keeps it (`approvals.answered_blocks`: `User answered Claude's questions:`, then
+`⎿ · question → answer`, cut at Slack's 3,000 characters); if Slack refuses that rewrite, the
+request is deleted, so no button is left that no longer works.
+`!stop` denies every request still pending in the session's own thread and deletes its message. A
+request Slack does not accept is denied at once, with a message telling Claude Code that it could
+not be shown, and the tool's line records the denial.
 
 ## Footer
 
 Every reply ends with one context line (`footer.format_footer`): `⚡ bypass` when bypass is on,
-the model from the SDK's `get_context_usage()`, the effort level, the name of the channel's
-directory, the git branch and the uncommitted changes of the folder the session works in, the
-session's tokens from the turn's `ResultMessage.model_usage`, the context percentage from
+the model from the SDK's `get_context_usage()`, the effort level, the name of the folder this
+thread was opened in, the git branch and the uncommitted changes of the folder the session works
+in, the session's tokens from the turn's `ResultMessage.model_usage`, the context percentage from
 `get_context_usage()`, and the 5-hour and weekly limits with the time to each reset. The folder the session works in is
 the `cwd` of the latest hook input, which follows a `cd` and a worktree
-(`ChannelSession.working_directory`): the same `Stop` hook, and a `PostToolUse` hook after every
+(`ThreadSession.working_directory`): the same `Stop` hook, and a `PostToolUse` hook after every
 tool, so a turn stopped or failed before its `Stop` still moves it. Until a hook reports it, and
-again after the client restarts, it is the channel's directory. The changes are the lines
+again after the client restarts, it is the thread's own folder. The changes are the lines
 inserted and deleted since the last commit, staged and unstaged, untracked files not counted, as
 ccstatusline's git-changes counts them. They come from plumbing commands (`git diff-files
 --shortstat` and `git diff-index --cached --shortstat HEAD`, the empty tree before a first
@@ -233,11 +245,12 @@ long-lived client and cached for five minutes; a rate-limit event from the SDK i
 cache. The limit fields exist only with a claude.ai subscription. A field that cannot be read is
 left out.
 
-`!status` lists the same values one per line (`Model: ...`, `Context: ...`), read by the same
-`ChannelSession._footer_data` and written from the same list, `footer.footer_fields`, as the
-footer writes them, then the running tasks; bypass and the folder are left out, since its Mode and Directory
-lines show them. When the session works in another folder than the channel's, a `Working in:`
-line names it before the values. It starts the channel's client when none is running, since the model and the
+`!status`, sent inside a session's thread, lists the same values one per line (`Model: ...`,
+`Context: ...`), read by the same `ThreadSession._footer_data` and written from the same list,
+`footer.footer_fields`, as the footer writes them, then the running tasks; bypass and the folder
+are left out, since its Mode and Directory lines show them. When the session works in another
+folder than the one it was opened in, a `Working in:` line names it before the values. It starts
+the thread's client when none is running, since the model and the
 context come from it (`get_context_usage()` answers before a session's first turn and during a
 turn: measured on claude-agent-sdk 0.2.158, bundled CLI 2.1.280, 2026-09-25). The session tokens
 are those of the client's last result, left out until its first turn and after a result that
@@ -249,7 +262,14 @@ for another reason, it ends with the error line a prompt would get.
 
 ## Sessions
 
-`code_with_slack.sessions.SessionManager` keeps one `ChannelSession` per bound channel.
+`code_with_slack.sessions.SessionManager` keeps one `ThreadSession` per open Slack thread, across
+every bound channel. A top-level message opens one in the channel's current folder
+(`SessionManager.open`); a reply inside a thread hands back its existing one, rebuilding it first
+if a restart, an idle close or a gone resume dropped it (`SessionManager.get`); a Resume click or
+`!resume <id or title>` opens one already set to a chosen session id (`SessionManager.resume`).
+Each thread keeps the folder it was opened in for as long as it exists: `!bind` changes only
+where the *next* thread starts, and refuses while any of the channel's threads is not idle
+(`SessionManager.bind`).
 
 - The Claude Agent SDK client is created on first use, and only in a folder the owner has
   trusted in Claude Code. An SDK session never shows Claude Code's trust dialog and counts as
@@ -263,24 +283,27 @@ for another reason, it ends with the error line a prompt would get.
   once and accept the dialog. A `!bind` runs the same checks (`sessions.check_directory`: missing,
   unreadable, untrusted): the channel is bound, and the answer gives the reason instead of
   promising a session.
-- The client has the channel's directory as its
-  working directory, `resume` set to the stored session id, the owner's own settings
+- The client has the thread's own directory as its
+  working directory, `resume` set to the thread's stored session id and effort level
+  (`sessions.client_options`), the owner's own settings
   (`setting_sources` user, project and local), streaming of partial messages, the approval
   callback, and `--allow-dangerously-skip-permissions`, which makes `!bypass on` possible
   without turning it on.
 - After connecting, `get_server_info()` gives the commands the session offers (for `!help` and
   `!`) and the permission mode that `!bypass off` returns to, or `default` when the folder's own
   settings start it in `bypassPermissions`. The footer shows `⚡ bypass` in either case.
-- If the stored session cannot be resumed (its transcript was deleted), the session id is
-  cleared, a new session starts, and the reply opens with a line saying so. If the channel's
-  directory no longer exists, nothing starts and the reply asks to bind the channel again. If
-  macOS privacy protection denies the daemon the directory (a launchd service does not inherit
-  Terminal's access to `~/Documents`), nothing starts and the reply says how to grant access.
+- If the thread's stored session cannot be resumed (its transcript was deleted), its entry is
+  dropped, the thread ends (`SessionGone`), and its reply, and every reply still waiting in it,
+  says so (`texts.SESSION_GONE`); the next message in that thread starts a session there again,
+  as a fresh top-level message would. If the thread's directory no longer exists, nothing starts
+  and the reply says so (`texts.DIRECTORY_MISSING`). If macOS privacy protection denies the
+  daemon the directory (a launchd service does not inherit Terminal's access to `~/Documents`),
+  nothing starts and the reply says how to grant access.
 - If the Claude Code process exits or its stream fails, the open reply ends with an error line,
   every waiting message is told, and the next message starts a new process. A Slack failure
   while a reply is written never stops the session or the running turn.
-- Messages are queued and run one at a time; each gets its own reply in the channel.
-  `!stop` interrupts the running turn, denies its pending approvals and stops the channel's
+- Messages are queued and run one at a time; each gets its own reply in the thread.
+  `!stop` interrupts the running turn, denies its pending approvals and stops the thread's
   background tasks (`ClaudeSDKClient.stop_task`).
 - One reader task follows the SDK's message stream for the life of the client. A turn starts
   at its first text or tool message, or earlier at a `TaskStartedMessage` with no
@@ -294,7 +317,7 @@ for another reason, it ends with the error line a prompt would get.
 - A background task that finishes between turns sends its notification while the session is
   idle, then Claude Code starts a turn of its own to report it. That turn gets a reply of its own
   that opens with one line per task it reports, as the terminal prints it
-  (`ChannelSession._ended_line`): a command's notification `summary`, which already reads
+  (`ThreadSession._ended_line`): a command's notification `summary`, which already reads
   `Background command "..." completed (exit code 0)`, or `Agent "<description>" finished` built
   from the task's `TaskStartedMessage`, since an agent's `summary` is its result; plus
   `usage.duration_ms` when the task reports it (`sessions.TASK_KINDS`, `SUMMARY_IS_END_LINE`).
@@ -310,30 +333,48 @@ for another reason, it ends with the error line a prompt would get.
   another reply. A background subagent's own calls (`parent_tool_use_id` pointing at a line of
   an ended turn) go under its line the same way and never open a reply. A notification for such
   a task still makes the next queued message wait for the turn Claude Code starts to report it.
-- The channel's latest reply counts what is still running at the end of its footer, or of its
+- The thread's latest reply counts what is still running at the end of its footer, or of its
   status line while Claude writes: `⏳ 1 shell · 1 agent`, by each task's `task_type`
   (`sessions.TASK_KINDS`; a type not listed counts as a task). A new reply takes the counts
   over and the previous one drops them; they disappear when nothing runs.
-- When the Claude Code process goes away (shutdown, rebinding, a process that exits), its tasks
-  go with it: their lines close with `Stopped` and the list empties. The map lives in memory only.
-- Shutting down, once the drain has ended, or binding the channel to another directory closes the
-  session: every reply still waiting (running, sent or queued) ends with `This reply ended before an answer:` and the
-  reason. A bind stores the new directory before the old session closes, so a message that
-  arrives meanwhile opens the new session. A closing session waits for a client that a daemon
-  word (`!help`, `!bypass`, `!status`) is still starting, then closes it, and starts no other:
-  the word gets `SessionClosed`, which tells the owner to send it again, and `!bypass` stores
-  nothing.
-- Logs carry channel ids and exception type names, never prompt or reply text.
+- When the Claude Code process goes away (shutdown, an idle close, a process that exits), its
+  tasks go with it: their lines close with `Stopped` and the list empties. The map lives in
+  memory only.
+- A thread's process closes on its own (D9) after `sessions.IDLE_CLOSE_SECONDS` (an hour) with
+  nothing running, sent, taken or queued, and no approval, question or background task pending
+  (`ThreadSession.idle`); the next message rebuilds the `ThreadSession` and reconnects it with
+  `resume` set to the stored session id, silently, as any other reconnect does. The timer
+  (`ThreadSession._idle_timer_check`) is armed or cancelled wherever that state could change, and
+  always re-armed synchronously before a lookup is handed to a caller (`SessionManager.get`'s
+  `touch()`), so it cannot fire in the gap between a lookup and the caller's own next `await` (a
+  download, a slow Slack call).
+- A stored effort level (`/effort`) does not survive Claude Code's own `--resume` by itself, unlike
+  the model (`/model`), so the daemon stores it per thread and passes it back through
+  `ClaudeAgentOptions(effort=...)` on every connect (`sessions.client_options`): it is read from
+  `state.json` before each connect and reset to unknown until Claude Code reports a level again.
+  `ThreadSession._finish` parses the level from a `!effort` turn's own output
+  (`footer.effort_change`) and stores it; `"auto"`, the CLI's word for the default, is stored as
+  unset.
+- Shutting down, once the drain has ended, closes every session. A thread's own session also
+  closes on its own: from D9's idle close, or at once when its stored session id can no longer be
+  resumed (`SessionGone`). Either way, every reply still waiting in it (running, sent or queued)
+  ends with `This reply ended before an answer:` and the reason. A closing session waits for a
+  client that a daemon word (`!help`, `!bypass`, `!status`) is still starting, then closes it, and
+  starts no other: the word gets `SessionClosed`, which tells the owner to send it again, and
+  `!bypass` stores nothing. A session rebuilt to replace one still closing (D9's idle close, or a
+  fresh lookup after a gone resume) waits for the old one to finish tearing down before its own
+  first connect: the SDK's transport needs real time, up to about 20 seconds, to flush the old
+  process after EOF, and resuming the same session id any sooner would race it.
+- Logs carry channel and thread ids and exception type names, never prompt or reply text.
 
-Bypass is the channel's `ChannelState.bypass` in `state.json`, which `ChannelSession.bypass`
-reads: a restart of the daemon, whatever its cause, keeps it, and the next Claude Code process
-gets it from `ensure_connected`. Claude Code's own `--resume` never restores `bypassPermissions`
-(sessions reference, read 2026-09-26); here the daemon restarts on its own (an update, launchd
-after a crash), so the switch stays with the owner's `!bypass off`. A restarted daemon starts no
-Claude Code process until a message arrives. At the start of `SessionManager.drain`, every channel
-with bypass on gets `texts.BYPASS_RESTARTING`. `!resume` keeps bypass, as the terminal's `/resume`
-keeps the current session's mode; `!bind` starts a new session in another folder without it,
-and its answer says so when bypass was on.
+Bypass is a thread's own `ThreadState.bypass` in `state.json`, which `ThreadSession.bypass`
+reads: an idle close and a restart of the daemon, whatever its cause, keep it, and the next Claude
+Code process in that thread gets it back from `ensure_connected`, through `set_permission_mode`,
+since Claude Code's own `--resume` never restores `bypassPermissions` (sessions reference, read
+2026-09-26). At the start of `SessionManager.drain`, every thread with bypass on gets
+`texts.BYPASS_RESTARTING`. A session `!resume` opens starts in its new thread with bypass off and
+no `/effort` level set, whatever the session had before: both belong to the thread, not to the
+Claude Code session id, and `!resume` never touches or waits on any other thread.
 
 ## Slack handlers
 
@@ -344,31 +385,58 @@ failure after the checks reaches the owner as an ephemeral error line.
 A link Slack made from a typed address (`<url|label>`, `<url>`) reaches Claude Code as typed; a
 link the owner named reaches it as `label (url)`, so the address is not lost; a mention stays in Slack's form (`<@U…>`), since naming the user would need a
 scope the app does not have.
-`code_with_slack.commands.parse_bang` reads a message starting with `!`: `help`, `bind`,
-`bypass`, `status`, `stop`, `resume` and `guide` are the daemon's own words, answered with a message in the
-channel (`!help`, `!guide` and `!bind` also work before the channel is bound); any other `!name args` runs
-that Claude Code command when the session offers `name`, and is sent as a normal prompt
-otherwise. `!resume` stands in for Claude Code's interactive `/resume`, which an SDK session
+
+A `message` event is routed by whether it is a reply in an existing thread: `slack_app.handle_message`
+reads `sessions.get(channel, thread_ts)` for a reply (`None` for a thread that holds no session),
+and always `None` for a top-level one (`thread_ts == ts`), even in a channel that is bound.
+`code_with_slack.commands.parse_bang` reads a message starting with `!` (none for one
+carrying files, which is always a prompt): `help`, `guide`, `bind`, `bypass`, `status`, `stop`
+and `resume` are the daemon's own words (`commands.Word`), dispatched in `handle_word` by
+whether the lookup above found a session: `!bind` and `!resume` work only at the top level,
+refused inside a thread (`texts.WORD_IN_THREAD`); `!bypass` only inside a thread, refused at the
+top level (`texts.BYPASS_TOP_LEVEL`); `!guide` answers the same either way; `!help`, `!status`
+and `!stop` answer both, but with different content: `!help` lists only the daemon's words at the
+top level and a session's own commands too inside its thread; `!status` lists the channel's live
+sessions at the top level and one session's own values inside its thread; `!stop` stops every
+session of the channel at the top level and one session inside its thread. `!clear` is not a word of its own: it is an
+ordinary `Passthrough` that `slack_app.is_clear` catches only inside a thread, refused there
+(`texts.CLEAR_IN_THREAD`, one thread is one session); at the top level it opens a new session
+like any other message, and reaches Claude Code as `/clear` if the freshly connected session
+offers that command. Any other `!name args` is a `Passthrough` too: sent as `/name args` when the
+session (freshly opened, at the top level) offers `name`, as the text itself otherwise. A
+top-level message with no existing thread opens a new session (`SessionManager.open`); a message
+in a thread that holds no session and is not a daemon word gets `texts.NOT_A_SESSION`, with
+nowhere to send it.
+
+`!resume` stands in for Claude Code's interactive `/resume`, which an SDK session
 does not offer: `code_with_slack.resume` lists the directory's sessions from the SDK's
 `list_sessions` with the columns of the terminal's picker (name or title, time since the last
 activity, git branch, size), the first 8 characters of the session id and a Resume button each, or matches
 `!resume <id or name>`. The terminal's picker shows no id; the list shows its start because
-`!resume` takes a full id or any start of one at least 8 characters long (`resume.ID_SHOWN`).
+`!resume` takes a full id or any start of one at least 8 characters long (`resume.ID_SHOWN`). The
+list is posted in the thread of the `!resume` message itself, and a Resume click or a typed
+`!resume <id or name>` (`slack_app.resume_into_new_thread`) opens the chosen session in that same
+thread (`sessions.resume`), with a fresh thread entry: bypass off and no `/effort` level, whatever
+the session had before. It is refused, with no `await` between the check and the `resume` call it
+guards so nothing can change in between, when that thread already holds a session
+(`texts.RESUME_HELD`: a resume is never a swap) or the channel was bound to another folder while
+the chosen session was read from the old one (`texts.RESUME_GONE`); it never waits on, or
+touches, any other thread of the channel.
 
-The daemon's notices (the answer to `!bind`, `!bypass` and `!stop`, a resume that did not
-happen, a refused attachment, a restart, and the ephemeral errors) are a context block, small
-and grey as the footer, so they read apart from Claude's replies: `slack_app.build_app`'s
-`notice`, `tell_owner`, and `ChannelSession._post`. The same holds for the lines of the `!bind`
-and `!resume` lists; their rows keep a section, since a context block holds no button. Their
-text is mrkdwn, and what comes from outside (a folder, a file name, a typed target) is escaped
-with `render.escape.mrkdwn_escape`. `!help`, `!guide`, `!status` and the answer to a resume stay
-a markdown block at full size: the first three are read, and a resumed session's title keeps
-every character inside its bold only there, since mrkdwn has no escape for `*`.
+The daemon's notices (the answer to `!bind`, `!bypass` and `!stop`, a word used in the wrong
+place, a resume that did not happen or is refused, a refused attachment, a restart, and the
+ephemeral errors) are a context block, small and grey as the footer, so they read apart from
+Claude's replies: `slack_app.build_app`'s `notice`, `tell_owner`, and `ThreadSession._post`. The
+same holds for the lines of the `!bind` and `!resume` lists; their rows keep a section, since a
+context block holds no button. Their text is mrkdwn, and what comes from outside (a folder, a
+file name, a typed target) is escaped with `render.escape.mrkdwn_escape`. `!help`, `!guide`,
+`!status` and the answer to a resume stay a markdown block at full size: the first three are
+read, and a resumed session's title keeps every character inside its bold only there, since
+mrkdwn has no escape for `*`.
 A shorter target is read only as a title.
 The list holds the directory's own sessions, not other worktrees', as the terminal's picker
-starts. Resuming stores the session id for the channel and closes the channel's client, only
-when no turn or background task is running or waiting; the next message starts Claude Code with `resume` set to it. A Resume click is
-checked like any other button, and the session must still be one of the directory's.
+starts. A Resume click is checked like any other button, and the session must still be one of
+the directory's.
 `!bind` alone lists, through `code_with_slack.folders`, the folders where a session can start:
 `ALLOWED_ROOT`, then its folders, then theirs, skipping hidden folders and symlinks and never
 descending into a git repository (a `.git` directory or file). A folder is kept when
@@ -377,10 +445,19 @@ the 20 rows shown is found, so the higher levels fill the rows, which are then s
 order. The trust record is parsed again only
 when its mtime or size changes. A Bind click is checked like any other button, its folder goes
 through the same `resolve_directory` check as a typed `!bind <folder>`, a click on the channel's
-own folder changes nothing, and a click while work is in flight is refused, as a Resume click is.
+own folder changes nothing, and a click while any of the channel's threads is not idle is
+refused, as a typed `!bind` is.
 The `!resume` list reads the last message of a session's transcript only while that session can
-still be among the 20 shown: a file's mtime bounds its last message from above. Resuming the
-channel's own session changes nothing, and a resume whose listing overlapped a `!bind` is refused.
-`commands.help_text` builds `!help` from `get_server_info()["commands"]` at the time
-of asking, keeping only the lines that contain the text after `!help` when there is one, so a command a new Claude Code release adds needs no change here. Bolt's per-request authorization returns the
+still be among the 20 shown: a file's mtime bounds its last message from above.
+Top-level `!status` (`slack_app.channel_status`) lists the channel's directory, then one line per
+live session of the channel, each with a permalink to its thread (`slack_app.thread_link`), busy,
+waiting for the owner or idle, its running tasks, its bypass and its folder when it differs from
+the channel's; inside a thread `!status` is that session's own (`ThreadSession.status`, see
+Footer above). Top-level `!stop` (`SessionManager.stop_channel`) and `!bind`'s busy check
+(`SessionManager.sessions_of`) both read the channel's live sessions the same way.
+`commands.help_text` lists the daemon's own words, then, only when it is called with a session's
+commands (never at the top level, where a word never has one), those from
+`get_server_info()["commands"]` at the time of asking, keeping only the lines that contain the
+text after `!help` when there is one, so a command a new Claude Code release adds needs no change
+here. Bolt's per-request authorization returns the
 identity `auth.test` gave at startup, so no request costs an extra API call.

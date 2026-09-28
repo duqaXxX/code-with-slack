@@ -78,10 +78,11 @@ In Slack, open your profile, choose the **⋮** button, then **Copy member ID** 
    so the channels sort together, for example `cc-myproject`. Custom sidebar sections would group
    them better, but Slack offers those on paid plans only.
 2. In the channel, run `/invite @code-with-slack`.
-3. Open the channel's notification settings and choose **Just mentions**, with `@channel`
-   mentions not ignored. The bot writes `@channel` only at the end of a complete reply's footer,
-   in an approval request and in a question, so with this setting those ring and nothing else does.
-   With **All new posts**, every message the bot posts rings.
+3. Open the channel's notification settings. A reply, an approval request and a question post
+   inside their own Slack thread, and Slack notifies you on a new message in a thread you started,
+   whatever this setting is. It governs only the bot's top-level messages (the answer to `!bind`,
+   `!status`, `!resume`'s own list, the upgrade notice): with **Just mentions** those stay silent,
+   since the bot writes no `@channel` mention anywhere; with **All new posts** they ring too.
 
 The bot sees private channels it was invited to, and nothing else.
 
@@ -92,12 +93,12 @@ code-with-slack keeps its files in `~/.config/code-with-slack/`:
 | File | Written by | Holds |
 |---|---|---|
 | `.env` | you | the tokens and the settings below |
-| `state.json` | code-with-slack | for each channel, its directory, its Claude Code session id and whether bypass is on |
+| `state.json` | code-with-slack | for each channel, its directory; for each of its threads, the folder it was opened in, its Claude Code session id, whether bypass is on and the effort level set with `/effort` |
 
 `state.json` looks like this; you never need to edit it:
 
 ```json
-{"version": 1, "channels": {"C0123456789": {"directory": "/home/dev/code/project", "session_id": "...", "bypass": false}}}
+{"version": 2, "channels": {"C0123456789": {"directory": "/home/dev/code/project", "notice_pending": false, "threads": {"1700000000.000100": {"directory": "/home/dev/code/project", "session_id": "...", "bypass": false, "effort": null}}}}}
 ```
 
 Create the directory and the file, readable by you only. code-with-slack refuses to start when
@@ -272,56 +273,80 @@ The bot answers one person, and the rest of this list protects what that person 
 
 ## Using it
 
-| In Slack | What it does |
-|---|---|
-| `!guide` | Explains in a few lines how to use the channel: binding, prompts, commands, approvals, sessions, bypass |
-| a message | Sends a prompt to the channel's session; the reply appears below it in the channel and grows as Claude works |
-| a message with files | Claude sees a JPEG, PNG, GIF or WebP image (up to 7.5 MB and 8000x8000 px; at most 5 images and 15 MB of images per message) as an image. Any other image type (SVG, HEIC, TIFF...) is refused. A text, source code, PDF, JSON, XML, YAML or Jupyter notebook file, up to 100 MB, reaches Claude as the path of a copy in `$TMPDIR/code-with-slack/`, kept 3 days; any other file (archives, Office documents, binaries) is refused. A file past a limit, or one that fails to download, stops the whole message, and the reply says which file and why |
-| `!help [text]` | Lists code-with-slack's own words and every command the channel's session offers now; with a text, only the lines whose name or description contains it, for example `!help model` |
-| `!bind` | Lists `ALLOWED_ROOT` itself (shown as `.`) and the folders up to two levels below it, never inside a git repository, that Claude Code trusts, with a **Bind** button each; the channel's own folder is marked when it is listed. At most 20 are shown, in path order; when there are more, the higher levels fill the list first. A click never ends a running turn: it is refused until the channel is idle |
-| `!bind <folder>` | Binds this channel to a folder under `ALLOWED_ROOT`, given relative to it (`!bind my-project`); an absolute path inside it works too. A new channel does nothing else until bound |
-| `!<command> [args]` | Runs a Claude Code command, for example `!compact` or `!model opus` |
-| `!bypass on` / `off` | Switches the channel's session to `bypassPermissions` and back. It is kept in `state.json`: `!resume` and a restart of code-with-slack keep it, `!bind` turns it off. A restart started with `SIGTERM` says first, in every channel where it is on, that it stays on |
-| `!status` | Shows the channel's directory, session and mode, the folder the session works in when it moved elsewhere, then the footer's values one per line |
-| `!stop` | Stops the turn that is running and the channel's background tasks, and denies pending approvals |
-| `!resume` | Lists the twenty newest sessions of the channel's directory (not of other worktrees), terminal and Slack alike, each with the first 8 characters of its session id and a **Resume** button; the channel's own is marked `current` |
-| `!resume <id or name>` | Resumes that session directly; the id may be its first 8 characters, as the list shows them, or any longer start; the name is the session's title, set with `/rename` or generated by Claude Code, and must match one session |
-| a question from Claude | Appears as one line with **Answer** and **Skip**; Answer opens a form with one question at a time, the options (one or several) and an **Other** field; **Next** moves on once the question has an answer, **Submit** on the last |
+A top-level message in a bound channel opens a new Slack thread and starts a session there; a
+reply inside that thread continues the same session, even days later. Each thread keeps the
+folder it was opened in: `!bind` only changes where the *next* thread starts. A thread's Claude
+Code process closes on its own after an hour with nothing to do; the next message sent to it
+resumes the session, as `claude --resume <id>` would.
+
+Upgrading from an earlier version that held one session per channel: the channel keeps its
+directory, loses its old session pointer and bypass switch, and gets this message once, posted
+top-level, not as a reply:
+
+> code-with-slack now runs one Claude Code session per thread. Send a new message in the channel
+> to start a session; reply in its thread to continue it. The session this channel had is still
+> in the folder: !resume brings it into a thread. Bypass is now set per session: send !bypass on
+> inside a thread.
+
+### Commands
+
+| Word | At the top level | Inside a session's thread |
+|---|---|---|
+| `!guide` | Explains in a few lines how code-with-slack works | Same |
+| `!bind` | Lists `ALLOWED_ROOT` itself (shown as `.`) and the folders up to two levels below it, never inside a git repository, that Claude Code trusts, with a **Bind** button each; the channel's own folder is marked when it is listed. At most 20 are shown, in path order; when there are more, the higher levels fill the list first. A click never ends a running turn: it is refused until every session of the channel is idle | Refused: `!bind works in the channel, not inside a thread.` |
+| `!bind <folder>` | Binds the channel to a folder under `ALLOWED_ROOT`, given relative to it (`!bind my-project`); an absolute path inside it works too. A new channel does nothing else until bound | Same refusal as above |
+| `!bypass on` / `off` | Refused: `Bypass belongs to one session: send !bypass on inside its thread.` | Switches that session to `bypassPermissions` and back, kept in `state.json` per thread: an idle close and a restart of code-with-slack keep it, `!resume` starts a new thread with it off |
+| `!status` | The channel's directory, then every live session of it, each linked to its thread, busy, waiting or idle, its bypass and running tasks, and its folder when it moved elsewhere | That session's directory, session id and mode, the folder it works in when it moved elsewhere, then the footer's values one per line |
+| `!stop` | Stops every running session of the channel and its background tasks, and denies its pending approvals | Stops that session the same way |
+| `!help [text]` | Lists code-with-slack's own words; Claude Code's own commands are listed inside a session's thread | Lists code-with-slack's own words and every command that session offers now; with a text, only the lines whose name or description contains it, for example `!help model` |
+| `!resume` | Lists the twenty newest sessions of the channel's directory (not of other worktrees), terminal and Slack alike, in its own thread, each with the first 8 characters of its session id and a **Resume** button | Refused: `!resume works in the channel, not inside a thread.` |
+| `!resume <id or name>` | A Resume click, or the id (its first 8 characters, as the list shows them, or any longer start) or the name (set with `/rename` or generated by Claude Code, and must match one session), opens that session in this thread, with bypass off and no `/effort` level set, whatever it had before; it never touches or waits on any other thread | Same refusal as above |
+| `!clear` | Opens a new session (harmless: nothing to clear yet) | Refused: `One thread is one session: send a new message in the channel to start a new one.` |
+| any other `!name [args]` | Opens a new session and runs `/name args` there if it offers that command, else sends the text as written | Runs `/name args` in that session if it offers the command, else sends the text as written |
+| a message, or one with files | Opens a new session; the reply appears in the thread and grows as Claude works | Continues that session |
+| a question from Claude | Appears as one line with **Answer** and **Skip**; Answer opens a form with one question at a time, the options (one or several) and an **Other** field; **Next** moves on once the question has an answer, **Submit** on the last | Same |
 
 Slack does not pass a Claude Code command typed with its own slash: `/compact` alone makes Slack
 answer that it is not a valid command. Type `!compact`. A `!word` that is not a command the
 session offers is sent as a normal prompt, so `!important: …` reaches Claude as written.
+`!resume` stands in for Claude Code's own `/resume`, which an SDK session does not offer. A reply
+in a thread whose session no longer resumes (its transcript was deleted) gets `This thread's
+session no longer exists: Claude Code deleted it or cannot find it. Send a new message in the
+channel to start one.`; a reply in a thread that holds no session at all (a word's own thread, or
+one from before this change) gets `This thread is not a session: send a new message in the
+channel to start one.`, except a word, which acts as if typed at the top level. A Resume click or
+`!resume <id or name>` sent to a thread that already holds a session gets `This thread already
+holds a session: !resume from the channel opens a new thread.`
 
-`!help`, `!guide`, `!bind`, `!bypass`, `!status`, `!stop` and `!resume` are code-with-slack's own
-and come first. Claude Code's own `/resume` is interactive and not offered to an SDK session, so
-`!resume` does its job: the next message continues the chosen session, in a new Claude Code
-process, with bypass as it was. It refuses while a turn or a background task is running or waiting in
-the channel, since resuming ends the channel's Claude Code process. If the session is still open in a
-terminal, close it there first: Claude Code interleaves the messages of two processes resuming
-the same session into one transcript. Claude Code has no other command with these names today; `!help` lists what the session offers. The
-answers to these words are messages in the channel.
+A message with files: Claude sees a JPEG, PNG, GIF or WebP image (up to 7.5 MB and 8000x8000 px;
+at most 5 images and 15 MB of images per message) as an image. Any other image type (SVG, HEIC,
+TIFF...) is refused. A text, source code, PDF, JSON, XML, YAML or Jupyter notebook file, up to 100
+MB, reaches Claude as the path of a copy in `$TMPDIR/code-with-slack/`, kept 3 days; any other
+file (archives, Office documents, binaries) is refused. A file past a limit, or one that fails to
+download, stops the whole message, and the reply says which file and why.
 
-A reply is one message in the channel. It appears as soon as you send your message, reading
-`Claude is writing…`, or `Waiting for the previous reply…` when another turn is still running.
-It is then rewritten about once a second while Claude works: text in the order it is written,
-and after each piece of text the tool calls that followed it, in small grey text. The calls that
-ended fold into one line of tool names and counts, such as `✓ Bash ×3 · Read · ✗ Bash`, where
-`✗` counts the calls that failed; a call still running (`⏳` and its command), a subagent and a
-background task keep a line of their own below it; a subagent's line counts the calls it made,
+A reply is one message in the session's thread. It appears as soon as you send your message,
+reading `Claude is writing…`, or `Waiting for the previous reply…` when another turn is still
+running in it. It is then rewritten about once a second while Claude works: text in the order it
+is written, and after each piece of text the tool calls that followed it, in small grey text. The
+calls that ended fold into one line of tool names and counts, such as `✓ Bash ×3 · Read · ✗ Bash`,
+where `✗` counts the calls that failed; a call still running (`⏳` and its command), a subagent and
+a background task keep a line of their own below it; a subagent's line counts the calls it made,
 and what it is doing now shows indented below it, under `⎿`.
 While Claude works, its latest call also keeps a line of its own until the next one, so you
 can follow what it does: the call alone, or `✗` and its error when it failed. When the reply is complete, a divider and
 the footer follow in a closing message of its own. A reply longer than one Slack message continues in the next one.
 
 
-An approval request is a message of its own below the reply, and rings, as a question does; once you decide, it disappears and
-the tool's line in the reply records the call. If Slack does not accept the request, Claude Code
-is told it was denied because it could not be shown.
+An approval request is a message of its own in the thread, below the reply, and rings, as a
+question does; once you decide, it disappears and the tool's line in the reply records the call.
+If Slack does not accept the request, Claude Code is told it was denied because it could not be
+shown.
 
-Messages sent while a turn is running wait their turn; each gets its own reply. When a background
-task finishes while nothing runs, Claude Code starts a turn of its own to report it, as it does
-in the terminal: that reply opens with Claude Code's own line for the task's end, such as
-`✓ Agent "review" finished · 3m 59s`. While tasks run, the footer counts them, such as
+Messages sent to a thread while its turn is running wait their turn; each gets its own reply. When
+a background task finishes while nothing runs, Claude Code starts a turn of its own to report it,
+as it does in the terminal: that reply opens with Claude Code's own line for the task's end, such
+as `✓ Agent "review" finished · 3m 59s`. While tasks run, the footer counts them, such as
 `⏳ 1 shell · 1 agent`.
 
 What code-with-slack says on its own (the answer to `!bind`, `!bypass` or `!stop`, a notice that
@@ -329,45 +354,51 @@ it is restarting, a refused attachment, an error) shows small and grey, as the f
 reads apart from Claude's replies. `!help`, `!guide`, `!status` and the answer to a resume show at
 full size.
 
-The channel's latest reply ends with a footer, which moves to each new reply:
+The thread's latest reply ends with a footer, which moves to each new reply in it:
 
 ```
 ⚡ bypass · claude-opus-5-5 · effort medium · my-project · main · (+42,-10) · 10.2M tok · ctx 15% · 5h 16% ↻ 43m · 7d 46% ↻ 3d 4h
 ```
 
-It holds `⚡ bypass` when bypass is on, the model, the effort level, the name of the channel's
-folder (its whole path is on `!status`), the git branch, the lines changed since the last commit
-(untracked files not counted), the session's tokens, the context used, and the 5-hour and weekly
-limits with the time to each reset, which exist only with a claude.ai subscription. The labels
-(`effort`, `tok`, `ctx`, `5h`, `7d`) are bold. A field that is not known is left out.
-The folder is the one the channel is bound to. The branch and the changes are those of the folder
-the session works in: the channel's at first, then the one Claude moved to with `cd` or a
-worktree, as Claude Code reported it after its last tool; `!status` names that folder when
-it is not the channel's. The effort level is the
-one Claude Code reported at the end of the last turn, or the one set since with `!effort` (or
+It holds `⚡ bypass` when bypass is on, the model, the effort level, the name of the folder this
+thread was opened in (its whole path is on `!status`), the git branch, the lines changed since
+the last commit (untracked files not counted), the session's tokens, the context used, and the
+5-hour and weekly limits with the time to each reset, which exist only with a claude.ai
+subscription. The labels (`effort`, `tok`, `ctx`, `5h`, `7d`) are bold. A field that is not known
+is left out.
+The branch and the changes are those of the folder the session works in: the thread's own folder
+at first, then the one Claude moved to with `cd` or a worktree, as Claude Code reported it after
+its last tool; `!status` names that folder when it is not the thread's own. The effort level is
+the one Claude Code reported at the end of the last turn, or the one set since with `!effort` (or
 `!model`); it reads `default` on a model that takes no effort level, and is left out after a
-restart until a turn ends normally (an interrupted turn or an API error reports no level). A level set with `!effort` lasts until the daemon restarts: the resumed session
-runs at the level your Claude Code settings give the model.
+restart or an idle close until a turn ends normally (an interrupted turn or an API error reports
+no level). A level set with `!effort` is kept for this thread and reapplied on every reconnect, so
+it survives an idle close and a restart of code-with-slack; a model set with `!model` needs no
+such help, since Claude Code's own resume keeps it by itself.
 
 ### Notifications
 
-Notifications arrive by mention: with the channel on **Just mentions** (Part 1), a message rings
-only when the bot writes `@channel` in it, and the bot writes it only where you are needed.
+A reply, an approval request and a question post inside the session's own thread, and Slack
+notifies you on a new message in a thread you started, whatever the channel's own notification
+setting is:
 
-- A reply rings once, when it is complete. The footer is then posted as a closing message of its
-  own, ending with `@channel`, and the notification reads `Reply to: ` and the start of your
-  message.
-- An approval request and a question ring; `@channel` ends the request.
+- A reply rings once, when it is complete, in the closing message its turn ends with.
+- An approval request and a question ring.
 - A reply that ends in an error rings.
-- Nothing rings while Claude writes, nor for a reply ended by `!stop`, a restart or a background
-  task.
+- Nothing rings while Claude writes, nor for the continuation of a reply longer than one message,
+  nor for a reply ended by `!stop`, a restart or an idle close.
 
-The closing message goes when a newer reply starts, as the footer does, except when the reply
-ends below a newer one (a message you sent while it ran): then it stays, holding `@channel` alone.
-Why the mention has to be visible, and what was measured, is in
-[features.md](features.md#notifications). A second notification from the channel shortly after a
-first one may not arrive: of the probe messages sent about 40 seconds after a ringing one, most
-stayed silent. Slack does not document this.
+The notification text reads `Reply to: ` and the start of your message. The channel's own setting
+(Part 1) governs only the bot's top-level messages (the answer to `!bind`, `!status`, `!resume`'s
+own list, the upgrade notice): with **Just mentions** those stay silent, since the bot writes no
+`@channel` mention anywhere; with **All new posts** they ring too.
+
+What was measured (2026-09-28, Slack free plan, Slack iOS app, slack-sdk 3.44.1): a new bot
+message in a thread you started rings, with or without a mention; the same message in a thread
+you did not start stays silent; a `chat.update` rewrite never rings; a message posted about one
+second after your own is sometimes not pushed, at 15 seconds it always is; `@channel` does not
+notify inside a thread (Slack help center, read 2026-09-28). More detail, and the 2026-09-27
+top-level measurements, are in [features.md](features.md#notifications).
 
 ## Troubleshooting
 
@@ -376,8 +407,10 @@ stayed silent. Slack does not document this.
 | The bot does not see a channel | The channel is public, or the bot was not invited |
 | `Claude Code is not logged in on the host` | Claude Code on the machine is logged out: run `claude`, then `/login` |
 | Some messages get no reply | A second instance is running and receiving part of the events |
-| `The previous session could not be resumed` | The stored session no longer exists (its transcript was deleted); the reply runs in a new session |
+| `This thread's session no longer exists...` | The stored session id can no longer be resumed (its transcript was deleted); send a new message in the channel to start one |
+| `This thread is not a session...` | The thread holds no session (a word's own thread, or one from before this change); send a new message in the channel to start one, or type a word, which works as if typed there |
+| `This thread already holds a session...` | A Resume click or `!resume <id or name>` was sent to a thread that already has one; `!resume` from the channel opens a new thread instead |
 | `Claude Code has not been trusted in ...`, after a message or a `!bind` | Open `claude` in that folder (the repository root) in the terminal, accept the trust dialog, and send the message again |
-| `The directory ... no longer exists` | The channel's directory was moved or deleted: bind the channel again with `!bind <path>` |
+| `The directory ... no longer exists` | The thread's directory was moved or deleted: bind the channel again with `!bind <path>` for the next thread |
 | `macOS does not let code-with-slack read ...` | The directory is in a folder macOS protects: see Part 4, "Folders macOS protects" |
 | `another code-with-slack is running` in the log | A second instance tried to start; only one may run |

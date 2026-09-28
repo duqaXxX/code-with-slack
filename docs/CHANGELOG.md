@@ -11,19 +11,36 @@ All notable changes to this project are documented here. The format follows
   `(+42,-10)`, counted as the terminal's ccstatusline counts them (#39), and the time to the
   weekly limit's reset, `7d 45% ↻ 3d 4h`, as they already did for the 5-hour one (#42).
 - Probe claim P14: a hook's `cwd` follows a `cd`, which the footer's branch depends on.
+- One Claude Code session per Slack thread, instead of one per channel: a top-level message opens
+  a new thread with its own session id, bypass switch and effort level, kept in `state.json`
+  (now version 2); a reply inside a thread continues that session, even after code-with-slack
+  restarts or the thread's Claude Code process closes from an hour with nothing to do (the next
+  message resumes it). A channel bound under version 1 keeps its directory and gets one top-level
+  notice explaining the new model, with its old session still reachable through `!resume`.
 - Probe claims P15 and P16: a resumed session keeps the model set with `/model`, and loses the
   effort set with `/effort` until `ClaudeAgentOptions(effort=...)` restores it.
-- With the channel on Slack's "Just mentions", a reply rings once, when it is complete, and its
-  closing message ends its footer with `@channel`, its notification reading `Reply to: ` and the
-  start of the owner's message; an approval request, a question and a reply that ends in an error
-  ring too. Nothing rings while Claude writes, nor for
-  `!stop`, a restart or a turn started by a background task (#26). `docs/setup.md` gains the
-  channel setting.
+- `!resume`, typed at the top level, lists the channel's folder's sessions in its own thread; a
+  Resume click or `!resume <id or title>` makes that thread the resumed session's thread. It is
+  refused inside a thread that already holds a session.
+- Every reply, approval request and question posts inside the session's own thread, and Slack
+  notifies the owner on a new message in a thread it started, mention or none, once when a reply
+  is complete, for an approval request and a question, and for a reply that ends in an error;
+  nothing rings while Claude writes, nor for `!stop`, a restart or an idle close. `docs/setup.md`
+  gains the notification section and `docs/features.md` the measurements behind it.
 
 ### Changed
 
-- The footer is a closing message of its own, posted when the reply ends. A reply that ends
-  below a newer one keeps its closing message, holding `@channel` alone.
+- `!bypass`, `!stop`, `!status`, `!bind` and `!help` answer differently at the top level than
+  inside a session's thread: `!bypass on`/`off` is per thread and refused at the top level;
+  `!stop` and `!status` act on every session of the channel at the top level and on one session
+  inside its thread; `!bind` works only at the top level, refused inside a thread; `!help` lists
+  the daemon's words everywhere and a session's own commands only inside its thread.
+- Approvals and questions are resolved only in the channel and thread they were posted in,
+  instead of the channel alone, and `!stop` denies only the pending requests of the session it
+  stops.
+- The footer is a closing message of its own, posted in the session's thread when the reply ends.
+  A reply that ends below a newer one keeps its closing message, now a bare line with no text of
+  its own, since a new message in the thread is what notifies.
 - An Edit or Write diff shows whole, as the terminal shows it, in a collapsible full-width
   container closed by default: the call's line is its title and `Added … lines, removed … lines`
   its subtitle. It no longer stops at 20 lines.
