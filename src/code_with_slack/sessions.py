@@ -1364,6 +1364,12 @@ class SessionManager:
         self._sessions: dict[tuple[str, str], ThreadSession] = {}
         self.draining = False
 
+    @property
+    def update_limiter(self) -> UpdateLimiter:
+        """The chat.update budget every ReplySink in the process draws from, so a chat.update
+        made outside a reply (e.g. slack_app.py's `show_answered`) can share the same one."""
+        return self._deps.update_limiter
+
     def open(self, channel_id: str, thread_ts: str) -> ThreadSession | None:
         """A top-level owner message: creates the thread's entry, in the channel's current
         folder, and its live session. None when the channel is unbound."""

@@ -1,5 +1,6 @@
 import asyncio
 import dataclasses
+import itertools
 import time
 from dataclasses import replace
 from typing import Any
@@ -848,19 +849,40 @@ async def test_reply_to_with_special_characters_is_escaped(slack: FakeSlack) -> 
 
 
 async def test_update_limiter_never_exceeds_the_budget_in_any_window() -> None:
-    limit, window = 3, 0.1
-    limiter = UpdateLimiter(limit=limit, window=window)
+    limit, window, burst = 4, 0.2, 1
+    limiter = UpdateLimiter(limit=limit, window=window, burst=burst)
     times: list[float] = []
     for _ in range(limit * 3):
         await limiter.acquire()
         times.append(time.monotonic())
-    # every run of limit+1 writes must span at least one window, wherever it falls.
-    for i in range(len(times) - limit):
-        assert times[i + limit] - times[i] >= window - 0.02
+    # a token bucket may spend its whole burst at once; past that, the standard bound holds:
+    # tokens spent in any span <= burst + rate * span, i.e. at most limit+burst per window.
+    for i in range(len(times) - (limit + burst)):
+        assert times[i + limit + burst] - times[i] >= window - 0.03
+
+
+async def test_update_limiter_paces_evenly_after_its_burst() -> None:
+    """Even pacing, not a sliding window: past the burst, one token every window/limit seconds,
+    never every reply racing through the whole budget and then freezing together (controller
+    ruling, 2026-09-29)."""
+    limit, window, burst = 6, 0.6, 2
+    limiter = UpdateLimiter(limit=limit, window=window, burst=burst)
+    gaps: list[float] = []
+    last: float | None = None
+    for _ in range(limit):
+        await limiter.acquire()
+        now = time.monotonic()
+        if last is not None:
+            gaps.append(now - last)
+        last = now
+    steady = gaps[burst - 1 :]  # the gaps once the burst is spent
+    interval = window / limit
+    assert all(g >= interval * 0.6 for g in steady)  # never far faster than the steady pace
+    assert max(steady) <= interval * 1.6  # ...and never a long stall either
 
 
 async def test_update_limiter_serves_waiters_in_arrival_order() -> None:
-    limiter = UpdateLimiter(limit=1, window=0.1)
+    limiter = UpdateLimiter(limit=1, window=0.1, burst=1)
     order: list[int] = []
 
     async def take(n: int) -> None:
@@ -871,24 +893,81 @@ async def test_update_limiter_serves_waiters_in_arrival_order() -> None:
     assert order == [1, 2, 3]
 
 
-async def test_two_busy_sinks_share_one_limiter_and_each_still_reaches_its_final_state(
-    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+async def test_update_limiter_releases_its_place_when_a_waiter_is_cancelled() -> None:
+    limiter = UpdateLimiter(limit=1, window=0.2, burst=1)
+    await limiter.acquire()  # spends the only token
+    waiter = asyncio.create_task(limiter.acquire())
+    await asyncio.sleep(0.05)  # the waiter is now sleeping, holding the limiter's own lock
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    # a cancelled waiter must not keep the lock: the next acquire is still served promptly.
+    await asyncio.wait_for(limiter.acquire(), timeout=0.5)
+
+
+async def test_a_change_during_a_limiter_wait_is_not_dropped(slack: FakeSlack) -> None:
+    """Regression for the CRITICAL finding in the P2T1 review: `_flush` rendered before
+    `acquire()`, so a change that arrived while a write waited its turn was lost until the next
+    unrelated event scheduled a new flush."""
+    limiter = UpdateLimiter(limit=1, window=0.5, burst=1)
+    sink = reply(slack, limiter=limiter)
+    await sink.text("one")
+    await asyncio.sleep(0.05)  # posted (chat.postMessage, not gated by the limiter)
+    await limiter.acquire()  # another busy reply spends the only token
+    await sink.text(" two")
+    await asyncio.sleep(0.05)  # the debounced flush is now waiting its turn on the limiter
+    await sink.text(" three")  # arrives mid-wait; the reply then goes idle
+    await asyncio.sleep(0.6)  # past the window: the waiting flush gets its token and writes
+    assert "one two three" in slack.message_texts()[-1]
+
+
+async def test_two_busy_sinks_share_one_limiter_paced_and_each_reaches_its_final_state(
+    slack: FakeSlack,
 ) -> None:
-    monkeypatch.setattr(sinks, "DEBOUNCE_SECONDS", 0.01)
-    limiter = UpdateLimiter(limit=1, window=0.05)
+    # Scaled 1/100 of the real 45-per-60s/burst-5 budget, same ratios, so the test runs fast.
+    limit, window, burst = 9, 0.6, 1
+    limiter = UpdateLimiter(limit=limit, window=window, burst=burst)
     a, b = reply(slack, limiter=limiter), reply(slack, limiter=limiter)
-    for i in range(4):
+
+    orig_api_call = slack.api_call
+    stamps: list[float] = []
+
+    async def timed(api_method: str, **kwargs: Any) -> Any:
+        if api_method == "chat.update":
+            stamps.append(time.monotonic())
+        return await orig_api_call(api_method, **kwargs)
+
+    slack.api_call = timed  # type: ignore[method-assign]
+
+    for i in range(6):
         await a.text(f"a{i} ")
         await b.text(f"b{i} ")
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0.03)
     await a.finish([], "footer-a")
     await b.finish([], "footer-b")
-    await asyncio.sleep(0.3)  # let every write still queued on the shared limiter drain
-    texts_shown = slack.message_texts()
-    assert any("a0 a1 a2 a3" in t for t in texts_shown)
-    assert any("b0 b1 b2 b3" in t for t in texts_shown)
-    # the shared budget delays writes; it never turns one change into one queued write each.
-    assert len(slack.calls_to("chat.update")) < 8
+    await asyncio.sleep(2.0)  # let every write still queued on the shared, paced limiter drain
+
+    calls = slack.calls_to("chat.update")
+    assert len(calls) == len(stamps)
+    # never more than the budget's window+burst allowance within any window, from either sink.
+    for i, start in enumerate(stamps):
+        within = sum(1 for t in stamps[i:] if t < start + window)
+        assert within <= limit + burst
+    # each reply's own rewrites are still spaced at least one debounce apart.
+    by_ts: dict[str, list[float]] = {}
+    for stamp, call in zip(stamps, calls, strict=True):
+        by_ts.setdefault(call["ts"], []).append(stamp)
+    for reply_stamps in by_ts.values():
+        reply_stamps.sort()
+        for earlier, later in itertools.pairwise(reply_stamps):
+            assert later - earlier >= sinks.DEBOUNCE_SECONDS - 0.005
+    # both replies' final content landed, with no leftover "Claude is writing" status line...
+    shown = dict(zip(slack.message_texts(), slack.message_blocks(), strict=True))
+    for content in ("a0 a1 a2 a3", "b0 b1 b2 b3"):
+        (final_text,) = (t for t in shown if content in t)
+        assert texts.WRITING not in str(shown[final_text])
+    # ...and each reply's closing message was posted (body + closing, once each).
+    assert len(slack.calls_to("chat.postMessage")) == 4
 
 
 async def test_a_ratelimited_chat_update_is_logged_without_message_content(

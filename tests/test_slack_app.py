@@ -17,6 +17,7 @@ from code_with_slack.attachments import DownloadFailed
 from code_with_slack.config import Config
 from code_with_slack.footer import UsageCache
 from code_with_slack.guards import ChannelGuard, Identity
+from code_with_slack.render.sinks import UpdateLimiter
 from code_with_slack.sessions import SessionDeps, SessionManager
 from code_with_slack.slack_app import build_app, slack_unescape
 from code_with_slack.state import StateStore
@@ -55,7 +56,14 @@ async def always_trusted(directory: Path) -> bool:
 
 
 class World:
-    def __init__(self, slack: FakeSlack, tmp_path: Path, *, bound: bool = True) -> None:
+    def __init__(
+        self,
+        slack: FakeSlack,
+        tmp_path: Path,
+        *,
+        bound: bool = True,
+        update_limiter: UpdateLimiter | None = None,
+    ) -> None:
         self.slack = slack
         self.root = tmp_path / "root"
         (self.root / "app").mkdir(parents=True)
@@ -98,6 +106,7 @@ class World:
                 client_factory=factory,
                 workspace_trusted=always_trusted,
                 sessions_of=lambda directory: self.stored_sessions,
+                update_limiter=update_limiter or UpdateLimiter(),
             )
         )
         config = Config(
@@ -647,6 +656,30 @@ async def test_a_complete_submit_answers_claude_and_keeps_the_answers(world: Wor
     assert update["blocks"][0]["elements"][0]["text"] == (
         f"{texts.ANSWERED}\n{texts.NESTED}· Colour? → blue\n{texts.NESTED}· Sizes? → s, xl"
     )
+
+
+async def test_show_answered_draws_from_the_process_s_shared_update_limiter(
+    slack: FakeSlack, tmp_path: Path
+) -> None:
+    limiter = UpdateLimiter(limit=1, window=0.3, burst=1)
+    world = World(slack, tmp_path, update_limiter=limiter)
+    await limiter.acquire()  # spent, as a busy ReplySink's own chat.update already would have
+    approval_id, pending = world.approvals.open(CHANNEL, FORM_THREAD, "Colour", QUESTIONS)
+    pending.message_ts = "1790000000.000009"
+    draft = Draft(approval_id, CHANNEL, FORM_THREAD, active=1, picks={0: [1]})
+    values = {
+        "q1": {"answer": {"type": "checkboxes", "selected_options": [{"value": "0"}]}},
+        "o1": {"other": {"type": "plain_text_input", "value": "xl"}},
+    }
+    start = time.monotonic()
+    await world.dispatch(form_body("view_submission", draft, values))  # runs the listener task
+    for _ in range(50):  # the listener task runs in the background: poll for its write
+        if world.slack.calls_to("chat.update"):
+            break
+        await asyncio.sleep(0.02)
+    # waits for the same budget a busy reply had already spent, not a free pass of its own.
+    assert world.slack.calls_to("chat.update")
+    assert time.monotonic() - start >= 0.2
 
 
 @pytest.mark.parametrize("user", [{"id": STRANGER}, {"team_id": OTHER_TEAM}])

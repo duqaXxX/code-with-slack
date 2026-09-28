@@ -7,6 +7,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- One `chat.update` limiter shared by every reply: a token bucket paced at 45 writes per 60
+  seconds with a small burst, so several busy threads stay under Slack's app-wide `chat.update`
+  budget together instead of each keeping its own. The per-reply once-a-second rewrite is
+  unchanged.
 - The footer and `!status` show the lines changed since the last commit next to the branch,
   `(+42,-10)`, counted as the terminal's ccstatusline counts them (#39), and the time to the
   weekly limit's reset, `7d 45% ↻ 3d 4h`, as they already did for the 5-hour one (#42).
