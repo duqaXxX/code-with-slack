@@ -29,12 +29,11 @@ DEBOUNCE_SECONDS = 1.0
 # The final write has no next rewrite to fix it: one that fails for any reason but its content
 # is tried once more after this pause (slack-sdk has already retried a rate limit by then).
 FINAL_RETRY_SECONDS = 10.0
-# chat.update is Tier 3, "50+ per minute" per app (chat.update reference, read 2026-09-28). The
-# burst below is folded into this budget, not on top of it: worst case, a process that was
-# already idle can spend UPDATE_LIMIT + UPDATE_BURST = 45 writes in one window, still a real
-# margin under Slack's documented floor. Paced evenly (a token bucket, not a sliding window) past
-# the burst, so a busy minute is a steady trickle rather than every reply racing through the
-# budget together and then freezing until it resets.
+# chat.update is Tier 3, "50+ per minute" per app (chat.update reference, read 2026-09-28): 40
+# per 60 s plus a burst of 5, worst case 45 in one window, a real margin under the documented
+# floor. Paced evenly (a token bucket, not a sliding window) past the burst, so a busy minute is
+# a steady trickle rather than every reply racing through the budget together and then freezing
+# until it resets.
 UPDATE_LIMIT = 40
 UPDATE_WINDOW_SECONDS = 60.0
 # How many writes the budget lets through at once before pacing kicks in: enough for a reply
@@ -413,8 +412,8 @@ class ReplySink:
             self._pending = asyncio.create_task(self._later())
 
     async def _later(self) -> None:
-        await asyncio.sleep(DEBOUNCE_SECONDS)
         while True:
+            await asyncio.sleep(DEBOUNCE_SECONDS)
             version = self._version
             # Shielded: `finish` cancels a pending rewrite, and a write cancelled after Slack
             # took it would lose the message's ts. `finish` waits for the lock instead.
@@ -423,9 +422,12 @@ class ReplySink:
             if self._version == version:
                 return
             # The reply changed again while that call wrote or waited its turn, in a way it
-            # never saw (e.g. it grew into a message it did not know it would need): flush again
-            # at once, no debounce, so it still catches up rather than waiting for the next
-            # unrelated event to notice.
+            # never saw (e.g. it grew into a message it did not know it would need): another
+            # debounce, then flush again, so it still catches up rather than waiting for the
+            # next unrelated event to notice. The debounce stays inside the loop: while text
+            # keeps streaming, the version moves during every round trip, and without it here
+            # a reply would be rewritten after every round trip instead of at most once per
+            # DEBOUNCE_SECONDS.
 
     def _blocks(self) -> list[dict[str, Any]]:
         """The reply's body in order: Claude's text as markdown, each run of tool lines as

@@ -8,9 +8,9 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - One `chat.update` limiter shared by every reply: a token bucket paced at 40 writes per 60
-  seconds, with a burst of 5 folded into that budget (worst case 45 in one window, still under
-  Slack's documented floor), so several busy threads stay under the app-wide `chat.update`
-  budget together instead of each keeping its own. The per-reply once-a-second rewrite is
+  seconds plus a burst of 5, worst case 45 in one window, still under Slack's documented floor,
+  so several busy threads stay under the app-wide `chat.update` budget together instead of each
+  keeping its own. The per-reply once-a-second rewrite is
   unchanged.
 - The footer and `!status` show the lines changed since the last commit next to the branch,
   `(+42,-10)`, counted as the terminal's ccstatusline counts them (#39), and the time to the

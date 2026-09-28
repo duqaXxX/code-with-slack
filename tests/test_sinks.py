@@ -972,10 +972,50 @@ async def test_a_change_during_the_chat_update_round_trip_is_not_dropped(
     assert "three" in slack.message_texts()[-1]
 
 
+async def test_the_debounce_holds_while_streaming_through_a_slow_round_trip(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_later` retries at once, with no further debounce, whenever the version moved during its
+    last flush. While text streams continuously and each chat.update's own round trip is slow,
+    the version moves during every round trip, so a reply was rewritten after every round trip
+    rather than at most once per DEBOUNCE_SECONDS."""
+    monkeypatch.setattr(sinks, "DEBOUNCE_SECONDS", 1.0)  # the real pacing, not this file's fixture
+    limiter = UpdateLimiter(
+        limit=1000, window=1, burst=1000
+    )  # isolates the debounce, not the budget
+    sink = reply(slack, limiter=limiter)
+    await sink.text("start ")
+    await asyncio.sleep(0.05)
+
+    orig_api_call = slack.api_call
+    stamps: list[float] = []
+
+    async def slow(api_method: str, **kwargs: Any) -> Any:
+        if api_method == "chat.update":
+            stamps.append(time.monotonic())
+            await asyncio.sleep(0.3)
+        return await orig_api_call(api_method, **kwargs)
+
+    slack.api_call = slow  # type: ignore[method-assign]
+
+    end = time.monotonic() + 6.0
+    i = 0
+    while time.monotonic() < end:
+        await sink.text(f"w{i} ")
+        i += 1
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(1.5)  # let a trailing retry, still catching up, land too
+
+    gaps = [b - a for a, b in itertools.pairwise(stamps)]
+    assert gaps  # the slow round trip left more than one update to compare
+    assert min(gaps) >= sinks.DEBOUNCE_SECONDS - 0.05
+
+
 async def test_two_busy_sinks_share_one_limiter_paced_and_each_reaches_its_final_state(
     slack: FakeSlack,
 ) -> None:
-    # Scaled 1/100 of the real 45-per-60s/burst-5 budget, same ratios, so the test runs fast.
+    # Scaled down from the real budget so the test runs fast; the values are independent of the
+    # production constants, not a ratio of them.
     limit, window, burst = 9, 0.6, 1
     limiter = UpdateLimiter(limit=limit, window=window, burst=burst)
     a, b = reply(slack, limiter=limiter), reply(slack, limiter=limiter)
