@@ -490,30 +490,60 @@ class ThreadSession:
         D10 shows ✋, including through any report turn a background task starts while held:
         `_start_turn` reacts WAITING, not WORKING, whenever `waiting_for_owner` is true). At most
         one hold is ever open on a thread at once: `submit_to_session` waits on it inside the
-        thread's own arrival lock, so a caller of this always pairs it with one `hold_end`."""
+        thread's own arrival lock, so a caller of this always pairs it with one `hold_end`.
+        `_react` would otherwise read WAITING as `_error_standing = False`: a hold is not new
+        work, so a standing ❌ must outlive it (Cancel restores it; Continue's own `submit`
+        clears it, same as any new work)."""
+        standing = self._error_standing
         self._waiting.add(_HOLD_MARKER)
         self._idle_timer_check()
         self._react(Status.WAITING)
+        self._error_standing = standing
 
     async def hold_end(self, *, continued: bool) -> None:
         """Undo `hold_start`. `continued`: Continue was chosen, so the reaction is left alone (the
         `submit()` right after this returns reacts ⏳ on its own); otherwise (Cancel, `!stop`, a
         drain) the root reflects the session's live state now, not a snapshot from when the hold
         started (a report turn during the hold, most likely a background task's, can have changed
-        it in the meantime): ✅ through `_react_done_if_idle` when idle (which also honours a
-        standing ❌), ⏳ when still not idle, or bare for a session whose Claude Code process never
-        even started."""
+        it in the meantime)."""
         self._waiting.discard(_HOLD_MARKER)
         self._idle_timer_check()
-        if continued:
-            return
-        if self._client is None:
+        if not continued:
+            await self._react_after_hold()
+
+    async def _react_after_hold(self) -> None:
+        """The reaction a hold not continued restores: bare for a thread that never ran a turn
+        (`_client is None` alone is not "never ran" — a D9 idle close or a restart evicts the
+        object and hands the thread a fresh one on its next lookup, with `_client` reset but its
+        history intact, so "never ran" is read from the stored session id instead, state.json's
+        only record of it, set once Claude Code's own init message reports one; nothing else is
+        stored for this); otherwise ❌ when an error stands (`hold_start` kept it standing through
+        the hold; this is what restores it, since `hold_start`'s own WAITING reaction already
+        overwrote whatever ❌ was showing), ✅ through `_react_done_if_idle` when idle and no
+        error stands, ⏳/✋ (whichever this thread still holds) otherwise."""
+        stored = self._deps.state.thread(self.channel_id, self.thread_ts)
+        if stored is None or stored.session_id is None:
             await self._status.clear()
             return
-        if self.idle:
+        if self._error_standing:
+            self._react_error()
+        elif self.idle:
             await self._react_done_if_idle()
-        elif not self._error_standing:
-            self._react(Status.WORKING)
+        else:
+            self._react_waiting_or_working()
+
+    async def react_hold_abandoned(self, *, error: bool) -> None:
+        """A Continue whose `submit()` never ran: `hold_end(continued=True)` already discarded
+        `_HOLD_MARKER` and left the ✋ standing, betting on that `submit()` to show ⏳ right after;
+        a caller that instead exits without ever calling it (`sessions.draining` turning true,
+        or `ensure_connected` raising `DirectoryUnavailable`/`SessionClosed`/`SessionGone`) must
+        restore the reaction itself, or the ✋ stands forever. `error`: ❌, the same reaction a
+        turn that reached the queue and then failed this way gets from `_fail(..., error=True)`;
+        otherwise whatever a Cancel would show."""
+        if error:
+            self._react_error()
+            return
+        await self._react_after_hold()
 
     async def cancel_hold(self) -> bool:
         """Cancel a D8 hold open in this thread, as the owner's own Cancel would: `stop()` and
