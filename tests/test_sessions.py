@@ -511,13 +511,16 @@ async def test_close_leaves_every_repair_field_cleared(
     session = h.session()
     await session.submit("clean")
     await until(lambda: bool(h.approvals._pending))
+    approval_id = next(iter(h.approvals._pending))
+    request_ts = h.approvals._pending[approval_id].message_ts
     await session.close()
     stored = h.state.thread(CHANNEL, THREAD)
     assert stored.open_replies == ()
     assert stored.requests == ()
     assert stored.status is None
     # Issue #19 fix round item 8: the pending approval's own message is actually deleted too.
-    assert len(h.slack.calls_to("chat.delete")) == 1
+    deleted = [a["ts"] for a in h.slack.calls_to("chat.delete")]
+    assert deleted == [request_ts]
 
 
 async def test_waiting_for_owner_reflects_an_open_approval(

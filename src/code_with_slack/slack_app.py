@@ -69,7 +69,14 @@ from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, hold_blocks
 from code_with_slack.prompt import Prompt
 from code_with_slack.render.escape import markdown_escape, mrkdwn_escape
 from code_with_slack.render.renderer import one_line
-from code_with_slack.render.sinks import FALLBACK_LIMIT, context_block, describe, notice_text, split
+from code_with_slack.render.sinks import (
+    FALLBACK_LIMIT,
+    context_block,
+    delete_request,
+    describe,
+    notice_text,
+    split,
+)
 from code_with_slack.resume import RESUME_ACTION, RESUME_ROWS, TITLE_LIMIT, matching, resume_blocks
 from code_with_slack.sessions import (
     DirectoryUnavailable,
@@ -438,7 +445,18 @@ def build_app(
         message_ts = str(posted["ts"])
         if holds.posted(hold_id, message_ts):
             # Crash repair (issue #19): a D8 hold question is a request like an approval.
-            state.add_request(channel, thread_ts, message_ts)
+            # Best-effort (fix round 2 item 1): outside the try/finally below on purpose, so a
+            # failed write here can never skip `hold_start`/`hold_end` and leave the hold itself
+            # undiscarded; the message is already live either way, so a failure is logged loudly.
+            try:
+                state.add_request(channel, thread_ts, message_ts)
+            except Exception as exc:
+                logger.error(
+                    "posted a D8 hold in %s/%s that state.json could not record: %s",
+                    channel,
+                    thread_ts,
+                    describe(exc),
+                )
             continued = False
             try:
                 session.hold_start()
@@ -867,14 +885,18 @@ def build_app(
         # The tool's line in the reply records the call: the request message has done its job.
         if ts is None:
             return
+        await delete_request(slack, channel=channel, ts=ts)
         try:
-            await slack.chat_delete(channel=channel, ts=ts)
-        except Exception as exc:
-            logger.warning("could not remove a request in %s: %s", channel, describe(exc))
-        finally:
             # Crash repair (issue #19): spoken for either way, as `ThreadSession._delete_request`
             # does. A no-op for a ts this thread never recorded (a folder or resume picker click).
+            # Best-effort (fix round 2 item 1): a failed write here is logged and swallowed.
             state.remove_request(channel, thread_ts, ts)
+        except Exception as exc:
+            logger.warning(
+                "could not clear a deleted request from state.json in %s: %s",
+                channel,
+                describe(exc),
+            )
 
     async def show_answered(
         channel: str,
@@ -896,13 +918,23 @@ def build_app(
                 text=texts.ANSWERED,
                 blocks=answered_blocks(questions, answers),
             )
-            # Crash repair (issue #19): answered without a delete, so it no longer carries
-            # buttons and must still leave the tracked list.
-            state.remove_request(channel, thread_ts, ts)
         except Exception as exc:
             # The request must not keep buttons that no longer work: remove it, as before.
             logger.warning("could not record an answer in %s: %s", channel, describe(exc))
             await remove_request(channel, thread_ts, ts)
+            return
+        # Crash repair (issue #19): answered without a delete, so it no longer carries buttons and
+        # must still leave the tracked list. Kept outside the try above on purpose (fix round 2
+        # item 1): a failed write here must never look like the chat.update itself failed and
+        # trigger a delete of a message that was just successfully updated. Best-effort: logged.
+        try:
+            state.remove_request(channel, thread_ts, ts)
+        except Exception as exc:
+            logger.warning(
+                "could not clear an answered request from state.json in %s: %s",
+                channel,
+                describe(exc),
+            )
 
     @app.action("question_open")
     async def on_question_open(ack: AsyncAck, body: dict[str, Any]) -> None:

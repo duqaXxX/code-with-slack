@@ -44,11 +44,11 @@ async def test_a_second_start_repairs_nothing(tmp_path: Path, slack: FakeSlack) 
 async def test_an_open_reply_is_read_by_its_own_ts_and_rewritten_dropping_only_the_status_block(
     tmp_path: Path, slack: FakeSlack
 ) -> None:
-    # Recorded 2026-09-28 in a real workspace (slack-sdk 3.44.1), scrubbed:
-    # actions/data/2026-09-28-replies-readback.json, replies_by_reply_ts. A posted `markdown`
-    # block reads back as `rich_text`; a block posted with an explicit block_id keeps it; one
-    # without gets a Slack-assigned id, which is why the status line's own fixed block_id
-    # (`sinks.STATUS_BLOCK_ID`) is what repair looks for, not "no block_id".
+    # Recorded from a real `conversations.replies` response on 2026-09-28 (slack-sdk 3.44.1),
+    # scrubbed, as other fixtures are. A posted `markdown` block reads back as `rich_text`; a
+    # block posted with an explicit block_id keeps it; one without gets a Slack-assigned id,
+    # which is why the status line's own fixed block_id (`sinks.STATUS_BLOCK_ID`) is what repair
+    # looks for, not "no block_id".
     state = make_state(tmp_path)
     fixture = slack_payload("api-conversations-replies-by-ts")
     message_ts = fixture["messages"][0]["ts"]

@@ -107,6 +107,75 @@ async def test_run_repairs_a_crashed_thread_before_pruning_it(
     assert StateStore(tmp_path / "state.json").thread(CHANNEL, "1000000000.000001") is None
 
 
+async def test_repair_and_prune_run_before_the_socket_mode_connection_opens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Fix round 2 item 6: the exact order named in the fix brief, not just repair-before-prune.
+    env = tmp_path / ".env"
+    env.write_text(
+        f"SLACK_BOT_TOKEN={'xox' + 'b-1'}\nSLACK_APP_TOKEN={'xap' + 'p-1'}\n"
+        f"SLACK_OWNER_USER_ID=U000ALICE\nALLOWED_ROOT={tmp_path}\n"
+    )
+    env.chmod(0o600)
+    monkeypatch.setattr(entry, "AsyncWebClient", lambda token: FakeSlack())
+
+    order: list[str] = []
+
+    async def fake_repair_crash(slack: object, state: object, limiter: object) -> None:
+        order.append("repair")
+
+    class OrderedFakeHandler(_FakeHandler):
+        async def connect_async(self) -> None:
+            order.append("connect")
+
+    monkeypatch.setattr(entry, "repair_crash", fake_repair_crash)
+    monkeypatch.setattr(entry, "AsyncSocketModeHandler", OrderedFakeHandler)
+    real_prune = entry.StateStore.prune
+
+    def recording_prune(self: object, *a: object, **k: object) -> int:
+        order.append("prune")
+        return real_prune(self, *a, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(entry.StateStore, "prune", recording_prune)
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(entry.run(tmp_path), timeout=1)
+    assert order == ["repair", "prune", "connect"]
+
+
+async def test_signal_handlers_are_installed_before_a_long_repair_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Fix round 2 item 5: installed before repair, not after, so a SIGTERM arriving during a long
+    # repair is caught instead of terminating the process under Python's default disposition,
+    # which would skip every `finally` (the single-instance lock, Socket Mode, every session).
+    env = tmp_path / ".env"
+    env.write_text(
+        f"SLACK_BOT_TOKEN={'xox' + 'b-1'}\nSLACK_APP_TOKEN={'xap' + 'p-1'}\n"
+        f"SLACK_OWNER_USER_ID=U000ALICE\nALLOWED_ROOT={tmp_path}\n"
+    )
+    env.chmod(0o600)
+    monkeypatch.setattr(entry, "AsyncWebClient", lambda token: FakeSlack())
+    monkeypatch.setattr(entry, "AsyncSocketModeHandler", _FakeHandler)
+
+    order: list[str] = []
+    loop = asyncio.get_running_loop()
+
+    def recording_add_signal_handler(sig: object, callback: object, *args: object) -> None:
+        order.append("signal")
+
+    monkeypatch.setattr(loop, "add_signal_handler", recording_add_signal_handler)
+
+    async def fake_repair_crash(slack: object, state: object, limiter: object) -> None:
+        order.append("repair")
+
+    monkeypatch.setattr(entry, "repair_crash", fake_repair_crash)
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(entry.run(tmp_path), timeout=1)
+    assert order == ["signal", "signal", "repair"]  # SIGTERM and SIGINT, both before repair
+
+
 def test_no_name_carries_claude_code() -> None:
     manifest = json.loads((ROOT / "slack-app-manifest.json").read_text())
     names = [

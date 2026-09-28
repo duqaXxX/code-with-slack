@@ -6,7 +6,8 @@ thread's leftovers must still be repaired); a graceful stop clears these same fi
 second start finds nothing to do.
 
 `conversations.replies` (docs.slack.dev/reference/methods/conversations.replies, read 2026-09-28,
-confirmed against a real workspace 2026-09-28, `actions/data/2026-09-28-replies-readback.json`):
+confirmed against a real `conversations.replies` response recorded from a real workspace on
+2026-09-28, scrubbed and kept as `tests/fixtures/slack/api-conversations-replies-by-ts.json`):
 `ts` set to the reply's own ts, with `limit=1`, returns only that one message (an `oldest`/
 `latest`/`inclusive` range built around the same ts instead returned the thread's root too).
 """

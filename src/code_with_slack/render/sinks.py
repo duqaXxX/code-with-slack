@@ -392,21 +392,23 @@ class ReplySink:
         """This sink's own transition: drop its current entry (if any), add `new_ts` (if not
         None), leave every other sink's entry alone. Best-effort (issue #19 fix round item 7): a
         failed `StateStore` write is logged (ids only) and swallowed, since the reply itself must
-        never fail over crash-repair bookkeeping; this sink's own local view of `new_ts` still
-        updates either way, so it stays correct even if the file write did not land."""
+        never fail over crash-repair bookkeeping. `_own_open_reply` only advances once the
+        callback actually succeeds (fix round 2 item 3): advancing it regardless would make the
+        next call believe the old ts no longer needs removing, orphaning it in state.json
+        forever, since nothing else ever asks to remove a ts this sink no longer remembers."""
         old = self._own_open_reply
+        if self._on_open_reply is not None:
+            try:
+                self._on_open_reply(old, new_ts)
+            except Exception as exc:
+                logger.warning(
+                    "could not update the open-reply tracking for %s/%s: %s",
+                    self._channel,
+                    self._thread_ts,
+                    describe(exc),
+                )
+                return
         self._own_open_reply = new_ts
-        if self._on_open_reply is None:
-            return
-        try:
-            self._on_open_reply(old, new_ts)
-        except Exception as exc:
-            logger.warning(
-                "could not update the open-reply tracking for %s/%s: %s",
-                self._channel,
-                self._thread_ts,
-                describe(exc),
-            )
 
     def _settle_open_reply(self) -> None:
         """Stop tracking once the body's final write is known to have landed, or the sink has

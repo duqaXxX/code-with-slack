@@ -133,6 +133,24 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
         )
         handler = AsyncSocketModeHandler(app, config.app_token)
 
+        stop = asyncio.Event()
+        received: list[signal.Signals] = []
+
+        def on_signal(sig: signal.Signals) -> None:
+            received.append(sig)
+            stop.set()
+
+        loop = asyncio.get_running_loop()
+        # Issue #19 fix round item 5: installed before repair runs below, not after, so a
+        # SIGTERM that arrives during a long repair (many threads, each Slack call under the
+        # shared rate limiter) is caught rather than left to Python's default disposition for
+        # SIGTERM, which terminates the process at once and skips every `finally` below (the
+        # single-instance lock, the Socket Mode connection, every session). Repair itself still
+        # runs to completion either way (nothing here cancels it); the signal is only lost if
+        # nothing is listening for it yet.
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, on_signal, sig)
+
         # Issue #19 fix round item 3: repaired, then pruned, before the Socket Mode connection
         # even opens. `slack` (a plain `AsyncWebClient`, already `auth_test`'d above) works
         # without it; opening Socket Mode is what starts delivering events, and a pruned thread's
@@ -145,16 +163,6 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
         except Exception as exc:
             logger.warning("could not prune stale threads: %s", exc)
 
-        stop = asyncio.Event()
-        received: list[signal.Signals] = []
-
-        def on_signal(sig: signal.Signals) -> None:
-            received.append(sig)
-            stop.set()
-
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, on_signal, sig)
         await handler.connect_async()  # type: ignore[no-untyped-call]  # untyped in Bolt 1.30.0
         logger.info("connected to Slack workspace %s", identity.team_id)
         try:
