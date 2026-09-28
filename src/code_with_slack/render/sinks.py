@@ -1,13 +1,17 @@
 """Write a rendered reply to Slack: one message in the Claude Code session's Slack thread,
 rewritten with chat.update as the reply grows, at most once per DEBOUNCE_SECONDS (chat.update
 allows "50+ per minute", Tier 3), rather than through Slack's own native streaming
-(`chat.startStream`).
+(`chat.startStream`). Every `chat.update` also waits its turn on an `UpdateLimiter` shared by
+every reply in the process, so several busy threads stay under the app's own budget together.
 """
 
 import asyncio
 import itertools
 import logging
 import re
+import time
+from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,6 +29,10 @@ DEBOUNCE_SECONDS = 1.0
 # The final write has no next rewrite to fix it: one that fails for any reason but its content
 # is tried once more after this pause (slack-sdk has already retried a rate limit by then).
 FINAL_RETRY_SECONDS = 10.0
+# chat.update is Tier 3, "50+ per minute" per app (chat.update reference, read 2026-09-28): a
+# margin below the documented floor, shared by every reply in the process.
+UPDATE_LIMIT = 45
+UPDATE_WINDOW_SECONDS = 60.0
 # A markdown block holds at most 12,000 characters; the margin keeps a tool line that grows in
 # place from pushing a full message over the limit.
 MESSAGE_LIMIT = 11_000
@@ -244,6 +252,37 @@ def split(body: str) -> list[str]:
     return chunks
 
 
+class UpdateLimiter:
+    """One instance shared by every `ReplySink` in the process, so their chat.update writes stay
+    under Slack's app-wide budget: a sliding window of `limit` writes per `window` seconds.
+    `acquire` blocks until a slot is free; a caller that has to wait keeps its place in line,
+    since it holds `_lock` for as long as it waits, so the next caller queues up behind it."""
+
+    def __init__(
+        self,
+        *,
+        limit: int = UPDATE_LIMIT,
+        window: float = UPDATE_WINDOW_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._limit = limit
+        self._window = window
+        self._clock = clock
+        self._writes: deque[float] = deque()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        async with self._lock:
+            while True:
+                now = self._clock()
+                while self._writes and now - self._writes[0] >= self._window:
+                    self._writes.popleft()
+                if len(self._writes) < self._limit:
+                    self._writes.append(now)
+                    return
+                await asyncio.sleep(self._writes[0] + self._window - now)
+
+
 class ReplySink:
     """One reply in a Slack thread, written in the order things happen: text, then a line per
     tool where it ran, updated in place. The last line shows a status (Claude is writing, or
@@ -254,10 +293,13 @@ class ReplySink:
     the whole reply at the next flush, the final one after FINAL_RETRY_SECONDS, and the session
     goes on."""
 
-    def __init__(self, slack: AsyncWebClient, *, channel: str, thread_ts: str) -> None:
+    def __init__(
+        self, slack: AsyncWebClient, *, channel: str, thread_ts: str, limiter: UpdateLimiter
+    ) -> None:
         self._slack = slack
         self._channel = channel
         self._thread_ts = thread_ts
+        self._limiter = limiter
         self._parts: list[_Text | _Tool] = []
         self._tools: dict[str, _Tool] = {}
         self._messages: list[str] = []  # ts of each message this reply has posted
@@ -467,6 +509,7 @@ class ReplySink:
                 self._closing = str(posted["ts"])
             elif blocks and self._closing is not None and blocks != self._closing_shown:
                 # An edit never rings (measured 2026-09-27): the text can stay as posted.
+                await self._limiter.acquire()
                 await self._slack.chat_update(
                     channel=self._channel,
                     ts=self._closing,
@@ -487,6 +530,7 @@ class ReplySink:
         saying Claude is writing. An empty `blocks` makes Slack drop the old ones and render
         the text (chat.update reference, 2026-09-25)."""
         try:
+            await self._limiter.acquire()
             await self._slack.chat_update(
                 channel=self._channel, ts=self._messages[index], text=plain_text(blocks), blocks=[]
             )
@@ -512,6 +556,7 @@ class ReplySink:
                 fallback = block_text(blocks[0])[:FALLBACK_LIMIT] or "…"
                 try:
                     if index < len(self._messages):
+                        await self._limiter.acquire()
                         await self._slack.chat_update(
                             channel=self._channel,
                             ts=self._messages[index],
