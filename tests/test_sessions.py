@@ -564,10 +564,12 @@ async def test_a_turn_stopped_by_the_owner_has_no_reply_to_notification(
     session = h.session()
     turn = await session.submit("clean")
     await until(lambda: bool(h.approvals._pending))
+    posts_before = len(h.slack.calls_to("chat.postMessage"))
     assert await session.stop() is True
     await asyncio.wait_for(turn.done.wait(), 2)
-    closing = h.slack.calls_to("chat.postMessage")[-1]
-    assert "Reply to:" not in closing["text"]
+    # D1: a stopped turn closes silently regardless of its own footer: no new message at all,
+    # not merely one without "Reply to:" in it.
+    assert h.slack.calls_to("chat.postMessage")[posts_before:] == []
 
 
 async def test_a_background_turn_s_report_keeps_the_original_reply_s_notification(
@@ -2963,6 +2965,46 @@ async def test_stop_shows_error(harness_for: Callable[..., Harness]) -> None:
     assert h.reactions()[-1] == Status.ERROR.value
 
 
+async def test_quick_turn_after_stop_ends_on_working(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # D10 item 1: `StatusReaction.current` only updates once its own `reactions.add` returns.
+    # A quick turn right after a stop can end (and try to react working, then done) before
+    # that slow round trip lands, so gating on `current` alone missed the standing ❌ and let
+    # an already-in-flight ⏳ add stick with nothing left to ever remove it.
+    h = harness_for(
+        {
+            "turns": [
+                [CanUseToolCall("Bash", {"command": "rm -rf build"}), *sdk_messages("interrupt")],
+                sdk_messages("tools"),
+            ]
+        }
+    )
+    session = h.session()
+    turn = await session.submit("clean")
+    await until(lambda: bool(h.approvals._pending))
+    assert await session.stop() is True
+    await asyncio.wait_for(turn.done.wait(), 2)
+    await until(lambda: session._status._current is Status.ERROR)
+    real_add = h.slack.reactions_add
+
+    async def slow_add(**kw: Any) -> Any:
+        await asyncio.sleep(0.3)  # a Slack round trip slower than the turn itself
+        return await real_add(**kw)
+
+    h.slack.reactions_add = slow_add  # type: ignore[method-assign]
+    quick = await session.submit("quick")
+    await asyncio.wait_for(quick.done.wait(), 2)
+    await asyncio.sleep(0.8)
+    on_root: set[str] = set()
+    for method, args in h.slack.calls:
+        if method == "reactions.add":
+            on_root.add(args["name"])
+        elif method == "reactions.remove":
+            on_root.discard(args["name"])
+    assert on_root == {Status.DONE.value}
+
+
 async def test_a_gone_session_shows_error(harness_for: Callable[..., Harness]) -> None:
     gone = ResultError(
         "Claude Code returned an error result: No conversation found",
@@ -2997,6 +3039,48 @@ async def test_a_drain_that_cuts_a_busy_session_shows_error(
     assert h.reactions()[-1] == Status.ERROR.value
 
 
+async def test_work_drain_path_leaves_hourglass(harness_for: Callable[..., Harness]) -> None:
+    # D10 item 2: `_work`'s own draining branch dropped a taken turn's prompt with `_fail`'s
+    # `notify=False`, which never reacted at all: the ⏳ (or ✅, once the session read idle) a
+    # submit had already shown stood as if that turn had gone through, though it never did.
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("first")).done.wait(), 2)
+    session._settled.clear()  # a report turn still in flight: the worker waits on it
+    second = await session.submit("second")
+    await until(lambda: session._taken is not None)
+    session.draining = True
+    session._settled.set()
+    await asyncio.wait_for(second.done.wait(), 2)
+    await session.close()
+    await session.done_closing.wait()
+    on_root: set[str] = set()
+    for method, args in h.slack.calls:
+        if method == "reactions.add":
+            on_root.add(args["name"])
+        elif method == "reactions.remove":
+            on_root.discard(args["name"])
+    assert on_root == {Status.ERROR.value}
+
+
+async def test_close_leaves_latest_closing_showing_a_running_shell(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # item 3/7: `set_running("")` on the latest, already-closed-out reply only debounces; a
+    # shutdown's own event loop iteration ends right after `close()` returns, so a `_later`
+    # still waiting on its own timer never gets to run, and the closing keeps a stale count.
+    first, _, _ = split_background()
+    h = harness_for({"turns": [first, sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("next")).done.wait(), 2)
+    assert running_block(h.slack.message_blocks()[-1]) == "⏳ 1 shell"
+    await session.close()
+    await session.done_closing.wait()
+    shown = [running_block(b) for b in h.slack.message_blocks()]
+    assert all(r is None for r in shown)
+
+
 async def test_a_top_level_status_word_gets_no_reaction(
     harness_for: Callable[..., Harness],
 ) -> None:
@@ -3017,13 +3101,18 @@ async def test_owner_query_crossing_a_task_notification_rings_once_with_no_error
     owner = await session.submit("what happened")
     await until(lambda: bool(h.clients) and h.clients[0].queries == ["what happened"])
     session._injected_expected = True  # Claude Code's own report was also expected right now
+    before = len(h.slack.calls_to("chat.postMessage"))
     h.clients[0].inject(sdk_messages("tools"))  # the result: a genuine human turn after all
     await asyncio.wait_for(owner.done.wait(), 2)
+    await asyncio.sleep(0.1)
     assert h.reactions() == [Status.WORKING.value]  # no ❌: this turn actually succeeded
-    rings = [c["text"] for c in h.slack.calls_to("chat.postMessage") if "Reply to:" in c["text"]]
-    # Exactly one ring, for the owner's own (misrouted) reply; the wrongly-guessed reply's own
-    # closing, if it posted one at all, must never carry a second one.
+    posts = h.slack.calls_to("chat.postMessage")[before:]
+    # Exactly two new messages: the wrongly-guessed reply's own body (it already streamed
+    # content, which has to land somewhere, silently closed) and the owner's real reply's
+    # own closing, which rings once. Never a second ring, and never anything else new.
+    rings = [p["text"] for p in posts if "Reply to:" in p["text"]]
     assert rings == [texts.REPLY_TO.format(prompt="what happened")]
+    assert len(posts) == 2
     assert texts.REPLY_ABOVE in h.bodies()[0]
 
 

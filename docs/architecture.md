@@ -197,11 +197,14 @@ session Claude Code no longer has, or any other exception), and once for the fir
 still open when the whole process exits (`ThreadSession._abandon`, `error=True`). It stays unset
 for a stop, a restart, an idle close or a session's own graceful close. A turn Claude Code starts
 on its own to report a background task carries none either: it renders into the reply that
-started the task (`ThreadSession._opening_target`), reopened so its own writes debounce again
-(`TurnRenderer.resume`, `ReplySink.resume`), so the closing message that eventually follows is
-still the one the original prompt is owed. A reply that already owes this notification when a
-newer reply in the same thread supersedes it keeps owing it, even once the newer reply takes the
-footer over.
+started the task (`ThreadSession._opening_target`), so the closing message that eventually
+follows is still the one the original prompt is owed; writes into that already-finished reply
+debounce exactly like any other change (`ReplySink._changed` never special-cases a finished
+reply). Once that reply's own closing message has already posted (a notification arriving later
+than `INJECTED_TURN_WAIT`), `_opening_target` treats it as untracked instead, so the report gets
+a fresh reply of its own, which notifies once, rather than a silent edit of a reply that can no
+longer carry one. A reply that already owes this notification when a newer reply in the same
+thread supersedes it keeps owing it, even once the newer reply takes the footer over.
 
 Slack's native streaming API (`chat.startStream`) is not used: in an ordinary channel it works
 only inside a thread, `chat.startStream` without `thread_ts` answering `invalid_thread_ts`
@@ -341,9 +344,19 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   waiting: an approval or a question is open, back to `⏳` once it is answered and the turn
   continues. `✅` ended: the closing message of the latest prompt posts with nothing else of the
   session running, queued or owed (`ThreadSession.idle`); a second prompt queued behind the first
-  keeps it `⏳` until everything has ended. `❌` error: a turn fails, `!stop` stops something,
-  `SessionGone`, or a shutdown's drain cuts short a busy session; D9's own idle close never
-  touches it, so it is left reading `✅`. A top-level word (`!status`, `!stop`, `!bind`) is not a
+  keeps it `⏳` until everything has ended. `❌` error: a turn fails, `!stop` stops something, a
+  restart's drain drops a queued or taken turn, `SessionGone`, or a shutdown's drain cuts short a
+  busy session. A `❌` stands until new work starts (a submit or a report turn, both of which
+  clear `ThreadSession._error_standing`), never flipped back to `✅` by some unrelated task's own
+  idle sweep in between (`ThreadSession._react_done_if_idle` reads that flag, not
+  `StatusReaction.current`, which only updates once its own `reactions.add` call returns and can
+  lag a quick turn); D9's own idle close never touches the reaction at all, whatever it reads. A
+  session rebuilt on the same root (a restart, a resumed thread) starts a fresh
+  `StatusReaction`, whose first successful `show` strips every other reaction name already on
+  the root, so an earlier session's leftover `✅` or `❌` never sits next to the new one. A
+  `missing_scope` failure (the workspace has not reinstalled the app for `reactions:write`) is
+  logged once for the whole process; every `StatusReaction` instance stops calling Slack for
+  reactions for the rest of the run. A top-level word (`!status`, `!stop`, `!bind`) is not a
   session and gets no reaction of its own.
 - One reader task follows the SDK's message stream for the life of the client. A turn starts
   at its first text or tool message, or earlier at a `TaskStartedMessage` with no

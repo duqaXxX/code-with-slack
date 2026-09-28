@@ -297,9 +297,12 @@ class UpdateLimiter:
     async def refund(self) -> None:
         """Give back a token `acquire` spent on a write that, once inside the caller's own lock,
         turned out not to be needed after all (the reply caught up to what it now shows while
-        this one waited its turn): capped at `burst`, as a token earned by waiting would be."""
-        async with self._lock:
-            self._tokens = min(self._burst, self._tokens + 1)
+        this one waited its turn): capped at `burst`, as a token earned by waiting would be.
+        Never takes `_lock`: a concurrent `acquire` can hold it for as long as its own wait
+        takes, and this must land at once regardless; a plain attribute write is safe without
+        it (no `await` in between, so nothing else can run mid-assignment), and `acquire`
+        always rereads `_tokens` fresh on its own next pass."""
+        self._tokens = min(self._burst, self._tokens + 1)
 
 
 class ReplySink:
@@ -441,6 +444,16 @@ class ReplySink:
         async with self._lock:
             if not await self._write_closing():
                 self._closing_retry = asyncio.create_task(self._retry_closing())
+
+    async def settle(self) -> None:
+        """Force this reply to its current, true form right now, cancelling any debounce still
+        pending: a shutdown's very last chance, since `asyncio.run`'s own exit never lets a
+        `_later` still waiting on its own timer get to run. Cheap when nothing changed since
+        the last write: `_flush` itself no-ops then."""
+        if self._pending is not None:
+            self._pending.cancel()
+            self._pending = None
+        await self._flush(final=self._finished)
 
     async def _retry_closing(self) -> None:
         await asyncio.sleep(FINAL_RETRY_SECONDS)
