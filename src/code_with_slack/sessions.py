@@ -437,6 +437,12 @@ class ThreadSession:
         return stored is not None and stored.bypass
 
     @property
+    def resolved_directory(self) -> Path:
+        """`directory`, resolved once at construction and cached (D8's `working_in` reads this
+        across sessions, instead of resolving every live session's folder on every message)."""
+        return self._resolved_directory
+
+    @property
     def busy(self) -> bool:
         return self._active is not None or bool(self._sent)
 
@@ -1814,10 +1820,10 @@ class SessionManager:
     def working_in(self, *, besides: ThreadSession) -> ThreadSession | None:
         """D8: a live session of any channel, other than `besides`, whose folder resolves to the
         same one as `besides`'s own and is not idle (a background task counts as working, same
-        as `idle` already treats it). Each session's own `_resolved_directory` is cached once, at
+        as `idle` already treats it). Each session's own `resolved_directory` is cached once, at
         construction: comparing it avoids a `Path.resolve()` syscall per live session on every
         message. The first one found is enough: the question links to it."""
-        resolved = besides._resolved_directory
+        resolved = besides.resolved_directory
         return next(
             (
                 s
@@ -1825,7 +1831,7 @@ class SessionManager:
                 if s is not besides
                 and not s.closed
                 and not s.idle
-                and s._resolved_directory == resolved
+                and s.resolved_directory == resolved
             ),
             None,
         )
