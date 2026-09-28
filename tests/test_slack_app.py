@@ -681,6 +681,8 @@ async def test_next_with_an_answer_moves_to_the_next_question(world: World) -> N
 async def test_a_complete_submit_answers_claude_and_keeps_the_answers(world: World) -> None:
     approval_id, pending = world.approvals.open(CHANNEL, FORM_THREAD, "Colour", QUESTIONS)
     pending.message_ts = "1790000000.000009"
+    world.state.open_thread(CHANNEL, FORM_THREAD)
+    world.state.add_request(CHANNEL, FORM_THREAD, pending.message_ts)
     draft = Draft(approval_id, CHANNEL, FORM_THREAD, active=1, picks={0: [1]})
     values = {
         "q1": {"answer": {"type": "checkboxes", "selected_options": [{"value": "0"}]}},
@@ -696,6 +698,8 @@ async def test_a_complete_submit_answers_claude_and_keeps_the_answers(world: Wor
     assert update["blocks"][0]["elements"][0]["text"] == (
         f"{texts.ANSWERED}\n{texts.NESTED}· Colour? → blue\n{texts.NESTED}· Sizes? → s, xl"
     )
+    # Crash repair (issue #19): answered without a delete, so it is no longer tracked either.
+    assert world.state.thread(CHANNEL, FORM_THREAD).requests == ()
 
 
 async def test_show_answered_draws_from_the_process_s_shared_update_limiter(
@@ -1495,6 +1499,8 @@ async def test_a_busy_session_in_the_same_folder_holds_the_message(world: World)
     section = posted_blocks(world)[0]
     assert section["type"] == "section"
     assert section["text"] == {"type": "mrkdwn", "text": texts.HOLD_QUESTION.format(link=link)}
+    # Crash repair (issue #19): a D8 hold is a request like an approval or a question.
+    assert world.state.thread(CHANNEL, THREAD).requests == (world.slack.posted_ts[-1],)
 
 
 async def test_continue_sends_the_held_message(world: World) -> None:
@@ -1505,6 +1511,7 @@ async def test_continue_sends_the_held_message(world: World) -> None:
     assert world.clients[-1].queries == ["hello"]
     deleted = [a["ts"] for a in world.slack.calls_to("chat.delete")]
     assert deleted == [question_ts]  # the question's own message
+    assert world.state.thread(CHANNEL, THREAD).requests == ()
 
 
 async def test_cancel_drops_the_message_and_says_so(world: World) -> None:
@@ -1516,6 +1523,7 @@ async def test_cancel_drops_the_message_and_says_so(world: World) -> None:
     assert said(world)[-1] == texts.NOT_SENT
     deleted = [a["ts"] for a in world.slack.calls_to("chat.delete")]
     assert deleted == [question_ts]  # the question, not the `Not sent.` notice
+    assert world.state.thread(CHANNEL, THREAD).requests == ()
 
 
 async def test_no_hold_when_the_other_session_is_idle(world: World) -> None:

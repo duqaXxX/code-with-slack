@@ -67,6 +67,25 @@ async def test_finish_alone_posts_no_closing_message(slack: FakeSlack) -> None:
     assert len(slack.calls_to("chat.postMessage")) == 2
 
 
+async def test_on_open_reply_tracks_the_last_message_and_clears_at_close_out(
+    slack: FakeSlack,
+) -> None:
+    # Crash repair (issue #19): `open` and every continuation report the ts that would need
+    # rewriting after a crash; `close_out` (silent or not) says the reply is no longer open.
+    seen: list[str | None] = []
+    sink = ReplySink(
+        slack, channel=CHANNEL, thread_ts=THREAD, limiter=UpdateLimiter(), on_open_reply=seen.append
+    )
+    await sink.open(texts.WRITING)
+    assert seen == [slack.posted_ts[0]]
+    await sink.text("x" * (sinks.MESSAGE_LIMIT + 10))  # forces a continuation message
+    await asyncio.sleep(0.05)
+    assert seen[-1] == slack.posted_ts[-1] and len(slack.posted_ts) == 2
+    await sink.finish([])
+    await sink.close_out("footer")
+    assert seen[-1] is None
+
+
 async def test_a_second_close_out_call_is_a_no_op(slack: FakeSlack) -> None:
     sink = reply(slack)
     await sink.text("Done.")

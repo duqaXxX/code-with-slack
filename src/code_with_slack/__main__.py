@@ -25,6 +25,7 @@ from code_with_slack.guards import ChannelGuard, Identity
 from code_with_slack.hold import Holds
 from code_with_slack.lock import AlreadyRunning, single_instance
 from code_with_slack.render.sinks import context_block, describe, notice_text
+from code_with_slack.repair import repair_crash
 from code_with_slack.sessions import (
     SessionDeps,
     SessionManager,
@@ -99,12 +100,6 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
     config = load_config(config_dir)
     with single_instance(config_dir):
         state = StateStore(config_dir / "state.json")
-        try:
-            removed = state.prune(_alive_sessions, time.time())
-            if removed:
-                logger.info("pruned %d stale thread(s) from state.json", removed)
-        except Exception as exc:
-            logger.warning("could not prune stale threads: %s", exc)
         uploads = uploads_dir()
         prepare_uploads(uploads)
         slack = AsyncWebClient(token=config.bot_token)
@@ -151,6 +146,15 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
         await handler.connect_async()  # type: ignore[no-untyped-call]  # untyped in Bolt 1.30.0
         logger.info("connected to Slack workspace %s", identity.team_id)
         try:
+            # Before `state.prune` (issue #19): a pruned thread's leftovers must still be
+            # repaired, and repair needs `slack` connected to read a reply back or rewrite it.
+            await repair_crash(slack, state, sessions.update_limiter)
+            try:
+                removed = state.prune(_alive_sessions, time.time())
+                if removed:
+                    logger.info("pruned %d stale thread(s) from state.json", removed)
+            except Exception as exc:
+                logger.warning("could not prune stale threads: %s", exc)
             await _post_upgrade_notices(slack, state)
             await stop.wait()
             # launchd stops and restarts with SIGTERM: the turns already running finish first. Not

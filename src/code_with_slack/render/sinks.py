@@ -318,12 +318,22 @@ class ReplySink:
     after FINAL_RETRY_SECONDS, and the session goes on."""
 
     def __init__(
-        self, slack: AsyncWebClient, *, channel: str, thread_ts: str, limiter: UpdateLimiter
+        self,
+        slack: AsyncWebClient,
+        *,
+        channel: str,
+        thread_ts: str,
+        limiter: UpdateLimiter,
+        on_open_reply: Callable[[str | None], None] | None = None,
     ) -> None:
         self._slack = slack
         self._channel = channel
         self._thread_ts = thread_ts
         self._limiter = limiter
+        # Crash repair (issue #19): the ts of this reply's last message while it is still open,
+        # so a crash mid-write can be found and rewritten on the next start. A plain sync
+        # callback (`StateStore`'s setters are sync file writes), never awaited here.
+        self._on_open_reply = on_open_reply
         self._parts: list[_Text | _Tool] = []
         self._tools: dict[str, _Tool] = {}
         self._messages: list[str] = []  # ts of each message this reply has posted
@@ -431,6 +441,10 @@ class ReplySink:
         if self._closed_out:
             return
         self._closed_out = True
+        # Crash repair (issue #19): the reply is no longer open once it closes out, silently or
+        # not, whatever its own body messages still look like at that point.
+        if self._on_open_reply is not None:
+            self._on_open_reply(None)
         self._footer = footer
         if silent:
             self._silent_closed = True
@@ -700,6 +714,8 @@ class ReplySink:
                         )
                         self._messages.append(str(posted["ts"]))
                         self._shown.append(blocks)
+                        if self._on_open_reply is not None:
+                            self._on_open_reply(self._messages[-1])
                 except Exception as exc:
                     logger.warning("could not write a reply to Slack: %s", describe(exc))
                     refused = final and describe(exc) in REFUSED_CONTENT
@@ -719,6 +735,8 @@ class ReplySink:
                     return False
                 self._messages.pop()
                 self._shown.pop()
+                if self._on_open_reply is not None and not self._closed_out:
+                    self._on_open_reply(self._messages[-1] if self._messages else None)
             # After the body, so the closing message is posted below it. Only once `close_out`
             # has run: before that, nothing is known about the footer or the notification yet.
             # A silent close has none of its own: `_render` already folded it into the body

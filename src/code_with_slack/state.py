@@ -29,6 +29,15 @@ class ThreadState:
     bypass: bool = False
     # The level set with `/effort`; `None` when unset or set back to the default.
     effort: str | None = None
+    # Crash repair (issue #19), each an id only, never message content:
+    # the ts of the open reply's last message, updated on every continuation, cleared once the
+    # reply closes out or is closed silently.
+    open_reply: str | None = None
+    # ts of every approval, question or D8 hold request still carrying buttons.
+    requests: tuple[str, ...] = ()
+    # The root's reaction name while it is ⏳ or ✋ (`render.status.Status.value`); cleared once
+    # ✅ or ❌ is requested.
+    status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -44,12 +53,21 @@ class StateError(Exception):
 
 
 def _parse_thread(raw: dict[str, Any]) -> ThreadState:
+    """Tolerant of a v2 file written before the repair fields existed (they default to "nothing
+    open"), and a v2 file written with them read by code that does not know them yet ignores the
+    extra keys: both directions of the additive version stay 2."""
     effort = raw.get("effort")
+    open_reply = raw.get("open_reply")
+    requests = raw.get("requests")
+    status = raw.get("status")
     return ThreadState(
         directory=Path(raw["directory"]),
         session_id=raw.get("session_id"),
         bypass=raw.get("bypass") is True,
         effort=effort if isinstance(effort, str) else None,
+        open_reply=open_reply if isinstance(open_reply, str) else None,
+        requests=tuple(requests) if isinstance(requests, list) else (),
+        status=status if isinstance(status, str) else None,
     )
 
 
@@ -129,6 +147,59 @@ class StateStore:
         current = self.thread(channel_id, thread_ts)
         if current is not None and current.effort != effort:
             self._set_thread(channel_id, thread_ts, replace(current, effort=effort))
+
+    def set_open_reply(self, channel_id: str, thread_ts: str, message_ts: str | None) -> None:
+        """Record the ts of an open reply's last message (crash repair); a no-op for a thread
+        that does not exist."""
+        current = self.thread(channel_id, thread_ts)
+        if current is not None and current.open_reply != message_ts:
+            self._set_thread(channel_id, thread_ts, replace(current, open_reply=message_ts))
+
+    def add_request(self, channel_id: str, thread_ts: str, message_ts: str) -> None:
+        """Record a request message still carrying buttons (crash repair); a no-op for a thread
+        that does not exist or already has it."""
+        current = self.thread(channel_id, thread_ts)
+        if current is not None and message_ts not in current.requests:
+            self._set_thread(
+                channel_id, thread_ts, replace(current, requests=(*current.requests, message_ts))
+            )
+
+    def remove_request(self, channel_id: str, thread_ts: str, message_ts: str) -> None:
+        """Drop a decided or removed request from the list (crash repair); a no-op if it is not
+        there, including for a thread that does not exist."""
+        current = self.thread(channel_id, thread_ts)
+        if current is not None and message_ts in current.requests:
+            remaining = tuple(t for t in current.requests if t != message_ts)
+            self._set_thread(channel_id, thread_ts, replace(current, requests=remaining))
+
+    def set_status_pending(self, channel_id: str, thread_ts: str, name: str | None) -> None:
+        """Record the root's reaction while it is ⏳ or ✋ (`name`), or clear it once ✅ or ❌ is
+        requested (crash repair); a no-op for a thread that does not exist."""
+        current = self.thread(channel_id, thread_ts)
+        if current is not None and current.status != name:
+            self._set_thread(channel_id, thread_ts, replace(current, status=name))
+
+    def repairs_pending(self) -> list[tuple[str, str, ThreadState]]:
+        """Every (channel_id, thread_ts, thread) whose crash-repair fields are not all empty:
+        what a crashed daemon left open for `run`'s startup repair to find."""
+        return [
+            (channel_id, thread_ts, thread)
+            for channel_id, channel in self._channels.items()
+            for thread_ts, thread in channel.threads.items()
+            if thread.open_reply is not None or thread.requests or thread.status is not None
+        ]
+
+    def clear_repair(self, channel_id: str, thread_ts: str) -> None:
+        """Clear a thread's three crash-repair fields together, once it has been repaired (or
+        repair failed for good and was logged); a no-op if already clear or the thread is gone."""
+        current = self.thread(channel_id, thread_ts)
+        if current is None:
+            return
+        if current.open_reply is None and not current.requests and current.status is None:
+            return
+        self._set_thread(
+            channel_id, thread_ts, replace(current, open_reply=None, requests=(), status=None)
+        )
 
     def remove_thread(self, channel_id: str, thread_ts: str) -> None:
         """Drop a thread's entry; a no-op if it is not there."""
@@ -234,6 +305,9 @@ class StateStore:
                             "session_id": t.session_id,
                             "bypass": t.bypass,
                             "effort": t.effort,
+                            "open_reply": t.open_reply,
+                            "requests": list(t.requests),
+                            "status": t.status,
                         }
                         for thread_ts, t in c.threads.items()
                     },

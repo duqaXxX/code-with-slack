@@ -533,6 +533,7 @@ class ThreadSession:
         error stands, ⏳/✋ (whichever this thread still holds) otherwise."""
         stored = self._deps.state.thread(self.channel_id, self.thread_ts)
         if stored is None or stored.session_id is None:
+            self._deps.state.set_status_pending(self.channel_id, self.thread_ts, None)
             await self._status.clear()
             return
         if self._error_standing:
@@ -884,12 +885,18 @@ class ThreadSession:
                 # session and hand the same root to a freshly built one right away, whose own
                 # `StatusReaction` strips every other name on its own first `show` (D10) — this
                 # ❌ must already be on the root before that race can even start.
+                self._note_status(Status.ERROR)
                 await self._status.show(Status.ERROR)
             if self._latest is not None:
                 # The last chance a change still only debounced (item 7) gets: `asyncio.run`'s
                 # own exit never lets a `_later` still waiting on its own timer run.
                 with contextlib.suppress(Exception):
                     await self._latest.settle()
+            # Crash repair (issue #19): a graceful close is not what repair is for, whatever is
+            # still live in Slack when it ends (an approval message `_cancel_tasks` cut off
+            # mid-await, most likely: `_can_use_tool`'s own finally never reached the point that
+            # would have cleared it), so this thread's fields end up empty either way.
+            self._deps.state.clear_repair(self.channel_id, self.thread_ts)
             # Only now: the CLI process (if any) has had its chance to flush and exit, or closing
             # failed partway through and there is nothing left worth waiting for either way.
             self.done_closing.set()
@@ -1227,9 +1234,17 @@ class ThreadSession:
         the state asked for last, set here synchronously, since `StatusReaction.current` changes
         only once Slack has answered."""
         self._error_standing = state is Status.ERROR
+        self._note_status(state)
         task = asyncio.create_task(self._status.show(state))
         self._background.add(task)
         task.add_done_callback(self._background.discard)
+
+    def _note_status(self, state: Status) -> None:
+        """Crash repair (issue #19): the root's reaction while it is ⏳ or ✋, cleared once ✅ or
+        ❌ is requested. Called from `_react` and from the two other places that ask
+        `StatusReaction` for a state directly (`close`'s ❌, `_react_done_if_idle`'s ✅)."""
+        pending = state.value if state in (Status.WORKING, Status.WAITING) else None
+        self._deps.state.set_status_pending(self.channel_id, self.thread_ts, pending)
 
     def _react_error(self) -> None:
         """❌ (D10). It stands until another state is asked for: `_react` records it in
@@ -1253,6 +1268,7 @@ class ThreadSession:
         `StatusReaction.current`: the reaction only updates once its own `reactions.add`
         returns, which a quick turn can easily outrun."""
         if not self.waiting_for_owner and self.idle and not self._error_standing:
+            self._note_status(Status.DONE)
             await self._status.show(Status.DONE)
 
     def _idle_timer_check(self) -> None:
@@ -1455,6 +1471,9 @@ class ThreadSession:
             channel=self.channel_id,
             thread_ts=self.thread_ts,
             limiter=self._deps.update_limiter,
+            on_open_reply=lambda ts: self._deps.state.set_open_reply(
+                self.channel_id, self.thread_ts, ts
+            ),
         )
         previous, self._latest = self._latest, sink
         await sink.set_running(self._running_counts())
@@ -1686,8 +1705,12 @@ class ThreadSession:
                     describe(exc),
                 )
                 return PermissionResultDeny(message=texts.APPROVAL_UNPOSTED)
-            if not self._deps.approvals.posted(approval_id, str(posted["ts"])):
-                await self._delete_request(str(posted["ts"]))  # decided while it was posted
+            message_ts = str(posted["ts"])
+            if self._deps.approvals.posted(approval_id, message_ts):
+                # Crash repair (issue #19): still carrying buttons, until it is answered.
+                self._deps.state.add_request(self.channel_id, self.thread_ts, message_ts)
+            else:
+                await self._delete_request(message_ts)  # decided while it was posted
             decision = await pending.future
         finally:
             self._deps.approvals.discard(approval_id)
@@ -1747,6 +1770,10 @@ class ThreadSession:
                 self.thread_ts,
                 describe(exc),
             )
+        finally:
+            # Crash repair (issue #19): the request is spoken for either way, so a startup
+            # repair never retries a delete this call already made (or gave up on).
+            self._deps.state.remove_request(self.channel_id, self.thread_ts, message_ts)
 
 
 class SessionManager:

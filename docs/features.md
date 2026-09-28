@@ -35,6 +35,7 @@ how a reply looks on desktop and on mobile is checked by hand.
 | Attached images and files | `test_attachments`, `test_slack_app` | P4, P5 | none |
 | Background commands and subagents: their lines, the running count, Claude Code's report | `test_renderer`, `test_sinks`, `test_sessions` | none | Run a subagent and a background command; each line closes when it ends |
 | A restart lets running turns finish, prunes threads whose session is gone, and says which background tasks hold it | `test_sessions`, `test_state`, `test_main` | none | `launchctl kill TERM` with a turn running; it finishes, then the daemon reconnects |
+| A crashed daemon's open replies, requests and root reactions are repaired on the next start (issue #19) | `test_repair`, `test_sinks`, `test_sessions`, `test_slack_app`, `test_state`, `test_main` | none | `kill -9` the daemon mid-turn with an approval pending; on the next start the reply ends with "code-with-slack stopped", the approval's buttons are gone, and the root shows ❌ |
 | A logged-out Claude Code gets the login instructions | `test_renderer` | none | Log out in the terminal, send a message |
 | Configuration: `.env` private, every missing variable named | `test_config` | none | none |
 | One instance at a time | `test_lock`, `test_main` | none | none |

@@ -77,6 +77,36 @@ async def test_run_prunes_stale_threads_and_survives_alive_raising(
     assert "could not prune stale threads" in caplog.text
 
 
+async def test_run_repairs_a_crashed_thread_before_pruning_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A thread with no session id, its root message older than a day (`state.ONE_DAY`): prune
+    # drops it. Repair must still act on it first (issue #19 ruling 5), since it is exactly what
+    # a crash mid-first-turn leaves.
+    env = tmp_path / ".env"
+    env.write_text(
+        f"SLACK_BOT_TOKEN={'xox' + 'b-1'}\nSLACK_APP_TOKEN={'xap' + 'p-1'}\n"
+        f"SLACK_OWNER_USER_ID=U000ALICE\nALLOWED_ROOT={tmp_path}\n"
+    )
+    env.chmod(0o600)
+    state = StateStore(tmp_path / "state.json")
+    state.bind(CHANNEL, tmp_path)
+    state.open_thread(CHANNEL, "1000000000.000001")
+    state.set_status_pending(CHANNEL, "1000000000.000001", "raised_hand")
+
+    fake_slack = FakeSlack()
+    monkeypatch.setattr(entry, "AsyncWebClient", lambda token: fake_slack)
+    monkeypatch.setattr(entry, "AsyncSocketModeHandler", _FakeHandler)
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(entry.run(tmp_path), timeout=1)
+
+    added = [a["name"] for a in fake_slack.calls_to("reactions.add")]
+    assert added == ["x"]
+    # Repaired, then pruned: nothing left of the thread at all.
+    assert StateStore(tmp_path / "state.json").thread(CHANNEL, "1000000000.000001") is None
+
+
 def test_no_name_carries_claude_code() -> None:
     manifest = json.loads((ROOT / "slack-app-manifest.json").read_text())
     names = [
