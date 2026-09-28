@@ -26,6 +26,7 @@ how a reply looks on desktop and on mobile is checked by hand.
 | `!stop` ends the running turn and the channel's background tasks | `test_sessions`, `test_slack_app` | P8, P12 | none |
 | `!status` and the footer (branch and changes of the folder the session works in, model, context, tokens, usage limits and their resets) | `test_footer`, `test_sessions`, `test_slack_app` | P2, P14 | none |
 | `!resume`: the session list and resuming one | `test_resume`, `test_sessions`, `test_slack_app` | P6, P7 | none |
+| Effort and model kept across a resume | `test_sessions` | P15, P16 | none |
 | `!help`, `!guide`, and `!name` sent to Claude Code as `/name` | `test_commands`, `test_slack_app` | none | none |
 | Attached images and files | `test_attachments`, `test_slack_app` | P4, P5 | none |
 | Background commands and subagents: their lines, the running count, Claude Code's report | `test_renderer`, `test_sinks`, `test_sessions` | none | Run a subagent and a background command; each line closes when it ends |

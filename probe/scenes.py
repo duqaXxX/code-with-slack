@@ -33,10 +33,10 @@ from code_with_slack.footer import UsageCache
 from code_with_slack.guards import Identity
 from code_with_slack.resume import resume_blocks
 from code_with_slack.sessions import (
-    ChannelSession,
     ClaudeClient,
     SessionDeps,
     SessionManager,
+    ThreadSession,
     Turn,
     directory_sessions,
 )
@@ -47,6 +47,11 @@ from tests.fakes import FakeSlack
 # The model the fixture recorder uses: the cheapest that runs every scene.
 PROBE_MODEL = "claude-haiku-4-5-20251001"
 CHANNEL, OWNER, TEAM, BOT = "C000PROBE", "U000PROBE", "T000PROBE", "U000PROBEBOT"
+THREAD = "1700000000.000100"  # the probe's main thread, used by every scene but the two below
+RESUME_THREAD = "1700000000.000200"  # the "resume" scene resumes P6/P7's session into this thread
+MODEL_THREAD = "1700000000.000300"  # the new session the "model and effort resume" scene opens
+MODEL_RESUME_THREAD = "1700000000.000301"  # its first resume, no effort stored: the losing half
+MODEL_RESUME_THREAD2 = "1700000000.000302"  # its second resume, effort stored: the restoring half
 TURN_LIMIT = 180.0
 COUNT_TO = 2000
 # The running line of a background command (`texts.RUNNING`), unlike `Ran 1 shell command`.
@@ -70,11 +75,17 @@ class ProbeApprovals(Approvals):
     """Answers every request as the owner would: Approve a tool, Deny a question."""
 
     def open(
-        self, channel_id: str, title: str, questions: list[dict[str, Any]] | None = None
+        self,
+        channel_id: str,
+        thread_ts: str,
+        title: str,
+        questions: list[dict[str, Any]] | None = None,
     ) -> tuple[str, Pending]:
-        approval_id, pending = super().open(channel_id, title, questions)
+        approval_id, pending = super().open(channel_id, thread_ts, title, questions)
         decision = Deny() if questions else Approve()
-        asyncio.get_running_loop().call_soon(self.resolve, approval_id, channel_id, decision)
+        asyncio.get_running_loop().call_soon(
+            self.resolve, approval_id, channel_id, thread_ts, decision
+        )
         return approval_id, pending
 
 
@@ -126,9 +137,13 @@ class Stage:
                 workspace_trusted=trusted,
             )
         )
+        opened = self.manager.open(CHANNEL, THREAD)
+        assert opened is not None
 
     def client(self, options: ClaudeAgentOptions) -> ClaudeClient:
-        """The real client, on Haiku, noting which tool each permission request is for."""
+        """The real client. Haiku on a fresh connect; a resumed connect passes no explicit model, so
+        the CLI keeps whichever model that session last used, unclobbered by our own flag — exactly
+        what `client_options()` itself does, and what P15 checks still holds."""
         decide: CanUseTool | None = options.can_use_tool
 
         async def noted(
@@ -139,13 +154,12 @@ class Stage:
             return await decide(tool, tool_input, context)
 
         can_use_tool = noted if decide is not None else None
-        return ClaudeSDKClient(
-            dataclasses.replace(options, model=PROBE_MODEL, can_use_tool=can_use_tool)
-        )
+        model = None if options.resume else PROBE_MODEL
+        return ClaudeSDKClient(dataclasses.replace(options, model=model, can_use_tool=can_use_tool))
 
     @property
-    def session(self) -> ChannelSession:
-        session = self.manager.get(CHANNEL)
+    def session(self) -> ThreadSession:
+        session = self.manager.get(CHANNEL, THREAD)
         assert session is not None
         return session
 
@@ -184,10 +198,13 @@ class Stage:
                 shown.pop(args["ts"], None)
         return "\n".join(shown.values())
 
-    async def turn(self, prompt: Any) -> Turn:
-        turn = await self.session.submit(prompt)
+    async def turn_on(self, session: ThreadSession, prompt: Any) -> Turn:
+        turn = await session.submit(prompt)
         await asyncio.wait_for(turn.done.wait(), TURN_LIMIT)
         return turn
+
+    async def turn(self, prompt: Any) -> Turn:
+        return await self.turn_on(self.session, prompt)
 
     async def recover(self) -> None:
         """After a scene that raised: stop what it left running, so the next scene starts on an
@@ -230,7 +247,7 @@ async def attempt(
 
 async def first_turn(s: Stage, word: str) -> dict[str, Observation]:
     await s.turn(f"Remember this code word: {word}. Reply with the single word: ready")
-    stored = s.state.get(CHANNEL)
+    stored = s.state.thread(CHANNEL, THREAD)
     status = await s.session.status()
     return {
         "P1": Observation(True, s.session.cli_version is not None, f"cli {s.session.cli_version}"),
@@ -345,7 +362,7 @@ async def interrupt(s: Stage) -> dict[str, Observation]:
 
 
 async def resume(s: Stage, word: str) -> dict[str, Observation]:
-    stored = s.state.get(CHANNEL)
+    stored = s.state.thread(CHANNEL, THREAD)
     session_id = stored.session_id if stored else None
     if session_id is None:
         return {"P6": Observation(False, False, "no session id stored")}
@@ -356,11 +373,65 @@ async def resume(s: Stage, word: str) -> dict[str, Observation]:
     # A background command an earlier scene failed to stop keeps the channel busy.
     if not await until(lambda: s.session.idle, 30):
         return seen | {"P7": Observation(False, False, "the channel never became idle")}
-    if not await s.manager.resume(CHANNEL, session_id):
+    resumed = await s.manager.resume(CHANNEL, RESUME_THREAD, session_id)
+    if resumed is None:
         return seen | {"P7": Observation(False, False, "the resume was refused")}
     mark = s.mark()
-    await s.turn("What was the code word I gave you? Reply with the word only.")
+    await s.turn_on(resumed, "What was the code word I gave you? Reply with the word only.")
     return seen | {"P7": Observation(True, word in s.replies_since(mark))}
+
+
+async def model_effort_resume(s: Stage) -> dict[str, Observation]:
+    """P15: a resumed session keeps the model set with `/model`. P16: it loses the effort set
+    with `/effort` (a resumed thread's `ThreadState` starts fresh, `state.open_thread`), and
+    `ClaudeAgentOptions(effort=...)` restores it once the thread's own stored effort is set
+    again before it connects."""
+    session = s.manager.open(CHANNEL, MODEL_THREAD)
+    assert session is not None
+    await s.turn_on(session, "/model sonnet")
+    await s.turn_on(session, "/effort low")
+    await s.turn_on(session, "Reply with the single word: ok")
+    stored = s.state.thread(CHANNEL, MODEL_THREAD)
+    session_id = stored.session_id if stored else None
+    await session.close()
+    if session_id is None:
+        detail = "no session id stored"
+        return {"P15": Observation(False, False, detail), "P16": Observation(False, False, detail)}
+
+    lost = await s.manager.resume(CHANNEL, MODEL_RESUME_THREAD, session_id)
+    if lost is None:
+        detail = "the resume was refused"
+        return {"P15": Observation(False, False, detail), "P16": Observation(False, False, detail)}
+    await s.turn_on(lost, "Reply with the single word: ok")
+    status = await lost.status()
+    model_kept = "sonnet" in status.lower()
+    effort_lost = "Effort: `low`" not in status
+    await lost.close()
+
+    restored = await s.manager.resume(CHANNEL, MODEL_RESUME_THREAD2, session_id)
+    if restored is None:
+        detail = "the second resume was refused"
+        return {
+            "P15": Observation(True, model_kept, "" if model_kept else status[:160]),
+            "P16": Observation(True, False, detail),
+        }
+    s.state.set_effort(CHANNEL, MODEL_RESUME_THREAD2, "low")
+    await s.turn_on(restored, "Reply with the single word: ok")
+    restored_status = await restored.status()
+    effort_restored = "Effort: `low`" in restored_status
+    await restored.close()
+
+    p16_holds = effort_lost and effort_restored
+    detail16 = (
+        ""
+        if p16_holds
+        else f"after the plain resume: {status[:160]!r}; after the effort resume: "
+        f"{restored_status[:160]!r}"
+    )
+    return {
+        "P15": Observation(True, model_kept, "" if model_kept else status[:160]),
+        "P16": Observation(True, p16_holds, detail16),
+    }
 
 
 async def bypass(s: Stage) -> dict[str, Observation]:
@@ -437,6 +508,7 @@ SCENES: dict[str, tuple[str, ...]] = {
     "background and stop": ("P12",),
     "interrupt": ("P8",),
     "resume": ("P6", "P7"),
+    "model and effort resume": ("P15", "P16"),
     "bypass": ("P9",),
     "working folder": ("P14",),
 }
@@ -457,6 +529,7 @@ async def run_scenes(log: Log) -> dict[str, Observation]:
             seen |= await attempt("background and stop", s, background_stop(s))
             seen |= await attempt("interrupt", s, interrupt(s))
             seen |= await attempt("resume", s, resume(s, word))
+            seen |= await attempt("model and effort resume", s, model_effort_resume(s))
             seen |= await attempt("bypass", s, bypass(s))
             seen |= await attempt("working folder", s, working_folder(s))
         finally:
