@@ -191,11 +191,13 @@ iOS, 2026-09-28, Slack free plan, slack-sdk 3.44.1; Slack's reference is silent 
 write while Claude works is silent, and the closing message's `text` reads `texts.REPLY_TO` when
 `ReplySink.close_out` gets `reply_to`, which makes it post even with no footer to show, as a bare
 line holding a zero-width space: `ThreadSession._finish` passes the owner's message
-(`sessions.asked`) for an owner turn that was not interrupted, `ThreadSession._fail` for an error
-(a Claude Code process that exits rings once, on the first reply it ends, `ThreadSession._abandon`),
-never for a stop, a restart, an idle close or `SessionGone`. A turn Claude Code starts on its own
-to report a background task carries none either: it renders into the reply that started the task
-(`ThreadSession._opening_target`), reopened so its own writes debounce again
+(`sessions.asked`) for an owner turn that ended without `!stop`; `ThreadSession._fail` does the
+same for a turn that fails outright (a directory gone missing, untrusted or unreadable, a
+session Claude Code no longer has, or any other exception), and once for the first owner reply
+still open when the whole process exits (`ThreadSession._abandon`, `error=True`). It stays unset
+for a stop, a restart, an idle close or a session's own graceful close. A turn Claude Code starts
+on its own to report a background task carries none either: it renders into the reply that
+started the task (`ThreadSession._opening_target`), reopened so its own writes debounce again
 (`TurnRenderer.resume`, `ReplySink.resume`), so the closing message that eventually follows is
 still the one the original prompt is owed. A reply that already owes this notification when a
 newer reply in the same thread supersedes it keeps owing it, even once the newer reply takes the

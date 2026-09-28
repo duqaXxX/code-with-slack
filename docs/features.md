@@ -62,8 +62,9 @@ So, inside a thread:
   that starts a background command or an agent still rings for the question it answered, just
   once that task, and its report if one comes, are both done.
 - An approval request and a question (`AskUserQuestion`) ring.
-- A reply that ends in an error rings once, with a new closing message, on the first owner reply
-  a Claude Code process that exits leaves open.
+- A reply that fails outright (a directory gone missing, untrusted or unreadable, a session
+  Claude Code no longer has, or any other exception) rings once, in a new closing message; when
+  the whole process exits instead, only the first owner reply still open rings the same way.
 - Nothing else rings: not `Claude is writing…`, not a rewrite (a turn Claude Code starts on its
   own to report a background task edits the reply that started it, never a message of its own),
   not the continuation of a reply longer than one message, and not a reply ended by `!stop`, a

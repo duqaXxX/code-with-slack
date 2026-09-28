@@ -390,11 +390,13 @@ A reply, an approval request and a question post inside the session's own thread
 notifies you on a new message in a thread you started, whatever the channel's own notification
 setting is:
 
-- A reply rings once, when it is complete, in the closing message its turn ends with.
+- A reply rings once, in its closing message: once the turn has ended and every task it started,
+  and the report for it, are done too.
 - An approval request and a question ring.
-- A reply that ends in an error rings.
+- A reply that fails outright rings once; when the whole process exits instead, only the first
+  reply still open rings the same way.
 - Nothing rings while Claude writes, nor for the continuation of a reply longer than one message,
-  nor for a reply ended by `!stop`, a restart or an idle close.
+  nor for a reply ended by `!stop`, a restart, an idle close or a lost session.
 
 The notification text reads `Reply to: ` and the start of your message. The channel's own setting
 (Part 1) governs only the bot's top-level messages (the answer to `!bind`, `!status`, `!resume`'s
