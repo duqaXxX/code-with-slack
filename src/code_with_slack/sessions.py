@@ -347,7 +347,9 @@ class ThreadSession:
         # Each task's type and description, for the footer's counts and its end line, and the
         # end lines that open Claude Code's next turn of its own, the one that reports them.
         self._tasks: dict[str, tuple[str, str]] = {}
-        self._ended: list[str] = []
+        # Ended tasks not yet opened into a report turn's reply: (task_id, its formatted end
+        # line). The task_id finds the reply that started it (D1: the report renders there).
+        self._ended: list[tuple[str, str]] = []
         # Tasks whose end arrived without their notification yet, by the loop time it arrived:
         # the notification starts the turn that reports them. The CLI can suppress it (SDK
         # TaskUpdatedMessage docstring), so a stop waits for it only INJECTED_TURN_WAIT.
@@ -872,7 +874,7 @@ class ThreadSession:
             and not self._sent
             and not stopped
         ):
-            self._ended.append(self._ended_line(message))
+            self._ended.append((message.task_id, self._ended_line(message)))
         if (
             isinstance(message, TaskUpdatedMessage)
             and message.status in TERMINAL_TASK_STATUSES
@@ -888,7 +890,8 @@ class ThreadSession:
             self._tasks.pop(message.task_id, None)
         if isinstance(message, TASK_MESSAGES) and message.task_id in self._task_replies:
             # A task that outlived its turn shows only on its own line, wherever it started.
-            await self._task_replies[message.task_id].feed(message)
+            holder = self._task_replies[message.task_id]
+            await holder.feed(message)
             await self._show_running()
             if (
                 self._active is None
@@ -896,6 +899,11 @@ class ThreadSession:
                 and not stopped
             ):
                 self._notified()
+            # D1: the task that just ended may have been the last thing keeping this reply's
+            # closing message waiting; `_notified` above, if it fired, already re-armed the wait.
+            owed = self._still_owed(holder) or self._injected_expected or not self._settled.is_set()
+            if not owed:
+                await holder.close_out()
             return
         # A stream message names the call it runs under (`parent_tool_use_id`), a task frame
         # the call that started it (`tool_use_id`): either leads to the reply holding that call
@@ -957,10 +965,15 @@ class ThreadSession:
         duration = message.usage["duration_ms"] if message.usage else None
         return ended_line(text, message.status, duration)
 
-    def _opening(self) -> str:
-        """What opens a reply of Claude Code's own turn: the end of each task it reports."""
+    def _opening_target(self) -> tuple[str, TurnRenderer | None]:
+        """What opens a report of Claude Code's own turn (the end of each task it reports), and
+        the reply that started the first of those tasks (D1: the report renders there), if it is
+        still tracked. `None` when it is not (a restart or an idle close dropped it): the report
+        then gets a reply of its own, as it always has."""
         lines, self._ended = self._ended, []
-        return "\n".join(lines) or texts.BACKGROUND_NOTICE
+        target = self._task_replies.get(lines[0][0]) if lines else None
+        text = "\n".join(line for _, line in lines) or texts.BACKGROUND_NOTICE
+        return text, target
 
     def _notified(self) -> None:
         """A task ended while no turn runs. Claude Code starts a turn to report it, unless an
@@ -984,10 +997,14 @@ class ThreadSession:
         )
         self._injected_expected = False
         held, self._held = self._held, []
-        if not held:
-            self._ended.clear()  # those tasks already show their end on their own lines
+        text, target = self._opening_target()
         try:
-            await self._standalone(held)
+            if held:
+                renderer = target or TurnRenderer(await self._sink(), str(self.directory))
+                await self._standalone(held, text, renderer)
+            elif target is not None and not self._still_owed(target):
+                # Nothing more is coming for it either: D1's closing message, held until now.
+                await target.close_out()
         except Exception as exc:
             logger.warning(
                 "could not post a background update in %s/%s: %s",
@@ -1032,8 +1049,12 @@ class ThreadSession:
             self._expiry.cancel()
         turn = None if injected else self._sent.popleft()
         if turn is None:
-            renderer = TurnRenderer(await self._sink(), str(self.directory))
-            await renderer.feed_notice(self._opening())
+            # D1: a report turn renders into the reply that started the task it reports, so no
+            # new message follows for it; only when that reply is no longer tracked does it get
+            # one of its own, as every reply always has.
+            text, target = self._opening_target()
+            renderer = target or TurnRenderer(await self._sink(), str(self.directory))
+            await renderer.feed_notice(text)
         else:
             renderer = TurnRenderer(turn.sink, str(self.directory))
             await turn.sink.announce(texts.WRITING)
@@ -1045,17 +1066,21 @@ class ThreadSession:
             await renderer.feed(message)
         return ActiveTurn(turn, renderer)
 
-    async def _standalone(self, messages: list[Message]) -> None:
-        if not messages:
-            return
-        renderer = TurnRenderer(await self._sink(), str(self.directory))
-        await renderer.feed_notice(self._opening())
+    async def _standalone(self, messages: list[Message], text: str, renderer: TurnRenderer) -> None:
+        """The turn the CLI never started to report an ended task, on its own reply (D1: usually
+        the one that started the task, `renderer`; `_expire_injected_turn` resolves it)."""
+        await renderer.feed_notice(text)
         for message in messages:
             await renderer.feed(message)
         await self._close_reply(renderer, None)
 
     async def _close_reply(
-        self, renderer: TurnRenderer, footer: str | None, reply_to: str | None = None
+        self,
+        renderer: TurnRenderer,
+        footer: str | None,
+        reply_to: str | None = None,
+        *,
+        force: bool = False,
     ) -> None:
         for task_id in renderer.running_tasks:
             self._task_replies[task_id] = renderer
@@ -1065,9 +1090,15 @@ class ThreadSession:
         # Before the close, so the reply's last write already carries the list.
         await self._show_running()
         await renderer.close(footer, reply_to=reply_to)
+        # D1: the closing message follows at once unless a task this renderer started outlives
+        # this very turn; `force` is a stop, an error or a restart, which never waits for one.
+        if force or not self._still_owed(renderer):
+            await renderer.close_out()
 
     async def _stop_task_replies(self) -> None:
-        """The Claude Code process is going away with its tasks: no reply keeps showing one."""
+        """The Claude Code process is going away with its tasks: no reply keeps showing one, and
+        none is left waiting on a closing message that will now never come (D1: closed at once,
+        using whatever footer and notification its own turn already decided)."""
         renderers = set(self._task_replies.values())
         self._task_replies.clear()
         self._tasks.clear()
@@ -1077,10 +1108,23 @@ class ThreadSession:
         for renderer in renderers:
             with contextlib.suppress(Exception):
                 await renderer.stop_running()
+                await renderer.close_out()
         await self._show_running()
 
     def _origin_of(self, tool_use_id: str) -> TurnRenderer | None:
         return next((r for r in self._task_replies.values() if r.owns(tool_use_id)), None)
+
+    def _still_owed(self, renderer: TurnRenderer) -> bool:
+        """D1: whether one of `renderer`'s own tasks still keeps its closing message waiting:
+        one still runs, or one ended with no notification yet (its report, if any, not in
+        yet)."""
+        if renderer.running_tasks:
+            return True
+        return any(
+            task_id in self._unreported
+            for task_id, owner in self._task_replies.items()
+            if owner is renderer
+        )
 
     def _running_counts(self) -> str:
         """`⏳ 1 shell · 2 agents`: the tasks that outlived their turn and still run."""
@@ -1200,7 +1244,7 @@ class ThreadSession:
                 ring = ring and reply_to is None
                 with contextlib.suppress(Exception):
                     await active.renderer.feed_error(line)
-                    await self._close_reply(active.renderer, None, reply_to)
+                    await self._close_reply(active.renderer, None, reply_to, force=True)
             await self._stop_task_replies()
             for turn in sent:
                 await self._fail(turn, line, notify=ring)
@@ -1309,7 +1353,8 @@ class ThreadSession:
         `notify` the end rings: an error the owner has to see, not a stop or a restart."""
         try:
             await turn.sink.text(text)
-            await turn.sink.finish([], None, reply_to=asked(turn.prompt) if notify else None)
+            await turn.sink.finish([])
+            await turn.sink.close_out(None, asked(turn.prompt) if notify else None)
         finally:
             turn.done.set()
 

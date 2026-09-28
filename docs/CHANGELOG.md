@@ -52,6 +52,11 @@ All notable changes to this project are documented here. The format follows
   and limits; `!status` lists its values in the same order. The folder shows by its name alone,
   its whole path staying on `!status`, and the labels (`effort`, `tok`, `ctx`, `5h`, `7d`) are
   bold.
+- A reply's closing message, and the notification it carries, now wait for every task it started
+  and for the turn Claude Code starts to report one, instead of posting the moment the turn ends;
+  that report turn renders into the same reply, appended after its body, rather than opening one
+  of its own. `!stop`, an error, a restart and an idle close still close a reply at once, with no
+  further wait, as before.
 
 ### Fixed
 

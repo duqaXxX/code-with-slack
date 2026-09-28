@@ -56,13 +56,17 @@ none. Measured 2026-09-28 (Slack free plan, Slack iOS app, slack-sdk 3.44.1):
 
 So, inside a thread:
 
-- A complete reply rings once, in the closing message posted when the turn ends.
+- A complete reply rings once, in its closing message. It posts once the turn has ended and none
+  of its tasks still runs or still waits on a turn Claude Code starts to report it (D1): a reply
+  that starts a background command or an agent still rings for the question it answered, just
+  once that task, and its report if one comes, are both done.
 - An approval request and a question (`AskUserQuestion`) ring.
 - A reply that ends in an error rings, once per failure.
-- Nothing else rings: not `Claude is writing…`, not a rewrite, not the continuation of a reply
-  longer than one message, not a reply ended by `!stop`, a restart or an idle close, and not a
-  reply Claude Code starts on its own to report a background task (the prompt that started the
-  task already rang).
+- Nothing else rings: not `Claude is writing…`, not a rewrite (a turn Claude Code starts on its
+  own to report a background task edits the reply that started it, never a message of its own),
+  not the continuation of a reply longer than one message, and not a reply ended by `!stop`, a
+  restart or an idle close, which close with whatever the turn had already decided, never waiting
+  further.
 
 The notification text reads `Reply to: ` and the start of the owner's message.
 

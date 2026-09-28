@@ -25,7 +25,8 @@ class RecordingSink:
     def __init__(self) -> None:
         self.texts: list[str] = []
         self.tasks: list[TaskUpdate] = []
-        self.finished: tuple[list[TaskUpdate], str | None] | None = None
+        self.finished: list[TaskUpdate] | None = None
+        self.closed_out: tuple[str | None, str | None] | None = None
 
     async def text(self, markdown: str) -> None:
         self.texts.append(markdown)
@@ -33,10 +34,11 @@ class RecordingSink:
     async def task(self, update: TaskUpdate) -> None:
         self.tasks.append(update)
 
-    async def finish(
-        self, closing: list[TaskUpdate], footer: str | None, *, reply_to: str | None = None
-    ) -> None:
-        self.finished = (closing, footer)
+    async def finish(self, closing: list[TaskUpdate]) -> None:
+        self.finished = closing
+
+    async def close_out(self, footer: str | None, reply_to: str | None = None) -> None:
+        self.closed_out = (footer, reply_to)
 
 
 async def render(
@@ -47,6 +49,7 @@ async def render(
     for message in messages:
         await renderer.feed(message)
     await renderer.close(footer)
+    await renderer.close_out()
     return sink, renderer
 
 
@@ -68,7 +71,7 @@ async def test_tools_turn_streams_text_and_one_line_per_tool() -> None:
     assert ids and {t.id for t in sink.tasks} == set(ids)
     finals = {t.id: t for t in sink.tasks}
     assert all(finals[i].status == "complete" for i in ids)
-    assert sink.finished == ([], "footer")
+    assert sink.finished == [] and sink.closed_out == ("footer", None)
     assert renderer.result is not None
 
 
@@ -121,8 +124,7 @@ async def test_logged_out_cli_gets_the_login_instructions() -> None:
 async def test_an_interrupted_turn_closes_every_open_line_without_error() -> None:
     sink, _ = await render(sdk_messages("interrupt"))
     assert sink.finished is not None
-    closing, _ = sink.finished
-    assert all(t.status == "complete" for t in closing)
+    assert all(t.status == "complete" for t in sink.finished)
 
 
 async def test_background_notification_in_a_later_turn_gets_a_line() -> None:
@@ -136,7 +138,7 @@ async def test_a_task_still_running_when_its_turn_ends_stays_open_until_it_ends(
     first, later = split_turns(sdk_messages("background"))[:2]
     sink, renderer = await render(first)
     assert sink.finished is not None
-    (running,) = [t for t in sink.finished[0] if t.status == "in_progress"]
+    (running,) = [t for t in sink.finished if t.status == "in_progress"]
     assert running.details == BACKGROUND
     assert renderer.running_tasks
     for message in later:
@@ -186,7 +188,7 @@ async def test_any_tool_name_renders_the_same_way(name: str) -> None:
 )
 async def test_statuses_are_only_the_ones_slack_accepts(name: str) -> None:
     sink, _ = await render(sdk_messages(name))
-    closing = sink.finished[0] if sink.finished else []
+    closing = sink.finished if sink.finished is not None else []
     assert {t.status for t in sink.tasks + closing} <= ALLOWED
 
 
@@ -295,6 +297,6 @@ def test_ended_line_is_claude_code_s_own_summary(
 async def test_tool_and_task_lines_carry_their_name_and_kind() -> None:
     first = split_turns(sdk_messages("background"))[0]
     sink, _ = await render(first)
-    last = {t.id: t for t in sink.tasks + sink.finished[0]}  # type: ignore[index]
+    last = {t.id: t for t in sink.tasks + (sink.finished or [])}
     assert all(t.name for t in last.values())
     assert any(t.task for t in last.values())

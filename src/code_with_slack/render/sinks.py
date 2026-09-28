@@ -248,11 +248,13 @@ class ReplySink:
     """One reply in a Slack thread, written in the order things happen: text, then a line per
     tool where it ran, updated in place. The last line shows a status (Claude is writing, or
     waiting for the previous reply) until the reply ends. A reply past MESSAGE_LIMIT continues
-    in a new message. The end is a closing message of its own, posted then (a divider and the
-    footer): a new message is what notifies here, so a reply that must reach the owner still
-    posts one even with nothing else to show. Never raises: a write that fails is retried with
-    the whole reply at the next flush, the final one after FINAL_RETRY_SECONDS, and the session
-    goes on."""
+    in a new message. `finish` writes the body's final form only: a task that outlives the turn
+    keeps updating its own line after that, in place, since Claude Code can report on it again.
+    The end is a closing message of its own (a divider and the footer), posted by `close_out`
+    once the caller knows nothing more is coming: a new message is what notifies here, so a
+    reply that must reach the owner still posts one even with nothing else to show. Never
+    raises: a write that fails is retried with the whole reply at the next flush, the final one
+    after FINAL_RETRY_SECONDS, and the session goes on."""
 
     def __init__(self, slack: AsyncWebClient, *, channel: str, thread_ts: str) -> None:
         self._slack = slack
@@ -274,6 +276,8 @@ class ReplySink:
         self._closing_shown: list[dict[str, Any]] = []
         self._reply_to: str | None = None  # the owner's question: the closing message's text
         self._notify_kept = False  # whether the closing message still owes its notification
+        self._closed_out = False  # whether close_out has run; a second call is a no-op
+        self._closing_retry: asyncio.Task[None] | None = None
 
     async def open(self, status: str) -> None:
         """Post the reply at once, showing only its status: the owner sees an answer is coming."""
@@ -320,26 +324,42 @@ class ReplySink:
         if self._finished:
             await self._changed()
 
-    async def finish(
-        self, closing: list[TaskUpdate], footer: str | None, *, reply_to: str | None = None
-    ) -> None:
-        """End the reply. A line still in progress is a task that outlives the turn: `task`
-        keeps updating it after the end. With `reply_to` (the owner's question, one line) the
-        closing message notifies the owner; without it the end is silent."""
+    async def finish(self, closing: list[TaskUpdate]) -> None:
+        """End the reply's body. A line still in progress is a task that outlives the turn:
+        `task` keeps updating it after this, in place. The closing message (the footer, the
+        notification) is not written here: it comes from `close_out`, once the caller knows
+        nothing more is coming (a task can still outlive this very turn)."""
         for update in closing:
             await self.task(update)
         if self._pending is not None:
             self._pending.cancel()
-        self._finished, self._footer, self._reply_to = True, footer, reply_to
-        # A reply already superseded when it ends still owes its notification: nothing later
-        # takes that back, even once `set_latest` drops the footer for good.
-        self._notify_kept = not self._latest
+        self._finished = True
         if not await self._flush(final=True):
             self._retry = asyncio.create_task(self._retry_final())
 
     async def _retry_final(self) -> None:
         await asyncio.sleep(FINAL_RETRY_SECONDS)
         await self._flush(final=True)
+
+    async def close_out(self, footer: str | None, reply_to: str | None = None) -> None:
+        """Post the closing message: the footer and what still runs, once, below the body.
+        With `reply_to` (the owner's question, one line) it notifies the owner; without it the
+        end is silent. A second call is a no-op: the reply has already closed."""
+        if self._closed_out:
+            return
+        self._closed_out = True
+        self._footer, self._reply_to = footer, reply_to
+        # A reply already superseded by the time it closes out still owes its notification:
+        # nothing later takes that back, even once `set_latest` drops the footer for good.
+        self._notify_kept = not self._latest
+        async with self._lock:
+            if not await self._write_closing():
+                self._closing_retry = asyncio.create_task(self._retry_closing())
+
+    async def _retry_closing(self) -> None:
+        await asyncio.sleep(FINAL_RETRY_SECONDS)
+        async with self._lock:
+            await self._write_closing()
 
     async def _changed(self) -> None:
         if self._finished:
@@ -551,5 +571,6 @@ class ReplySink:
                     return False
                 self._messages.pop()
                 self._shown.pop()
-            # After the body, so the closing message is posted below it.
-            return await self._write_closing() if final else True
+            # After the body, so the closing message is posted below it. Only once `close_out`
+            # has run: before that, nothing is known about the footer or the notification yet.
+            return await self._write_closing() if final and self._closed_out else True
