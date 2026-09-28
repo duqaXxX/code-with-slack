@@ -21,6 +21,7 @@ how a reply looks on desktop and on mobile is checked by hand.
 | Tool lines fold in the terminal's words (`Ran 2 shell commands · Read 1 file`) | `test_sinks`, `test_previews` | P10 | none |
 | Edit and Write previews: sentence, diff or new file's lines | `test_previews`, `test_sinks` | P13 | A diff opens and closes on desktop and mobile; it colours on desktop, the squares on mobile |
 | Notifications: one per complete reply, approval, question or error, none while Claude writes | `test_sinks`, `test_sessions` | none | In a thread you started, away from Slack: a reply rings once, `!stop` does not |
+| Status reaction: one on each session's root message, ⏳ working, ✋ waiting for you, ✅ ended, ❌ error, `!stop` or a restart that cut it short | `test_status`, `test_sessions` | none | The reaction moves ⏳ to ✅ in the channel list |
 | Approvals: Approve and Deny buttons for a tool call, each resolved only in its own thread | `test_approvals`, `test_sessions`, `test_slack_app` | P11 | none |
 | Questions: the Answer form, and the answered record kept in the thread | `test_approvals`, `test_slack_app` | none | Answer a real question; the record stays with each answer |
 | `!bypass`, kept per thread in `state.json` across restarts; refused at the top level | `test_sessions`, `test_state`, `test_slack_app` | P9 | none |

@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- A status reaction on each session's root message: ⏳ working, ✋ waiting for the owner, ✅ once
+  everything has ended, ❌ on an error, `!stop` or a restart that cut a busy session short (D10).
+  `reactions:write` is added to the bot's Slack scopes.
 - One `chat.update` limiter shared by every reply: a token bucket paced at 40 writes per 60
   seconds plus a burst of 5, worst case 45 in one window, still under Slack's documented floor,
   so several busy threads stay under the app-wide `chat.update` budget together instead of each
