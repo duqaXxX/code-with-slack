@@ -65,6 +65,7 @@ from code_with_slack.guards import (
     is_prompt_message,
     message_actor,
 )
+from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, hold_blocks
 from code_with_slack.prompt import Prompt
 from code_with_slack.render.escape import markdown_escape, mrkdwn_escape
 from code_with_slack.render.renderer import one_line
@@ -144,6 +145,7 @@ def build_app(
     identity: Identity,
     sessions: SessionManager,
     approvals: Approvals,
+    holds: Holds,
     guard: ChannelGuard,
     state: StateStore,
     uploads: Path,
@@ -300,6 +302,16 @@ def build_app(
             prompt = await with_attachments(channel, thread_ts, text, files) if files else text
             if prompt is None:
                 return
+            # D8: this message would wake `session` (busy just queues behind what is already
+            # running); ask first when another live session, of any channel, is already busy in
+            # the same resolved folder. Later messages of this thread queue behind the wait,
+            # since it runs inside the arrival lock.
+            if not session.busy:
+                other = sessions.working_in(session.directory, besides=session)
+                if other is not None and not await hold_before_sending(
+                    channel, thread_ts, session, other
+                ):
+                    return
             # Retried once against a freshly looked-up session: the one this call was handed can
             # still close under it (most likely D9's idle close, though `touch()` at the lookup
             # already guards the common case) during the download above or the steps below.
@@ -327,6 +339,64 @@ def build_app(
                         # close), so a retry would find nothing here again either.
                         raise SessionGone from None
                     session = fresh
+
+    async def hold_before_sending(
+        channel: str, thread_ts: str, session: ThreadSession, other: ThreadSession
+    ) -> bool:
+        """D8: post `Another session is working in this folder: <link>. Send anyway?` and wait
+        for the owner's Continue or Cancel, cancelled the same way by `!stop` (in this thread or
+        the whole channel) or a drain. True to send the message on; False when it was not,
+        either way telling the owner `Not sent.` already."""
+        link = await thread_link(other.channel_id, other.thread_ts)
+        hold_id, pending = holds.open(channel, thread_ts)
+        try:
+            posted = await slack.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                text=texts.HOLD_QUESTION.format(link=link),
+                blocks=hold_blocks(hold_id, link),
+                unfurl_links=False,
+                unfurl_media=False,
+            )
+        except Exception as exc:
+            # Nobody can answer a question that was never shown: fail closed, as an unpostable
+            # approval does, rather than send into a folder another session is using.
+            logger.error("could not post a D8 hold in %s/%s: %s", channel, thread_ts, describe(exc))
+            holds.discard(hold_id)
+            await tell_owner(channel, thread_ts, texts.HOLD_UNPOSTED)
+            return False
+        message_ts = str(posted["ts"])
+        if not holds.posted(hold_id, message_ts):
+            # Decided (a fast `!stop` or drain) before the message's own ts was known: nobody
+            # else learned it in time to remove it.
+            await remove_request(channel, message_ts)
+        session.hold_start()
+        try:
+            continued = await pending.future
+        finally:
+            session.hold_end(continued=continued)
+        if not continued:
+            await notice(channel, thread_ts, texts.NOT_SENT)
+        return continued
+
+    async def on_hold_decision(ack: AsyncAck, body: dict[str, Any]) -> None:
+        await ack()
+        user, team = interaction_actor(body)
+        channel = (body.get("channel") or {}).get("id")
+        thread_ts = click_thread(body)
+        if not await admitted(user, team, channel, thread_ts):
+            return
+        assert channel is not None
+        action = body["actions"][0]
+        hold_id = str(action.get("value"))
+        continue_ = action["action_id"] == HOLD_CONTINUE
+        if holds.resolve(hold_id, channel, thread_ts, continue_=continue_) is None:
+            await tell_owner(channel, thread_ts, texts.APPROVAL_GONE)
+            return
+        await remove_request(channel, body["message"]["ts"])
+
+    for action_id in (HOLD_CONTINUE, HOLD_CANCEL):
+        app.action(action_id)(on_hold_decision)
 
     async def handle_word(
         channel: str, thread_ts: str, command: Word, *, session: ThreadSession | None

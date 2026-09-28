@@ -65,6 +65,7 @@ from code_with_slack.footer import (
     session_tokens,
 )
 from code_with_slack.guards import Identity
+from code_with_slack.hold import Holds
 from code_with_slack.prompt import Prompt, user_message
 from code_with_slack.render.renderer import (
     INTERRUPTED,
@@ -121,6 +122,9 @@ DRAIN_POLL_SECONDS = 0.5
 # approval, question or background report pending); the next message rebuilds it and resumes.
 # Read at fire time, like INJECTED_TURN_WAIT, so a test can lower it with monkeypatch.
 IDLE_CLOSE_SECONDS = 3600.0
+# D8: the one hold a thread can have open at once, in `_waiting` alongside real approval ids
+# (`waiting_for_owner` and D9's idle-close timer treat every entry the same).
+_HOLD_MARKER = "d8-hold"
 # How much of the owner's question a notification quotes.
 ASKED_LIMIT = 100
 # The levels `ClaudeAgentOptions.effort` accepts. A stored value outside this set (a CLI wording
@@ -271,6 +275,9 @@ class SessionDeps:
     state: StateStore
     approvals: Approvals
     usage: UsageCache
+    # D8: kept in memory only, shared with slack_app.py's click handlers (Holds() default gives
+    # every test its own, as `update_limiter` does).
+    holds: Holds = field(default_factory=Holds)
     client_factory: ClientFactory = default_client_factory
     workspace_trusted: Callable[[Path], Awaitable[bool]] = workspace_trusted
     sessions_of: Callable[[Path], list[SDKSessionInfo]] = directory_sessions
@@ -364,8 +371,11 @@ class ThreadSession:
         # `_expire_unreported`'s own timers only: this session's alone, so `close` can cancel
         # them without touching `_background`'s shared-client tasks.
         self._expiring: set[asyncio.Task[None]] = set()
-        # Approval ids open right now, waiting on the owner's decision (`waiting_for_owner`).
+        # Approval ids open right now, waiting on the owner's decision (`waiting_for_owner`); a
+        # D8 hold adds `_HOLD_MARKER` here too.
         self._waiting: set[str] = set()
+        # D8: what the root showed just before `hold_start`, for `hold_end` to restore on Cancel.
+        self._hold_before: Status | None = None
         # Task messages that arrived between turns, shown in the next turn's reply.
         self._held: list[Message] = []
         # Tasks that outlived their turn, and the reply whose line each one keeps up to date,
@@ -475,6 +485,48 @@ class ThreadSession:
         caller might do on the way to its own `submit`: otherwise the timer could still fire, and
         close the session, in the gap between the lookup and the turn actually being queued."""
         self._idle_timer_check()
+
+    def hold_start(self) -> None:
+        """D8: mark this thread's 'send anyway?' question as waiting on the owner, the same way
+        an approval does (`waiting_for_owner` covers both, so D9's idle-close timer stays off and
+        D10 shows ✋). At most one hold is ever open on a thread at once: `submit_to_session`
+        waits on it inside the thread's own arrival lock, so a caller of this always pairs it with
+        one `hold_end`, with nothing else of this session's own work between the two."""
+        self._hold_before = self._status.current
+        self._waiting.add(_HOLD_MARKER)
+        self._idle_timer_check()
+        self._react(Status.WAITING)
+
+    def hold_end(self, *, continued: bool) -> None:
+        """Undo `hold_start`. `continued`: Continue was chosen, so the reaction is left alone (a
+        `submit()` right after this returns shows ⏳ on its own); otherwise (Cancel, `!stop`, a
+        drain) the root goes back to whatever it showed before the hold started, or bare when it
+        had shown nothing yet (a session that never ran)."""
+        self._waiting.discard(_HOLD_MARKER)
+        self._idle_timer_check()
+        if continued:
+            self._hold_before = None
+            return
+        before, self._hold_before = self._hold_before, None
+        if before is not None:
+            self._react(before)
+        else:
+            self._error_standing = False
+            task = asyncio.create_task(self._status.clear())
+            self._background.add(task)
+            task.add_done_callback(self._background.discard)
+
+    async def cancel_hold(self) -> bool:
+        """Cancel a D8 hold open in this thread, as the owner's own Cancel would: `stop()` and
+        `SessionManager.drain` both call this (a drain, unlike an approval or a question, never
+        leaves a hold open: nobody could still be typing a reply to a question that names a
+        session about to close). The button message is removed here, silently; `submit_to_session`
+        is the one waiting on the future, and it tells the owner `Not sent.` once it wakes."""
+        pending = self._deps.holds.cancel(self.channel_id, self.thread_ts)
+        if pending is None:
+            return False
+        await self._delete_request(pending.message_ts)
+        return True
 
     async def fail_queued(self, line: str, *, error: bool = False) -> None:
         """End every queued turn's reply with `line`, and release whoever waits on them.
@@ -648,7 +700,12 @@ class ThreadSession:
 
     async def stop(self) -> bool:
         """Interrupt the running turn, deny its pending approvals and stop this thread's
-        background tasks; queued turns stay queued."""
+        background tasks; queued turns stay queued. A D8 hold open in this thread is always
+        cancelled too, silently (`submit_to_session` tells the owner `Not sent.` once it wakes):
+        the return value, which the caller turns into "Stopped..."/"Nothing is running...", still
+        answers only for a turn or a task, since a hold with nothing else running stops nothing
+        Claude Code itself was doing."""
+        await self.cancel_hold()
         if self._client is None:
             return False
         tasks = self._running_task_ids()
@@ -1718,6 +1775,23 @@ class SessionManager:
         a gone resume) is left out even before the next lookup evicts it."""
         return [s for (c, _), s in self._sessions.items() if c == channel_id and not s.closed]
 
+    def working_in(self, directory: Path, *, besides: ThreadSession) -> ThreadSession | None:
+        """D8: a live session of any channel, other than `besides`, whose resolved folder is
+        `directory` and is not idle (a background task counts as working, same as `idle` already
+        treats it). The first one found is enough: the question links to it."""
+        resolved = directory.resolve()
+        return next(
+            (
+                s
+                for s in self._sessions.values()
+                if s is not besides
+                and not s.closed
+                and not s.idle
+                and s.directory.resolve() == resolved
+            ),
+            None,
+        )
+
     async def bind(self, channel_id: str, directory: Path) -> bool:
         """Bind the channel to `directory`, for the next thread it opens; False, and nothing
         changed, while any live session of the channel is not idle (D5). A thread already open
@@ -1771,13 +1845,16 @@ class SessionManager:
         idle, or when `cut_short` is set. Idle includes the background commands and agents, which
         die with the Claude Code process, and the turn Claude Code starts to report each one.
         Queued turns end at once, asking to be sent again. An approval or a question stays open:
-        the Slack connection lives until the drain ends, so the owner can still answer it."""
+        the Slack connection lives until the drain ends, so the owner can still answer it. A D8
+        hold does not: it asks about a session the restart is about to touch, so it is cancelled
+        here exactly as `!stop` would (its own waiter tells the owner `Not sent.`)."""
         self.draining = True
         sessions = list(self._sessions.values())
         # Every flag before the first await: no worker sends a queued turn in between.
         for session in sessions:
             session.draining = True
         for session in sessions:
+            await session.cancel_hold()
             # D10: a queued turn genuinely dropped by the drain reacts ❌, though it never
             # rings (the restart itself is announced separately, right below).
             await session.fail_queued(texts.ENDED.format(reason=texts.ENDED_RESTARTING), error=True)
