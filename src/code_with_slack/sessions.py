@@ -1127,17 +1127,18 @@ class ThreadSession:
     def _react(self, state: Status) -> None:
         """Show `state` on the root message reaction as a task this session tracks (D10): a
         reaction must never delay a turn, and `StatusReaction.show` already serializes its own
-        calls and swallows their errors, so nothing here waits on it."""
+        calls and swallows their errors, so nothing here waits on it. `_error_standing` follows
+        the state asked for last, set here synchronously, since `StatusReaction.current` changes
+        only once Slack has answered."""
+        self._error_standing = state is Status.ERROR
         task = asyncio.create_task(self._status.show(state))
         self._background.add(task)
         task.add_done_callback(self._background.discard)
 
     def _react_error(self) -> None:
-        """❌ (D10), remembered in `_error_standing` synchronously, right now: `_react`'s own
-        Slack call is fire-and-forget, so `StatusReaction.current` would still read the old
-        state for a while yet, long enough for a quick turn's own idle sweep to mistake this
-        session for done."""
-        self._error_standing = True
+        """❌ (D10). It stands until another state is asked for: `_react` records it in
+        `_error_standing` at once, before Slack answers, so a quick turn's own idle sweep cannot
+        mistake this session for done."""
         self._react(Status.ERROR)
 
     def _react_waiting_or_working(self) -> None:

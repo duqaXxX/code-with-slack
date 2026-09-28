@@ -3170,3 +3170,28 @@ async def test_closing_a_session_with_only_a_running_task_left_shows_error(
     assert session.busy is False  # the bug: `busy` alone would miss the running task
     await session.close()
     assert h.reactions() == [Status.WORKING.value, Status.ERROR.value]
+
+
+async def test_a_turn_that_finishes_after_a_restart_drain_dropped_a_queued_one_ends_on_done(
+    harness_for: Callable[[dict[str, Any]], Harness],
+) -> None:
+    # A restart drain drops a queued turn (❌) while the running turn waits on an approval the
+    # owner can still answer; the answer shows ⏳ again, and when that turn ends the root reads
+    # ✅: the ❌ stood only until the next state was asked for.
+    ask = CanUseToolCall("Bash", {"command": "ls"})
+    msgs = sdk_messages("tools")
+    h = harness_for({"turns": [[*msgs[:13], ask, *msgs[13:]]]})
+    session = h.session()
+    first = await session.submit("first")
+    second = await session.submit("second")
+    await until(lambda: bool(h.approvals._pending))
+    drained = asyncio.create_task(h.manager.drain(asyncio.Event()))
+    await asyncio.wait_for(second.done.wait(), 2)
+    approval_id = next(iter(h.approvals._pending))
+    assert h.approvals.resolve(approval_id, CHANNEL, THREAD, Approve()) is not None
+    await asyncio.wait_for(first.done.wait(), 2)
+    await asyncio.wait_for(drained, 3)
+    await h.manager.close_all()
+    await asyncio.sleep(0.2)
+    assert Status.ERROR.value in h.reactions()
+    assert h.reactions()[-1] == Status.DONE.value
