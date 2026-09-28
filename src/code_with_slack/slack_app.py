@@ -300,18 +300,31 @@ def build_app(
             prompt = await with_attachments(channel, thread_ts, text, files) if files else text
             if prompt is None:
                 return
-            if isinstance(command, Passthrough):
-                await session.ensure_connected()
-                known = {str(c.get("name")) for c in session.commands}
-                name = command.text.split(" ", 1)[0]
-                prompt = f"/{command.text}" if name in known else text
-            # Checked last, with no await before the submit: a stop can start during a download.
-            # The daemon's words still work meanwhile (`!stop` shortens the wait); a new turn
-            # would not finish, and Slack does not send this event again to the next instance.
-            if sessions.draining:
-                await notice(channel, thread_ts, texts.RESTARTING)
-                return
-            await session.submit(prompt)
+            # Retried once against a freshly looked-up session: the one this call was handed can
+            # still close under it (most likely D9's idle close, though `touch()` at the lookup
+            # already guards the common case) during the download above or the steps below.
+            for attempt in range(2):
+                try:
+                    if isinstance(command, Passthrough):
+                        await session.ensure_connected()
+                        known = {str(c.get("name")) for c in session.commands}
+                        name = command.text.split(" ", 1)[0]
+                        prompt = f"/{command.text}" if name in known else text
+                    # Checked last, with no await before the submit: a stop can start during a
+                    # download. The daemon's words still work meanwhile (`!stop` shortens the
+                    # wait); a new turn would not finish, and Slack does not resend this event.
+                    if sessions.draining:
+                        await notice(channel, thread_ts, texts.RESTARTING)
+                        return
+                    await session.submit(prompt)
+                    return
+                except SessionClosed:
+                    if attempt:
+                        raise
+                    fresh = sessions.get(channel, thread_ts)
+                    if fresh is None:
+                        raise
+                    session = fresh
 
     async def handle_word(
         channel: str, thread_ts: str, command: Word, *, session: ThreadSession | None

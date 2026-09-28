@@ -1949,10 +1949,10 @@ async def test_an_idle_session_closes_itself_after_the_delay_and_posts_nothing(
     h = harness_for({"turns": [sdk_messages("tools")]})
     session = h.session()
     await asyncio.wait_for((await session.submit("hi")).done.wait(), 2)
-    posts_before = len(h.slack.calls_to("chat.postMessage"))
+    calls_before = len(h.slack.calls)  # every kind: postMessage, update, delete
     await until(lambda: not h.clients[0].connected, limit=1)
     assert session.closed
-    assert len(h.slack.calls_to("chat.postMessage")) == posts_before  # a silent close
+    assert len(h.slack.calls) == calls_before  # a silent close
 
 
 async def test_the_idle_close_does_not_fire_while_a_turn_runs(
@@ -2074,3 +2074,181 @@ async def test_a_gone_session_is_left_out_of_sessions_of(
     await asyncio.wait_for(turn.done.wait(), 2)
     assert session.closed
     assert h.manager.sessions_of(CHANNEL) == []
+
+
+# D9 fix round 1: the resume race, the routing race, the two missed re-arm points, the effort
+# edge cases and the eviction leak the reviewer found.
+
+
+async def test_ensure_connected_waits_for_the_predecessor_s_disconnect_before_resuming(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # SubprocessCLITransport.close() notes the CLI needs real time to flush and exit after EOF:
+    # a rebuild must never resume the same session id while that is still in flight.
+    gate = asyncio.Event()
+    h = harness_for({"disconnect_gate": gate}, {"turns": [sdk_messages("tools")]})
+    session = h.session()
+    await session.ensure_connected()
+    h.state.set_session(CHANNEL, THREAD, "prior")
+    closing = asyncio.create_task(session.close())
+    await asyncio.sleep(0.05)  # close() is now blocked inside the gated disconnect
+    assert not closing.done()
+    assert session.closed  # closing has started...
+    assert h.clients[0].connected is True  # ...but has not finished
+    rebuilt = h.manager.get(CHANNEL, THREAD)
+    assert rebuilt is not None and rebuilt is not session
+    connecting = asyncio.create_task(rebuilt.ensure_connected())
+    await asyncio.sleep(0.05)
+    assert not connecting.done()  # waiting on the predecessor: no second client started yet
+    assert len(h.clients) == 1
+    gate.set()
+    await asyncio.wait_for(closing, 2)
+    await asyncio.wait_for(connecting, 2)
+    assert len(h.clients) == 2
+    assert h.clients[1].options.resume == "prior"
+
+
+async def test_close_all_waits_for_an_idle_close_already_in_flight(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    gate = asyncio.Event()
+    h = harness_for({"disconnect_gate": gate})
+    session = h.session()
+    await session.ensure_connected()
+    await until(lambda: session.closed, limit=1)  # the idle close fired and is now in flight
+    assert h.clients[0].connected is True  # blocked inside the gated disconnect
+    closing_all = asyncio.create_task(h.manager.close_all())
+    await asyncio.sleep(0.05)
+    assert not closing_all.done()  # waits for the in-flight close rather than returning early
+    gate.set()
+    await asyncio.wait_for(closing_all, 2)
+    assert h.clients[0].connected is False
+
+
+async def test_a_lookup_touches_the_idle_timer_before_any_await(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The timer armed when the turn ended is close to firing; a lookup (a message arriving) must
+    # reset it to a fresh IDLE_CLOSE_SECONDS, synchronously, before any slow step (a download, a
+    # Slack call) a caller might do on the way to its own submit.
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.1)
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("hi")).done.wait(), 2)
+    await asyncio.sleep(0.07)  # close to the stale timer's own delay, not yet closed
+    looked_up = h.manager.get(CHANNEL, THREAD)
+    assert looked_up is session
+    await asyncio.sleep(0.07)  # past where the STALE timer would have fired (0.1s from the end)
+    assert not session.closed  # the touch gave it a fresh window instead
+
+
+async def test_a_lookup_of_an_idle_session_still_closes_it_eventually(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The touch above resets the clock; it does not disarm it. A lookup with no submit ever
+    # following stays a session with nothing to do, and closes on its own new schedule.
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("hi")).done.wait(), 2)
+    assert h.manager.get(CHANNEL, THREAD) is session
+    await until(lambda: session.closed, limit=1)
+
+
+async def test_submit_on_a_closed_session_raises_session_closed(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({})
+    session = h.session()
+    await session.close()
+    with pytest.raises(sessions.SessionClosed):
+        await session.submit("hi")
+
+
+async def test_ensure_connected_arms_the_idle_close_too(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A daemon word (`!status`, `!help`, `!bypass`) connects with no turn ever submitted.
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    h = harness_for({})
+    session = h.session()
+    await session.ensure_connected()
+    await until(lambda: session.closed, limit=1)
+
+
+async def test_the_idle_close_arms_again_when_no_report_turn_ever_comes(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.05)
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    first, notice, _ = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    h.clients[0].inject(notice)  # a report turn is expected, but never sent in this test
+    await until(lambda: session.closed, limit=2)  # INJECTED_TURN_WAIT elapses, then the timer
+
+
+async def test_a_model_change_with_no_effort_does_not_clear_the_stored_level(
+    harness_for: Callable[..., Harness],
+) -> None:
+    turn = sdk_messages("usage")
+    result = turn[-1]
+    assert isinstance(result, ResultMessage)
+    model_turn = [
+        *turn[:-1],
+        dataclasses.replace(result, result="Set model to `Sonnet 5` for this session only"),
+    ]
+    h = harness_for({"turns": [model_turn]})
+    session = h.session()  # opens the thread
+    h.state.set_effort(CHANNEL, THREAD, "high")  # stored from an earlier turn
+    await asyncio.wait_for((await session.submit("/model sonnet")).done.wait(), 2)
+    assert h.state.thread(CHANNEL, THREAD).effort == "high"  # unknown, not cleared
+
+
+async def test_an_unrecognized_stored_effort_is_dropped_not_sent(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({})
+    h.session()  # opens the thread
+    h.state.set_effort(CHANNEL, THREAD, "ultra")  # not one of the SDK's EffortLevel values
+    await h.session().ensure_connected()
+    assert h.clients[0].options.effort is None
+
+
+async def test_an_idle_closed_session_is_evicted_even_with_no_further_lookup(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("hi")).done.wait(), 2)
+    await until(lambda: not h.clients[0].connected, limit=1)
+    key = (CHANNEL, THREAD)
+    await until(lambda: key not in h.manager._sessions, limit=1)
+
+
+async def test_the_idle_close_does_not_fire_while_a_plain_turn_runs(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No approval at all this time: just a turn that has not finished yet.
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    h = harness_for({"turns": [[]]})  # a turn with no messages: stays "sent" forever
+    session = h.session()
+    turn = await session.submit("still working")
+    await asyncio.sleep(0.1)
+    assert not session.closed
+    assert not turn.done.is_set()
+
+
+async def test_drain_suppresses_the_idle_close(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("hi")).done.wait(), 2)
+    session.draining = True
+    await asyncio.sleep(0.1)
+    assert not session.closed

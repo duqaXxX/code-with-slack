@@ -1105,6 +1105,30 @@ async def test_a_command_after_a_message_with_files_waits_its_turn(
     assert [str(p).startswith(body["event"]["text"]) for p in queued] == [True, False]
 
 
+async def test_a_session_closed_during_a_slow_download_is_retried_on_a_fresh_one(
+    world: World,
+) -> None:
+    # D9: whatever closed the session handed to this call (an idle close, most likely, though
+    # `touch()` at the lookup already guards that common case) during the slow step below must
+    # not lose the prompt: submit_to_session retries once against a freshly looked-up session.
+    body = shared_file("snippet")
+    file_thread = str(body["event"]["ts"])
+    world.downloads[body["event"]["files"][0]["url_private_download"]] = b"hello\n"
+    world.slow_downloads = 0.2
+    dispatching = asyncio.create_task(world.dispatch(body))
+    async with asyncio.timeout(2):
+        session = None
+        while session is None:
+            session = world.sessions.get(CHANNEL, file_thread)
+            await asyncio.sleep(0.01)
+    await session.close()  # something else closes it while the download is still running
+    await dispatching
+    await asyncio.sleep(0.3)  # let the slow download finish and the retried submit run
+    assert world.queries() != []
+    rebuilt = world.sessions.get(CHANNEL, file_thread)
+    assert rebuilt is not None and rebuilt is not session
+
+
 async def test_a_prompt_while_the_daemon_stops_is_refused_and_words_still_work(
     world: World,
 ) -> None:

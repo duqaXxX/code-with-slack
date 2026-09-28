@@ -10,7 +10,7 @@ from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, cast, get_args
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -27,6 +27,7 @@ from claude_agent_sdk import (
 from claude_agent_sdk.types import (
     TERMINAL_TASK_STATUSES,
     CanUseTool,
+    EffortLevel,
     HookCallback,
     HookContext,
     HookInput,
@@ -115,6 +116,10 @@ DRAIN_POLL_SECONDS = 0.5
 IDLE_CLOSE_SECONDS = 3600.0
 # How much of the owner's question a notification quotes.
 ASKED_LIMIT = 100
+# The levels `ClaudeAgentOptions.effort` accepts. A stored value outside this set (a CLI wording
+# `footer.effort_change` parsed that the SDK's own type does not know, such as "auto") is never
+# sent: `_connect` drops it rather than pass something the SDK was not built to validate.
+VALID_EFFORT_LEVELS = frozenset(get_args(EffortLevel))
 
 
 class DirectoryUnavailable(Exception):
@@ -204,7 +209,7 @@ def injected_turn(result: ResultMessage) -> bool:
 def client_options(
     directory: Path,
     session_id: str | None,
-    effort: str | None,
+    effort: EffortLevel | None,
     can_use_tool: CanUseTool,
     on_stop: HookCallback,
     on_tool_done: HookCallback,
@@ -214,9 +219,9 @@ def client_options(
         resume=session_id,
         # D9: the model set with `/model` survives a resume by itself (measured); the effort
         # `/effort` set does not, so the daemon stores it per thread and passes it back here.
-        # `effort` is free text parsed from the CLI's own output (footer.effort_change), not
-        # validated against the SDK's EffortLevel literal.
-        effort=effort,  # type: ignore[arg-type]
+        # Validated against VALID_EFFORT_LEVELS by the caller, so this is always a level the SDK
+        # itself would accept.
+        effort=effort,
         setting_sources=["user", "project", "local"],
         include_partial_messages=True,
         can_use_tool=can_use_tool,
@@ -292,7 +297,15 @@ class ActiveTurn:
 
 
 class ThreadSession:
-    def __init__(self, channel_id: str, thread_ts: str, directory: Path, deps: SessionDeps) -> None:
+    def __init__(
+        self,
+        channel_id: str,
+        thread_ts: str,
+        directory: Path,
+        deps: SessionDeps,
+        *,
+        predecessor: asyncio.Event | None = None,
+    ) -> None:
         self.channel_id = channel_id
         self.thread_ts = thread_ts
         self.directory = directory
@@ -307,6 +320,18 @@ class ThreadSession:
         self._connect_lock = asyncio.Lock()
         # Set once close starts: no client starts after it, and no word stores a setting.
         self._closed = False
+        # The predecessor this object replaced at its key (D9: the manager evicts a closed
+        # session as soon as closing starts, not once it finishes). Awaited once, inside the
+        # connect lock, before this session's own first connect: the SDK's transport needs real
+        # time to flush the old CLI process after EOF, and a resume of the same session id must
+        # not start while that is still in flight.
+        self._predecessor = predecessor
+        # Set once close() (or the SessionGone branch) has fully finished: the predecessor signal
+        # above, for whoever replaces this session next, and what `close_all` waits on.
+        self.done_closing: asyncio.Event = asyncio.Event()
+        # Set by the manager that created this session; called once, right when `done_closing`
+        # is set, so a session nobody ever looks up again does not sit in `_sessions` forever.
+        self.on_closed: Callable[[], None] | None = None
         self._notice: str | None = None
         self._background: set[asyncio.Task[None]] = set()
         # Approval ids open right now, waiting on the owner's decision (`waiting_for_owner`).
@@ -393,9 +418,10 @@ class ThreadSession:
 
     @property
     def closed(self) -> bool:
-        """Closed for good (`close()` has started: a shutdown, D9's idle close, or the
-        SessionGone branch of `ensure_connected`). The manager discards this object at its next
-        lookup and leaves it out of `sessions_of`; nothing here is ever reused."""
+        """Closing has started (`close()`'s first line, a shutdown, D9's idle close, or the
+        SessionGone branch of `ensure_connected`); the teardown itself may still be running.
+        The manager discards this object rather than hand it out again, from its next lookup
+        (`sessions_of` already leaves it out); `done_closing` says when the teardown is over."""
         return self._closed
 
     @property
@@ -405,6 +431,13 @@ class ThreadSession:
         now = asyncio.get_running_loop().time()
         return any(now - ended < INJECTED_TURN_WAIT for ended in self._unreported.values())
 
+    def touch(self) -> None:
+        """Cancel or (re)arm the idle-close timer for the state right now (D9). The manager calls
+        this wherever a session is handed out (`get`/`open`), synchronously, before any await a
+        caller might do on the way to its own `submit`: otherwise the timer could still fire, and
+        close the session, in the gap between the lookup and the turn actually being queued."""
+        self._idle_timer_check()
+
     async def fail_queued(self, line: str) -> None:
         """End every queued turn's reply with `line`, and release whoever waits on them."""
         while not self._queue.empty():
@@ -412,7 +445,13 @@ class ThreadSession:
                 await self._fail(self._queue.get_nowait(), line)
 
     async def submit(self, prompt: Prompt) -> Turn:
-        """Queue a prompt; its reply appears at once, saying Claude is writing or waiting."""
+        """Queue a prompt; its reply appears at once, saying Claude is writing or waiting.
+        Raises `SessionClosed` if the session closed (an idle close, most likely) between the
+        caller's lookup and this call; the caller retries once, against a freshly looked-up
+        session (D9)."""
+        if self._closed:
+            raise SessionClosed
+        self._idle_timer_check()  # cancelled here, before anything below can await (D9)
         waiting = self.busy or not self._queue.empty() or not self._settled.is_set()
         sink = await self._sink()
         await sink.open(texts.WAITING if waiting else texts.WRITING)
@@ -430,6 +469,12 @@ class ThreadSession:
                 raise SessionClosed
             if self._client is not None:
                 return self._client
+            if self._predecessor is not None:
+                # The Claude Code process this thread had before may still be exiting: the SDK's
+                # transport notes it needs real time to flush the session file after EOF (up to
+                # ~20 s). Connecting with `resume=<the same id>` before that is done would race it.
+                await self._predecessor.wait()
+                self._predecessor = None
             await check_directory(self.directory, self._deps.workspace_trusted)
             stored = self._deps.state.thread(self.channel_id, self.thread_ts)
             session_id = stored.session_id if stored else None
@@ -448,6 +493,11 @@ class ThreadSession:
                 )
                 self._deps.state.remove_thread(self.channel_id, self.thread_ts)
                 self._closed = True
+                # No client was ever connected in this branch (`_connect` raised): nothing to
+                # wait on, so the "fully closed" signal fires at once, same as `close()`'s tail.
+                self.done_closing.set()
+                if self.on_closed is not None:
+                    self.on_closed()
                 await self.fail_queued(texts.SESSION_GONE)
                 raise SessionGone from exc
             try:
@@ -467,6 +517,7 @@ class ThreadSession:
             self.session_tokens = None  # counted by the client process, which starts at zero
             name = f"reader-{self.channel_id}-{self.thread_ts}"
             self._reader = asyncio.create_task(self._read(client), name=name)
+            self._idle_timer_check()  # a daemon word (`!status`, say) connects with no turn (D9)
             return client
 
     async def set_bypass(self, on: bool) -> None:
@@ -609,6 +660,12 @@ class ThreadSession:
         if self._client is not None:
             client, self._client = self._client, None
             await self._disconnect(client)
+        # Only now: the CLI process (if any) has had its chance to flush and exit. A predecessor
+        # event's waiter (a rebuilt session's `ensure_connected`) and `close_all` both rely on
+        # this coming after the disconnect above, never before it.
+        self.done_closing.set()
+        if self.on_closed is not None:
+            self.on_closed()
 
     async def _cancel_tasks(self) -> None:
         # Every task is cancelled before any is awaited: a reader left running while the worker
@@ -636,10 +693,19 @@ class ThreadSession:
             )
 
     async def _connect(self, session_id: str | None, effort: str | None) -> ClaudeClient:
+        valid_effort: EffortLevel | None = None
+        if effort in VALID_EFFORT_LEVELS:
+            valid_effort = cast(EffortLevel, effort)
+        elif effort is not None:
+            logger.warning(
+                "dropped an unrecognized stored effort level in %s/%s",
+                self.channel_id,
+                self.thread_ts,
+            )
         options = client_options(
             self.directory,
             session_id,
-            effort,
+            valid_effort,
             self._can_use_tool,
             self._on_stop,
             self._on_tool_done,
@@ -708,6 +774,9 @@ class ThreadSession:
         finally:
             with contextlib.suppress(Exception):
                 await client.disconnect()
+        # The session stays alive (not closed): the next turn reconnects. `_abandon` settles it
+        # from outside this loop's own per-message check above, so it needs its own call (D9).
+        self._idle_timer_check()
 
     async def _dispatch(self, message: Message) -> None:
         if isinstance(message, RateLimitEvent):
@@ -851,6 +920,9 @@ class ThreadSession:
             )
         finally:
             self._settled.set()
+            # Runs outside `_read`'s loop (its own INJECTED_TURN_WAIT timer), so nothing else
+            # re-checks idleness for this transition: it may need to arm the timer itself (D9).
+            self._idle_timer_check()
 
     def _idle_timer_check(self) -> None:
         """(Re)arm the idle-close timer (D9) when the session is now idle with no approval or
@@ -975,15 +1047,15 @@ class ThreadSession:
             if changed:
                 self.effort, self.effort_reported = effort, True
                 # D9: stored so the next connect can pass it back (the model set with `/model`
-                # survives a resume by itself; effort does not). "auto" is the CLI's own word for
-                # the default (its EffortLevel has no such value), and a model change with no
-                # effort in its output clears the level the same way: neither is an override to
-                # resume with.
-                self._deps.state.set_effort(
-                    self.channel_id,
-                    self.thread_ts,
-                    effort if effort not in (None, "auto") else None,
-                )
+                # survives a resume by itself; effort does not). effort_change's own None means
+                # "unknown" (a `/model` change with no effort in its output), not "back to
+                # default": the stored override, if any, is left alone. "auto" is the CLI's own
+                # word for the default (its EffortLevel has no such value): that IS an explicit
+                # reset, stored as None.
+                if effort is not None:
+                    self._deps.state.set_effort(
+                        self.channel_id, self.thread_ts, None if effort == "auto" else effort
+                    )
             # Kept for `!status`, even when this result reports none (`/usage`, `/clear`): the two
             # lines never disagree.
             self.session_tokens = session_tokens(result)
@@ -1214,7 +1286,9 @@ class SessionManager:
         D9's idle close, or a resume whose session turned out gone); None when the thread is not
         a session. A closed session (`close()` has started: shutdown, an idle close, or the
         SessionGone branch of `ensure_connected`) is never handed back here: it is discarded and
-        replaced, so a message never reaches a client that is going, or gone."""
+        replaced, so a message never reaches a client that is going, or gone. The session handed
+        back has just been touched (D9): its idle-close timer cannot fire before the caller's own
+        next await, however slow (a download, a slow Slack call)."""
         thread = self._deps.state.thread(channel_id, thread_ts)
         if thread is None:
             return None
@@ -1223,18 +1297,32 @@ class SessionManager:
     def _session(self, channel_id: str, thread_ts: str, directory: Path) -> ThreadSession:
         key = (channel_id, thread_ts)
         session = self._sessions.get(key)
+        predecessor: asyncio.Event | None = None
         if session is not None and session.closed:
-            # Safe to discard: `close()` (or the SessionGone branch) has already run, so nothing
-            # here can still be using it. A session that is merely closing (`_closed` just set,
-            # its own `close()` still awaiting its disconnect) reads as closed too: a message
-            # that arrives now gets a freshly rebuilt session rather than racing that teardown.
+            # Discarded as soon as closing has started, not once it finishes: a message must
+            # never reach an object mid-teardown (every operation on it raises SessionClosed).
+            # The replacement waits on the old session's own `done_closing` before it connects,
+            # so a rebuild never resumes the same id while the old process is still exiting.
             del self._sessions[key]
+            predecessor = session.done_closing
             session = None
         if session is None:
-            session = ThreadSession(channel_id, thread_ts, directory, self._deps)
+            session = ThreadSession(
+                channel_id, thread_ts, directory, self._deps, predecessor=predecessor
+            )
             session.draining = self.draining
+            session.on_closed = lambda: self._evict_if_current(key, session)
             self._sessions[key] = session
+        # About to be handed to a caller: never let the idle timer close it out from under
+        # whatever slow step (a download, a Slack call) the caller does before its own submit.
+        session.touch()
         return session
+
+    def _evict_if_current(self, key: tuple[str, str], session: ThreadSession) -> None:
+        """Drop a fully-closed session from the live map, but only if nothing has already
+        replaced it at this key (D9: keeps a long-idle thread's dead object from piling up)."""
+        if self._sessions.get(key) is session:
+            del self._sessions[key]
 
     def sessions_of(self, channel_id: str) -> list[ThreadSession]:
         """The live sessions of a channel, across its threads; a closed one (D9's idle close, or
@@ -1314,6 +1402,14 @@ class SessionManager:
                 await asyncio.wait_for(cut_short.wait(), DRAIN_POLL_SECONDS)
 
     async def close_all(self) -> None:
-        for session in list(self._sessions.values()):
-            await session.close()
+        """Close every session and wait for each to be fully torn down, including one an idle
+        close (D9) already had in flight: `close()` is safe to call again on a session already
+        closing, but returning as soon as this call's own no-op finds the client already gone
+        would not wait for whichever call is actually disconnecting it."""
+        sessions = list(self._sessions.values())
+        for session in sessions:
+            if not session.closed:
+                await session.close()
+        for session in sessions:
+            await session.done_closing.wait()
         self._sessions.clear()

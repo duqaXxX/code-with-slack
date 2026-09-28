@@ -95,6 +95,7 @@ class FakeClaudeClient:
         server_info_error: Exception | None = None,
         context_usage_error: Exception | None = None,
         disconnect_error: Exception | None = None,
+        disconnect_gate: asyncio.Event | None = None,
     ) -> None:
         self.options = options
         self._turns = list(turns or [])
@@ -112,6 +113,9 @@ class FakeClaudeClient:
         self._server_info_error = server_info_error
         self._context_usage_error = context_usage_error
         self._disconnect_error = disconnect_error
+        # A disconnect that waits for the test, as a CLI takes real time to flush and exit after
+        # EOF (SubprocessCLITransport.close()).
+        self._disconnect_gate = disconnect_gate
         self.connected = False
         # A prompt as sent: text, or the user messages of an image prompt (streaming input).
         self.queries: list[Any] = []
@@ -128,6 +132,8 @@ class FakeClaudeClient:
         self.connected = True
 
     async def disconnect(self) -> None:
+        if self._disconnect_gate is not None:
+            await self._disconnect_gate.wait()
         self.connected = False
         if self._disconnect_error is not None:
             raise self._disconnect_error
