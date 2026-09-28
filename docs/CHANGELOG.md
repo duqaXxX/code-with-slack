@@ -60,10 +60,11 @@ All notable changes to this project are documented here. The format follows
 - A reply's closing message, and the notification it carries, now wait for every task it started
   and for the turn Claude Code starts to report one, instead of posting the moment the turn ends;
   that report turn renders into the same reply, appended after its body, rather than opening one
-  of its own. `!stop`, an error, a restart, an idle close and a lost session close a reply at
-  once instead of waiting further, with no message of its own: its footer, if any, joins the
-  body's own last message with an edit instead, which never rings, where a new message would
-  have whatever it said.
+  of its own. `!stop`, a restart, an idle close and a lost session close a reply at once instead
+  of waiting further, with no message of its own: its footer, if any, joins the body's own last
+  message with an edit instead, since a new message would still ring whatever it said and an
+  edit never does. A process that exits still rings once, with a new closing message, on the
+  first owner reply it ends.
 
 ### Fixed
 

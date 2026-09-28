@@ -169,18 +169,21 @@ ended and none of its tasks still runs or still waits on such a report, less tha
 `sessions.INJECTED_TURN_WAIT` old (`ThreadSession._still_owed`; the CLI can suppress the
 notification altogether, so past that wait `ThreadSession._expire_unreported` gives up on it),
 `ReplySink.close_out` posts the closing message below the reply, in the same thread, holding a
-divider and the footer (`ReplySink._write_closing`). A report turn can name only the reply of the
-first task it covers when several end together; `ThreadSession._sweep_closed_out`, run after
+divider and the footer (`ReplySink._write_closing`). A report turn can name only the reply of
+the first task it covers when several end together; `ThreadSession._sweep_closed_out`, run after
 every turn and after `ThreadSession._expire_injected_turn`, closes out every other reply left
-eligible. A `!stop`, an error, a restart, an idle close or `SessionGone` closes a reply at once instead of
+eligible. A `!stop`, a restart, an idle close or `SessionGone` closes a reply at once instead of
 waiting further, with no message of its own either (`TurnRenderer.close_out(silent=True)`): even
 a footer with no notification to carry would still be a new message, and a new message in a
 thread the owner started rings whatever it says. The footer, if the reply is still latest, joins
 the body's own last message instead (`ReplySink._render`), written through the ordinary flush,
-since an edit never rings. Only the thread's latest reply shows the footer: a new reply takes it
-over (`ReplySink.set_latest`), so it stays at the bottom of the thread as the terminal's status
-line, and a closing message left with nothing to show (no footer, and no notification owed) is
-deleted. A reply longer than about 11,000 characters continues in a new message.
+since an edit never rings. A Claude Code process that exits is the one exception: it still rings
+once, on the first owner reply it ends, with a new closing message carrying `texts.REPLY_TO`
+(`ThreadSession._abandon`, `error=True`). Only the thread's latest reply shows the footer: a new
+reply takes it over (`ReplySink.set_latest`), so it stays at the bottom of the thread as the
+terminal's status line, and a closing message left with nothing to show (no footer, and no
+notification owed) is deleted. A reply longer than about 11,000 characters continues in a new
+message.
 
 The closing message is also the reply's notification: Slack notifies the owner on any new message
 in a thread it started, mention or none, and a `chat.update` rewrite never notifies (measured on

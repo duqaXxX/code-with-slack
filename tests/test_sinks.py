@@ -79,6 +79,34 @@ async def test_a_second_close_out_call_is_a_no_op(slack: FakeSlack) -> None:
     assert slack.calls_to("chat.postMessage")[-1]["text"] == "Reply to: the question?"
 
 
+async def test_a_silent_close_that_would_overflow_the_block_limit_stays_in_one_message(
+    slack: FakeSlack,
+) -> None:
+    # D1 fix round 3: a silent close's footer joins the body's own last message; BLOCKS_LIMIT
+    # (45) leaves exactly the margin under Slack's own 50-block cap for that, so a message
+    # already at BLOCKS_LIMIT still fits the closing blocks without a message of its own.
+    sink = reply(slack)
+    await sink.open(texts.WRITING)
+    sink._blocks = lambda: [  # type: ignore[method-assign]
+        {"type": "markdown", "text": f"x{i}"} for i in range(sinks.BLOCKS_LIMIT)
+    ]
+    await sink.finish([])
+    posts = len(slack.calls_to("chat.postMessage"))
+    await sink.set_running("⏳ 1 shell")
+    await sink.close_out("footer", "question", silent=True)
+    assert len(slack.calls_to("chat.postMessage")) == posts  # no message of its own
+    last = slack.calls_to("chat.update")[-1]["blocks"]
+    assert len(last) <= 50
+    assert {"type": "divider"} in last
+    # a later non-silent close_out is a no-op.
+    await sink.close_out("footer", "question")
+    assert len(slack.calls_to("chat.postMessage")) == posts
+    # a running-count change afterward still keeps the footer in the same, last message.
+    await sink.set_running("")
+    await asyncio.sleep(0.8)
+    assert {"type": "divider"} in slack.calls_to("chat.update")[-1]["blocks"]
+
+
 async def test_tool_lines_sit_where_they_happen(slack: FakeSlack) -> None:
     sink = reply(slack)
     await sink.text("First I list the files.")

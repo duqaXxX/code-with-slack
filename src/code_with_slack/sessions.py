@@ -343,7 +343,14 @@ class ThreadSession:
         # is set, so a session nobody ever looks up again does not sit in `_sessions` forever.
         self.on_closed: Callable[[], None] | None = None
         self._notice: str | None = None
+        # Fire-and-forget tasks this session never waits on, chiefly a usage refresh: never
+        # cancelled by `close`, since a usage refresh shares one `UsageProbe` (and its one
+        # client) across every session, and cancelling it mid-query would leave that client
+        # answering the next lookup, of any session, late (fix round 3, minor 1).
         self._background: set[asyncio.Task[None]] = set()
+        # `_expire_unreported`'s own timers only: this session's alone, so `close` can cancel
+        # them (fix round 2) without touching `_background`'s shared-client tasks.
+        self._expiring: set[asyncio.Task[None]] = set()
         # Approval ids open right now, waiting on the owner's decision (`waiting_for_owner`).
         self._waiting: set[str] = set()
         # Task messages that arrived between turns, shown in the next turn's reply.
@@ -745,10 +752,13 @@ class ThreadSession:
 
     async def _cancel_tasks(self) -> None:
         # Every task is cancelled before any is awaited: a reader left running while the worker
-        # stops could still end a turn and record its session after a rebind. `_background`'s
-        # own fire-and-forget tasks (a usage refresh, D1 fix round 1's `_expire_unreported`) go
-        # too (fix round 2): none should outlive the session, and a stray expiry firing after
-        # would try to post a closing through one that is already gone.
+        # stops could still end a turn and record its session after a rebind. `_expiring`'s own
+        # timers go too (fix round 3): none should outlive the session, and a stray one firing
+        # after would try to post a closing through one that is already gone. `_background`'s
+        # tasks are not cancelled here (fix round 3, minor 1): a usage refresh shares one
+        # `UsageProbe` client across every session, and cancelling it mid-query (`UsageProbe`
+        # does not catch `CancelledError`) would leave that client answering the next lookup,
+        # of any session, late.
         tasks = [
             t
             for t in (
@@ -756,7 +766,7 @@ class ThreadSession:
                 self._reader,
                 self._expiry,
                 self._idle_expiry,
-                *self._background,
+                *self._expiring,
             )
             if t is not None
         ]
@@ -904,8 +914,8 @@ class ThreadSession:
             # TaskUpdatedMessage docstring); nothing else rechecks this reply once the wait
             # that holds it passes, so this schedules that recheck itself.
             expiry = asyncio.create_task(self._expire_unreported(message.task_id))
-            self._background.add(expiry)
-            expiry.add_done_callback(self._background.discard)
+            self._expiring.add(expiry)
+            expiry.add_done_callback(self._expiring.discard)
         if isinstance(message, TaskNotificationMessage):
             self._unreported.pop(message.task_id, None)
             self._stopped.discard(message.task_id)
@@ -1114,6 +1124,7 @@ class ThreadSession:
         reply_to: str | None = None,
         *,
         force: bool = False,
+        silent: bool = False,
     ) -> None:
         for task_id in renderer.running_tasks:
             self._task_replies[task_id] = renderer
@@ -1130,8 +1141,12 @@ class ThreadSession:
         await renderer.close(footer, reply_to=reply_to)
         # D1: the closing message follows at once unless a task this renderer started outlives
         # this very turn; `force` is a stop, an error or a restart, which never waits for one.
+        # `silent` (fix round 3, IMPORTANT): `_abandon` passes it for a `force` close with no
+        # `reply_to`, since a background task can still be running here (`_stop_task_replies`
+        # stops it only after this call returns) and a non-silent close_out would still post a
+        # brand-new, still-ringing message for its stale running count.
         if force or not self._still_owed(renderer):
-            await renderer.close_out()
+            await renderer.close_out(silent=silent)
 
     async def _stop_task_replies(self) -> None:
         """The Claude Code process is going away with its tasks: no reply keeps showing one, and
@@ -1322,7 +1337,9 @@ class ThreadSession:
                 ring = ring and reply_to is None
                 with contextlib.suppress(Exception):
                     await active.renderer.feed_error(line)
-                    await self._close_reply(active.renderer, None, reply_to, force=True)
+                    await self._close_reply(
+                        active.renderer, None, reply_to, force=True, silent=reply_to is None
+                    )
             await self._stop_task_replies()
             for turn in sent:
                 await self._fail(turn, line, notify=ring)

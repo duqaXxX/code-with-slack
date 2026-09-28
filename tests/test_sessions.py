@@ -922,9 +922,10 @@ async def test_a_suppressed_notification_s_closing_still_posts_eventually(
 async def test_the_unreported_expiry_timer_does_not_outlive_close(
     harness_for: Callable[..., Harness],
 ) -> None:
-    # D1 fix round 2: `_expire_unreported`'s own task lives in `_background`, which `close`
-    # must cancel along with everything else, or it would try to post through a session that
-    # is already gone once its (real, 30s) wait finally elapses.
+    # D1 fix round 2: `_expire_unreported`'s own task lives in `_expiring` (fix round 3: its
+    # own set, kept apart from `_background`'s shared-client tasks), which `close` must cancel
+    # along with everything else, or it would try to post through a session that is already
+    # gone once its (real, 30s) wait finally elapses.
     first, notice, _ = split_background()
     h = harness_for({"turns": [first]})
     session = h.session()
@@ -932,7 +933,31 @@ async def test_the_unreported_expiry_timer_does_not_outlive_close(
     h.clients[0].inject([m for m in notice if not isinstance(m, TaskNotificationMessage)])
     await until(lambda: bool(session._unreported))
     await session.close(reason=texts.ENDED_IDLE)
-    assert not any(not t.done() for t in session._background)
+    assert not any(not t.done() for t in session._expiring)
+
+
+async def test_closing_a_session_does_not_cancel_a_pending_usage_refresh(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # D1 fix round 3 (minor 1): a usage refresh shares one UsageProbe, and its one client,
+    # across every session; `UsageProbe.__call__` does not handle being cancelled mid-query,
+    # which would leave that shared client answering the next lookup, of any session, late.
+    # `close` cancels `_expiring`'s own timers, never `_background`'s.
+    h = harness_for({})
+    session = h.session()
+    started = asyncio.Event()
+
+    async def slow_refresh() -> None:
+        started.set()
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(h.deps.usage, "refresh_if_stale", slow_refresh)
+    session._refresh_usage()
+    await asyncio.wait_for(started.wait(), 2)
+    task = next(iter(session._background))
+    await session.close(reason=texts.ENDED_IDLE)
+    assert not task.done()
+    task.cancel()  # nothing else will, once the test is done with it
 
 
 def split_background() -> tuple[list[Any], list[Any], list[Any]]:
@@ -1145,6 +1170,27 @@ async def test_closing_the_session_stops_the_lines_of_running_tasks(
     await h.manager.close_all()
     assert running_block(h.slack.message_blocks()[0]) is None
     assert "Stopped" in h.replies()[0]
+
+
+async def test_a_shutdown_during_an_active_turn_with_a_background_task_closes_silently(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # D1 fix round 3 (IMPORTANT): a restart or shutdown while a turn is active, with an
+    # earlier background task still running, must not post a new (still-ringing) message for
+    # that active turn's own closing: `_close_reply(force=True)` runs before
+    # `_stop_task_replies` has actually stopped the task, so its non-silent form would still
+    # show a stale running count in a brand-new message.
+    first, _, _ = split_background()
+    partial = [m for m in sdk_messages("tools") if type(m).__name__ != "ResultMessage"][:4]
+    h = harness_for({"turns": [first, partial]})  # the second query gets no scripted result
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    await session.submit("second")
+    await until(lambda: session._active is not None)
+    posts_before = len(h.slack.calls_to("chat.postMessage"))
+    await session.close()  # a restart or a shutdown: closes everything silently
+    new = h.slack.calls_to("chat.postMessage")[posts_before:]
+    assert not new
 
 
 async def test_shutdown_with_a_deferred_closing_closes_silently(
