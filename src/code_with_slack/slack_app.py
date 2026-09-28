@@ -302,6 +302,12 @@ def build_app(
             prompt = await with_attachments(channel, thread_ts, text, files) if files else text
             if prompt is None:
                 return
+            # Checked before D8 too: a drain already cancelled every hold open when it started
+            # (SessionManager.drain) and will never cancel one opened after, so a message that
+            # arrives once draining has begun must never open a new one (it would wait forever).
+            if sessions.draining:
+                await notice(channel, thread_ts, texts.RESTARTING)
+                return
             # D8: this message would wake `session` (busy just queues behind what is already
             # running); ask first when another live session, of any channel, is already busy in
             # the same resolved folder. Later messages of this thread queue behind the wait,
@@ -340,6 +346,22 @@ def build_app(
                         raise SessionGone from None
                     session = fresh
 
+    async def hold_mrkdwn_link(channel: str, thread_ts: str) -> str:
+        """Like `thread_link`, but in mrkdwn's own `<url|label>` form for a `mrkdwn` section
+        block (approvals and the resume picker use the same form for their own buttons; a
+        `thread_mrkdwn_link` helper is expected to land from the parallel D5/D6 work, which this
+        duplicates locally rather than wait for)."""
+        try:
+            permalink = (await slack.chat_getPermalink(channel=channel, message_ts=thread_ts))[
+                "permalink"
+            ]
+        except Exception as exc:
+            logger.warning(
+                "could not get a permalink for %s/%s: %s", channel, thread_ts, describe(exc)
+            )
+            return texts.STATUS_CHANNEL_LINK_FALLBACK.format(thread_ts=thread_ts)
+        return f"<{permalink}|Session>"
+
     async def hold_before_sending(
         channel: str, thread_ts: str, session: ThreadSession, other: ThreadSession
     ) -> bool:
@@ -347,7 +369,13 @@ def build_app(
         for the owner's Continue or Cancel, cancelled the same way by `!stop` (in this thread or
         the whole channel) or a drain. True to send the message on; False when it was not,
         either way telling the owner `Not sent.` already."""
-        link = await thread_link(other.channel_id, other.thread_ts)
+        if sessions.draining:
+            await notice(channel, thread_ts, texts.RESTARTING)
+            return False
+        link = await hold_mrkdwn_link(other.channel_id, other.thread_ts)
+        if sessions.draining:  # a restart could have started during the permalink call above
+            await notice(channel, thread_ts, texts.RESTARTING)
+            return False
         hold_id, pending = holds.open(channel, thread_ts)
         try:
             posted = await slack.chat_postMessage(
@@ -366,15 +394,20 @@ def build_app(
             await tell_owner(channel, thread_ts, texts.HOLD_UNPOSTED)
             return False
         message_ts = str(posted["ts"])
-        if not holds.posted(hold_id, message_ts):
+        if holds.posted(hold_id, message_ts):
+            continued = False
+            try:
+                session.hold_start()
+                continued = await pending.future
+            finally:
+                await session.hold_end(continued=continued)
+                holds.discard(hold_id)  # a no-op once resolved; catches a cancelled wait
+        else:
             # Decided (a fast `!stop` or drain) before the message's own ts was known: nobody
-            # else learned it in time to remove it.
+            # else learned it in time to remove it, and the wait below is already over, so
+            # `hold_start`/`hold_end` (and their ✋) never ran for it either.
             await remove_request(channel, message_ts)
-        session.hold_start()
-        try:
-            continued = await pending.future
-        finally:
-            session.hold_end(continued=continued)
+            continued = pending.future.result()
         if not continued:
             await notice(channel, thread_ts, texts.NOT_SENT)
         return continued
@@ -391,7 +424,7 @@ def build_app(
         hold_id = str(action.get("value"))
         continue_ = action["action_id"] == HOLD_CONTINUE
         if holds.resolve(hold_id, channel, thread_ts, continue_=continue_) is None:
-            await tell_owner(channel, thread_ts, texts.APPROVAL_GONE)
+            await tell_owner(channel, thread_ts, texts.HOLD_GONE)
             return
         await remove_request(channel, body["message"]["ts"])
 
@@ -444,12 +477,17 @@ def build_app(
                         texts.STOPPED_CHANNEL if stopped else texts.NOTHING_TO_STOP,
                     )
                 else:
-                    stopped = await session.stop()
-                    await notice(
-                        channel,
-                        thread_ts,
-                        texts.STOPPED_THREAD if stopped else texts.NOTHING_TO_STOP_THREAD,
-                    )
+                    thread_stopped = await session.stop()
+                    # None: only a D8 hold was here, cancelled already (`Not sent.`, from the
+                    # waiter); no second notice, since nothing Claude Code was doing stopped.
+                    if thread_stopped is not None:
+                        await notice(
+                            channel,
+                            thread_ts,
+                            texts.STOPPED_THREAD
+                            if thread_stopped
+                            else texts.NOTHING_TO_STOP_THREAD,
+                        )
             case Resume(target=target):
                 if session is not None:
                     await notice(channel, thread_ts, texts.WORD_IN_THREAD.format(word=command.WORD))

@@ -86,10 +86,13 @@ class Holds:
 
 
 def hold_blocks(hold_id: str, link: str) -> list[dict[str, Any]]:
-    """The question in the thread: a markdown text (so `link`, `thread_link`'s standard-Markdown
-    form, renders) plus Continue and Cancel."""
+    """The question in the thread: a `mrkdwn` section (`link` in mrkdwn's own `<url|label>` form,
+    same as approvals and the resume picker use for their own buttons) plus Continue and Cancel."""
     return [
-        {"type": "markdown", "text": texts.HOLD_QUESTION.format(link=link)},
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": texts.HOLD_QUESTION.format(link=link)},
+        },
         {
             "type": "actions",
             "elements": [

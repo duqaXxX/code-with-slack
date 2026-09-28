@@ -131,6 +131,9 @@ HOLD_UNPOSTED = (
     "code-with-slack could not show this question in Slack, so the message was not sent. "
     "Send it again."
 )
+HOLD_GONE = (
+    "This question is no longer open: it was already answered, or code-with-slack restarted."
+)
 NOT_SENT = "Not sent."
 STATUS = (
     "Directory: `{directory}`\nSession: `{session}`\nMode: `{mode}`\n"

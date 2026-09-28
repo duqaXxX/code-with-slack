@@ -1386,8 +1386,12 @@ async def start_a_hold(world: World, *, other_channel: str = CHANNEL) -> None:
 async def test_a_busy_session_in_the_same_folder_holds_the_message(world: World) -> None:
     await start_a_hold(world)
     assert len(world.clients) == 1  # held, not sent
-    link = "[Session](https://example.slack.com/archives/C000CHAN/p1780000000000001)"
-    assert posted_blocks(world)[0]["text"] == texts.HOLD_QUESTION.format(link=link)
+    # mrkdwn's own `<url|label>` form (a `section` block, like approvals and the resume picker
+    # use for their own buttons), not `thread_link`'s standard-Markdown form.
+    link = "<https://example.slack.com/archives/C000CHAN/p1780000000000001|Session>"
+    section = posted_blocks(world)[0]
+    assert section["type"] == "section"
+    assert section["text"] == {"type": "mrkdwn", "text": texts.HOLD_QUESTION.format(link=link)}
 
 
 async def test_continue_sends_the_held_message(world: World) -> None:
@@ -1473,7 +1477,7 @@ async def test_a_double_click_finds_no_hold(world: World) -> None:
     body = click_in(HOLD_CONTINUE, hold_id, CHANNEL, THREAD)
     await world.dispatch(body)
     await world.dispatch(body)
-    assert world.ephemerals()[-1] == texts.APPROVAL_GONE
+    assert world.ephemerals()[-1] == texts.HOLD_GONE
 
 
 @pytest.mark.parametrize("user", [{"id": STRANGER}, {"team_id": OTHER_TEAM}])
@@ -1490,17 +1494,26 @@ async def test_a_click_for_another_thread_is_refused(world: World) -> None:
     hold_id = button_value(posted_blocks(world), HOLD_CONTINUE)
     await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, OTHER_THREAD))
     assert len(world.clients) == 1  # never sent: the click did not match the hold
-    assert world.ephemerals()[-1] == texts.APPROVAL_GONE
+    assert world.ephemerals()[-1] == texts.HOLD_GONE
+
+
+async def test_a_click_for_another_channel_is_refused(world: World) -> None:
+    await start_a_hold(world)
+    hold_id = button_value(posted_blocks(world), HOLD_CONTINUE)
+    await world.dispatch(click_in(HOLD_CONTINUE, hold_id, OTHER_CHANNEL, THREAD))
+    assert len(world.clients) == 1  # never sent: the click did not match the hold
+    assert world.ephemerals()[-1] == texts.HOLD_GONE
 
 
 async def test_stop_in_the_held_thread_cancels_it(world: World) -> None:
     await start_a_hold(world)
     await world.dispatch(reply("!stop", THREAD))
     assert len(world.clients) == 1
-    # `!stop` cancelled the hold (`Not sent.`, from the waiter) and reports separately that
-    # Claude Code itself had nothing running: two true, independent notices.
-    assert texts.NOT_SENT in said(world)
-    assert texts.NOTHING_TO_STOP_THREAD in said(world)
+    # `!stop` cancelled the hold: `Not sent.` alone, from the waiter, since nothing Claude Code
+    # itself was doing stopped (no separate "Nothing is running..." on top of it).
+    assert said(world).count(texts.NOT_SENT) == 1
+    assert texts.NOTHING_TO_STOP_THREAD not in said(world)
+    assert texts.STOPPED_THREAD not in said(world)
 
 
 async def test_a_top_level_stop_of_the_channel_cancels_the_hold(world: World) -> None:
@@ -1567,3 +1580,122 @@ async def test_an_unpostable_question_fails_closed(world: World) -> None:
     await world.dispatch(message("hello", ts=THREAD))
     assert len(world.clients) == 1
     assert world.ephemerals()[-1] == texts.HOLD_UNPOSTED
+
+
+async def test_a_message_during_a_drain_is_refused_not_held(world: World) -> None:
+    await world.dispatch(message("busy elsewhere", ts=OTHER_THREAD))
+    cut_short = asyncio.Event()
+    drain = asyncio.create_task(world.sessions.drain(cut_short))
+    await asyncio.sleep(0.02)  # the drain has set its flags before this message arrives
+    await world.dispatch(message("hello", ts=THREAD))
+    assert said(world)[-1] == texts.RESTARTING
+    assert _hold_questions(world) == []  # never held: a hold opened now would wait forever
+    cut_short.set()
+    await asyncio.wait_for(drain, 2)
+
+
+async def test_a_message_queued_behind_a_drain_cancelled_hold_is_also_refused(
+    world: World,
+) -> None:
+    await start_a_hold(world)  # THREAD's own "hello" is held
+    queued = asyncio.create_task(world.dispatch(reply("again", THREAD)))
+    await asyncio.sleep(0.02)  # "again" now waits behind "hello" for the thread's arrival lock
+    cut_short = asyncio.Event()
+    cut_short.set()
+    await world.sessions.drain(cut_short)  # cancels "hello"'s hold
+    await asyncio.wait_for(queued, 2)
+    assert len(world.clients) == 1  # neither "hello" nor "again" was ever sent
+    assert texts.NOT_SENT in said(world)  # "hello", cancelled by the drain
+    assert said(world)[-1] == texts.RESTARTING  # "again", refused once draining had begun
+
+
+async def test_a_cancelled_wait_does_not_leak_the_hold(world: World) -> None:
+    await world.dispatch(message("busy elsewhere", ts=OTHER_THREAD))
+    before = set(asyncio.all_tasks())
+    await world.dispatch(message("hello", ts=THREAD))  # posts the question, then waits
+    new_tasks = set(asyncio.all_tasks()) - before
+    assert new_tasks, "expected a task still waiting on the hold's future"
+    for task in new_tasks:
+        task.cancel()
+    await asyncio.sleep(0.05)
+    session = world.sessions.get(CHANNEL, THREAD)
+    assert session is not None
+    assert not session.waiting_for_owner  # `_HOLD_MARKER` did not stay in `_waiting`
+    assert world.holds._pending == {}  # no leaked entry
+
+
+async def test_a_hold_decided_before_its_message_ts_is_known_does_not_flicker(
+    world: World,
+) -> None:
+    await world.dispatch(message("busy elsewhere", ts=OTHER_THREAD))
+    real = world.slack.chat_postMessage
+    prefix = texts.HOLD_QUESTION.split("{")[0]
+    gate = asyncio.Event()
+
+    async def gated(**kwargs: Any) -> Any:
+        result = await real(**kwargs)
+        if str(kwargs.get("text", "")).startswith(prefix):
+            await gate.wait()  # the question is posted, but not yet recorded in `holds`
+        return result
+
+    world.slack.chat_postMessage = gated  # type: ignore[method-assign]
+    task = asyncio.create_task(world.dispatch(message("hello", ts=THREAD)))
+    await asyncio.sleep(0.05)
+    world.holds.cancel(CHANNEL, THREAD)  # exactly what `!stop` would do
+    gate.set()
+    await asyncio.wait_for(task, 2)
+    assert texts.NOT_SENT in said(world)
+    added = [a["name"] for a in world.slack.calls_to("reactions.add")]
+    assert Status.WAITING.value not in added  # hold_start/hold_end never ran: no ✋ flicker
+
+
+async def test_a_report_turn_during_a_hold_keeps_the_raised_hand(world: World) -> None:
+    turns = split_turns(sdk_messages("background"))
+    await world.dispatch(message("start it", ts=THREAD))
+    target = world.sessions.get(CHANNEL, THREAD)
+    assert target is not None
+    world.clients[0].inject(turns[0])
+    async with asyncio.timeout(2):
+        while target.busy or not target.running_kinds:  # noqa: ASYNC110
+            await asyncio.sleep(0.01)
+    # THREAD already has a running task, so OTHER_THREAD's own first message is held too:
+    # Continue lets it become genuinely busy (never completes) before the real case below.
+    await world.dispatch(message("busy elsewhere", ts=OTHER_THREAD))
+    hold_id = button_value(posted_blocks(world), HOLD_CONTINUE)
+    await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, OTHER_THREAD))
+    assert len(world.clients) == 2
+    await world.dispatch(reply("more", THREAD))  # held: OTHER_THREAD busy, THREAD is not
+    assert target.waiting_for_owner
+    for turn in turns[1:]:
+        world.clients[0].inject(turn)
+    await asyncio.sleep(0.2)  # the background task's own report turn runs during the hold
+    assert target._status.current is Status.WAITING  # the report turn did not show ⏳ over it
+
+
+async def test_cancel_after_a_finished_report_turn_shows_done_not_a_stale_reaction(
+    world: World,
+) -> None:
+    turns = split_turns(sdk_messages("background"))
+    await world.dispatch(message("start it", ts=THREAD))
+    target = world.sessions.get(CHANNEL, THREAD)
+    assert target is not None
+    world.clients[0].inject(turns[0])
+    async with asyncio.timeout(2):
+        while target.busy or not target.running_kinds:  # noqa: ASYNC110
+            await asyncio.sleep(0.01)
+    await world.dispatch(message("busy elsewhere", ts=OTHER_THREAD))  # held too: see test above
+    hold_id = button_value(posted_blocks(world), HOLD_CONTINUE)
+    await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, OTHER_THREAD))
+    assert len(world.clients) == 2
+    await world.dispatch(reply("more", THREAD))  # held: OTHER_THREAD busy, THREAD is not
+    for turn in turns[1:]:
+        world.clients[0].inject(turn)
+    async with asyncio.timeout(2):
+        while target.running_kinds:  # noqa: ASYNC110  # the background task finishes reporting
+            await asyncio.sleep(0.01)
+    hold_id = button_value(_hold_questions(world)[-1]["blocks"], HOLD_CANCEL)
+    await world.dispatch(click_in(HOLD_CANCEL, hold_id, CHANNEL, THREAD))
+    await asyncio.sleep(0.05)
+    # Not the stale snapshot from `hold_start` (WAITING, its own ✋): the session actually
+    # finished its report turn during the hold, so cancelling now shows done.
+    assert target._status.current is Status.DONE

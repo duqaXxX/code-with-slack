@@ -374,8 +374,6 @@ class ThreadSession:
         # Approval ids open right now, waiting on the owner's decision (`waiting_for_owner`); a
         # D8 hold adds `_HOLD_MARKER` here too.
         self._waiting: set[str] = set()
-        # D8: what the root showed just before `hold_start`, for `hold_end` to restore on Cancel.
-        self._hold_before: Status | None = None
         # Task messages that arrived between turns, shown in the next turn's reply.
         self._held: list[Message] = []
         # Tasks that outlived their turn, and the reply whose line each one keeps up to date,
@@ -489,32 +487,33 @@ class ThreadSession:
     def hold_start(self) -> None:
         """D8: mark this thread's 'send anyway?' question as waiting on the owner, the same way
         an approval does (`waiting_for_owner` covers both, so D9's idle-close timer stays off and
-        D10 shows ✋). At most one hold is ever open on a thread at once: `submit_to_session`
-        waits on it inside the thread's own arrival lock, so a caller of this always pairs it with
-        one `hold_end`, with nothing else of this session's own work between the two."""
-        self._hold_before = self._status.current
+        D10 shows ✋, including through any report turn a background task starts while held:
+        `_start_turn` reacts WAITING, not WORKING, whenever `waiting_for_owner` is true). At most
+        one hold is ever open on a thread at once: `submit_to_session` waits on it inside the
+        thread's own arrival lock, so a caller of this always pairs it with one `hold_end`."""
         self._waiting.add(_HOLD_MARKER)
         self._idle_timer_check()
         self._react(Status.WAITING)
 
-    def hold_end(self, *, continued: bool) -> None:
-        """Undo `hold_start`. `continued`: Continue was chosen, so the reaction is left alone (a
-        `submit()` right after this returns shows ⏳ on its own); otherwise (Cancel, `!stop`, a
-        drain) the root goes back to whatever it showed before the hold started, or bare when it
-        had shown nothing yet (a session that never ran)."""
+    async def hold_end(self, *, continued: bool) -> None:
+        """Undo `hold_start`. `continued`: Continue was chosen, so the reaction is left alone (the
+        `submit()` right after this returns reacts ⏳ on its own); otherwise (Cancel, `!stop`, a
+        drain) the root reflects the session's live state now, not a snapshot from when the hold
+        started (a report turn during the hold, most likely a background task's, can have changed
+        it in the meantime): ✅ through `_react_done_if_idle` when idle (which also honours a
+        standing ❌), ⏳ when still not idle, or bare for a session whose Claude Code process never
+        even started."""
         self._waiting.discard(_HOLD_MARKER)
         self._idle_timer_check()
         if continued:
-            self._hold_before = None
             return
-        before, self._hold_before = self._hold_before, None
-        if before is not None:
-            self._react(before)
-        else:
-            self._error_standing = False
-            task = asyncio.create_task(self._status.clear())
-            self._background.add(task)
-            task.add_done_callback(self._background.discard)
+        if self._client is None:
+            await self._status.clear()
+            return
+        if self.idle:
+            await self._react_done_if_idle()
+        elif not self._error_standing:
+            self._react(Status.WORKING)
 
     async def cancel_hold(self) -> bool:
         """Cancel a D8 hold open in this thread, as the owner's own Cancel would: `stop()` and
@@ -698,19 +697,19 @@ class ThreadSession:
         self._told_waiting = True
         await self._post(texts.RESTART_WAITS.format(counts=kinds))
 
-    async def stop(self) -> bool:
+    async def stop(self) -> bool | None:
         """Interrupt the running turn, deny its pending approvals and stop this thread's
         background tasks; queued turns stay queued. A D8 hold open in this thread is always
-        cancelled too, silently (`submit_to_session` tells the owner `Not sent.` once it wakes):
-        the return value, which the caller turns into "Stopped..."/"Nothing is running...", still
-        answers only for a turn or a task, since a hold with nothing else running stops nothing
-        Claude Code itself was doing."""
-        await self.cancel_hold()
+        cancelled too, silently (`submit_to_session` tells the owner `Not sent.` once it wakes).
+        None when that hold was the only thing here: the caller adds no further notice of its
+        own then, since a hold with nothing else running stops nothing Claude Code itself was
+        doing, and `Not sent.` alone already answers `!stop`."""
+        held = await self.cancel_hold()
         if self._client is None:
-            return False
+            return None if held else False
         tasks = self._running_task_ids()
         if not self.busy and not tasks:
-            return False
+            return None if held else False
         if self.busy:
             # D10: a denial `deny_all` triggers below resolves `_can_use_tool`'s own future, whose
             # `finally` would otherwise race this method's own closing ❌ back to working; this
@@ -1246,7 +1245,10 @@ class ThreadSession:
         # trailing messages, not a new one, and its ❌ must stand.
         if not self._interrupting:
             self._error_standing = False  # a turn is sent, or a report turn starts: new work
-            self._react(Status.WORKING)
+            # D8: a background task's own report turn can start while a hold waits on this very
+            # session; ✋ must stand through it, not be overwritten by ⏳ (`waiting_for_owner`
+            # covers a hold the same way it covers an open approval or question).
+            self._react(Status.WAITING if self.waiting_for_owner else Status.WORKING)
         injected = self._injected_expected or not self._sent
         self._injected_expected = False
         if self._expiry is not None:
