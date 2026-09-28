@@ -30,9 +30,12 @@ from tests.fakes import (
     STRANGER,
     TEAM,
     THREAD,
+    CanUseToolCall,
     FakeClaudeClient,
     FakeSlack,
+    sdk_messages,
     slack_payload,
+    split_turns,
 )
 
 # The click fixtures (000-005-block_actions.json) sit at their message's own ts, no thread_ts:
@@ -200,6 +203,13 @@ async def test_a_reply_in_a_thread_that_holds_no_session_is_refused(world: World
 async def test_a_message_from_anyone_else_does_nothing(world: World, user: str, team: str) -> None:
     await world.dispatch(message("rm -rf /", user=user, team=team))
     assert world.queries() == [] and not world.posted_anything()
+
+
+@pytest.mark.parametrize(("user", "team"), [(STRANGER, TEAM), (OWNER, OTHER_TEAM)])
+async def test_a_reply_from_anyone_else_does_nothing(world: World, user: str, team: str) -> None:
+    await world.dispatch(message("hi", ts=THREAD))  # the owner opens the session
+    await world.dispatch(reply("rm -rf /", THREAD, user=user, team=team))
+    assert world.queries() == ["hi"] and not world.ephemerals()
 
 
 async def test_edits_do_nothing(world: World) -> None:
@@ -397,8 +407,36 @@ async def test_bang_status_lists_every_live_session_with_a_link(world: World) ->
     lines = text.splitlines()
     directory = (world.root / "app").resolve()
     assert lines[0] == texts.STATUS_CHANNEL_HEADER.format(directory=directory)
+    # `say` posts a markdown block: a standard Markdown link, not mrkdwn's `<url|label>`.
     link = f"https://example.slack.com/archives/{CHANNEL}/p1780000000000001"
-    assert lines[1] == f"<{link}|Session>: busy"
+    assert lines[1] == f"[Session]({link}): busy"
+
+
+async def test_bang_status_shows_waiting_for_the_owner(world: World) -> None:
+    await world.dispatch(message("hi", ts=THREAD))
+    world.clients[0].inject([CanUseToolCall("Bash", {"command": "ls"})])
+    async with asyncio.timeout(2):
+        while not world.approvals._pending:  # noqa: ASYNC110
+            await asyncio.sleep(0.01)
+    await world.dispatch(message("!status", ts=OTHER_THREAD))
+    line = said(world)[-1].splitlines()[1]
+    assert f": {texts.STATUS_CHANNEL_WAITING}" in line
+
+
+async def test_bang_status_shows_a_background_only_session_as_busy_not_idle(world: World) -> None:
+    # A task that outlived its turn: `session.busy` is False, yet it is not idle either.
+    first = split_turns(sdk_messages("background"))[0]
+    await world.dispatch(message("start it", ts=THREAD))
+    world.clients[0].inject(first)
+    session = world.sessions.get(CHANNEL, THREAD)
+    assert session is not None
+    async with asyncio.timeout(2):
+        while session.busy or not session.running_kinds:  # noqa: ASYNC110
+            await asyncio.sleep(0.01)
+    await world.dispatch(message("!status", ts=OTHER_THREAD))
+    line = said(world)[-1].splitlines()[1]
+    assert f": {texts.STATUS_CHANNEL_BUSY}" in line
+    assert "⏳" in line
 
 
 async def test_bang_status_inside_a_thread_shows_that_session(world: World) -> None:
@@ -535,9 +573,10 @@ async def test_answer_opens_the_form(world: World) -> None:
     assert Draft.load(view["private_metadata"]) == Draft(approval_id, CHANNEL, FORM_THREAD)
 
 
-async def test_nobody_else_can_open_the_form(world: World) -> None:
+@pytest.mark.parametrize("user", [{"id": STRANGER}, {"team_id": OTHER_TEAM}])
+async def test_nobody_else_can_open_the_form(world: World, user: dict[str, str]) -> None:
     approval_id, _ = world.approvals.open(CHANNEL, FORM_THREAD, "Colour", QUESTIONS)
-    await world.dispatch(click("question_open", approval_id, id=STRANGER))
+    await world.dispatch(click("question_open", approval_id, **user))
     assert not world.slack.calls_to("views.open") and not world.posted_anything()
 
 
@@ -584,10 +623,11 @@ async def test_a_complete_submit_answers_claude_and_keeps_the_answers(world: Wor
     )
 
 
-async def test_nobody_else_can_submit_the_form(world: World) -> None:
+@pytest.mark.parametrize("user", [{"id": STRANGER}, {"team_id": OTHER_TEAM}])
+async def test_nobody_else_can_submit_the_form(world: World, user: dict[str, str]) -> None:
     approval_id, pending = world.approvals.open(CHANNEL, FORM_THREAD, "Colour", QUESTIONS)
     draft = Draft(approval_id, CHANNEL, FORM_THREAD, picks={0: [0], 1: [0]})
-    await world.dispatch(form_body("view_submission", draft, {}, id=STRANGER))
+    await world.dispatch(form_body("view_submission", draft, {}, **user))
     assert not pending.future.done()
 
 
@@ -806,6 +846,72 @@ async def test_only_the_list_reads_the_transcripts_for_dates(
     assert dated == []
     await world.dispatch(message("!resume"))
     assert dated == [(world.root / "app").resolve()]
+
+
+async def test_a_second_resume_click_on_the_same_list_is_refused(world: World) -> None:
+    two_sessions(world)
+    await world.dispatch(click("session_resume", SESSION_A))
+    await world.dispatch(click("session_resume", SESSION_B))  # a quick second click, same list
+    assert world.state.thread(CHANNEL, CLICK_THREAD).session_id == SESSION_A
+    assert texts.RESUME_HELD in world.ephemerals()
+
+
+async def test_a_resume_click_after_a_typed_resume_in_the_same_thread_is_refused(
+    world: World,
+) -> None:
+    two_sessions(world)
+    # A non-session thread that holds the picker: `!resume footer` there acts as top-level.
+    await world.dispatch(reply("!resume footer", CLICK_THREAD))
+    assert world.state.thread(CHANNEL, CLICK_THREAD).session_id == SESSION_A
+    await world.dispatch(click("session_resume", SESSION_B))  # the picker's own thread
+    assert world.state.thread(CHANNEL, CLICK_THREAD).session_id == SESSION_A
+    assert texts.RESUME_HELD in world.ephemerals()
+
+
+async def test_a_resume_click_never_stores_a_session_of_a_folder_bound_meanwhile(
+    world: World,
+) -> None:
+    two_sessions(world)
+    (world.root / "docs").mkdir()
+    listed = asyncio.Event()
+
+    def slow(directory: Path) -> list[SDKSessionInfo]:
+        listed.set()
+        time.sleep(0.2)  # list_sessions reading the old folder's transcripts
+        return world.stored_sessions
+
+    world.sessions._deps.sessions_of = slow
+    click_task = asyncio.create_task(world.dispatch(click("session_resume", SESSION_B)))
+    await listed.wait()
+    await world.dispatch(message("!bind docs"))
+    await click_task
+    await asyncio.sleep(0.3)
+    assert world.state.channel(CHANNEL).directory == (world.root / "docs").resolve()
+    assert world.state.channel(CHANNEL).threads == {}
+    assert texts.RESUME_GONE in world.ephemerals()
+
+
+async def test_a_typed_resume_never_stores_a_session_of_a_folder_bound_meanwhile(
+    world: World,
+) -> None:
+    two_sessions(world)
+    (world.root / "docs").mkdir()
+    listed = asyncio.Event()
+
+    def slow(directory: Path) -> list[SDKSessionInfo]:
+        listed.set()
+        time.sleep(0.2)
+        return world.stored_sessions
+
+    world.sessions._deps.sessions_of = slow
+    resume_task = asyncio.create_task(world.dispatch(message(f"!resume {SESSION_B}", ts=THREAD)))
+    await listed.wait()
+    await world.dispatch(message("!bind docs"))
+    await resume_task
+    await asyncio.sleep(0.3)
+    assert world.state.channel(CHANNEL).directory == (world.root / "docs").resolve()
+    assert world.state.thread(CHANNEL, THREAD) is None
+    assert texts.RESUME_GONE in world.ephemerals()
 
 
 @pytest.mark.parametrize(
@@ -1065,15 +1171,3 @@ async def test_an_answer_slack_will_not_record_removes_the_request(world: World)
     assert pending.future.done()
     # Its buttons would no longer work: the request goes, as before this record existed.
     assert [a["ts"] for a in world.slack.calls_to("chat.delete")] == ["1790000000.000009"]
-
-
-async def test_no_reply_ever_carries_a_channel_mention(world: World) -> None:
-    # `<!channel>` was removed with the thread model (Task 2): a full turn, an approval and a
-    # question must never bring it back through slack_app.py's own posts either.
-    await world.dispatch(message("hi", ts=THREAD))
-    await world.dispatch(reply("!status", THREAD))
-    await world.dispatch(reply("!help", THREAD))
-    approval_id, _ = world.approvals.open(CHANNEL, THREAD, "Bash: ls")
-    await world.dispatch(click("approval_allow", approval_id))
-    for _, args in world.slack.calls:
-        assert "<!channel>" not in json.dumps(args)

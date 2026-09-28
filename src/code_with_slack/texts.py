@@ -136,6 +136,7 @@ ACTIVITY_BUSY = "running a turn, {queued} queued"
 STATUS_CHANNEL_HEADER = "Directory: `{directory}`"
 STATUS_CHANNEL_EMPTY = "No live session in this channel."
 STATUS_CHANNEL_ROW = "{link}: {activity}"
+STATUS_CHANNEL_WAITING = "waiting for you"
 STATUS_CHANNEL_BUSY = "busy"
 STATUS_CHANNEL_IDLE = "idle"
 STATUS_CHANNEL_BYPASS = " · ⚡ bypass"
@@ -148,12 +149,12 @@ HELP_WORDS = (
     "inside a thread",
     "`!status` in the channel: every session's state; inside a thread: that session's "
     "directory, mode and the footer's values",
-    "`!stop` in the channel: every running session and its background tasks; inside a "
-    "thread: only that session, and its pending approvals",
+    "`!stop` in the channel: every running session, its background tasks and its pending "
+    "approvals; inside a thread: only that session",
     "`!bind [folder]` the folders Claude Code trusts, or bind this channel to one, its path "
     "relative to the allowed root; in the channel, refused inside a thread",
-    "`!bypass on|off` run every tool without asking, until off or a restart; inside a "
-    "thread, refused in the channel",
+    "`!bypass on|off` run every tool without asking, until `!bypass off`; it survives a "
+    "restart; inside a thread, refused in the channel",
     "`!resume [session]` this directory's sessions, or resume one by id or name into a new "
     "thread; in the channel, refused inside a thread",
 )
@@ -198,6 +199,7 @@ RESUME_AMBIGUOUS = (
     "`!resume`."
 )
 RESUME_GONE = "That session is not in this channel's directory any more: `!resume` lists them."
+RESUME_HELD = "This thread already holds a session: `!resume` from the channel opens a new thread."
 # `!guide`: how to use the bot, in the owner's words. tests/test_commands.py fails when a word of
 # the daemon is missing here; keep the tone plain and every line true of the current behaviour.
 GUIDE = """**code-with-slack**

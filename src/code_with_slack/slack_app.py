@@ -1,9 +1,10 @@
 """The Slack side: every inbound path, each checked on its own before it reaches a session."""
 
 import asyncio
+import contextlib
 import logging
 import re
-from collections.abc import Awaitable
+from collections.abc import AsyncIterator, Awaitable
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -152,7 +153,23 @@ def build_app(
         return await download(url, config.bot_token, mimetype, limit)
 
     fetch_file = fetch or download_file
+    # One lock per thread, alive only while someone holds or waits on it (a channel keeps
+    # opening new threads for as long as it runs; a lock kept forever would leak).
     arrival_order: dict[tuple[str, str], asyncio.Lock] = {}
+    arrival_waiters: dict[tuple[str, str], int] = {}
+
+    @contextlib.asynccontextmanager
+    async def arrival_lock(key: tuple[str, str]) -> AsyncIterator[None]:
+        arrival_waiters[key] = arrival_waiters.get(key, 0) + 1
+        lock = arrival_order.setdefault(key, asyncio.Lock())
+        try:
+            async with lock:
+                yield
+        finally:
+            arrival_waiters[key] -= 1
+            if arrival_waiters[key] == 0:
+                del arrival_waiters[key]
+                del arrival_order[key]
 
     async def authorize() -> AuthorizeResult:
         # auth.test already ran at startup; who may act is decided by the guards below.
@@ -187,14 +204,15 @@ def build_app(
             logger.error("a request failed in %s/%s: %s", channel, thread_ts, type(exc).__name__)
             await tell_owner(channel, thread_ts, texts.ERROR_REPLY.format(error=type(exc).__name__))
 
-    async def admitted(user: str | None, team: str | None, channel: str | None) -> bool:
+    async def admitted(
+        user: str | None, team: str | None, channel: str | None, thread_ts: str | None
+    ) -> bool:
         if not channel or not is_owner(identity, user, team):
             logger.info("ignored an inbound event from someone other than the owner")
             return False
         reason = await guard.refusal(channel)
         if reason is not None:
-            # A refused channel is not about one message: the notice is not tied to a thread.
-            await tell_owner(channel, None, texts.CHANNEL_REFUSED.format(reason=reason))
+            await tell_owner(channel, thread_ts, texts.CHANNEL_REFUSED.format(reason=reason))
             return False
         return True
 
@@ -229,11 +247,11 @@ def build_app(
             return
         user, team = message_actor(event)
         channel = event.get("channel")
-        if not await admitted(user, team, channel):
-            return
-        assert channel is not None
         ts = str(event.get("ts"))
         thread_ts = str(event.get("thread_ts") or ts)
+        if not await admitted(user, team, channel, thread_ts):
+            return
+        assert channel is not None
         await reply_on_failure(channel, thread_ts, handle_message(channel, thread_ts, ts, event))
 
     async def handle_message(channel: str, thread_ts: str, ts: str, event: dict[str, Any]) -> None:
@@ -278,7 +296,7 @@ def build_app(
             return
         # Prompts and commands for Claude Code enter the queue in the order they were sent,
         # although files take a while to download. Every reply goes to the thread.
-        async with arrival_order.setdefault((channel, thread_ts), asyncio.Lock()):
+        async with arrival_lock((channel, thread_ts)):
             prompt = await with_attachments(channel, thread_ts, text, files) if files else text
             if prompt is None:
                 return
@@ -370,8 +388,16 @@ def build_app(
         channel: str, channel_directory: Path, session: ThreadSession
     ) -> str:
         link = await thread_link(channel, session.thread_ts)
-        activity = texts.STATUS_CHANNEL_BUSY if session.busy else texts.STATUS_CHANNEL_IDLE
+        if session.waiting_for_owner:
+            activity = texts.STATUS_CHANNEL_WAITING
+        elif session.busy or session.running_kinds:
+            # A session with only a background task running is not idle either.
+            activity = texts.STATUS_CHANNEL_BUSY
+        else:
+            activity = texts.STATUS_CHANNEL_IDLE
         row = texts.STATUS_CHANNEL_ROW.format(link=link, activity=activity)
+        if session.running_kinds:
+            row += f" · {texts.RUNNING.format(counts=session.running_kinds)}"
         if session.bypass:
             row += texts.STATUS_CHANNEL_BYPASS
         if session.directory != channel_directory:
@@ -379,6 +405,8 @@ def build_app(
         return row
 
     async def thread_link(channel: str, thread_ts: str) -> str:
+        # `say` posts a markdown block: standard Markdown links (docs.slack.dev, markdown
+        # block), not mrkdwn's `<url|label>`.
         try:
             permalink = (await slack.chat_getPermalink(channel=channel, message_ts=thread_ts))[
                 "permalink"
@@ -388,7 +416,7 @@ def build_app(
                 "could not get a permalink for %s/%s: %s", channel, thread_ts, describe(exc)
             )
             return texts.STATUS_CHANNEL_LINK_FALLBACK.format(thread_ts=thread_ts)
-        return f"<{permalink}|Session>"
+        return f"[Session]({permalink})"
 
     @app.action("answer")
     async def on_answer(ack: AsyncAck) -> None:
@@ -398,10 +426,10 @@ def build_app(
         await ack()
         user, team = interaction_actor(body)
         channel = (body.get("channel") or {}).get("id")
-        if not await admitted(user, team, channel):
+        thread_ts = click_thread(body)
+        if not await admitted(user, team, channel, thread_ts):
             return
         assert channel is not None
-        thread_ts = click_thread(body)
         action = body["actions"][0]
         approval_id = str(action.get("value"))
         pending = approvals.get(approval_id)
@@ -506,10 +534,11 @@ def build_app(
         await ack()
         user, team = interaction_actor(body)
         channel = (body.get("channel") or {}).get("id")
-        if not await admitted(user, team, channel):
+        thread_ts = click_thread(body)
+        if not await admitted(user, team, channel, thread_ts):
             return
         assert channel is not None
-        await reply_on_failure(channel, click_thread(body), bind_clicked(channel, body))
+        await reply_on_failure(channel, thread_ts, bind_clicked(channel, body))
 
     async def bind_clicked(channel: str, body: dict[str, Any]) -> None:
         thread_ts = click_thread(body)
@@ -560,26 +589,40 @@ def build_app(
                 ),
             )
             return
-        await resume_into_new_thread(channel, thread_ts, found[0])
+        await resume_into_new_thread(channel, thread_ts, directory, found[0])
 
-    async def resume_into_new_thread(channel: str, thread_ts: str, chosen: SDKSessionInfo) -> None:
-        """Point a new thread at `chosen`: phase 1 of `!resume` opens an independent thread on
-        it, whatever else the channel's folder is doing."""
+    async def resume_into_new_thread(
+        channel: str, thread_ts: str, directory: Path, chosen: SDKSessionInfo
+    ) -> bool:
+        """Point a new thread at `chosen`, a session read from `directory`; False, after telling
+        the owner why, when nothing changed: this thread already holds a session (a resume is
+        never a swap), or the channel was bound to another folder while `chosen` was read from
+        `directory`. Both checks run with no `await` before the `resume` they guard, so nothing
+        can change between the check and the call they protect."""
+        if sessions.get(channel, thread_ts) is not None:
+            await tell_owner(channel, thread_ts, texts.RESUME_HELD)
+            return False
+        record = state.channel(channel)
+        if record is None or record.directory != directory:
+            await tell_owner(channel, thread_ts, texts.RESUME_GONE)
+            return False
         session = await sessions.resume(channel, thread_ts, chosen.session_id)
-        assert session is not None  # the caller already confirmed the channel is bound
+        assert session is not None  # just confirmed the channel is bound to `directory`
         # A markdown block, not mrkdwn: the title is escaped so it cannot close or open the bold.
         title = markdown_escape(one_line(chosen.summary, TITLE_LIMIT)) or chosen.session_id
         await say(channel, thread_ts, texts.RESUME_OK.format(title=title))
+        return True
 
     @app.action(RESUME_ACTION)
     async def on_resume(ack: AsyncAck, body: dict[str, Any]) -> None:
         await ack()
         user, team = interaction_actor(body)
         channel = (body.get("channel") or {}).get("id")
-        if not await admitted(user, team, channel):
+        thread_ts = click_thread(body)
+        if not await admitted(user, team, channel, thread_ts):
             return
         assert channel is not None
-        await reply_on_failure(channel, click_thread(body), resume_clicked(channel, body))
+        await reply_on_failure(channel, thread_ts, resume_clicked(channel, body))
 
     async def resume_clicked(channel: str, body: dict[str, Any]) -> None:
         thread_ts = click_thread(body)
@@ -594,8 +637,8 @@ def build_app(
         if chosen is None:
             await tell_owner(channel, thread_ts, texts.RESUME_GONE)
             return
-        await resume_into_new_thread(channel, thread_ts, chosen)
-        await remove_request(channel, body["message"]["ts"])
+        if await resume_into_new_thread(channel, thread_ts, record.directory, chosen):
+            await remove_request(channel, body["message"]["ts"])
 
     async def remove_request(channel: str, ts: str | None) -> None:
         # The tool's line in the reply records the call: the request message has done its job.
@@ -632,10 +675,10 @@ def build_app(
         await ack()
         user, team = interaction_actor(body)
         channel = (body.get("channel") or {}).get("id")
-        if not await admitted(user, team, channel):
+        thread_ts = click_thread(body)
+        if not await admitted(user, team, channel, thread_ts):
             return
         assert channel is not None
-        thread_ts = click_thread(body)
         approval_id = str(body["actions"][0].get("value"))
         pending = approvals.get(approval_id)
         if (
@@ -696,7 +739,7 @@ def build_app(
             return
 
         await ack()
-        if not await admitted(user, team, draft.channel_id):
+        if not await admitted(user, team, draft.channel_id, draft.thread_ts):
             return
         answers = draft_answers(draft, questions)
         assert answers is not None

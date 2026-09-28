@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -34,6 +35,46 @@ async def test_a_second_instance_stops_before_slack(tmp_path: Path) -> None:
     env.chmod(0o600)
     with single_instance(tmp_path), pytest.raises(entry.AlreadyRunning):
         await entry.run(tmp_path)
+
+
+class _FakeHandler:
+    """Stands in for AsyncSocketModeHandler: no real websocket, so `run` reaches `stop.wait()`."""
+
+    def __init__(self, app: object, app_token: str) -> None:
+        pass
+
+    async def connect_async(self) -> None:
+        return None
+
+    async def close_async(self) -> None:
+        return None
+
+
+async def test_run_prunes_stale_threads_and_survives_alive_raising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    env = tmp_path / ".env"
+    env.write_text(
+        f"SLACK_BOT_TOKEN={'xox' + 'b-1'}\nSLACK_APP_TOKEN={'xap' + 'p-1'}\n"
+        f"SLACK_OWNER_USER_ID=U000ALICE\nALLOWED_ROOT={tmp_path}\n"
+    )
+    env.chmod(0o600)
+    # A bound channel with a stored session id: `run` must ask `_alive_sessions` about it before
+    # connecting, and a broken transcript read there must not stop the daemon from starting.
+    state = StateStore(tmp_path / "state.json")
+    state.bind(CHANNEL, tmp_path)
+    state.open_thread(CHANNEL, "1780000000.000001", session_id="some-id")
+
+    def broken_list_sessions(*, directory: str, include_worktrees: bool) -> list[SDKSessionInfo]:
+        raise PermissionError("transcripts unreadable")
+
+    monkeypatch.setattr("code_with_slack.sessions.list_sessions", broken_list_sessions)
+    monkeypatch.setattr(entry, "AsyncWebClient", lambda token: FakeSlack())
+    monkeypatch.setattr(entry, "AsyncSocketModeHandler", _FakeHandler)
+
+    with caplog.at_level(logging.WARNING), pytest.raises(TimeoutError):
+        await asyncio.wait_for(entry.run(tmp_path), timeout=1)
+    assert "could not prune stale threads" in caplog.text
 
 
 def test_no_name_carries_claude_code() -> None:

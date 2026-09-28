@@ -113,8 +113,8 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
             loop.add_signal_handler(sig, on_signal, sig)
         await handler.connect_async()  # type: ignore[no-untyped-call]  # untyped in Bolt 1.30.0
         logger.info("connected to Slack workspace %s", identity.team_id)
-        await _post_upgrade_notices(slack, state)
         try:
+            await _post_upgrade_notices(slack, state)
             await stop.wait()
             # launchd stops and restarts with SIGTERM: the turns already running finish first. Not
             # on SIGINT: a Ctrl-C in a terminal reaches the Claude Code processes too, which share

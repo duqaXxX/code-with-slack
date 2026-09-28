@@ -307,6 +307,50 @@ async def test_ask_user_question_returns_answers(harness_for: Callable[..., Harn
     assert result.updated_input == {"questions": recorded["input"]["questions"], "answers": answers}
 
 
+async def test_waiting_for_owner_reflects_an_open_approval(
+    harness_for: Callable[..., Harness],
+) -> None:
+    ask = CanUseToolCall("Bash", {"command": "ls"})
+    h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
+    session = h.session()
+    await session.submit("list the files")
+    await until(lambda: bool(h.approvals._pending))
+    assert session.waiting_for_owner is True
+    h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, THREAD, Approve())
+    await until(lambda: session.waiting_for_owner is False)
+
+
+async def test_running_kinds_reflects_a_task_that_outlives_its_turn(
+    harness_for: Callable[..., Harness],
+) -> None:
+    first = split_turns(sdk_messages("background"))[0]
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    assert session.busy is False
+    assert session.running_kinds  # a task still runs, though the session itself is not busy
+
+
+async def test_no_reply_ever_carries_a_channel_mention(harness_for: Callable[..., Harness]) -> None:
+    # `<!channel>` was removed with the thread model: a full turn that ends with a closing
+    # message, posts an approval request and a question request must never bring it back.
+    recorded = sdk_json("ask-can-use-tool")
+    ask = CanUseToolCall("Bash", {"command": "ls"})
+    question = CanUseToolCall(recorded["tool_name"], recorded["input"])
+    h = harness_for({"turns": [[ask, question, *sdk_messages("tools")]]})
+    turn = await h.session().submit("do it")
+    await until(lambda: bool(h.approvals._pending))
+    approval_id = next(iter(h.approvals._pending))
+    assert h.approvals.resolve(approval_id, CHANNEL, THREAD, Approve()) is not None
+    await until(lambda: bool(h.approvals._pending))
+    question_id = next(iter(h.approvals._pending))
+    answers = {q["question"]: q["options"][0]["label"] for q in recorded["input"]["questions"]}
+    assert h.approvals.resolve(question_id, CHANNEL, THREAD, Answer(answers)) is not None
+    await asyncio.wait_for(turn.done.wait(), 2)
+    for _, args in h.slack.calls:
+        assert "<!channel>" not in json.dumps(args)
+
+
 async def test_an_owner_turn_that_completes_closes_with_its_prompt_as_the_notification(
     harness_for: Callable[..., Harness],
 ) -> None:

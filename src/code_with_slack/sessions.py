@@ -299,6 +299,8 @@ class ThreadSession:
         self._closed = False
         self._notice: str | None = None
         self._background: set[asyncio.Task[None]] = set()
+        # Approval ids open right now, waiting on the owner's decision (`waiting_for_owner`).
+        self._waiting: set[str] = set()
         # Task messages that arrived between turns, shown in the next turn's reply.
         self._held: list[Message] = []
         # Tasks that outlived their turn, and the reply whose line each one keeps up to date,
@@ -351,6 +353,17 @@ class ThreadSession:
     @property
     def busy(self) -> bool:
         return self._active is not None or bool(self._sent)
+
+    @property
+    def waiting_for_owner(self) -> bool:
+        """An approval or a question is open in this thread, waiting on the owner's answer."""
+        return bool(self._waiting)
+
+    @property
+    def running_kinds(self) -> str:
+        """`1 shell · 2 agents`, the tasks that outlived their turn and still run; empty when
+        none does. The channel-level `!status` shows this beside a session's own state."""
+        return self._running_kinds()
 
     @property
     def idle(self) -> bool:
@@ -1039,6 +1052,7 @@ class ThreadSession:
         approval_id, pending = self._deps.approvals.open(
             self.channel_id, self.thread_ts, title, questions
         )
+        self._waiting.add(approval_id)
         blocks = (
             question_blocks(approval_id, questions)
             if questions
@@ -1068,6 +1082,7 @@ class ThreadSession:
             decision = await pending.future
         finally:
             self._deps.approvals.discard(approval_id)
+            self._waiting.discard(approval_id)
         return to_permission(decision, tool_input, questions)
 
     async def _fail(self, turn: Turn, text: str, *, notify: bool = False) -> None:
