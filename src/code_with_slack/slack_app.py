@@ -316,7 +316,10 @@ def build_app(
             )
         except Exception as exc:
             logger.warning(
-                "could not post the old-folder notice in %s/%s: %s", channel, thread_ts, describe(exc)
+                "could not post the old-folder notice in %s/%s: %s",
+                channel,
+                thread_ts,
+                describe(exc),
             )
             return
         old_folder_notified.add(key)
