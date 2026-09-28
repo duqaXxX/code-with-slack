@@ -33,6 +33,15 @@ SESSION_GONE = (
     "This thread's session no longer exists: Claude Code deleted it or cannot find it. Send a "
     "new message in the channel to start one."
 )
+NOT_A_SESSION = "This thread is not a session: send a new message in the channel to start one."
+WORD_IN_THREAD = "`!{word}` works in the channel, not inside a thread."
+CLEAR_IN_THREAD = "One thread is one session: send a new message in the channel to start a new one."
+UPGRADE_NOTICE = (
+    "code-with-slack now runs one Claude Code session per thread. Send a new message in the "
+    "channel to start a session; reply in its thread to continue it. The session this channel "
+    "had is still in the folder: !resume brings it into a thread. Bypass is now set per "
+    "session: send !bypass on inside a thread."
+)
 ERROR_REPLY = "Claude Code reported an error: `{error}`"
 WRITING = "_Claude is writing…_"
 WAITING = "_Waiting for the previous reply…_"
@@ -51,7 +60,6 @@ BIND_OK = "Bound this channel to `{directory}`. The next message starts a new se
 BIND_UNAVAILABLE = (
     "Bound this channel to `{directory}`, but no session can start there yet. {reason}"
 )
-BIND_BYPASS_OFF = " Bypass is off in it: send `!bypass on` to switch it on again."
 BIND_OUTSIDE = (
     "`{path}` is not a folder under `{root}`. Give its path relative to that folder, for "
     "example `!bind my-project`."
@@ -74,10 +82,6 @@ UPLOAD_TOO_MANY = (
 UPLOAD_TOO_HEAVY = (
     "Nothing was sent to Claude: its images total {size}, over the {limit} one message takes."
 )
-PROMPT_REBOUND = (
-    "Nothing was sent to Claude: the channel was bound to another folder while this message "
-    "waited. Send it again if it is meant for the new folder."
-)
 SESSION_CLOSED = (
     "Nothing was done: the channel was bound to another folder or resumed another session "
     "while this command ran. Send it again if it is still meant."
@@ -94,26 +98,29 @@ BIND_CURRENT = " · _current_"
 BIND_BUTTON = "Bind"
 BIND_ALREADY = "This channel is already bound to `{directory}`."
 BIND_BUSY = (
-    "A turn or a background task is running or waiting in this channel: binding another folder "
-    "would end it. Let it finish or `!stop` it, then bind."
+    "Sessions are running in this channel: binding another folder now would cut their work. "
+    "Let them finish or send `!stop`, then bind again."
 )
 BYPASS_ON = (
-    "Bypass is on in this channel: Claude Code runs every tool without asking, until "
-    "`!bypass off` or `!bind`. It stays on when code-with-slack restarts."
+    "Bypass is on in this session: Claude Code runs every tool without asking, until "
+    "`!bypass off`. It stays on when code-with-slack restarts."
 )
-BYPASS_RESTARTING = "code-with-slack is restarting: bypass stays on in this channel."
+BYPASS_RESTARTING = "code-with-slack is restarting: bypass stays on in this session."
 BYPASS_OFF = "Bypass is off. Claude Code is back in its `{mode}` mode."
+BYPASS_TOP_LEVEL = "Bypass belongs to one session: send `!bypass on` inside its thread."
 STOPPED = "Stopped the current turn."
 # An answered question, as the terminal keeps it in the transcript.
 ANSWERED = "User answered Claude's questions:"
 # Slack drops plain spaces at the start of a line; no-break spaces stay and make the indent.
 NESTED = "\u00a0" * 4 + "⎿ "
 STOPPED_CHANNEL = "Stopped what was running in this channel."
+STOPPED_THREAD = "Stopped what was running in this session."
 RESTART_WAITS = (
     "code-with-slack is restarting once these background tasks end: {counts}. "
     "`!stop` ends them now."
 )
 NOTHING_TO_STOP = "Nothing is running in this channel."
+NOTHING_TO_STOP_THREAD = "Nothing is running in this session."
 STATUS = (
     "Directory: `{directory}`\nSession: `{session}`\nMode: `{mode}`\n"
     "Claude Code: `{version}`\nNow: {activity}"
@@ -124,23 +131,38 @@ STATUS_BACKGROUND = "Background: `{counts}`"
 STATUS_WORKING = "Working in: `{directory}`"
 RUNNING = "⏳ {counts}"
 ACTIVITY_BUSY = "running a turn, {queued} queued"
+# `!status` sent to the channel (top-level, or a thread that holds no session): the channel's
+# folder, then one line per live session, each with a link to its thread.
+STATUS_CHANNEL_HEADER = "Directory: `{directory}`"
+STATUS_CHANNEL_EMPTY = "No live session in this channel."
+STATUS_CHANNEL_ROW = "{link}: {activity}"
+STATUS_CHANNEL_BUSY = "busy"
+STATUS_CHANNEL_IDLE = "idle"
+STATUS_CHANNEL_BYPASS = " · ⚡ bypass"
+STATUS_CHANNEL_FOLDER = " · folder `{directory}`"
+STATUS_CHANNEL_LINK_FALLBACK = "thread `{thread_ts}`"
 HELP_OWN = "**code-with-slack**"
 HELP_WORDS = (
-    "`!guide` how code-with-slack works, in a few lines",
-    "`!help [text]` this list, or only the lines that contain the text",
-    "`!status` the channel's directory, session and mode, then the footer's values",
-    "`!stop` stop the running turn and the background tasks, and deny pending approvals",
+    "`!guide` how code-with-slack works, in a few lines; in the channel or inside a thread",
+    "`!help [text]` this list, or only the lines that contain the text; in the channel or "
+    "inside a thread",
+    "`!status` in the channel: every session's state; inside a thread: that session's "
+    "directory, mode and the footer's values",
+    "`!stop` in the channel: every running session and its background tasks; inside a "
+    "thread: only that session, and its pending approvals",
     "`!bind [folder]` the folders Claude Code trusts, or bind this channel to one, its path "
-    "relative to the allowed root",
-    "`!bypass on|off` run every tool without asking, until off or a bind",
-    "`!resume [session]` this directory's sessions, or resume one by id or name",
+    "relative to the allowed root; in the channel, refused inside a thread",
+    "`!bypass on|off` run every tool without asking, until off or a restart; inside a "
+    "thread, refused in the channel",
+    "`!resume [session]` this directory's sessions, or resume one by id or name into a new "
+    "thread; in the channel, refused inside a thread",
 )
 HELP_NO_MATCH = "No command matches `{query}`."
 HELP_CLAUDE = (
     "\n**Claude Code** (this session, now). Any other `!name args` runs that command; "
     "these words above come first."
 )
-HELP_UNBOUND = "\nClaude Code's own commands are listed here once the channel is bound."
+HELP_UNBOUND = "\nClaude Code's own commands are listed inside a session's thread."
 APPROVAL_PROMPT = "Claude Code asks to use *{tool}*"
 DENY_MESSAGE = "The owner denied this from Slack."
 SKIP_MESSAGE = "The owner dismissed the question without answering."
@@ -166,14 +188,9 @@ RESUME_MORE = (
     "Only the newest {rows} are shown: `!resume <id>`, or `!resume <title>` for a session that "
     "has one, resumes an older session."
 )
-RESUME_ALREADY = "This channel is already on that session."
 RESUME_OK = (
     "Resumed **{title}**: your next message continues it. If it is open in a terminal, close it "
     "there first, or the messages of both will mix in one conversation."
-)
-RESUME_BUSY = (
-    "A turn or a background task is running or waiting in this channel: resuming would end it. "
-    "Let it finish or `!stop` it, then resume."
 )
 RESUME_NONE = "No session in `{directory}` has the id or name `{target}`: `!resume` lists them."
 RESUME_AMBIGUOUS = (
@@ -184,20 +201,27 @@ RESUME_GONE = "That session is not in this channel's directory any more: `!resum
 # `!guide`: how to use the bot, in the owner's words. tests/test_commands.py fails when a word of
 # the daemon is missing here; keep the tone plain and every line true of the current behaviour.
 GUIDE = """**code-with-slack**
-This channel runs Claude Code on your Mac, in one folder, and answers you alone.
+This channel runs Claude Code on your Mac, in one folder, and answers you alone. One Slack \
+thread is one Claude Code session: a top-level message starts a new one, and a reply inside its \
+thread continues it, even days later.
 
 **Get started**
 1. `!bind` lists the folders Claude Code trusts, with a Bind button each; `!bind <folder>` \
 binds one by its path relative to your allowed root: `!bind my-project`. Claude Code must trust \
-that folder first: open `claude` there once in the terminal and accept.
-2. Write a message: it is a prompt. The reply appears below it and grows as Claude works, \
-with a line for each tool it uses. Attach images or files to it: Claude sees a JPEG, PNG, GIF or \
+that folder first: open `claude` there once in the terminal and accept. `!bind` works only as a \
+top-level message in the channel.
+2. Write a message in the channel: it opens a session, and its reply appears in a thread of its \
+own, growing as Claude works, with a line for each tool it uses. Reply inside that thread to \
+continue the same session. Attach images or files to a message: Claude sees a JPEG, PNG, GIF or \
 WebP image directly (other image types are refused) and reads a text, code, PDF, JSON, XML, YAML \
 or notebook file from a copy saved on this Mac; other files are refused.
 
 **Commands**
-Claude Code's commands start with `!` instead of `/`: `!compact`, `!model opus`, `!clear`. \
-`!help` lists every command this session offers, and `!help <text>` filters the list.
+Claude Code's commands start with `!` instead of `/`: `!compact`, `!model opus`. They run inside \
+a session's thread, where `!help` lists every command that session offers, and `!help <text>` \
+filters the list; typed in the channel, `!help` lists code-with-slack's own words instead. \
+`!clear` is refused inside a thread (one thread is one session): start a fresh session with a \
+new top-level message instead.
 
 **Approvals and questions**
 When Claude Code asks permission, the request shows what will run, with **Approve** and \
@@ -205,15 +229,18 @@ When Claude Code asks permission, the request shows what will run, with **Approv
 question from Claude comes with **Answer**, which opens a short form, and **Skip**.
 
 **Sessions**
-`!status` shows the folder, the session, the permission mode and the footer's values. `!stop` \
-stops the running turn and the background tasks. `!resume` lists this folder's twenty newest \
-sessions, from the terminal too, each with the start of its id and a **Resume** button; `!resume \
-<id>` (that start is enough), or `!resume <title>` for a session that has one, resumes it \
-directly. To continue the channel's session in the terminal, run `claude --resume <id>` there with \
-the full id `!status` shows.
+`!status` typed in the channel lists the folder and every session still live, each linked to \
+its thread; inside a thread it shows that session's directory, mode and the footer's values. \
+`!stop` typed in the channel stops every running session and its background tasks; inside a \
+thread it stops only that one. `!resume`, typed in the channel only, lists this folder's twenty \
+newest sessions, from the terminal too, each with the start of its id and a **Resume** button; \
+`!resume <id>` (that start is enough), or `!resume <title>` for a session that has one, opens it \
+in a new thread of its own. To continue a session in the terminal, run `claude --resume <id>` \
+there with the full id `!status` shows.
 
 **Bypass**
-`!bypass on` lets Claude Code run every tool without asking, until `!bypass off` or `!bind`; \
-`!resume` and a restart of code-with-slack keep it. The footer shows ⚡ bypass while it is on.
+`!bypass on`, sent inside a session's thread, lets Claude Code run every tool without asking in \
+that session, until `!bypass off`; a restart of code-with-slack keeps it. The footer shows ⚡ \
+bypass while it is on.
 
 `!guide` shows this text again."""

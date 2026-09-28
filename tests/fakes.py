@@ -197,6 +197,7 @@ class FakeSlack(AsyncWebClient):
             "conversations.members": slack_payload("api-conversations-members"),
             "chat.postMessage": slack_payload("api-chat-postMessage"),
             "chat.startStream": slack_payload("api-chat-startStream"),
+            "chat.getPermalink": slack_payload("api-chat-getPermalink"),
         }
 
     async def api_call(  # type: ignore[override]

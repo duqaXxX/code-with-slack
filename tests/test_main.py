@@ -1,11 +1,16 @@
 import json
 import logging
+import time
 from pathlib import Path
 
 import pytest
+from claude_agent_sdk import SDKSessionInfo
 
 from code_with_slack import __main__ as entry
+from code_with_slack import texts
 from code_with_slack.lock import single_instance
+from code_with_slack.state import StateStore
+from tests.fakes import CHANNEL, FakeSlack
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -56,3 +61,57 @@ def test_the_manifest_asks_for_the_minimum() -> None:
     assert "agent_view" not in manifest["features"]
     # Commands are typed as `!word` messages: the app registers no slash command.
     assert "slash_commands" not in manifest["features"]
+
+
+def _v1_state(tmp_path: Path, channel: str = CHANNEL) -> StateStore:
+    """A v1 `state.json`, migrated on load: each of its channels gets a pending D7 notice."""
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"version": 1, "channels": {channel: {"directory": str(tmp_path)}}}))
+    return StateStore(path)
+
+
+async def test_the_upgrade_notice_posts_top_level_and_clears_the_flag(tmp_path: Path) -> None:
+    state = _v1_state(tmp_path)
+    assert state.pending_notices() == [CHANNEL]
+    slack = FakeSlack()
+    await entry._post_upgrade_notices(slack, state)
+    (post,) = slack.calls_to("chat.postMessage")
+    assert post["channel"] == CHANNEL
+    assert post.get("thread_ts") is None  # not a reply to any message
+    assert post["text"] == texts.UPGRADE_NOTICE
+    assert state.pending_notices() == []
+
+
+async def test_a_failed_upgrade_notice_keeps_the_flag_for_next_start(tmp_path: Path) -> None:
+    state = _v1_state(tmp_path)
+    slack = FakeSlack()
+    slack.responses["chat.postMessage"] = RuntimeError("network down")
+    await entry._post_upgrade_notices(slack, state)
+    assert state.pending_notices() == [CHANNEL]
+
+
+def test_alive_sessions_reads_directory_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_list_sessions(*, directory: str, include_worktrees: bool) -> list[SDKSessionInfo]:
+        assert directory == str(tmp_path) and include_worktrees is False
+        return [SDKSessionInfo("sid-1", "", 0, 1), SDKSessionInfo("sid-2", "", 0, 1)]
+
+    monkeypatch.setattr("code_with_slack.sessions.list_sessions", fake_list_sessions)
+    assert entry._alive_sessions(tmp_path) == {"sid-1", "sid-2"}
+
+
+def test_prune_uses_alive_sessions_to_drop_a_gone_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = StateStore(tmp_path / "state.json")
+    state.bind(CHANNEL, tmp_path)
+    state.open_thread(CHANNEL, "1780000000.000001", session_id="gone")
+
+    def fake_list_sessions(*, directory: str, include_worktrees: bool) -> list[SDKSessionInfo]:
+        return []
+
+    monkeypatch.setattr("code_with_slack.sessions.list_sessions", fake_list_sessions)
+    removed = state.prune(entry._alive_sessions, time.time())
+    assert removed == 1
+    assert state.thread(CHANNEL, "1780000000.000001") is None
