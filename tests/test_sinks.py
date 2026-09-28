@@ -237,10 +237,12 @@ async def test_running_counts_join_the_footer_of_a_finished_reply(slack: FakeSla
     await sink.finish([])
     await sink.close_out("footer")
     await sink.set_running("⏳ 1 shell")
-    shown = last_blocks(slack)  # written at once: no rewrite is scheduled after the end
+    await asyncio.sleep(0.05)  # a change to a finished reply still debounces (D1)
+    shown = last_blocks(slack)
     assert [b["type"] for b in shown] == ["context", "divider", "context", "context"]
     assert shown[-2] == sinks.context_block("footer · ⏳ 1 shell")
     await sink.set_running("")
+    await asyncio.sleep(0.05)
     assert last_blocks(slack)[-2] == sinks.context_block("footer")
     # the body posted once, the closing message once: running counts only ever update it.
     assert len(slack.calls_to("chat.postMessage")) == 2
@@ -255,6 +257,7 @@ async def test_running_counts_stand_alone_when_a_reply_has_no_footer(slack: Fake
     # nothing to show yet: no closing message exists until something (here, a running count) does.
     assert len(slack.calls_to("chat.postMessage")) == 1
     await sink.set_running("⏳ 1 agent")
+    await asyncio.sleep(0.05)  # a change to a finished reply still debounces (D1)
     assert last_blocks(slack) == [
         sinks.SPACER_ABOVE,
         {"type": "divider"},
@@ -508,8 +511,10 @@ async def test_a_reply_that_is_no_longer_latest_removes_its_closing_message(
     await sink.finish([])
     await sink.close_out("footer")
     await sink.set_running("⏳ 1 shell")
+    await asyncio.sleep(0.05)  # a change to a finished reply still debounces (D1)
     closing_ts = slack.posted_ts[-1]
     await sink.set_latest(False)
+    await asyncio.sleep(0.05)
     # the body never carried the footer; the closing message, with nothing left to show, goes.
     assert [b["type"] for b in slack.message_blocks()[0]] == ["markdown"]
     assert [a["ts"] for a in slack.calls_to("chat.delete")] == [closing_ts]
@@ -536,6 +541,7 @@ async def test_an_empty_finished_reply_that_is_no_longer_latest_goes(slack: Fake
     # message, since the reply is (still) the channel's latest.
     assert [a["ts"] for a in slack.calls_to("chat.delete")] == [slack.posted_ts[0]]
     await sink.set_latest(False)
+    await asyncio.sleep(0.05)  # a change to a finished reply still debounces (D1)
     # no longer latest: the closing message has nothing left to show either.
     assert [a["ts"] for a in slack.calls_to("chat.delete")] == list(slack.posted_ts)
 
@@ -890,6 +896,7 @@ async def test_after_close_out_only_updates_and_deletes_follow_no_new_post(
     await sink.set_running("⏳ 1 shell")
     await sink.set_running("")
     await sink.set_latest(False)
+    await asyncio.sleep(0.05)  # a change to a finished reply still debounces (D1)
     # the closing message rang once, when it was posted: nothing later posts a new one.
     assert len(slack.calls_to("chat.postMessage")) == before
     assert slack.calls_to("chat.update") or slack.calls_to("chat.delete")
@@ -911,6 +918,7 @@ async def test_reply_to_on_a_reply_not_latest_at_close_out_still_posts_and_notif
     await sink.set_running("⏳ 1 shell")  # still not latest: no effect
     assert slack.message_blocks()[-1] == [bare]
     await sink.set_latest(True)  # a later change: the footer now has somewhere to show
+    await asyncio.sleep(0.05)  # a change to a finished reply still debounces (D1)
     assert sinks.context_block("footer · ⏳ 1 shell") in slack.message_blocks()[-1]
 
 
@@ -1007,6 +1015,77 @@ async def test_update_limiter_releases_its_place_when_a_waiter_is_cancelled() ->
         await waiter
     # a cancelled waiter must not keep the lock: the next acquire is still served promptly.
     await asyncio.wait_for(limiter.acquire(), timeout=0.5)
+
+
+async def test_update_limiter_refund_makes_a_token_available_at_once() -> None:
+    limiter = UpdateLimiter(limit=1, window=10.0, burst=1)  # too slow to refill on its own
+    await limiter.acquire()  # spends the only token
+    await limiter.refund()
+    await asyncio.wait_for(limiter.acquire(), timeout=0.05)  # available again, not after `window`
+
+
+async def test_update_limiter_refund_never_exceeds_burst() -> None:
+    limiter = UpdateLimiter(limit=1, window=10.0, burst=2)
+    await limiter.refund()
+    await limiter.refund()
+    await limiter.refund()  # never more than a full burst, whatever was actually spent
+    assert limiter._tokens == 2
+
+
+class _StuckLimiter:
+    """Records every `acquire`/`refund`; `acquire` blocks until `release` is called, as a busy
+    shared `UpdateLimiter` would while another reply spends its only token."""
+
+    def __init__(self) -> None:
+        self.acquired = 0
+        self.refunded = 0
+        self._gate = asyncio.Event()
+
+    async def acquire(self) -> None:
+        self.acquired += 1
+        await self._gate.wait()
+
+    async def refund(self) -> None:
+        self.refunded += 1
+
+    def release(self) -> None:
+        self._gate.set()
+
+
+async def test_finish_racing_a_stuck_draft_refunds_its_wasted_acquire(slack: FakeSlack) -> None:
+    # D1/item 9: `finish` can flip `_finished` while an earlier debounced draft (captured
+    # `final=False`) is still stuck acquiring the shared limiter; once granted, that acquire
+    # writes nothing (`finish`'s own flush, not this stale draft, owns the final form) and must
+    # not have spent a token for it.
+    limiter = _StuckLimiter()
+    sink = reply(slack, limiter=limiter)  # type: ignore[arg-type]
+    await sink.text("one")
+    await asyncio.sleep(0.05)  # posted (chat.postMessage never touches the limiter)
+    await sink.text(" two")
+    await asyncio.sleep(0.05)  # the debounced draft flush is now stuck acquiring the limiter
+    assert limiter.acquired == 1 and limiter.refunded == 0
+    finishing = asyncio.create_task(sink.finish([]))
+    await asyncio.sleep(0.02)  # `finish` set `_finished` and is now waiting on the same lock
+    assert limiter.refunded == 0  # not yet: the stuck draft still holds it
+    limiter.release()  # the stuck draft's acquire is finally granted
+    await asyncio.wait_for(finishing, 1)
+    assert limiter.refunded == 1  # given back: the draft wrote nothing, `finish` owns the form
+    assert "one two" in slack.message_texts()[-1]  # `finish`'s own flush still wrote it
+
+
+async def test_a_task_update_on_a_finished_reply_never_blocks_the_caller(
+    slack: FakeSlack,
+) -> None:
+    # item 7: `_changed` on a finished reply used to flush at once and await the shared
+    # limiter inline, blocking whoever called `task()` (the SDK reader loop, live) for as
+    # long as the limiter made it wait; it must always debounce through `_later` instead.
+    limiter = _StuckLimiter()
+    sink = reply(slack, limiter=limiter)  # type: ignore[arg-type]
+    await sink.text("one")
+    await sink.finish([])  # posts as a new message: never touches the limiter
+    start = time.monotonic()
+    await asyncio.wait_for(sink.task(TaskUpdate("t1", "Bash: ls", "in_progress")), 0.05)
+    assert time.monotonic() - start < 0.05
 
 
 async def test_a_change_during_a_limiter_wait_is_not_dropped(slack: FakeSlack) -> None:

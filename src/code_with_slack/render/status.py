@@ -32,10 +32,20 @@ def _describe(exc: Exception) -> str:
 class StatusReaction:
     """Keeps one reaction on `root_ts` in sync with the session's state. Showing the same state
     again makes no call. A change adds the new reaction before removing the previous one, so the
-    root is never bare between them. Calls are serialized per instance (an asyncio.Lock): two
-    quick changes end on the last one. `already_reacted` on add and `no_reaction` on remove count
-    as done; any other failure is logged (channel, ts and the error code only) and swallowed,
-    since a reaction must never break a turn."""
+    root is never bare between them, and only once the add succeeded (or was already there):
+    a failed add leaves `_current` as it was, so the next `show` retries rather than stripping
+    the root's own reaction for nothing. A fresh instance (a new session's reaction, next to
+    whatever an earlier one already left on the same root) also strips the other three names on
+    its own first successful add, so the root never carries more than one. Calls are serialized
+    per instance (an asyncio.Lock): two quick changes end on the last one. `already_reacted` on
+    add and `no_reaction` on remove count as done. `missing_scope` (the workspace has not
+    reinstalled the app for `reactions:write`) is logged once for the whole process, and every
+    instance stops calling Slack for reactions from then on; any other failure is logged
+    (channel, ts and the error code only) and swallowed, since a reaction must never break a
+    turn."""
+
+    # Process-wide, once true: no instance calls Slack for reactions again this run.
+    _missing_scope = False
 
     def __init__(self, slack: AsyncWebClient, *, channel: str, root_ts: str) -> None:
         self._slack = slack
@@ -44,27 +54,49 @@ class StatusReaction:
         self._lock = asyncio.Lock()
         self._current: Status | None = None
 
+    @property
+    def current(self) -> Status | None:
+        """The reaction this instance last showed successfully; `None` before that."""
+        return self._current
+
     async def show(self, state: Status) -> None:
+        if StatusReaction._missing_scope:
+            return
         async with self._lock:
             if state is self._current:
                 return
             previous = self._current
-            await self._add(state)
+            if not await self._add(state):
+                return  # `_current` stays as it was: the next `show` retries the add
             if previous is not None:
                 await self._remove(previous)
+            else:
+                # A fresh instance: an earlier session's reaction may still sit on this root
+                # (an idle close's DONE, a restart's ERROR). Strip every other name so the root
+                # carries exactly this one (D10).
+                for other in Status:
+                    if other is not state:
+                        await self._remove(other)
             self._current = state
 
-    async def _add(self, state: Status) -> None:
+    async def _add(self, state: Status) -> bool:
+        """Whether the root now carries `state`: true on success or `already_reacted`."""
         try:
             await self._slack.reactions_add(
                 channel=self._channel, timestamp=self._root_ts, name=state.value
             )
         except Exception as exc:
             code = _describe(exc)
-            if code != "already_reacted":
+            if code == "already_reacted":
+                return True
+            if code == "missing_scope":
+                self._note_missing_scope()
+            else:
                 logger.warning(
                     "reactions.add failed on %s/%s: %s", self._channel, self._root_ts, code
                 )
+            return False
+        return True
 
     async def _remove(self, state: Status) -> None:
         try:
@@ -73,7 +105,22 @@ class StatusReaction:
             )
         except Exception as exc:
             code = _describe(exc)
-            if code != "no_reaction":
+            if code == "no_reaction":
+                return
+            if code == "missing_scope":
+                self._note_missing_scope()
+            else:
                 logger.warning(
                     "reactions.remove failed on %s/%s: %s", self._channel, self._root_ts, code
                 )
+
+    def _note_missing_scope(self) -> None:
+        if not StatusReaction._missing_scope:
+            logger.warning(
+                "reactions.add/remove failed on %s/%s: missing_scope (reactions:write); "
+                "the app needs reinstalling with the current scopes; no more reactions "
+                "will be attempted this run",
+                self._channel,
+                self._root_ts,
+            )
+        StatusReaction._missing_scope = True

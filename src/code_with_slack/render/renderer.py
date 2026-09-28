@@ -66,7 +66,6 @@ class Sink(Protocol):
     async def close_out(
         self, footer: str | None, reply_to: str | None = None, *, silent: bool = False
     ) -> None: ...
-    async def resume(self) -> None: ...
 
 
 def one_line(value: str, limit: int) -> str:
@@ -231,11 +230,6 @@ class TurnRenderer:
         a no-op."""
         self._closed_out = True
         await self._sink.close_out(self._footer, self._reply_to, silent=silent)
-
-    async def resume(self) -> None:
-        """Reopen this reply for a report turn's own writes to debounce again
-        (`ReplySink.resume`), before feeding it into an already-closed reply."""
-        await self._sink.resume()
 
     async def stop_running(self) -> None:
         """The Claude Code process is gone and its tasks with it: close their lines as stopped."""

@@ -294,6 +294,13 @@ class UpdateLimiter:
                     return
                 await asyncio.sleep((1 - self._tokens) / self._rate)
 
+    async def refund(self) -> None:
+        """Give back a token `acquire` spent on a write that, once inside the caller's own lock,
+        turned out not to be needed after all (the reply caught up to what it now shows while
+        this one waited its turn): capped at `burst`, as a token earned by waiting would be."""
+        async with self._lock:
+            self._tokens = min(self._burst, self._tokens + 1)
+
 
 class ReplySink:
     """One reply in a Slack thread, written in the order things happen: text, then a line per
@@ -394,6 +401,11 @@ class ReplySink:
             await self.task(update)
         if self._pending is not None:
             self._pending.cancel()
+            # Cleared now, not left for `_schedule` to find: `cancel` only requests it, so the
+            # task can still read `.done()` as False for a while yet (real production code
+            # always has an await in between; a change right after `finish`, with none, would
+            # not). `_schedule` must not mistake it for a debounce already in flight.
+            self._pending = None
         self._finished = True
         if not await self._flush(final=True):
             self._retry = asyncio.create_task(self._retry_final())
@@ -435,23 +447,15 @@ class ReplySink:
         async with self._lock:
             await self._write_closing()
 
-    async def resume(self) -> None:
-        """Reopen an already-finished reply so a report turn's own writes debounce again (D1),
-        instead of `_changed` treating `_finished` as "the turn is over, write
-        every change at once" and turning each streamed delta into its own `chat.update`. No
-        status line reappears (`_render` skips an empty one). `finish`, the report turn's own
-        end, marks the reply finished again."""
-        self._finished = False
-        self._status = ""
-
     async def _changed(self) -> None:
+        """A background task or subagent can still update its own line after the reply itself
+        finished (rare, and possibly during shutdown): debounced through `_later`, like any
+        other change, rather than flushed here and now, which would spend a limiter wait (real
+        time, under a busy process's shared budget) inline on the caller, the SDK reader loop
+        among them. `finish` and `close_out` write the final form themselves, right when each
+        decides there is one."""
         self._version += 1
-        if self._finished:
-            # A background task or subagent after the reply ended: rare, and possibly during
-            # shutdown, so written at once in its final form rather than on a timer.
-            await self._flush(final=True)
-        else:
-            self._schedule()
+        self._schedule()
 
     def _schedule(self) -> None:
         if self._pending is None or self._pending.done():
@@ -461,9 +465,13 @@ class ReplySink:
         while True:
             await asyncio.sleep(DEBOUNCE_SECONDS)
             version = self._version
+            # `final` is read now, not fixed at `_changed`'s own time: once the reply has
+            # finished, every further debounced pass writes the current, final form (no status
+            # line; the closing blocks too, once a silent close folded them into the body).
+            final = self._finished
             # Shielded: `finish` cancels a pending rewrite, and a write cancelled after Slack
             # took it would lose the message's ts. `finish` waits for the lock instead.
-            if not await asyncio.shield(self._flush(final=False)):
+            if not await asyncio.shield(self._flush(final=final)):
                 return
             if self._version == version:
                 return
@@ -545,9 +553,7 @@ class ReplySink:
             size += length
         if not final:
             status = " · ".join(filter(None, (self._status, self._running)))
-            # Empty after `resume` cleared the status for a report turn's own writes (D1):
-            # no status line at all, rather than an empty one.
-            if status:
+            if status:  # neither set (rare, before the first `open`): no status line at all
                 messages[-1].append(context_block(status))
         elif self._silent_closed:
             # A silent close (D1): the footer, if any, joins the body's own
@@ -638,6 +644,9 @@ class ReplySink:
             for index, blocks in enumerate(rendered):
                 if not blocks:
                     continue
+                # Compared before the limiter is ever asked for a token below: nothing awaits
+                # between this render and that ask, so nothing else can change `_shown` in
+                # between, and a message already showing this stays free.
                 if index < len(self._shown) and self._shown[index] == blocks:
                     continue
                 fallback = block_text(blocks[0])[:FALLBACK_LIMIT] or "…"
@@ -645,6 +654,7 @@ class ReplySink:
                     if index < len(self._messages):
                         await self._limiter.acquire()
                         if not final and self._finished:
+                            await self._limiter.refund()  # no write follows: not spent for real
                             return True  # finish() ran while this draft waited its turn
                         # A change can arrive while this write waits its turn: send what the
                         # reply looks like right now rather than the snapshot taken before the
@@ -654,6 +664,7 @@ class ReplySink:
                         if index < len(fresh) and fresh[index]:
                             blocks = fresh[index]
                         if blocks == self._shown[index]:
+                            await self._limiter.refund()  # caught up: no write follows either
                             continue  # caught up while it waited: nothing left to send
                         fallback = block_text(blocks[0])[:FALLBACK_LIMIT] or "…"
                         await self._slack.chat_update(

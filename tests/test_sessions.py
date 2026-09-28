@@ -929,6 +929,31 @@ async def test_a_suppressed_notification_s_closing_still_posts_eventually(
     await until(lambda: a.closed_out, limit=1.0)
 
 
+async def test_a_report_whose_target_already_closed_out_gets_its_own_reply(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # D1: a notification arriving later than INJECTED_TURN_WAIT lets `_expire_unreported` close
+    # the reply out first; the report turn the CLI starts once that late notification finally
+    # comes must not render into that already-closed reply (an edit, which never notifies, with
+    # any overflow posting below the closing it can no longer touch): it gets a fresh reply.
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.1)
+    first, notice, injected = split_background()
+    ended = [m for m in notice if not isinstance(m, TaskNotificationMessage)]
+    notification = [m for m in notice if isinstance(m, TaskNotificationMessage)]
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    a = session._task_replies["bc41naslr"]
+    h.clients[0].inject(ended)
+    # closed out already, on the late-notification path
+    await until(lambda: a.closed_out, limit=1.0)
+    h.clients[0].inject(notification + injected)
+    await until(lambda: any(is_report(r) for r in h.replies()))
+    await asyncio.sleep(0.05)
+    assert not is_report(h.bodies()[0])  # a's own body is untouched
+    assert any(is_report(r) for r in h.bodies()[1:])  # the report got a reply of its own
+
+
 async def test_the_unreported_expiry_timer_does_not_outlive_close(
     harness_for: Callable[..., Harness],
 ) -> None:
@@ -1045,9 +1070,10 @@ async def test_running_counts_follow_the_latest_reply(
     assert running_block(h.slack.message_blocks()[-1]) == "⏳ 1 shell"
     h.clients[0].inject(notice + injected)
     await until(lambda: is_report(h.bodies()[0]))
-    await asyncio.sleep(0.05)
-    # the task has ended: no reply's closing message shows a running count any more.
-    assert all(running_block(blocks) is None for blocks in h.slack.message_blocks())
+    # the task has ended: no reply's closing message shows a running count any more. The
+    # second reply's own closing already finished, so this update of it debounces like any
+    # other change to a finished reply (D1): `until` gives it the room to land.
+    await until(lambda: all(running_block(blocks) is None for blocks in h.slack.message_blocks()))
 
 
 async def test_two_prompts_in_a_row_each_get_their_own_closing_message(
@@ -1124,7 +1150,9 @@ async def test_a_background_agent_s_calls_update_its_line_and_open_no_reply(
     await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
     posted = len(h.slack.posted_ts)
     h.clients[0].inject(children)
-    await asyncio.sleep(0.1)
+    # A task that outlived its own turn updating its line afterward debounces like any other
+    # change to a finished reply (D1): `until` gives it the room to land.
+    await until(lambda: "Bash" in h.replies()[0])
     assert len(h.slack.posted_ts) == posted
     parent, nested = h.replies()[0].splitlines()[:2]
     assert "Agent" in parent and nested.startswith(NESTED) and "Bash" in nested
@@ -1234,7 +1262,9 @@ async def test_a_notification_with_no_turn_updates_its_line_and_releases_the_que
     second = await session.submit("next")
     await asyncio.wait_for(second.done.wait(), 2)
     # The task is known: its end shows on the line where it started, not in a post of its own.
-    assert h.replies()[0].startswith("✓")
+    # That line updates a reply whose own turn has already finished, which debounces like any
+    # other change to a finished reply (D1): `until` gives it the room to land.
+    await until(lambda: h.replies()[0].startswith("✓"))
     assert not any(is_report(r) for r in h.replies())
     assert h.clients[0].queries == ["start it", "next"]
 
@@ -2186,6 +2216,32 @@ async def test_a_stop_of_a_background_task_posts_no_new_message_until_it_ends(
     assert len(h.slack.calls_to("chat.postMessage")) == posts_before
 
 
+async def test_a_stopped_report_turn_closes_silently(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # D1: `TurnRenderer.close` only ever extends `_reply_to` forward, so the report turn's own
+    # renderer still carries "start it" from the turn that started the task. A report turn
+    # `!stop` cuts short must close silently regardless, exactly as a stopped owner turn does.
+    first, notice, injected = split_background()
+    partial = [m for m in injected if not isinstance(m, ResultMessage)]
+    result = next(m for m in injected if isinstance(m, ResultMessage))
+    interrupted = dataclasses.replace(result, terminal_reason="aborted_streaming")
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    h.clients[0].inject(notice)
+    await until(lambda: session._injected_expected)
+    h.clients[0].inject(partial)
+    await until(lambda: session._active is not None)
+    posts_before = len(h.slack.calls_to("chat.postMessage"))
+    assert await session.stop() is True
+    h.clients[0].inject([interrupted])
+    await asyncio.sleep(0.05)
+    assert len(h.slack.calls_to("chat.postMessage")) == posts_before  # no new, ringing message
+    for _, args in h.slack.calls:
+        assert "Reply to:" not in json.dumps(args)
+
+
 async def test_bang_stop_of_a_background_task_closes_silently(
     harness_for: Callable[..., Harness],
 ) -> None:
@@ -2947,3 +3003,81 @@ async def test_a_top_level_status_word_gets_no_reaction(
     h = harness_for({})
     await h.session().status()
     assert h.reactions() == []
+
+
+async def test_owner_query_crossing_a_task_notification_rings_once_with_no_error(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # `_settle`: the turn's start guessed Claude Code's own report (`_injected_expected`), but
+    # the result says a person asked it after all, with the owner's own turn still in `_sent`
+    # to redirect it to. The turn itself succeeded: no ❌, and only the redirected reply's own
+    # closing rings (never the wrongly-guessed reply's own, which must close silently).
+    h = harness_for({"turns": []})
+    session = h.session()
+    owner = await session.submit("what happened")
+    await until(lambda: bool(h.clients) and h.clients[0].queries == ["what happened"])
+    session._injected_expected = True  # Claude Code's own report was also expected right now
+    h.clients[0].inject(sdk_messages("tools"))  # the result: a genuine human turn after all
+    await asyncio.wait_for(owner.done.wait(), 2)
+    assert h.reactions() == [Status.WORKING.value]  # no ❌: this turn actually succeeded
+    rings = [c["text"] for c in h.slack.calls_to("chat.postMessage") if "Reply to:" in c["text"]]
+    # Exactly one ring, for the owner's own (misrouted) reply; the wrongly-guessed reply's own
+    # closing, if it posted one at all, must never carry a second one.
+    assert rings == [texts.REPLY_TO.format(prompt="what happened")]
+    assert texts.REPLY_ABOVE in h.bodies()[0]
+
+
+async def test_an_abandon_s_error_stands_through_a_later_unreported_expiry(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # D10: `_expire_unreported`'s own tail used to call `_react_done_if_idle` unconditionally,
+    # flipping a standing ❌ (here, `_abandon(error=True)`, a crashed CLI) back to ✅ once the
+    # session reads idle again, even though no new work ever started.
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.1)
+    first, notice, _ = split_background()
+    ended = [m for m in notice if not isinstance(m, TaskNotificationMessage)]
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    h.clients[0].inject(ended)  # the task's terminal update, no notification yet: unreported
+    await asyncio.sleep(0.02)
+    assert session._unreported  # `_expire_unreported`'s own timer is now scheduled
+    h.clients[0].inject([EndOfStream()])  # the CLI process is gone
+    await until(lambda: session._client is None)
+    assert h.reactions()[-1] == Status.ERROR.value
+    await asyncio.sleep(0.15)  # past INJECTED_TURN_WAIT: the expiry timer has now fired
+    assert h.reactions()[-1] == Status.ERROR.value
+
+
+async def test_a_silently_failed_queued_turn_with_a_running_task_posts_no_new_message(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # `_fail`'s own `close_out` used to default to non-silent: with a background task still
+    # running (drain lets it keep running), its running count alone (no footer, no reply_to)
+    # still made a brand-new message, which rings whatever it says (D1), even though
+    # `notify=False` (a restart drain's own `fail_queued`) meant this should stay silent.
+    first, _, _ = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    second = await session.submit("next")  # queued: the worker has not taken it yet
+    posts_before = len(h.slack.calls_to("chat.postMessage"))
+    await session.fail_queued(texts.ENDED.format(reason=texts.ENDED_RESTARTING))
+    await asyncio.wait_for(second.done.wait(), 2)
+    new = h.slack.calls_to("chat.postMessage")[posts_before:]
+    assert not new
+
+
+async def test_closing_a_session_with_only_a_running_task_left_shows_error(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # `busy` (active or sent turns) misses a task that outlived its own turn: `close()` must
+    # still react ❌ for cutting it short, or the ⏳ from the turn that started it never clears.
+    first, _, _ = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    assert h.reactions() == [Status.WORKING.value]  # the task still runs: no ✅ yet
+    assert session.busy is False  # the bug: `busy` alone would miss the running task
+    await session.close()
+    assert h.reactions() == [Status.WORKING.value, Status.ERROR.value]
