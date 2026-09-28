@@ -41,17 +41,22 @@ logger = logging.getLogger("code_with_slack")
 DRAIN_LIMIT_SECONDS = 1740
 
 
+# The longest project folder name the CLI writes as the plain sanitized path
+# (see `_alive_sessions`).
+LONG_PROJECT_KEY = 200
+
+
 def _projects_dir() -> Path:
     """Where Claude Code keeps every project's transcripts: "Claude Code stores session
     transcripts locally in plaintext under `~/.claude/projects/`"
     (https://code.claude.com/docs/en/data-usage, read 2026-09-28), under `CLAUDE_CONFIG_DIR`
     when that is set (the CLI's own override, already relied on elsewhere in this project)."""
     override = os.environ.get("CLAUDE_CONFIG_DIR")
-    home = unicodedata.normalize("NFC", override) if override else str(Path.home() / ".claude")
+    home = unicodedata.normalize("NFC", override or str(Path.home() / ".claude"))
     return Path(home) / "projects"
 
 
-def _alive_sessions(directory: Path) -> Collection[str]:
+def _alive_sessions(directory: Path) -> Collection[str] | None:
     """The session ids alive in `directory`, for `state.prune`: those `directory_sessions`
     shows, unioned with every transcript file actually there. `list_sessions` skips sidechain
     and metadata-only sessions (the SDK's own listing rules, `claude_agent_sdk._internal.sessions`,
@@ -59,13 +64,16 @@ def _alive_sessions(directory: Path) -> Collection[str]:
     pruned just because it has not built up a title yet. `project_key_for_directory` is the
     public function the SDK offers for its own project-directory naming (its docstring: "the same
     ... sanitization the CLI uses for project directory names"); when its folder is not found
-    under the documented location, pruning must err on keeping, so nothing extra is added
-    (`directory_sessions`'s own result is not touched either way)."""
+    under the documented location, pruning must err on keeping. Past `LONG_PROJECT_KEY`
+    characters the CLI names the folder with a hash the SDK does not reproduce (the SDK's own
+    `_find_project_dir` docstring, 0.2.160): a missing folder there proves nothing, so the answer
+    is None ("cannot tell") and `state.prune` keeps that folder's threads."""
     alive = {info.session_id for info in directory_sessions(directory)}
-    folder = _projects_dir() / project_key_for_directory(directory)
+    key = project_key_for_directory(directory)
+    folder = _projects_dir() / key
     if folder.is_dir():
-        alive |= {p.stem for p in folder.glob("*.jsonl")}
-    return alive
+        return alive | {p.stem for p in folder.glob("*.jsonl")}
+    return None if len(key) > LONG_PROJECT_KEY else alive
 
 
 async def _post_upgrade_notices(slack: AsyncWebClient, state: StateStore) -> None:

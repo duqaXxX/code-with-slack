@@ -178,3 +178,23 @@ def test_prune_uses_alive_sessions_to_drop_a_gone_thread(
     removed = state.prune(entry._alive_sessions, time.time())
     assert removed == 1
     assert state.thread(CHANNEL, "1780000000.000001") is None
+
+
+def test_alive_sessions_cannot_decide_a_long_folder_it_does_not_find(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Past 200 sanitized characters the CLI names the project folder with a hash the SDK does
+    # not reproduce (`_find_project_dir` docstring, claude-agent-sdk 0.2.160): a missing folder
+    # there proves nothing, so `_alive_sessions` answers None and prune keeps the threads.
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config"))
+    project = tmp_path / ("p" * 220)
+    monkeypatch.setattr("code_with_slack.sessions.list_sessions", lambda **_: [])
+    assert entry._alive_sessions(project) is None
+
+
+def test_alive_sessions_decides_a_short_folder_it_does_not_find(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr("code_with_slack.sessions.list_sessions", lambda **_: [])
+    assert entry._alive_sessions(tmp_path / "project") == set()

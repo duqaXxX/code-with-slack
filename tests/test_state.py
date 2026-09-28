@@ -320,3 +320,20 @@ class TestPrune:
             store.prune(alive=boom, now=1790549806.565369)
         assert path.read_text() == before
         assert store.thread(CHANNEL, THREAD_TS) is not None
+
+
+def test_prune_keeps_every_thread_of_a_folder_it_cannot_decide(tmp_path: Path) -> None:
+    # `alive` returns None when it cannot tell which sessions a folder holds: pruning errs on
+    # keeping, so none of that folder's threads is removed.
+    store = StateStore(tmp_path / "state.json")
+    store.bind("C000CHAN", tmp_path / "undecided")
+    store.open_thread("C000CHAN", "1700000000.000100", session_id="kept-1")
+    store.bind("C000CHAN", tmp_path / "decided")
+    store.open_thread("C000CHAN", "1700000000.000200", session_id="gone-1")
+
+    def alive(directory: Path) -> set[str] | None:
+        return None if directory.name == "undecided" else set()
+
+    assert store.prune(alive, 1700000000.0) == 1
+    assert store.thread("C000CHAN", "1700000000.000100") is not None
+    assert store.thread("C000CHAN", "1700000000.000200") is None

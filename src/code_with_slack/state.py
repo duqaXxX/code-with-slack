@@ -158,12 +158,13 @@ class StateStore:
         self._channels[channel_id] = replace(channel, notice_pending=False)
         self._save()
 
-    def prune(self, alive: Callable[[Path], Collection[str]], now: float) -> int:
+    def prune(self, alive: Callable[[Path], Collection[str] | None], now: float) -> int:
         """Remove a thread whose session id is gone from its folder's sessions, and a
         no-session thread whose root message is older than `ONE_DAY`. Calls `alive` once per
-        distinct folder. If `alive` raises, nothing is removed or written; the caller decides
-        what to do next. Returns how many entries were removed."""
-        alive_cache: dict[Path, Collection[str]] = {}
+        distinct folder; None means it cannot tell, and that folder's threads are kept. If
+        `alive` raises, nothing is removed or written; the caller decides what to do next.
+        Returns how many entries were removed."""
+        alive_cache: dict[Path, Collection[str] | None] = {}
         updated: dict[str, ChannelRecord] = {}
         removed = 0
         for channel_id, channel in self._channels.items():
@@ -172,7 +173,8 @@ class StateStore:
                 if thread.session_id is not None:
                     if thread.directory not in alive_cache:
                         alive_cache[thread.directory] = alive(thread.directory)
-                    if thread.session_id not in alive_cache[thread.directory]:
+                    sessions = alive_cache[thread.directory]
+                    if sessions is not None and thread.session_id not in sessions:
                         removed += 1
                         continue
                 elif now - float(thread_ts) > ONE_DAY:
