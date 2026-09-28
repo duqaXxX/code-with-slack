@@ -280,3 +280,20 @@ class FakeSlack(AsyncWebClient):
 
     def calls_to(self, method: str) -> list[dict[str, Any]]:
         return [args for name, args in self.calls if name == method]
+
+    async def reactions_add(
+        self, *, channel: str, name: str, timestamp: str, **kwargs: Any
+    ) -> AsyncSlackResponse:
+        """The arguments StatusReaction sends (slack_sdk 3.44.1's AsyncWebClient.reactions_add
+        signature, docs.slack.dev/reference/methods/reactions.add, read 2026-09-28)."""
+        kwargs.update({"channel": channel, "name": name, "timestamp": timestamp})
+        return await self.api_call("reactions.add", params=kwargs)
+
+    async def reactions_remove(
+        self, *, channel: str, name: str, timestamp: str, **kwargs: Any
+    ) -> AsyncSlackResponse:
+        """Same, but without the `file`/`file_comment` padding the real
+        AsyncWebClient.reactions_remove always adds: StatusReaction never sends them, and a test
+        asserting on recorded calls would otherwise have to filter them out."""
+        kwargs.update({"channel": channel, "name": name, "timestamp": timestamp})
+        return await self.api_call("reactions.remove", params=kwargs)
