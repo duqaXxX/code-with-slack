@@ -385,7 +385,13 @@ async def resume(s: Stage, word: str) -> dict[str, Observation]:
     if session_id is None:
         return {"P6": Observation(False, False, "no session id stored")}
     listed = await asyncio.to_thread(directory_sessions, s.workdir)
-    picker = json.dumps(resume_blocks(s.workdir, listed, None, datetime.now(UTC)))
+    # The daemon's own `held` test: the first turn's thread holds this session, so its row shows
+    # no Resume button, but the session is still listed.
+    picker = json.dumps(
+        resume_blocks(
+            s.workdir, listed, lambda sid: s.state.holder(sid) is not None, datetime.now(UTC)
+        )
+    )
     in_list = any(i.session_id == session_id for i in listed) and session_id[:8] in picker
     seen = {"P6": Observation(True, in_list)}
     # A background command an earlier scene failed to stop keeps the channel busy.
