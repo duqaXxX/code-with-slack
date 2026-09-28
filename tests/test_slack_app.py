@@ -1639,6 +1639,69 @@ async def test_a_directory_gone_unavailable_after_continue_reacts_error_not_a_ra
     assert session._status.current is Status.ERROR
 
 
+async def test_a_generic_connect_error_after_continue_reacts_error_not_a_raised_hand(
+    world: World,
+) -> None:
+    # `submitted`, not a fixed set of exception types: any failure before `submit()` (a
+    # logged-out CLI raising something `ensure_connected` does not special-case, most likely)
+    # must not leave the hold's ✋ standing forever either.
+    await world.dispatch(message("busy elsewhere", ts=OTHER_THREAD))
+    await world.dispatch(message("!compact", ts=THREAD))  # a Passthrough: held, `ensure_connected`
+    hold_id = button_value(posted_blocks(world), HOLD_CONTINUE)
+    world.connect_error = RuntimeError("logged out")
+    await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, THREAD))
+    assert world.clients[-1].queries == []  # its own connect failed: nothing was ever sent
+    assert world.clients[0].queries == ["busy elsewhere"]  # the other session, unaffected
+    session = world.sessions.get(CHANNEL, THREAD)
+    assert session is not None
+    assert session._status.current is Status.ERROR
+
+
+async def test_a_session_gone_at_continue_time_reacts_error_not_a_raised_hand(
+    world: World,
+) -> None:
+    # The held session itself closed (its thread's own entry gone too, as a SessionGone close
+    # leaves it) in the gap between Continue and `submit()`: the retry's own fresh lookup finds
+    # nothing, so `SessionGone` propagates instead of a plain `SessionClosed`.
+    await start_a_hold(world)
+    hold_id = button_value(posted_blocks(world), HOLD_CONTINUE)
+    session = world.sessions.get(CHANNEL, THREAD)
+    assert session is not None
+    session._closed = True  # as if something else had closed it while the hold was open
+    world.state.remove_thread(CHANNEL, THREAD)
+    await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, THREAD))
+    assert world.clients[-1].queries == ["busy elsewhere"]  # never sent: no second client
+    assert session._status.current is Status.ERROR
+    assert texts.SESSION_GONE in world.ephemerals()
+    # `_closed` was set directly above, bypassing the real teardown (`cancel_hold` would answer
+    # Cancel, not Continue, for a session real `close()` reaches): finished properly here, or
+    # the fixture's own `close_all` hangs behind this object's never-fired `done_closing`.
+    await session.close()
+
+
+async def test_a_session_closed_at_continue_time_retries_and_sends_without_reacting_error(
+    world: World,
+) -> None:
+    # The held session closed (its thread's own entry intact, unlike D7's `SessionGone` close)
+    # in the gap between Continue and `submit()`: the retry's own fresh lookup rebuilds a live
+    # session and sends normally, so the original object's ✋ must not be turned into ❌.
+    await start_a_hold(world)
+    hold_id = button_value(posted_blocks(world), HOLD_CONTINUE)
+    session = world.sessions.get(CHANNEL, THREAD)
+    assert session is not None
+    session._closed = True  # a D9 idle close, most likely; the thread's own entry survives
+    session.done_closing.set()  # what the real teardown this stands in for always fires
+    await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, THREAD))
+    fresh = world.sessions.get(CHANNEL, THREAD)
+    assert fresh is not None and fresh is not session
+    assert world.clients[-1].queries == ["hello"]  # sent, on a freshly rebuilt client
+    reacted = {a["name"] for a in world.slack.calls_to("reactions.add")}
+    assert Status.ERROR.value not in reacted
+    # `_closed` was set directly above, bypassing the real teardown: finished properly here, or
+    # the fixture's own `close_all` hangs behind this object's never-cancelled background tasks.
+    await session.close()
+
+
 async def test_stop_in_the_held_thread_cancels_it(world: World) -> None:
     await start_a_hold(world)
     await world.dispatch(reply("!stop", THREAD))
