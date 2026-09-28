@@ -794,6 +794,10 @@ async def test_a_button_is_never_trusted_for_a_session_of_another_directory(worl
     assert world.ephemerals() == [texts.RESUME_GONE]
 
 
+# The permalink FakeSlack answers with by default (tests/fixtures/slack/api-chat-getPermalink.json).
+PERMALINK = "https://example.slack.com/archives/C000CHAN/p1780000000000001"
+
+
 async def test_a_typed_resume_of_a_session_held_by_another_thread_is_refused(world: World) -> None:
     # D6 minimum: two live processes on one transcript is never reachable.
     two_sessions(world)
@@ -801,7 +805,8 @@ async def test_a_typed_resume_of_a_session_held_by_another_thread_is_refused(wor
     assert world.state.thread(CHANNEL, OTHER_THREAD).session_id == SESSION_B
     await world.dispatch(message(f"!resume {SESSION_B}", ts=THREAD))
     assert world.state.thread(CHANNEL, THREAD) is None
-    assert texts.RESUME_ELSEWHERE in world.ephemerals()
+    link = f"<{PERMALINK}|Session>"
+    assert texts.RESUME_ELSEWHERE.format(link=link) in world.ephemerals()
 
 
 async def test_a_resume_click_of_a_session_held_by_another_thread_is_refused(world: World) -> None:
@@ -809,10 +814,21 @@ async def test_a_resume_click_of_a_session_held_by_another_thread_is_refused(wor
     await world.dispatch(message(f"!resume {SESSION_B}", ts=OTHER_THREAD))
     await world.dispatch(click("session_resume", SESSION_B))  # a different thread (CLICK_THREAD)
     assert world.state.thread(CHANNEL, CLICK_THREAD) is None
-    assert texts.RESUME_ELSEWHERE in world.ephemerals()
+    link = f"<{PERMALINK}|Session>"
+    assert texts.RESUME_ELSEWHERE.format(link=link) in world.ephemerals()
 
 
-async def test_the_list_marks_a_session_held_elsewhere_with_no_button(world: World) -> None:
+async def test_a_held_session_s_link_falls_back_when_the_permalink_fails(world: World) -> None:
+    two_sessions(world)
+    await world.dispatch(message(f"!resume {SESSION_B}", ts=OTHER_THREAD))
+    world.slack.responses["chat.getPermalink"] = RuntimeError("network down")
+    await world.dispatch(message(f"!resume {SESSION_B}", ts=THREAD))
+    assert world.state.thread(CHANNEL, THREAD) is None
+    fallback = texts.STATUS_CHANNEL_LINK_FALLBACK.format(thread_ts=OTHER_THREAD)
+    assert texts.RESUME_ELSEWHERE.format(link=fallback) in world.ephemerals()
+
+
+async def test_the_list_marks_a_session_held_elsewhere_with_its_permalink(world: World) -> None:
     two_sessions(world)
     await world.dispatch(message(f"!resume {SESSION_B}", ts=OTHER_THREAD))
     await world.dispatch(message("!resume"))
@@ -820,7 +836,10 @@ async def test_the_list_marks_a_session_held_elsewhere_with_no_button(world: Wor
     held_row = next(b for b in post["blocks"] if b.get("block_id") == f"session-{SESSION_B}")
     free_row = next(b for b in post["blocks"] if b.get("block_id") == f"session-{SESSION_A}")
     assert "accessory" not in held_row and "accessory" in free_row
-    assert held_row["text"]["text"].endswith(texts.RESUME_ELSEWHERE_ROW)
+    link = f"<{PERMALINK}|open elsewhere>"
+    assert held_row["text"]["text"].endswith(texts.RESUME_ELSEWHERE_ROW.format(link=link))
+    permalinks = world.slack.calls_to("chat.getPermalink")
+    assert [(c["channel"], c["message_ts"]) for c in permalinks] == [(CHANNEL, OTHER_THREAD)]
 
 
 async def test_a_still_running_first_turn_already_holds_its_session_id(world: World) -> None:
@@ -838,7 +857,8 @@ async def test_a_still_running_first_turn_already_holds_its_session_id(world: Wo
     world.stored_sessions = [SDKSessionInfo(held_id, "tools", 0, 1)]
     await world.dispatch(message(f"!resume {held_id}", ts=OTHER_THREAD))
     assert world.state.thread(CHANNEL, OTHER_THREAD) is None
-    assert texts.RESUME_ELSEWHERE in world.ephemerals()
+    link = f"<{PERMALINK}|Session>"
+    assert texts.RESUME_ELSEWHERE.format(link=link) in world.ephemerals()
 
 
 async def test_resume_opens_an_independent_thread_while_another_is_busy(world: World) -> None:
@@ -1300,6 +1320,68 @@ async def test_a_bind_to_an_untrusted_folder_says_no_session_can_start_yet(
     reason = texts.DIRECTORY_UNTRUSTED.format(directory=docs)
     assert said(world)[-1] == texts.BIND_UNAVAILABLE.format(directory=docs, reason=reason)
     assert world.state.channel(CHANNEL).directory == docs
+    await world.sessions.close_all()
+
+
+async def _idle_message(world: World, text: str, *, ts: str) -> None:
+    """A message that opens or continues a thread and lets its turn finish, so the session is
+    idle again (D5's `bind` refuses one that is still busy)."""
+    await world.dispatch(message(text, ts=ts))
+    world.clients[-1].inject(sdk_messages("tools"))  # a full turn, ResultMessage included
+    await asyncio.sleep(0.05)
+
+
+async def test_bind_names_the_old_folder_a_thread_keeps(world: World) -> None:
+    # D5: the thread stays in `app`, the folder it was created in; the bind answer names it.
+    await _idle_message(world, "hi", ts=THREAD)
+    (world.root / "docs").mkdir()
+    await world.dispatch(message("!bind docs"))
+    old = (world.root / "app").resolve()
+    new = (world.root / "docs").resolve()
+    assert said(world)[-1] == texts.BIND_OK_ELSEWHERE.format(directory=new, old=f"`{old}`")
+    await world.sessions.close_all()
+
+
+async def test_bind_names_every_old_folder_still_in_use(world: World) -> None:
+    await _idle_message(world, "hi", ts=THREAD)  # a thread in `app`
+    (world.root / "docs").mkdir()
+    await world.dispatch(message("!bind docs"))
+    await _idle_message(world, "hi", ts=OTHER_THREAD)  # a thread in `docs`
+    (world.root / "notes").mkdir()
+    await world.dispatch(message("!bind notes"))
+    app = (world.root / "app").resolve()
+    docs = (world.root / "docs").resolve()
+    notes = (world.root / "notes").resolve()
+    old = ", ".join(f"`{f}`" for f in sorted((app, docs), key=str))
+    assert said(world)[-1] == texts.BIND_OK_ELSEWHERE.format(directory=notes, old=old)
+    await world.sessions.close_all()
+
+
+async def test_bind_stays_plain_with_no_thread_in_another_folder(world: World) -> None:
+    (world.root / "docs").mkdir()
+    await world.dispatch(message("!bind docs"))
+    new = (world.root / "docs").resolve()
+    assert said(world) == [texts.BIND_OK.format(directory=new)]
+
+
+async def test_a_reply_in_an_old_folder_thread_gets_the_notice_once(world: World) -> None:
+    await _idle_message(world, "hi", ts=THREAD)  # opens a session in `app`
+    (world.root / "docs").mkdir()
+    await world.dispatch(message("!bind docs"))
+    old = (world.root / "app").resolve()
+    new = (world.root / "docs").resolve()
+    expected = texts.OLD_THREAD_FOLDER.format(old=old, new=new)
+    await world.dispatch(reply("go on", THREAD))
+    assert said(world).count(expected) == 1
+    await world.dispatch(reply("again", THREAD))
+    assert said(world).count(expected) == 1  # a second reply in the same thread says it no more
+    await world.sessions.close_all()
+
+
+async def test_a_thread_in_the_current_folder_never_gets_the_notice(world: World) -> None:
+    await world.dispatch(message("hi", ts=THREAD))  # opens a session in `app`, still current
+    await world.dispatch(reply("go on", THREAD))
+    assert not any("Claude Code resumes a session only there" in t for t in said(world))
     await world.sessions.close_all()
 
 

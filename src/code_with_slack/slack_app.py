@@ -69,7 +69,7 @@ from code_with_slack.prompt import Prompt
 from code_with_slack.render.escape import markdown_escape, mrkdwn_escape
 from code_with_slack.render.renderer import one_line
 from code_with_slack.render.sinks import FALLBACK_LIMIT, context_block, describe, notice_text, split
-from code_with_slack.resume import RESUME_ACTION, TITLE_LIMIT, matching, resume_blocks
+from code_with_slack.resume import RESUME_ACTION, RESUME_ROWS, TITLE_LIMIT, matching, resume_blocks
 from code_with_slack.sessions import (
     DirectoryUnavailable,
     SessionClosed,
@@ -105,13 +105,21 @@ def slack_unescape(text: str) -> str:
     return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
 
-def bound_text(directory: Path, unavailable: DirectoryUnavailable | None) -> str:
-    """The answer to a bind: what keeps a session from starting in the folder, if anything."""
-    if unavailable is None:
+def bound_text(
+    directory: Path, unavailable: DirectoryUnavailable | None, old_folders: list[Path]
+) -> str:
+    """The answer to a bind: what keeps a session from starting in the folder, if anything
+    (D5's BIND_UNAVAILABLE keeps priority: what would stop every session there matters more than
+    where an existing thread's session lives), else the old folders existing threads keep working
+    in, if any."""
+    if unavailable is not None:
+        return texts.BIND_UNAVAILABLE.format(
+            directory=mrkdwn_escape(str(directory)), reason=unavailable.message
+        )
+    if not old_folders:
         return texts.BIND_OK.format(directory=mrkdwn_escape(str(directory)))
-    return texts.BIND_UNAVAILABLE.format(
-        directory=mrkdwn_escape(str(directory)), reason=unavailable.message
-    )
+    old = ", ".join(f"`{mrkdwn_escape(str(folder))}`" for folder in old_folders)
+    return texts.BIND_OK_ELSEWHERE.format(directory=mrkdwn_escape(str(directory)), old=old)
 
 
 def click_thread(body: dict[str, Any]) -> str:
@@ -157,6 +165,9 @@ def build_app(
     # opening new threads for as long as it runs; a lock kept forever would leak).
     arrival_order: dict[tuple[str, str], asyncio.Lock] = {}
     arrival_waiters: dict[tuple[str, str], int] = {}
+    # D5: threads already told (or opened) since this process started, so the old-folder notice
+    # (plan 7) shows once per thread per process, not on every reply.
+    old_folder_notified: set[tuple[str, str]] = set()
 
     @contextlib.asynccontextmanager
     async def arrival_lock(key: tuple[str, str]) -> AsyncIterator[None]:
@@ -267,6 +278,7 @@ def build_app(
             await handle_word(channel, thread_ts, command, session=session)
             return
         if session is not None:
+            await old_folder_notice(channel, thread_ts, session)
             await submit_to_session(
                 channel, thread_ts, session, text, files, command, in_thread=True
             )
@@ -280,6 +292,23 @@ def build_app(
             await tell_owner(channel, thread_ts, texts.UNBOUND.format(root=config.allowed_root))
             return
         await submit_to_session(channel, thread_ts, opened, text, files, command, in_thread=False)
+
+    async def old_folder_notice(channel: str, thread_ts: str, session: ThreadSession) -> None:
+        """D5: a thread whose folder differs from the channel's current one, told once per
+        process (a thread told before this process started, or opened during it, needs no more)."""
+        key = (channel, thread_ts)
+        record = state.channel(channel)
+        if key in old_folder_notified or record is None or session.directory == record.directory:
+            return
+        old_folder_notified.add(key)
+        await notice(
+            channel,
+            thread_ts,
+            texts.OLD_THREAD_FOLDER.format(
+                old=mrkdwn_escape(str(session.directory)),
+                new=mrkdwn_escape(str(record.directory)),
+            ),
+        )
 
     async def submit_to_session(
         channel: str,
@@ -426,19 +455,31 @@ def build_app(
             row += texts.STATUS_CHANNEL_FOLDER.format(directory=session.directory)
         return row
 
-    async def thread_link(channel: str, thread_ts: str) -> str:
-        # `say` posts a markdown block: standard Markdown links (docs.slack.dev, markdown
-        # block), not mrkdwn's `<url|label>`.
+    async def _permalink(channel: str, thread_ts: str) -> str | None:
         try:
-            permalink = (await slack.chat_getPermalink(channel=channel, message_ts=thread_ts))[
-                "permalink"
-            ]
+            return str(
+                (await slack.chat_getPermalink(channel=channel, message_ts=thread_ts))["permalink"]
+            )
         except Exception as exc:
             logger.warning(
                 "could not get a permalink for %s/%s: %s", channel, thread_ts, describe(exc)
             )
+            return None
+
+    async def thread_link(channel: str, thread_ts: str) -> str:
+        # `say` posts a markdown block: standard Markdown links (docs.slack.dev, markdown
+        # block), not mrkdwn's `<url|label>`.
+        permalink = await _permalink(channel, thread_ts)
+        if permalink is None:
             return texts.STATUS_CHANNEL_LINK_FALLBACK.format(thread_ts=thread_ts)
         return f"[Session]({permalink})"
+
+    async def thread_mrkdwn_link(channel: str, thread_ts: str, label: str) -> str:
+        # A resume row and a notice are mrkdwn (`context_block`), which takes `<url|label>`.
+        permalink = await _permalink(channel, thread_ts)
+        if permalink is None:
+            return texts.STATUS_CHANNEL_LINK_FALLBACK.format(thread_ts=thread_ts)
+        return f"<{permalink}|{label}>"
 
     @app.action("answer")
     async def on_answer(ack: AsyncAck) -> None:
@@ -525,8 +566,16 @@ def build_app(
         if not await sessions.bind(channel, directory):
             await notice(channel, thread_ts, texts.BIND_BUSY)
             return
+        await announce_bind(channel, thread_ts, directory)
+
+    async def announce_bind(channel: str, thread_ts: str, directory: Path) -> None:
+        # Thread entries keep their own folder either side of the bind (state.bind), so the old
+        # folders (D5) can be read now: those of the channel's threads that differ from the new one.
         unavailable = await sessions.unavailable(directory)
-        await notice(channel, thread_ts, bound_text(directory, unavailable))
+        record = state.channel(channel)
+        threads = record.threads.values() if record is not None else []
+        old_folders = sorted({t.directory for t in threads if t.directory != directory}, key=str)
+        await notice(channel, thread_ts, bound_text(directory, unavailable, old_folders))
 
     async def folder_named(channel: str, thread_ts: str, path: str) -> Path | None:
         directory = resolve_directory(path, config.allowed_root)
@@ -577,8 +626,7 @@ def build_app(
         if not await sessions.bind(channel, directory):
             await notice(channel, thread_ts, texts.BIND_BUSY)
             return
-        unavailable = await sessions.unavailable(directory)
-        await notice(channel, thread_ts, bound_text(directory, unavailable))
+        await announce_bind(channel, thread_ts, directory)
         await remove_request(channel, body["message"]["ts"])
 
     async def handle_resume(channel: str, thread_ts: str, target: str) -> None:
@@ -590,10 +638,25 @@ def build_app(
         # Only the list shows dates: matching a target needs none, and dating reads every file.
         stored = await sessions.sessions_in(directory, dated=not target)
         if not target:
+            # A permalink is a Slack round trip: fetched only for the held rows the list shows.
+            candidates = [(s.session_id, state.holder(s.session_id)) for s in stored[:RESUME_ROWS]]
+            held = [(sid, holder) for sid, holder in candidates if holder is not None]
+            links = dict(
+                zip(
+                    (sid for sid, _ in held),
+                    await asyncio.gather(
+                        *(
+                            thread_mrkdwn_link(holder[0], holder[1], "open elsewhere")
+                            for _, holder in held
+                        )
+                    ),
+                    strict=True,
+                )
+            )
             blocks = resume_blocks(
                 directory,
                 stored,
-                lambda sid: state.holder(sid) is not None,
+                lambda sid: links.get(sid),
                 datetime.now().astimezone(),
             )
             await slack.chat_postMessage(
@@ -630,8 +693,10 @@ def build_app(
         if sessions.get(channel, thread_ts) is not None:
             await tell_owner(channel, thread_ts, texts.RESUME_HELD)
             return False
-        if state.holder(chosen.session_id) is not None:
-            await tell_owner(channel, thread_ts, texts.RESUME_ELSEWHERE)
+        holder = state.holder(chosen.session_id)
+        if holder is not None:
+            link = await thread_mrkdwn_link(holder[0], holder[1], "Session")
+            await tell_owner(channel, thread_ts, texts.RESUME_ELSEWHERE.format(link=link))
             return False
         record = state.channel(channel)
         if record is None or record.directory != directory:
