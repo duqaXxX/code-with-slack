@@ -1,5 +1,7 @@
 import asyncio
 import dataclasses
+import itertools
+import time
 from dataclasses import replace
 from typing import Any
 
@@ -12,7 +14,7 @@ from code_with_slack import texts
 from code_with_slack.render import sinks
 from code_with_slack.render.escape import mrkdwn_escape
 from code_with_slack.render.renderer import STOPPED, TaskUpdate, TurnRenderer
-from code_with_slack.render.sinks import ReplySink
+from code_with_slack.render.sinks import ReplySink, UpdateLimiter
 from tests.fakes import CHANNEL, THREAD, FakeSlack, sdk_messages
 
 
@@ -30,8 +32,8 @@ def last_blocks(slack: FakeSlack) -> list[dict[str, Any]]:
     return blocks
 
 
-def reply(slack: FakeSlack) -> ReplySink:
-    return ReplySink(slack, channel=CHANNEL, thread_ts=THREAD)
+def reply(slack: FakeSlack, *, limiter: UpdateLimiter | None = None) -> ReplySink:
+    return ReplySink(slack, channel=CHANNEL, thread_ts=THREAD, limiter=limiter or UpdateLimiter())
 
 
 async def test_a_reply_s_body_is_one_message_and_the_closing_message_follows(
@@ -912,3 +914,234 @@ async def test_reply_to_with_special_characters_is_escaped(slack: FakeSlack) -> 
     assert closing["text"] == texts.REPLY_TO.format(prompt=escaped_prompt)
     # With no footer, a bare line stands in for it: the question shows only in the notification.
     assert slack.message_blocks()[-1] == [sinks.context_block(sinks.ZERO_WIDTH_SPACE)]
+
+
+async def test_update_limiter_never_exceeds_the_budget_in_any_window() -> None:
+    limit, window, burst = 4, 0.2, 1
+    limiter = UpdateLimiter(limit=limit, window=window, burst=burst)
+    times: list[float] = []
+    for _ in range(limit * 3):
+        await limiter.acquire()
+        times.append(time.monotonic())
+    # a token bucket may spend its whole burst at once; past that, the standard bound holds:
+    # tokens spent in any span <= burst + rate * span, i.e. at most limit+burst per window.
+    for i in range(len(times) - (limit + burst)):
+        assert times[i + limit + burst] - times[i] >= window - 0.03
+
+
+async def test_update_limiter_paces_evenly_after_its_burst(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Even pacing, not a sliding window: past the burst, one token every window/limit seconds,
+    never every reply racing through the whole budget and then freezing together. An injected
+    clock, advanced by exactly what the limiter itself sleeps for, so the gaps are exact and this
+    cannot flake on a loaded runner."""
+    limit, window, burst = 6, 0.6, 2
+    fake_time = [0.0]
+
+    async def fake_sleep(seconds: float) -> None:
+        fake_time[0] += seconds
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    limiter = UpdateLimiter(limit=limit, window=window, burst=burst, clock=lambda: fake_time[0])
+    gaps: list[float] = []
+    last: float | None = None
+    for _ in range(limit):
+        await limiter.acquire()
+        if last is not None:
+            gaps.append(fake_time[0] - last)
+        last = fake_time[0]
+
+    steady = gaps[burst - 1 :]  # the gaps once the burst is spent
+    interval = window / limit
+    assert all(g == pytest.approx(interval) for g in steady)
+
+
+async def test_update_limiter_serves_waiters_in_arrival_order() -> None:
+    limiter = UpdateLimiter(limit=1, window=0.1, burst=1)
+    order: list[int] = []
+
+    async def take(n: int) -> None:
+        await limiter.acquire()
+        order.append(n)
+
+    await asyncio.gather(take(1), take(2), take(3))
+    assert order == [1, 2, 3]
+
+
+async def test_update_limiter_releases_its_place_when_a_waiter_is_cancelled() -> None:
+    limiter = UpdateLimiter(limit=1, window=0.2, burst=1)
+    await limiter.acquire()  # spends the only token
+    waiter = asyncio.create_task(limiter.acquire())
+    await asyncio.sleep(0.05)  # the waiter is now sleeping, holding the limiter's own lock
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    # a cancelled waiter must not keep the lock: the next acquire is still served promptly.
+    await asyncio.wait_for(limiter.acquire(), timeout=0.5)
+
+
+async def test_a_change_during_a_limiter_wait_is_not_dropped(slack: FakeSlack) -> None:
+    """A change that arrives while a write is waiting its turn on the shared limiter is not
+    lost: it is not part of the write already in flight, so it must reach the next one."""
+    limiter = UpdateLimiter(limit=1, window=0.5, burst=1)
+    sink = reply(slack, limiter=limiter)
+    await sink.text("one")
+    await asyncio.sleep(0.05)  # posted (chat.postMessage, not gated by the limiter)
+    await limiter.acquire()  # another busy reply spends the only token
+    await sink.text(" two")
+    await asyncio.sleep(0.05)  # the debounced flush is now waiting its turn on the limiter
+    await sink.text(" three")  # arrives mid-wait; the reply then goes idle
+    await asyncio.sleep(0.6)  # past the window: the waiting flush gets its token and writes
+    assert "one two three" in slack.message_texts()[-1]
+
+
+async def test_growth_past_the_message_limit_during_a_limiter_wait_is_not_dropped(
+    slack: FakeSlack,
+) -> None:
+    """A change during the wait can be more than new text on the same message: it can push the
+    reply into a second message. The write already in flight only knew about the first."""
+    limiter = UpdateLimiter(limit=1, window=0.5, burst=1)
+    sink = reply(slack, limiter=limiter)
+    await sink.text("one ")
+    await asyncio.sleep(0.05)  # body posted
+    await limiter.acquire()  # another busy reply spends the only token
+    await sink.text("two ")
+    await asyncio.sleep(0.05)  # the debounced flush is now waiting its turn on the limiter
+    # past MESSAGE_LIMIT: this reply now needs a second message, discovered only once the wait
+    # ends and the reply is looked at again, not from the snapshot the wait started with.
+    await sink.text(("word " * 20) + "\n\n" + ("x" * 100 + "\n\n") * 120)
+    await sink.text("TAIL")
+    await asyncio.sleep(1.2)  # past the window: the waiting flush gets its token and catches up
+    assert any("TAIL" in t for t in slack.message_texts())
+
+
+async def test_a_change_during_the_chat_update_round_trip_is_not_dropped(
+    slack: FakeSlack,
+) -> None:
+    """A change can also arrive while a write is in flight (Slack's own round trip), not only
+    while it waits on the limiter: that write does not know about it either."""
+    limiter = UpdateLimiter(limit=100, window=1, burst=100)  # never waits: isolates the round trip
+    sink = reply(slack, limiter=limiter)
+    await sink.text("one")
+    await asyncio.sleep(0.05)  # posted
+    orig_api_call = slack.api_call
+
+    async def slow(api_method: str, **kwargs: Any) -> Any:
+        if api_method == "chat.update":
+            await asyncio.sleep(0.2)
+        return await orig_api_call(api_method, **kwargs)
+
+    slack.api_call = slow  # type: ignore[method-assign]
+    await sink.text(" two")
+    await asyncio.sleep(0.05)  # the rewrite is now in flight, inside its own chat.update call
+    await sink.text(" three")  # arrives during that round trip
+    await asyncio.sleep(0.5)
+    assert "three" in slack.message_texts()[-1]
+
+
+async def test_the_debounce_holds_while_streaming_through_a_slow_round_trip(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_later` retries at once, with no further debounce, whenever the version moved during its
+    last flush. While text streams continuously and each chat.update's own round trip is slow,
+    the version moves during every round trip, so a reply was rewritten after every round trip
+    rather than at most once per DEBOUNCE_SECONDS."""
+    monkeypatch.setattr(sinks, "DEBOUNCE_SECONDS", 1.0)  # the real pacing, not this file's fixture
+    limiter = UpdateLimiter(
+        limit=1000, window=1, burst=1000
+    )  # isolates the debounce, not the budget
+    sink = reply(slack, limiter=limiter)
+    await sink.text("start ")
+    await asyncio.sleep(0.05)
+
+    orig_api_call = slack.api_call
+    stamps: list[float] = []
+
+    async def slow(api_method: str, **kwargs: Any) -> Any:
+        if api_method == "chat.update":
+            stamps.append(time.monotonic())
+            await asyncio.sleep(0.3)
+        return await orig_api_call(api_method, **kwargs)
+
+    slack.api_call = slow  # type: ignore[method-assign]
+
+    end = time.monotonic() + 6.0
+    i = 0
+    while time.monotonic() < end:
+        await sink.text(f"w{i} ")
+        i += 1
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(1.5)  # let a trailing retry, still catching up, land too
+
+    gaps = [b - a for a, b in itertools.pairwise(stamps)]
+    assert gaps  # the slow round trip left more than one update to compare
+    assert min(gaps) >= sinks.DEBOUNCE_SECONDS - 0.05
+
+
+async def test_two_busy_sinks_share_one_limiter_paced_and_each_reaches_its_final_state(
+    slack: FakeSlack,
+) -> None:
+    # Scaled down from the real budget so the test runs fast; the values are independent of the
+    # production constants, not a ratio of them.
+    limit, window, burst = 9, 0.6, 1
+    limiter = UpdateLimiter(limit=limit, window=window, burst=burst)
+    a, b = reply(slack, limiter=limiter), reply(slack, limiter=limiter)
+
+    orig_api_call = slack.api_call
+    stamps: list[float] = []
+
+    async def timed(api_method: str, **kwargs: Any) -> Any:
+        if api_method == "chat.update":
+            stamps.append(time.monotonic())
+        return await orig_api_call(api_method, **kwargs)
+
+    slack.api_call = timed  # type: ignore[method-assign]
+
+    for i in range(6):
+        await a.text(f"a{i} ")
+        await b.text(f"b{i} ")
+        await asyncio.sleep(0.03)
+    await a.finish([])
+    await a.close_out("footer-a")
+    await b.finish([])
+    await b.close_out("footer-b")
+    await asyncio.sleep(2.0)  # let every write still queued on the shared, paced limiter drain
+
+    calls = slack.calls_to("chat.update")
+    assert len(calls) == len(stamps)
+    # never more than the budget's window+burst allowance within any window, from either sink.
+    for i, start in enumerate(stamps):
+        within = sum(1 for t in stamps[i:] if t < start + window)
+        assert within <= limit + burst
+    # each reply's own rewrites are still spaced at least one debounce apart.
+    by_ts: dict[str, list[float]] = {}
+    for stamp, call in zip(stamps, calls, strict=True):
+        by_ts.setdefault(call["ts"], []).append(stamp)
+    for reply_stamps in by_ts.values():
+        reply_stamps.sort()
+        for earlier, later in itertools.pairwise(reply_stamps):
+            assert later - earlier >= sinks.DEBOUNCE_SECONDS - 0.005
+    # both replies' full final content landed, with no leftover "Claude is writing" status line...
+    shown = dict(zip(slack.message_texts(), slack.message_blocks(), strict=True))
+    for content in ("a0 a1 a2 a3 a4 a5", "b0 b1 b2 b3 b4 b5"):
+        (final_text,) = (t for t in shown if content in t)
+        assert texts.WRITING not in str(shown[final_text])
+    # ...and each reply's closing message was posted (body + closing, once each).
+    assert len(slack.calls_to("chat.postMessage")) == 4
+
+
+async def test_a_ratelimited_chat_update_is_logged_without_message_content(
+    slack: FakeSlack, caplog: pytest.LogCaptureFixture
+) -> None:
+    sink = reply(slack)
+    await sink.text("first")
+    await asyncio.sleep(0.05)  # the body's first message is posted
+    slack.responses["chat.update"] = SlackApiError(
+        "ratelimited", {"ok": False, "error": "ratelimited"}
+    )
+    with caplog.at_level("WARNING"):
+        await sink.text(" the owner's secret content")
+        await asyncio.sleep(0.05)
+    assert "ratelimited" in caplog.text
+    assert "secret content" not in caplog.text

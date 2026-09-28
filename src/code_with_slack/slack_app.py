@@ -690,6 +690,9 @@ def build_app(
         if ts is None:
             return
         try:
+            # Shares the same process-wide budget every ReplySink draws from: an answered
+            # request is rare, but it is still one more chat.update against the same app.
+            await sessions.update_limiter.acquire()
             await slack.chat_update(
                 channel=channel,
                 ts=ts,

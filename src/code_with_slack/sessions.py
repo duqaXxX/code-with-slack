@@ -73,7 +73,13 @@ from code_with_slack.render.renderer import (
     one_line,
     task_title,
 )
-from code_with_slack.render.sinks import ReplySink, context_block, describe, notice_text
+from code_with_slack.render.sinks import (
+    ReplySink,
+    UpdateLimiter,
+    context_block,
+    describe,
+    notice_text,
+)
 from code_with_slack.resume import by_last_activity
 from code_with_slack.state import StateStore
 from code_with_slack.trust import workspace_trusted
@@ -267,6 +273,9 @@ class SessionDeps:
     client_factory: ClientFactory = default_client_factory
     workspace_trusted: Callable[[Path], Awaitable[bool]] = workspace_trusted
     sessions_of: Callable[[Path], list[SDKSessionInfo]] = directory_sessions
+    # Shared by every ReplySink in the process, so their chat.update writes stay under one
+    # app-wide budget together; a fresh default here gives each test its own.
+    update_limiter: UpdateLimiter = field(default_factory=UpdateLimiter)
 
 
 @dataclass
@@ -1198,7 +1207,12 @@ class ThreadSession:
 
     async def _sink(self) -> ReplySink:
         """A new reply, which becomes this thread's latest and takes over the running list."""
-        sink = ReplySink(self._deps.slack, channel=self.channel_id, thread_ts=self.thread_ts)
+        sink = ReplySink(
+            self._deps.slack,
+            channel=self.channel_id,
+            thread_ts=self.thread_ts,
+            limiter=self._deps.update_limiter,
+        )
         previous, self._latest = self._latest, sink
         await sink.set_running(self._running_counts())
         if previous is not None:
@@ -1443,6 +1457,12 @@ class SessionManager:
         self._deps = deps
         self._sessions: dict[tuple[str, str], ThreadSession] = {}
         self.draining = False
+
+    @property
+    def update_limiter(self) -> UpdateLimiter:
+        """The chat.update budget every ReplySink in the process draws from, so a chat.update
+        made outside a reply (e.g. slack_app.py's `show_answered`) can share the same one."""
+        return self._deps.update_limiter
 
     def open(self, channel_id: str, thread_ts: str) -> ThreadSession | None:
         """A top-level owner message: creates the thread's entry, in the channel's current

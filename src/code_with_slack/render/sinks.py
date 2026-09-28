@@ -1,13 +1,17 @@
 """Write a rendered reply to Slack: one message in the Claude Code session's Slack thread,
 rewritten with chat.update as the reply grows, at most once per DEBOUNCE_SECONDS (chat.update
 allows "50+ per minute", Tier 3), rather than through Slack's own native streaming
-(`chat.startStream`).
+(`chat.startStream`). Every `chat.update` also waits its turn on an `UpdateLimiter` shared by
+every reply in the process: a token bucket that paces writes evenly under the app's own budget,
+rather than letting several busy threads exhaust it together and then freeze until it resets.
 """
 
 import asyncio
 import itertools
 import logging
 import re
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,6 +29,16 @@ DEBOUNCE_SECONDS = 1.0
 # The final write has no next rewrite to fix it: one that fails for any reason but its content
 # is tried once more after this pause (slack-sdk has already retried a rate limit by then).
 FINAL_RETRY_SECONDS = 10.0
+# chat.update is Tier 3, "50+ per minute" per app (chat.update reference, read 2026-09-28): 40
+# per 60 s plus a burst of 5, worst case 45 in one window, a real margin under the documented
+# floor. Paced evenly (a token bucket, not a sliding window) past the burst, so a busy minute is
+# a steady trickle rather than every reply racing through the budget together and then freezing
+# until it resets.
+UPDATE_LIMIT = 40
+UPDATE_WINDOW_SECONDS = 60.0
+# How many writes the budget lets through at once before pacing kicks in: enough for a reply
+# that just started to show its first few lines without waiting on threads that were already busy.
+UPDATE_BURST = 5
 # A markdown block holds at most 12,000 characters; the margin keeps a tool line that grows in
 # place from pushing a full message over the limit.
 MESSAGE_LIMIT = 11_000
@@ -244,6 +258,43 @@ def split(body: str) -> list[str]:
     return chunks
 
 
+class UpdateLimiter:
+    """One instance shared by every `ReplySink` in the process, so their chat.update writes stay
+    under Slack's app-wide budget: a token bucket refilling at `limit` tokens per `window`
+    seconds (evenly, one token every `window / limit`), holding at most `burst` at once. A caller
+    that has to wait keeps its place in line, since it holds `_lock` for as long as it waits, so
+    the next caller queues up behind it. A retry `AsyncRateLimitErrorRetryHandler` makes under the
+    hood, inside one `chat.update` call, spends no extra token here: the limiter only gates the
+    call itself, not what slack-sdk does while it is in flight."""
+
+    def __init__(
+        self,
+        *,
+        limit: int = UPDATE_LIMIT,
+        window: float = UPDATE_WINDOW_SECONDS,
+        burst: int = UPDATE_BURST,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._rate = limit / window  # tokens regained per second
+        self._burst = burst
+        self._clock = clock
+        self._tokens = float(burst)
+        self._checked = clock()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        """Block until a token is available, then spend it."""
+        async with self._lock:
+            while True:
+                now = self._clock()
+                self._tokens = min(self._burst, self._tokens + (now - self._checked) * self._rate)
+                self._checked = now
+                if self._tokens >= 1:
+                    self._tokens -= 1
+                    return
+                await asyncio.sleep((1 - self._tokens) / self._rate)
+
+
 class ReplySink:
     """One reply in a Slack thread, written in the order things happen: text, then a line per
     tool where it ran, updated in place. The last line shows a status (Claude is writing, or
@@ -256,10 +307,13 @@ class ReplySink:
     raises: a write that fails is retried with the whole reply at the next flush, the final one
     after FINAL_RETRY_SECONDS, and the session goes on."""
 
-    def __init__(self, slack: AsyncWebClient, *, channel: str, thread_ts: str) -> None:
+    def __init__(
+        self, slack: AsyncWebClient, *, channel: str, thread_ts: str, limiter: UpdateLimiter
+    ) -> None:
         self._slack = slack
         self._channel = channel
         self._thread_ts = thread_ts
+        self._limiter = limiter
         self._parts: list[_Text | _Tool] = []
         self._tools: dict[str, _Tool] = {}
         self._messages: list[str] = []  # ts of each message this reply has posted
@@ -278,6 +332,9 @@ class ReplySink:
         self._notify_kept = False  # whether the closing message still owes its notification
         self._closed_out = False  # whether close_out has run; a second call is a no-op
         self._closing_retry: asyncio.Task[None] | None = None
+        # Bumped by `_changed`: `_flush` compares it before and after a pass to notice a change
+        # that arrived while the pass wrote or waited its turn, and runs another pass for it.
+        self._version = 0
 
     async def open(self, status: str) -> None:
         """Post the reply at once, showing only its status: the owner sees an answer is coming."""
@@ -371,6 +428,7 @@ class ReplySink:
         self._status = ""
 
     async def _changed(self) -> None:
+        self._version += 1
         if self._finished:
             # A background task or subagent after the reply ended: rare, and possibly during
             # shutdown, so written at once in its final form rather than on a timer.
@@ -383,10 +441,22 @@ class ReplySink:
             self._pending = asyncio.create_task(self._later())
 
     async def _later(self) -> None:
-        await asyncio.sleep(DEBOUNCE_SECONDS)
-        # Shielded: `finish` cancels a pending rewrite, and a write cancelled after Slack took it
-        # would lose the message's ts. `finish` waits for the lock instead.
-        await asyncio.shield(self._flush(final=False))
+        while True:
+            await asyncio.sleep(DEBOUNCE_SECONDS)
+            version = self._version
+            # Shielded: `finish` cancels a pending rewrite, and a write cancelled after Slack
+            # took it would lose the message's ts. `finish` waits for the lock instead.
+            if not await asyncio.shield(self._flush(final=False)):
+                return
+            if self._version == version:
+                return
+            # The reply changed again while that call wrote or waited its turn, in a way it
+            # never saw (e.g. it grew into a message it did not know it would need): another
+            # debounce, then flush again, so it still catches up rather than waiting for the
+            # next unrelated event to notice. The debounce stays inside the loop: while text
+            # keeps streaming, the version moves during every round trip, and without it here
+            # a reply would be rewritten after every round trip instead of at most once per
+            # DEBOUNCE_SECONDS.
 
     def _blocks(self) -> list[dict[str, Any]]:
         """The reply's body in order: Claude's text as markdown, each run of tool lines as
@@ -499,6 +569,7 @@ class ReplySink:
                 self._closing = str(posted["ts"])
             elif blocks and self._closing is not None and blocks != self._closing_shown:
                 # An edit never rings (measured 2026-09-27): the text can stay as posted.
+                await self._limiter.acquire()
                 await self._slack.chat_update(
                     channel=self._channel,
                     ts=self._closing,
@@ -519,6 +590,7 @@ class ReplySink:
         saying Claude is writing. An empty `blocks` makes Slack drop the old ones and render
         the text (chat.update reference, 2026-09-25)."""
         try:
+            await self._limiter.acquire()
             await self._slack.chat_update(
                 channel=self._channel, ts=self._messages[index], text=plain_text(blocks), blocks=[]
             )
@@ -529,7 +601,13 @@ class ReplySink:
         return True
 
     async def _flush(self, *, final: bool) -> bool:
-        """Write what changed; False when a write failed and the reply is not as rendered."""
+        """Write what changed; False when a write failed and the reply is not as rendered. A
+        write can take real time (the limiter, a chat.update round trip), during which the reply
+        can change again: send what it looks like right now for that index, not the snapshot
+        taken before the wait, so a wait never drops a change. `_later` reschedules this call
+        when `self._version` moved during it, which is how a change too big for this pass's own
+        `rendered` to have known about (growing into a message it did not expect to need) still
+        gets discovered and sent, on the next call's fresh render."""
         async with self._lock:
             if self._finished and not final:
                 return True  # a draft that waited for the lock must not undo the final form
@@ -544,6 +622,19 @@ class ReplySink:
                 fallback = block_text(blocks[0])[:FALLBACK_LIMIT] or "…"
                 try:
                     if index < len(self._messages):
+                        await self._limiter.acquire()
+                        if not final and self._finished:
+                            return True  # finish() ran while this draft waited its turn
+                        # A change can arrive while this write waits its turn: send what the
+                        # reply looks like right now rather than the snapshot taken before the
+                        # wait. If it grew into a message this pass never saw coming, the version
+                        # check below has `_later` call `_flush` again for that.
+                        fresh = self._render(final)
+                        if index < len(fresh) and fresh[index]:
+                            blocks = fresh[index]
+                        if blocks == self._shown[index]:
+                            continue  # caught up while it waited: nothing left to send
+                        fallback = block_text(blocks[0])[:FALLBACK_LIMIT] or "…"
                         await self._slack.chat_update(
                             channel=self._channel,
                             ts=self._messages[index],

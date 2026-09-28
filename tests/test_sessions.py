@@ -35,7 +35,7 @@ from code_with_slack import sessions, texts
 from code_with_slack.approvals import Answer, Approvals, Approve
 from code_with_slack.footer import UsageCache
 from code_with_slack.guards import Identity
-from code_with_slack.render.sinks import NESTED, ZERO_WIDTH_SPACE, context_block
+from code_with_slack.render.sinks import NESTED, ZERO_WIDTH_SPACE, UpdateLimiter, context_block
 from code_with_slack.sessions import SessionDeps, SessionManager, resolve_directory
 from code_with_slack.state import StateStore
 from tests.fakes import (
@@ -90,6 +90,10 @@ class Harness:
             usage=UsageCache(fetch),
             client_factory=self.factory,
             workspace_trusted=trusted,
+            # A generous burst: these tests are about session orchestration, not the shared
+            # limiter's own pacing (that lives in test_sinks.py), and several use a real 2s
+            # `wait_for` budget the production rate (one write every ~1.33s past 5) would blow.
+            update_limiter=UpdateLimiter(burst=1_000),
         )
         self.manager = SessionManager(self.deps)
 
