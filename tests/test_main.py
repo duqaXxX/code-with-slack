@@ -142,6 +142,28 @@ def test_alive_sessions_reads_directory_sessions(
     assert entry._alive_sessions(tmp_path) == {"sid-1", "sid-2"}
 
 
+def test_alive_sessions_keeps_a_transcript_list_sessions_filters_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `list_sessions` skips sidechain and metadata-only sessions (claude-agent-sdk 0.2.160,
+    # `_internal/sessions.py`, read 2026-09-28): a session real enough to be stored in a thread
+    # must never be pruned just because it has not built up a title yet.
+    from claude_agent_sdk._internal.sessions import _canonicalize_path, _get_project_dir
+
+    config, project = tmp_path / "config", tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    folder = _get_project_dir(_canonicalize_path(str(project)))
+    folder.mkdir(parents=True)
+    (folder / "68da9311-0000-4000-8000-000000000001.jsonl").write_text('{"type": "system"}\n')
+
+    def fake_list_sessions(*, directory: str, include_worktrees: bool) -> list[SDKSessionInfo]:
+        return []  # filtered out by the SDK's own listing rules, not actually gone
+
+    monkeypatch.setattr("code_with_slack.sessions.list_sessions", fake_list_sessions)
+    assert entry._alive_sessions(project) == {"68da9311-0000-4000-8000-000000000001"}
+
+
 def test_prune_uses_alive_sessions_to_drop_a_gone_thread(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

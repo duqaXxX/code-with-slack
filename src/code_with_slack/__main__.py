@@ -9,6 +9,7 @@ import time
 from collections.abc import Collection
 from pathlib import Path
 
+from claude_agent_sdk._internal.sessions import _canonicalize_path, _find_project_dir
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from slack_sdk.http_retry.builtin_async_handlers import AsyncRateLimitErrorRetryHandler
 from slack_sdk.web.async_client import AsyncWebClient
@@ -39,8 +40,17 @@ DRAIN_LIMIT_SECONDS = 1740
 
 
 def _alive_sessions(directory: Path) -> Collection[str]:
-    """The session ids `directory_sessions` still finds in `directory`, for `state.prune`."""
-    return {info.session_id for info in directory_sessions(directory)}
+    """The session ids alive in `directory`, for `state.prune`: those `directory_sessions`
+    shows, unioned with every transcript file actually there. `list_sessions` skips sidechain
+    and metadata-only sessions (the SDK's own listing rules, `claude_agent_sdk._internal.sessions`,
+    0.2.160, read 2026-09-28): a session real enough to be stored in a thread must never be
+    pruned just because it has not built up a title yet. `_canonicalize_path`/`_find_project_dir`
+    are the same private-but-pinned helpers `resume.py` already relies on for this folder."""
+    alive = {info.session_id for info in directory_sessions(directory)}
+    folder = _find_project_dir(_canonicalize_path(str(directory)))
+    if folder is not None:
+        alive |= {p.stem for p in folder.glob("*.jsonl")}
+    return alive
 
 
 async def _post_upgrade_notices(slack: AsyncWebClient, state: StateStore) -> None:

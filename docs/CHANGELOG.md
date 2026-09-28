@@ -91,6 +91,31 @@ All notable changes to this project are documented here. The format follows
   inside a background subagent now goes to the reply that holds that subagent. An agent the
   command starts inside it shows on the command's line (`⏳ /review · 1 call`, then `⎿ Run the tests`)
   instead of a second running line.
+- D6 minimum: a Resume click or `!resume <id or name>` that names a session already open in
+  another thread of any channel is refused, with a new text, instead of resuming it a second
+  time; the `!resume` list marks such a session and gives it no button.
+- A resumed session whose transcript turned out gone left its worker task, and any armed
+  idle-close timer, running forever after the close: `asyncio.all_tasks()` kept growing. A turn
+  that raced the close during its own `sink.open` could be told the wrong reason (or, before this
+  fix, sometimes get no reason at all): it now always gets the same "session gone" reply the
+  turn that found it gone got.
+- The stale wording "the channel was bound to another folder or resumed another session" for a
+  session closed under a running command is gone (neither still happens): it now says the
+  session closed while the command ran, from an idle close or a restart. When a prompt's retry
+  after such a close finds the thread's own entry gone too (not just closed), it now says the
+  session is gone, instead of implying a retry would help.
+- `close_all` (a restart, or the daemon stopping) stopped closing sessions at the first one
+  whose `close()` raised, leaving the channel's other sessions never closed. Each is now closed
+  under its own `try`/`except`, logged by id and skipped on failure, before the call waits for
+  every close in flight to finish.
+- Pruning stale threads on start treated a session the SDK's `list_sessions` filters out
+  (sidechain or metadata-only) as gone even when its transcript file exists, and could drop a
+  thread that should have survived. Pruning now also checks the transcript file itself.
+- `!status` at the top level fetched each live session's permalink one after another; it now
+  fetches them at once, in the same order.
+- A level set with `!effort` showed as unknown right after a reconnect (an idle close or a
+  restart), until the first turn ended and Claude Code reported one. The footer and `!status` now
+  show the requested level at once, until Claude Code's own report corrects it.
 
 ### Changed
 

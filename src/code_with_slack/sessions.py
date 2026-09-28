@@ -468,6 +468,13 @@ class ThreadSession:
             sink = await self._sink()
             await sink.open(texts.WAITING if waiting else texts.WRITING)
             turn = Turn(prompt, sink)
+            if self._closed:
+                # The session closed (most likely `ensure_connected`'s SessionGone branch, which
+                # already drained the queue) while `sink.open` was in flight: no worker will ever
+                # take this turn from the queue, so it is resolved right here instead of left
+                # waiting for one that will not come.
+                await self._fail(turn, texts.SESSION_GONE, notify=True)
+                return turn
             self._queue.put_nowait(turn)
         finally:
             self._pending_submits -= 1
@@ -513,6 +520,15 @@ class ThreadSession:
                 if self.on_closed is not None:
                     self.on_closed()
                 await self.fail_queued(texts.SESSION_GONE)
+                self._idle_timer_check()  # cancels any armed timer; closed now, so none rearms
+                worker = self._worker
+                if worker is not None and worker is not asyncio.current_task():
+                    # Called directly (`!status`, `!bypass`), not from this session's own
+                    # worker: an idle worker left blocked on the queue would never learn to stop
+                    # otherwise (the worker's own loop ends itself once it is the one closing).
+                    worker.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await worker
                 raise SessionGone from exc
             try:
                 info = await client.get_server_info() or {}
@@ -525,8 +541,11 @@ class ThreadSession:
                 await self._disconnect(client)
                 raise
             self._client = client
-            # A resumed session runs at the settings' level (measured), unknown until reported.
-            self.effort, self.effort_reported = None, False
+            # A resumed session runs at the settings' level (measured), unknown until reported,
+            # unless the daemon itself just asked for a stored level: that request is shown at
+            # once, until Claude Code's own report (every turn ends with one) corrects it.
+            requested = effort if effort in VALID_EFFORT_LEVELS else None
+            self.effort, self.effort_reported = requested, requested is not None
             self.working_directory = None  # the new process starts in the bound folder
             self.session_tokens = None  # counted by the client process, which starts at zero
             name = f"reader-{self.channel_id}-{self.thread_ts}"
@@ -743,7 +762,10 @@ class ThreadSession:
         return client
 
     async def _work(self) -> None:
-        while True:
+        # Closed (the SessionGone branch of `ensure_connected`, most likely) ends the loop
+        # instead of looping back to an empty queue nothing will ever fill again: an orphan
+        # worker task, blocked forever, is not what a closed session leaves behind.
+        while not self._closed:
             turn = await self._queue.get()
             self._taken = turn
             try:
@@ -753,7 +775,7 @@ class ThreadSession:
                 if self.draining:
                     self._taken = None
                     await self._fail(turn, texts.ENDED.format(reason=texts.ENDED_RESTARTING))
-                    self._idle_timer_check()  # the queue may now be empty and idle again (D9)
+                    self._idle_timer_check()  # only cancels: draining itself blocks it from arming
                     continue
                 self._sent.append(turn)
                 self._taken = None
@@ -1440,7 +1462,15 @@ class SessionManager:
         sessions = list(self._sessions.values())
         for session in sessions:
             if not session.closed:
-                await session.close()
+                try:
+                    await session.close()
+                except Exception as exc:  # one session's failure must not skip the rest
+                    logger.error(
+                        "could not close %s/%s: %s",
+                        session.channel_id,
+                        session.thread_ts,
+                        describe(exc),
+                    )
         for session in sessions:
             await session.done_closing.wait()
         self._sessions.clear()

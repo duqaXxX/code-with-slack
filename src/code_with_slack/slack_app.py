@@ -323,7 +323,9 @@ def build_app(
                         raise
                     fresh = sessions.get(channel, thread_ts)
                     if fresh is None:
-                        raise
+                        # Not just closed: its thread's own entry is gone too (D7's SessionGone
+                        # close), so a retry would find nothing here again either.
+                        raise SessionGone from None
                     session = fresh
 
     async def handle_word(
@@ -393,8 +395,15 @@ def build_app(
         live = sessions.sessions_of(channel)
         if not live:
             lines.append(texts.STATUS_CHANNEL_EMPTY)
-        for live_session in live:
-            lines.append(await channel_status_row(channel, record.directory, live_session))
+        else:
+            lines.extend(
+                await asyncio.gather(
+                    *(
+                        channel_status_row(channel, record.directory, live_session)
+                        for live_session in live
+                    )
+                )
+            )
         await say(channel, thread_ts, "\n".join(lines))
 
     async def channel_status_row(
@@ -581,7 +590,12 @@ def build_app(
         # Only the list shows dates: matching a target needs none, and dating reads every file.
         stored = await sessions.sessions_in(directory, dated=not target)
         if not target:
-            blocks = resume_blocks(directory, stored, None, datetime.now().astimezone())
+            blocks = resume_blocks(
+                directory,
+                stored,
+                lambda sid: state.holder(sid) is not None,
+                datetime.now().astimezone(),
+            )
             await slack.chat_postMessage(
                 channel=channel,
                 thread_ts=thread_ts,
@@ -609,11 +623,15 @@ def build_app(
     ) -> bool:
         """Point a new thread at `chosen`, a session read from `directory`; False, after telling
         the owner why, when nothing changed: this thread already holds a session (a resume is
-        never a swap), or the channel was bound to another folder while `chosen` was read from
-        `directory`. Both checks run with no `await` before the `resume` they guard, so nothing
-        can change between the check and the call they protect."""
+        never a swap), `chosen` is already held by some other thread (D6: one session lives in
+        one thread), or the channel was bound to another folder while `chosen` was read from
+        `directory`. Every check runs with no `await` before the `resume` they guard, so nothing
+        can change between the checks and the call they protect."""
         if sessions.get(channel, thread_ts) is not None:
             await tell_owner(channel, thread_ts, texts.RESUME_HELD)
+            return False
+        if state.holder(chosen.session_id) is not None:
+            await tell_owner(channel, thread_ts, texts.RESUME_ELSEWHERE)
             return False
         record = state.channel(channel)
         if record is None or record.directory != directory:

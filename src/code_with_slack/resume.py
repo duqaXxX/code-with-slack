@@ -12,6 +12,7 @@ import dataclasses
 import heapq
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -123,7 +124,7 @@ def _size(size: int | None) -> str | None:
     return f"{size / (1024 * 1024):.1f}MB"
 
 
-def _row(session: SDKSessionInfo, current: bool, now: datetime) -> dict[str, Any]:
+def _row(session: SDKSessionInfo, held: bool, now: datetime) -> dict[str, Any]:
     # Shown as the terminal's picker shows it, HEAD outside a repository included.
     branch = shown_as_written(session.git_branch) if session.git_branch else None
     title = shown_as_written(one_line(session.summary, TITLE_LIMIT))
@@ -136,13 +137,13 @@ def _row(session: SDKSessionInfo, current: bool, now: datetime) -> dict[str, Any
         _size(session.file_size),
         session.session_id[:ID_SHOWN],
     ]
-    line = " · ".join(p for p in parts if p) + (texts.RESUME_CURRENT if current else "")
+    line = " · ".join(p for p in parts if p) + (texts.RESUME_ELSEWHERE_ROW if held else "")
     block: dict[str, Any] = {
         "type": "section",
         "block_id": f"session-{session.session_id}",
         "text": {"type": "mrkdwn", "text": line},
     }
-    if not current:
+    if not held:
         block["accessory"] = {
             "type": "button",
             "action_id": RESUME_ACTION,
@@ -153,9 +154,14 @@ def _row(session: SDKSessionInfo, current: bool, now: datetime) -> dict[str, Any
 
 
 def resume_blocks(
-    directory: Path, sessions: list[SDKSessionInfo], current: str | None, now: datetime
+    directory: Path,
+    sessions: list[SDKSessionInfo],
+    held: Callable[[str], bool],
+    now: datetime,
 ) -> list[dict[str, Any]]:
-    """The picker: the newest RESUME_ROWS sessions of `directory`, the channel's own marked."""
+    """The picker: the newest RESUME_ROWS sessions of `directory`. `held` is true for a session
+    id already held by a thread of any channel (D6): its row shows no Resume button, since
+    resuming it there is refused anyway."""
     # The list's own lines are the daemon's notices, small and grey; the rows keep their button.
     shown = shown_as_written(str(directory))
     if not sessions:
@@ -163,7 +169,7 @@ def resume_blocks(
     header = texts.RESUME_LIST.format(directory=shown)
     blocks = [
         context_block(header),
-        *(_row(s, s.session_id == current, now) for s in sessions[:RESUME_ROWS]),
+        *(_row(s, held(s.session_id), now) for s in sessions[:RESUME_ROWS]),
     ]
     if len(sessions) > RESUME_ROWS:
         more = texts.RESUME_MORE.format(rows=RESUME_ROWS)

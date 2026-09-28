@@ -85,8 +85,8 @@ UPLOAD_TOO_HEAVY = (
     "Nothing was sent to Claude: its images total {size}, over the {limit} one message takes."
 )
 SESSION_CLOSED = (
-    "Nothing was done: the channel was bound to another folder or resumed another session "
-    "while this command ran. Send it again if it is still meant."
+    "Nothing was done: this session closed while it ran (idle for a while, or the daemon "
+    "restarted). Send it again if it is still meant."
 )
 UPLOAD_NOT_SHARED = "is not a file shared in this channel that code-with-slack can download"
 UPLOAD_DOWNLOAD = "could not be downloaded ({error})"
@@ -185,7 +185,6 @@ APPROVAL_UNPOSTED = "code-with-slack could not show this request in Slack, so no
 APPROVAL_GONE = "This request is no longer pending: the turn ended or code-with-slack restarted."
 RESUME_LIST = "Sessions in `{directory}`, newest first:"
 RESUME_EMPTY = "No sessions in `{directory}` yet."
-RESUME_CURRENT = " · _current_"
 RESUME_BUTTON = "Resume"
 RESUME_MORE = (
     "Only the newest {rows} are shown: `!resume <id>`, or `!resume <title>` for a session that "
@@ -202,6 +201,8 @@ RESUME_AMBIGUOUS = (
 )
 RESUME_GONE = "That session is not in this channel's directory any more: `!resume` lists them."
 RESUME_HELD = "This thread already holds a session: `!resume` from the channel opens a new thread."
+RESUME_ELSEWHERE = "This session is already open in another thread: send your message there."
+RESUME_ELSEWHERE_ROW = " · _open elsewhere_"
 # `!guide`: how to use the bot, in the owner's words. tests/test_commands.py fails when a word of
 # the daemon is missing here; keep the tone plain and every line true of the current behaviour.
 GUIDE = """**code-with-slack**

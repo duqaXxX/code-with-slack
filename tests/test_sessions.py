@@ -231,8 +231,86 @@ async def test_a_gone_session_fails_a_queued_turn_and_leaks_no_process(
     # Only the one failed attempt: no second client started for the queued turn.
     assert [c.options.resume for c in h.clients] == ["gone"]
     assert h.bodies() == [texts.SESSION_GONE, texts.SESSION_GONE]
+    # The worker must not be left spinning on an empty queue nobody will ever fill again.
+    await asyncio.sleep(0)
+    names = {t.get_name() for t in asyncio.all_tasks()}
+    assert f"worker-{CHANNEL}-{THREAD}" not in names
+    assert f"idle-close-{CHANNEL}-{THREAD}" not in names
     await h.manager.close_all()
     assert all(not c.connected for c in h.clients)
+
+
+async def test_a_turn_that_races_sessiongone_during_its_own_open_gets_session_gone(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A second `submit` can be suspended inside its own `sink.open` while the first turn's
+    # `ensure_connected` finds the stored session gone, closes the session and drains the queue
+    # (empty at that point). The second turn is queued only after that: nothing will ever take
+    # it from an ended worker, so it must be resolved right there, as gone too.
+    gone = ResultError(
+        "Claude Code returned an error result: No conversation found",
+        data={
+            "subtype": "error_during_execution",
+            "is_error": True,
+            "errors": ["No conversation found with session ID: gone"],
+        },
+    )
+    h = harness_for({"connect_error": gone})
+    session = h.session()
+    h.state.set_session(CHANNEL, THREAD, "gone")
+
+    gates = [asyncio.Event(), asyncio.Event()]
+    opened: list[str] = []
+    real_open = sessions.ReplySink.open
+
+    async def gated_open(self: Any, status: str) -> None:
+        gate = gates[len(opened)]
+        opened.append(status)
+        await gate.wait()
+        await real_open(self, status)
+
+    monkeypatch.setattr(sessions.ReplySink, "open", gated_open)
+
+    first_task = asyncio.create_task(session.submit("hello"))
+    await until(lambda: len(opened) == 1)  # "hello" is paused inside its own `sink.open`
+    second_task = asyncio.create_task(session.submit("again"))
+    await until(lambda: len(opened) == 2)  # "again" is paused inside its own `sink.open` too
+    gates[0].set()  # let "hello" queue itself and start its worker
+    first_turn = await first_task
+    await asyncio.wait_for(first_turn.done.wait(), 2)
+    assert session.closed  # the SessionGone branch has already closed and drained the queue
+    gates[1].set()  # only now does "again" reach the point where it would enqueue itself
+    second_turn = await asyncio.wait_for(second_task, 2)
+    await asyncio.wait_for(second_turn.done.wait(), 2)
+    assert h.bodies() == [texts.SESSION_GONE, texts.SESSION_GONE]
+    await asyncio.sleep(0)
+    names = {t.get_name() for t in asyncio.all_tasks()}
+    assert f"worker-{CHANNEL}-{THREAD}" not in names
+    await h.manager.close_all()
+
+
+async def test_a_direct_sessiongone_call_leaves_no_idle_timer_task(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # `!status` (or `!bypass`) can hit SessionGone with no worker ever created: the idle-close
+    # timer armed when the session was handed out (D9) must not be left running past the close.
+    gone = ResultError(
+        "Claude Code returned an error result: No conversation found",
+        data={
+            "subtype": "error_during_execution",
+            "is_error": True,
+            "errors": ["No conversation found with session ID: gone"],
+        },
+    )
+    h = harness_for({"connect_error": gone})
+    session = h.session()  # touched on hand-out: its idle-close timer is armed already
+    h.state.set_session(CHANNEL, THREAD, "gone")
+    await session.status()
+    assert session.closed
+    await asyncio.sleep(0)
+    names = {t.get_name() for t in asyncio.all_tasks()}
+    assert f"idle-close-{CHANNEL}-{THREAD}" not in names
+    assert f"worker-{CHANNEL}-{THREAD}" not in names
 
 
 async def test_a_restart_rebuilds_a_stored_thread_with_its_bypass(
@@ -1942,6 +2020,17 @@ async def test_the_client_is_launched_with_the_stored_effort(
     assert h.clients[0].options.effort == "low"
 
 
+async def test_the_footer_shows_a_stored_effort_at_once_after_a_reconnect(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # A stored `!effort` is sent to Claude Code on every reconnect; the footer must not show
+    # "unknown" for the level the daemon itself just asked for, before any turn reports another.
+    h = harness_for({})
+    h.session()
+    h.state.set_effort(CHANNEL, THREAD, "low")
+    assert "Effort: `low`" in await h.session().status()
+
+
 async def test_an_idle_session_closes_itself_after_the_delay_and_posts_nothing(
     harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2124,6 +2213,26 @@ async def test_close_all_waits_for_an_idle_close_already_in_flight(
     gate.set()
     await asyncio.wait_for(closing_all, 2)
     assert h.clients[0].connected is False
+
+
+async def test_close_all_continues_past_a_session_whose_close_raises(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({}, {})
+    first = h.session(THREAD)
+    second = h.session(OTHER_THREAD)
+    await first.ensure_connected()
+    await second.ensure_connected()
+
+    async def raising_close(reason: str = texts.ENDED_SHUTDOWN) -> None:
+        # A real `close()` always sets `done_closing` from its own `finally`, whatever fails.
+        first.done_closing.set()
+        raise RuntimeError("boom")
+
+    first.close = raising_close  # type: ignore[method-assign]
+    await asyncio.wait_for(h.manager.close_all(), 2)
+    assert h.clients[1].connected is False  # the second session still closed
+    assert h.manager.sessions_of(CHANNEL) == []
 
 
 async def test_a_lookup_touches_the_idle_timer_before_any_await(

@@ -412,6 +412,32 @@ async def test_bang_status_lists_every_live_session_with_a_link(world: World) ->
     assert lines[1] == f"[Session]({link}): busy"
 
 
+async def test_bang_status_fetches_permalinks_concurrently(world: World) -> None:
+    await world.dispatch(message("hello", ts=THREAD))
+    await world.dispatch(message("hello", ts=OTHER_THREAD))
+    await world.dispatch(message("hello", ts=CLICK_THREAD))
+
+    in_flight = 0
+    max_in_flight = 0
+    real = world.slack.chat_getPermalink
+
+    async def tracked(**kwargs: Any) -> Any:
+        nonlocal in_flight, max_in_flight
+        in_flight += 1
+        max_in_flight = max(max_in_flight, in_flight)
+        await asyncio.sleep(0.01)
+        try:
+            return await real(**kwargs)
+        finally:
+            in_flight -= 1
+
+    world.slack.chat_getPermalink = tracked  # type: ignore[method-assign]
+    await world.dispatch(message("!status", ts="1790300000.000001"))
+    assert max_in_flight == 3  # all three fetched at once, not one after another
+    text = said(world)[-1]
+    assert len(text.splitlines()) == 4  # header + one row per session, order kept
+
+
 async def test_bang_status_shows_waiting_for_the_owner(world: World) -> None:
     await world.dispatch(message("hi", ts=THREAD))
     world.clients[0].inject([CanUseToolCall("Bash", {"command": "ls"})])
@@ -733,6 +759,35 @@ async def test_a_button_is_never_trusted_for_a_session_of_another_directory(worl
     await world.dispatch(click("session_resume", "68da9311-0000-4000-8000-0000000000ff"))
     assert world.state.channel(CHANNEL).threads == {}
     assert world.ephemerals() == [texts.RESUME_GONE]
+
+
+async def test_a_typed_resume_of_a_session_held_by_another_thread_is_refused(world: World) -> None:
+    # D6 minimum: two live processes on one transcript is never reachable.
+    two_sessions(world)
+    await world.dispatch(message(f"!resume {SESSION_B}", ts=OTHER_THREAD))
+    assert world.state.thread(CHANNEL, OTHER_THREAD).session_id == SESSION_B
+    await world.dispatch(message(f"!resume {SESSION_B}", ts=THREAD))
+    assert world.state.thread(CHANNEL, THREAD) is None
+    assert texts.RESUME_ELSEWHERE in world.ephemerals()
+
+
+async def test_a_resume_click_of_a_session_held_by_another_thread_is_refused(world: World) -> None:
+    two_sessions(world)
+    await world.dispatch(message(f"!resume {SESSION_B}", ts=OTHER_THREAD))
+    await world.dispatch(click("session_resume", SESSION_B))  # a different thread (CLICK_THREAD)
+    assert world.state.thread(CHANNEL, CLICK_THREAD) is None
+    assert texts.RESUME_ELSEWHERE in world.ephemerals()
+
+
+async def test_the_list_marks_a_session_held_elsewhere_with_no_button(world: World) -> None:
+    two_sessions(world)
+    await world.dispatch(message(f"!resume {SESSION_B}", ts=OTHER_THREAD))
+    await world.dispatch(message("!resume"))
+    post = world.slack.calls_to("chat.postMessage")[-1]
+    held_row = next(b for b in post["blocks"] if b.get("block_id") == f"session-{SESSION_B}")
+    free_row = next(b for b in post["blocks"] if b.get("block_id") == f"session-{SESSION_A}")
+    assert "accessory" not in held_row and "accessory" in free_row
+    assert held_row["text"]["text"].endswith(texts.RESUME_ELSEWHERE_ROW)
 
 
 async def test_resume_opens_an_independent_thread_while_another_is_busy(world: World) -> None:
@@ -1129,6 +1184,28 @@ async def test_a_session_closed_during_a_slow_download_is_retried_on_a_fresh_one
     assert str(queries[0]).startswith(body["event"]["text"])
     rebuilt = world.sessions.get(CHANNEL, file_thread)
     assert rebuilt is not None and rebuilt is not session
+
+
+async def test_a_retry_that_finds_the_thread_gone_answers_session_gone(world: World) -> None:
+    # D7: a `SessionGone` close (unlike an idle close) also removes the thread's own entry, so
+    # the retry's fresh lookup finds nothing: answering the stale `SessionClosed` text, which
+    # promises a retry will help, would be wrong.
+    body = shared_file("snippet")
+    file_thread = str(body["event"]["ts"])
+    world.downloads[body["event"]["files"][0]["url_private_download"]] = b"hello\n"
+    world.slow_downloads = 0.2
+    dispatching = asyncio.create_task(world.dispatch(body))
+    async with asyncio.timeout(2):
+        session = None
+        while session is None:
+            session = world.sessions.get(CHANNEL, file_thread)
+            await asyncio.sleep(0.01)
+    await session.close()  # closed, and its thread's entry gone, as SessionGone leaves it
+    world.state.remove_thread(CHANNEL, file_thread)
+    await dispatching
+    await asyncio.sleep(0.3)
+    assert world.queries() == []
+    assert texts.SESSION_GONE in world.ephemerals()
 
 
 async def test_a_prompt_while_the_daemon_stops_is_refused_and_words_still_work(
