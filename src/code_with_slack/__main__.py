@@ -22,6 +22,7 @@ from code_with_slack.attachments import prepare_uploads, uploads_dir
 from code_with_slack.config import CONFIG_DIR, ConfigError, load_config
 from code_with_slack.footer import UsageCache, UsageProbe
 from code_with_slack.guards import ChannelGuard, Identity
+from code_with_slack.hold import Holds
 from code_with_slack.lock import AlreadyRunning, single_instance
 from code_with_slack.render.sinks import context_block, describe, notice_text
 from code_with_slack.sessions import (
@@ -112,12 +113,14 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
         identity = Identity(config.owner_user_id, str(auth["team_id"]), str(auth["user_id"]))
         probe = UsageProbe(Path.home(), default_client_factory)
         approvals = Approvals()
+        holds = Holds()
         sessions = SessionManager(
             SessionDeps(
                 slack=slack,
                 identity=identity,
                 state=state,
                 approvals=approvals,
+                holds=holds,
                 usage=UsageCache(probe),
                 client_factory=default_client_factory,
             )
@@ -128,6 +131,7 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
             identity=identity,
             sessions=sessions,
             approvals=approvals,
+            holds=holds,
             guard=ChannelGuard(slack, identity),
             state=state,
             uploads=uploads,

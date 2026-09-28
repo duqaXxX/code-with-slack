@@ -35,6 +35,12 @@ All notable changes to this project are documented here. The format follows
   is complete, for an approval request and a question, and for a reply that ends in an error;
   nothing rings while Claude writes, nor for `!stop`, a restart or an idle close. `docs/setup.md`
   gains the notification section and `docs/features.md` the measurements behind it.
+- D8: two sessions can now work in the same folder at once, but the daemon asks before a message
+  wakes an idle one while a live session of another thread (any channel, resolved path) is not
+  idle in that folder: `Another session is working in this folder: <link>. Send anyway?`, with
+  Continue and Cancel. `!stop` inside the held thread, a top-level `!stop` of its channel, and a
+  restart cancel the wait the same way Cancel does, with a `Not sent.` notice; the idle-close
+  timer and the ✋ root reaction treat a held message the same way they treat an open approval.
 
 ### Changed
 

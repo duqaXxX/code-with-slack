@@ -79,6 +79,15 @@ class StatusReaction:
                         await self._remove(other)
             self._current = state
 
+    async def clear(self) -> None:
+        """Remove the current reaction, leaving the root bare: for a caller with nothing to
+        revert to (D8's Cancel on a session that had shown no reaction yet)."""
+        async with self._lock:
+            if self._current is None:
+                return
+            await self._remove(self._current)
+            self._current = None
+
     async def _add(self, state: Status) -> bool:
         """Whether the root now carries `state`: true on success or `already_reacted`."""
         try:
