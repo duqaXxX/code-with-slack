@@ -226,7 +226,7 @@ RESUME_GONE = "That session is not in this channel's directory any more: `!resum
 RESUME_HELD = "This thread already holds a session: `!resume` from the channel opens a new thread."
 # D6: a session held by any thread of any channel is never resumed a second time; `{link}` is the
 # holding thread's permalink (a plain fallback when Slack would not give one).
-RESUME_ELSEWHERE = "This session is already in this thread: {link}."
+RESUME_ELSEWHERE = "This session is already open in another thread: {link}."
 RESUME_ELSEWHERE_ROW = " · {link}"
 # `!guide`: how to use the bot, in the owner's words. tests/test_commands.py fails when a word of
 # the daemon is missing here; keep the tone plain and every line true of the current behaviour.
