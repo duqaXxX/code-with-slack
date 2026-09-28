@@ -375,22 +375,6 @@ def build_app(
                         raise SessionGone from None
                     session = fresh
 
-    async def hold_mrkdwn_link(channel: str, thread_ts: str) -> str:
-        """Like `thread_link`, but in mrkdwn's own `<url|label>` form for a `mrkdwn` section
-        block (approvals and the resume picker use the same form for their own buttons; a
-        `thread_mrkdwn_link` helper is expected to land from the parallel D5/D6 work, which this
-        duplicates locally rather than wait for)."""
-        try:
-            permalink = (await slack.chat_getPermalink(channel=channel, message_ts=thread_ts))[
-                "permalink"
-            ]
-        except Exception as exc:
-            logger.warning(
-                "could not get a permalink for %s/%s: %s", channel, thread_ts, describe(exc)
-            )
-            return texts.STATUS_CHANNEL_LINK_FALLBACK.format(thread_ts=thread_ts)
-        return f"<{permalink}|Session>"
-
     async def hold_before_sending(
         channel: str, thread_ts: str, session: ThreadSession, other: ThreadSession
     ) -> bool:
@@ -401,7 +385,7 @@ def build_app(
         if sessions.draining:
             await notice(channel, thread_ts, texts.RESTARTING)
             return False
-        link = await hold_mrkdwn_link(other.channel_id, other.thread_ts)
+        link = await thread_mrkdwn_link(other.channel_id, other.thread_ts, "Session")
         if sessions.draining:  # a restart could have started during the permalink call above
             await notice(channel, thread_ts, texts.RESTARTING)
             return False

@@ -35,6 +35,11 @@ All notable changes to this project are documented here. The format follows
   is complete, for an approval request and a question, and for a reply that ends in an error;
   nothing rings while Claude writes, nor for `!stop`, a restart or an idle close. `docs/setup.md`
   gains the notification section and `docs/features.md` the measurements behind it.
+- D5/D6: a bind's answer names each existing thread's own folder when it differs from the new
+  one, and that thread's first reply after the bind repeats the notice once per process; the
+  resume picker's row for a session already held by another thread, and the refusal when that
+  session is named or clicked, both carry a permalink to the holding thread instead of a plain
+  marker.
 - D8: two sessions can now work in the same folder at once, but the daemon asks before a message
   wakes an idle one while a live session of another thread (any channel, resolved path) is not
   idle in that folder: `Another session is working in this folder: <link>. Send anyway?`, with

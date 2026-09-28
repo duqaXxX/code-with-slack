@@ -336,6 +336,18 @@ where the *next* thread starts, and refuses while any of the channel's threads i
 - Messages are queued and run one at a time; each gets its own reply in the thread.
   `!stop` interrupts the running turn, denies its pending approvals and stops the thread's
   background tasks (`ClaudeSDKClient.stop_task`).
+- D8: before a message would wake an idle session (`slack_app.submit_to_session`), a live session
+  of any other thread, of any channel, whose resolved folder is the same and is not idle
+  (`SessionManager.working_in`) makes the daemon ask first: `Another session is working in this
+  folder: <link>. Send anyway?`, with Continue and Cancel (`slack_app.hold_before_sending`, kept
+  in `hold.Holds`, memory only). The wait runs inside `submit_to_session`'s own `arrival_lock`, so
+  a later message of the same thread queues behind it rather than opening a second hold. `!stop`
+  inside the held thread or a top-level `!stop` of its channel cancels the wait the same way
+  Cancel does (`Holds.cancel`); so does `SessionManager.drain`, which also cancels every hold
+  still open when a restart starts (a hold opened after that point checks `sessions.draining`
+  itself, since the drain never revisits it). Either way the owner gets `Not sent.`; a hold a
+  message could not post is cancelled and told `HOLD_UNPOSTED`, failing closed rather than
+  sending into a folder another session is using.
 - Each `ThreadSession` keeps one `render.status.StatusReaction` on its own root message (D10),
   which `thread_ts` always is: a top-level owner message, or the owner's own `!resume` message.
   `ThreadSession._react` shows it as a tracked background task, since a reaction must never delay
