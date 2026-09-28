@@ -1,16 +1,18 @@
 from pathlib import Path
 
+import pytest
 from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_slack_response import AsyncSlackResponse
 
 from code_with_slack import texts
-from code_with_slack.render.sinks import UpdateLimiter
+from code_with_slack.render.sinks import BLOCKS_LIMIT, UpdateLimiter
 from code_with_slack.render.status import Status
 from code_with_slack.repair import repair_crash
 from code_with_slack.state import StateStore
-from tests.fakes import CHANNEL, OTHER_THREAD, THREAD, FakeSlack
+from tests.fakes import CHANNEL, OTHER_THREAD, THREAD, FakeSlack, slack_payload
 
 STOPPED_LINE = texts.ENDED.format(reason=texts.ENDED_SHUTDOWN)
+STOPPED_BLOCK = {"type": "markdown", "text": STOPPED_LINE}
 
 
 def make_state(tmp_path: Path) -> StateStore:
@@ -39,50 +41,67 @@ async def test_a_second_start_repairs_nothing(tmp_path: Path, slack: FakeSlack) 
     assert slack.calls == []
 
 
-async def test_an_open_reply_is_rewritten_keeping_its_body_and_ending_with_the_stopped_line(
+async def test_an_open_reply_is_read_by_its_own_ts_and_rewritten_dropping_only_the_status_block(
     tmp_path: Path, slack: FakeSlack
 ) -> None:
+    # Recorded 2026-09-28 in a real workspace (slack-sdk 3.44.1), scrubbed:
+    # actions/data/2026-09-28-replies-readback.json, replies_by_reply_ts. A posted `markdown`
+    # block reads back as `rich_text`; a block posted with an explicit block_id keeps it; one
+    # without gets a Slack-assigned id, which is why the status line's own fixed block_id
+    # (`sinks.STATUS_BLOCK_ID`) is what repair looks for, not "no block_id".
     state = make_state(tmp_path)
-    body_blocks = [{"type": "markdown", "text": "Looking at the files."}]
-    slack.responses["conversations.replies"] = {
-        "ok": True,
-        "messages": [
-            {
-                "ts": "1790000000.000001",
-                "blocks": [
-                    *body_blocks,
-                    # the daemon's own transient status line: a context block, no block_id.
-                    {
-                        "type": "context",
-                        "elements": [{"type": "mrkdwn", "text": "Claude is writing…"}],
-                    },
-                ],
-            }
-        ],
-    }
-    state.set_open_reply(CHANNEL, THREAD, "1790000000.000001")
+    fixture = slack_payload("api-conversations-replies-by-ts")
+    message_ts = fixture["messages"][0]["ts"]
+    slack.responses["conversations.replies"] = fixture
+    state.replace_open_reply(CHANNEL, THREAD, None, message_ts)
     await repair_crash(slack, state, UpdateLimiter())
+    [call] = slack.calls_to("conversations.replies")
+    assert call["channel"] == CHANNEL
+    assert call["ts"] == message_ts
+    assert call["limit"] == 1
+    assert call["oldest"] is None and call["latest"] is None and call["inclusive"] is None
     [update] = slack.calls_to("chat.update")
-    assert update["ts"] == "1790000000.000001"
-    assert update["blocks"] == [*body_blocks, {"type": "markdown", "text": STOPPED_LINE}]
-    assert state.thread(CHANNEL, THREAD).open_reply is None
+    assert update["ts"] == message_ts
+    original = fixture["messages"][0]["blocks"]
+    assert update["blocks"] == [*original[:-1], STOPPED_BLOCK]  # only the "status" block dropped
+    assert any(b["block_id"] == "Pq6Je" for b in update["blocks"])  # an unrelated context block
+    assert state.thread(CHANNEL, THREAD).open_replies == ()
 
 
-async def test_a_reply_with_no_status_line_still_gets_the_stopped_line_appended(
+async def test_a_reply_with_no_status_block_still_gets_the_stopped_line_appended(
     tmp_path: Path, slack: FakeSlack
 ) -> None:
-    # Already in its final form (past `finish`, not yet `close_out`): nothing to drop, since
-    # the last block is a markdown block, not the shape a status line has.
+    # Already in its final form (past `finish`, not yet `close_out`): nothing to drop, since the
+    # last block's id is not the status line's.
     state = make_state(tmp_path)
-    body_blocks = [{"type": "markdown", "text": "Done."}]
+    body_blocks = [{"type": "markdown", "block_id": "auto1", "text": "Done."}]
     slack.responses["conversations.replies"] = {
         "ok": True,
         "messages": [{"ts": "1790000000.000001", "blocks": body_blocks}],
     }
-    state.set_open_reply(CHANNEL, THREAD, "1790000000.000001")
+    state.replace_open_reply(CHANNEL, THREAD, None, "1790000000.000001")
     await repair_crash(slack, state, UpdateLimiter())
     [update] = slack.calls_to("chat.update")
-    assert update["blocks"] == [*body_blocks, {"type": "markdown", "text": STOPPED_LINE}]
+    assert update["blocks"] == [*body_blocks, STOPPED_BLOCK]
+
+
+async def test_a_full_reply_replaces_its_last_block_instead_of_exceeding_the_limit(
+    tmp_path: Path, slack: FakeSlack
+) -> None:
+    state = make_state(tmp_path)
+    body_blocks = [
+        {"type": "markdown", "block_id": f"b{i}", "text": f"x{i}"} for i in range(BLOCKS_LIMIT)
+    ]
+    slack.responses["conversations.replies"] = {
+        "ok": True,
+        "messages": [{"ts": "1790000000.000001", "blocks": body_blocks}],
+    }
+    state.replace_open_reply(CHANNEL, THREAD, None, "1790000000.000001")
+    await repair_crash(slack, state, UpdateLimiter())
+    [update] = slack.calls_to("chat.update")
+    assert len(update["blocks"]) == BLOCKS_LIMIT
+    assert update["blocks"][:-1] == body_blocks[:-1]
+    assert update["blocks"][-1] == STOPPED_BLOCK
 
 
 async def test_a_deleted_reply_message_is_left_alone_and_the_field_still_clears(
@@ -90,10 +109,10 @@ async def test_a_deleted_reply_message_is_left_alone_and_the_field_still_clears(
 ) -> None:
     state = make_state(tmp_path)
     slack.responses["conversations.replies"] = {"ok": True, "messages": []}
-    state.set_open_reply(CHANNEL, THREAD, "1790000000.000001")
+    state.replace_open_reply(CHANNEL, THREAD, None, "1790000000.000001")
     await repair_crash(slack, state, UpdateLimiter())
     assert slack.calls_to("chat.update") == []
-    assert state.thread(CHANNEL, THREAD).open_reply is None
+    assert state.thread(CHANNEL, THREAD).open_replies == ()
 
 
 async def test_a_failed_read_leaves_the_message_untouched_and_still_clears_the_field(
@@ -101,10 +120,24 @@ async def test_a_failed_read_leaves_the_message_untouched_and_still_clears_the_f
 ) -> None:
     state = make_state(tmp_path)
     slack.responses["conversations.replies"] = RuntimeError("network down")
-    state.set_open_reply(CHANNEL, THREAD, "1790000000.000001")
+    state.replace_open_reply(CHANNEL, THREAD, None, "1790000000.000001")
     await repair_crash(slack, state, UpdateLimiter())
     assert slack.calls_to("chat.update") == []
-    assert state.thread(CHANNEL, THREAD).open_reply is None
+    assert state.thread(CHANNEL, THREAD).open_replies == ()
+
+
+async def test_more_than_one_open_reply_in_a_thread_are_all_repaired(
+    tmp_path: Path, slack: FakeSlack
+) -> None:
+    # A background task's own reply can outlive the turn that started it: two open at once.
+    state = make_state(tmp_path)
+    slack.responses["conversations.replies"] = {"ok": True, "messages": []}
+    state.replace_open_reply(CHANNEL, THREAD, None, "1790000000.000001")
+    state.replace_open_reply(CHANNEL, THREAD, None, "1790000000.000002")
+    await repair_crash(slack, state, UpdateLimiter())
+    read = [c["ts"] for c in slack.calls_to("conversations.replies")]
+    assert read == ["1790000000.000001", "1790000000.000002"]
+    assert state.thread(CHANNEL, THREAD).open_replies == ()
 
 
 async def test_stale_requests_are_deleted_and_a_gone_one_still_counts_as_done(
@@ -126,9 +159,11 @@ async def test_a_root_left_waiting_or_working_gets_x_and_the_field_clears(
     state = make_state(tmp_path)
     state.set_status_pending(CHANNEL, THREAD, Status.WAITING.value)
     await repair_crash(slack, state, UpdateLimiter())
-    removed = [a["name"] for a in slack.calls_to("reactions.remove")]
+    # Through `StatusReaction` (fix round item 9): a fresh instance's first `show` also strips
+    # every other stray reaction on the root, not just the one name state.json recorded.
+    removed = {a["name"] for a in slack.calls_to("reactions.remove")}
     added = [a["name"] for a in slack.calls_to("reactions.add")]
-    assert removed == [Status.WAITING.value]
+    assert removed == {s.value for s in Status if s is not Status.ERROR}
     assert added == [Status.ERROR.value]
     assert state.thread(CHANNEL, THREAD).status is None
 
@@ -149,11 +184,11 @@ async def test_one_threads_failure_does_not_stop_the_others(
 ) -> None:
     state = make_state(tmp_path)
     state.open_thread(CHANNEL, OTHER_THREAD)
-    state.set_open_reply(CHANNEL, THREAD, "1790000000.000001")
+    state.replace_open_reply(CHANNEL, THREAD, None, "1790000000.000001")
     state.set_status_pending(CHANNEL, OTHER_THREAD, Status.WORKING.value)
     slack.responses["conversations.replies"] = RuntimeError("boom")
     await repair_crash(slack, state, UpdateLimiter())
-    assert state.thread(CHANNEL, THREAD).open_reply is None
+    assert state.thread(CHANNEL, THREAD).open_replies == ()
     assert state.thread(CHANNEL, OTHER_THREAD).status is None
     added = [a["name"] for a in slack.calls_to("reactions.add")]
     assert added == [Status.ERROR.value]
@@ -163,7 +198,7 @@ async def test_repair_never_stores_or_sends_message_content(
     tmp_path: Path, slack: FakeSlack
 ) -> None:
     state = make_state(tmp_path)
-    state.set_open_reply(CHANNEL, THREAD, "1790000000.000001")
+    state.replace_open_reply(CHANNEL, THREAD, None, "1790000000.000001")
     secret_block = {"type": "markdown", "text": "secret"}
     slack.responses["conversations.replies"] = {
         "ok": True,
@@ -172,3 +207,17 @@ async def test_repair_never_stores_or_sends_message_content(
     await repair_crash(slack, state, UpdateLimiter())
     raw = (tmp_path / "state.json").read_text()
     assert "secret" not in raw
+
+
+async def test_a_failed_state_write_is_logged_and_swallowed(
+    tmp_path: Path, slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = make_state(tmp_path)
+    state.replace_open_reply(CHANNEL, THREAD, None, "1790000000.000001")
+    slack.responses["conversations.replies"] = {"ok": True, "messages": []}
+
+    def boom(*_: object, **__: object) -> None:
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(state, "replace_open_reply", boom)
+    await repair_crash(slack, state, UpdateLimiter())  # must not raise

@@ -8,13 +8,14 @@ loop.
 
 `code-with-slack` (`code_with_slack.__main__.main`) starts in this order: it loads the
 configuration, so a bad `.env` fails before anything else; takes the single-instance lock, so a
-second daemon fails before it opens a Socket Mode connection; reads `state.json`; calls
-`auth.test` for the workspace id and the bot user id; then opens the Socket Mode connection and,
-once connected, repairs what a crashed daemon left open (`code_with_slack.repair.repair_crash`,
-issue #19: see below), prunes `state.json` (`StateStore.prune`, run only after repair, so a
-pruned thread's leftovers are still repaired first): a thread whose session id no longer resumes
-in its folder, and a no-session thread whose root message is more than a day old, are dropped;
-and posts the v1-to-v2 upgrade notice to each channel that still owes one
+second daemon fails before it opens a Socket Mode connection; reads `state.json`; builds a plain
+`AsyncWebClient` and calls `auth.test` for the workspace id and the bot user id; then, with that
+client (Socket Mode not opened yet), repairs what a crashed daemon left open
+(`code_with_slack.repair.repair_crash`, issue #19: see below) and prunes `state.json`
+(`StateStore.prune`, run only after repair, so a pruned thread's leftovers are still repaired
+first): a thread whose session id no longer resumes in its folder, and a no-session thread whose
+root message is more than a day old, are dropped; only then opens the Socket Mode connection and,
+once connected, posts the v1-to-v2 upgrade notice to each channel that still owes one
 (`__main__._post_upgrade_notices`), as a message of its own, not a reply. On `SIGTERM`, which
 `launchctl kill TERM` and `launchctl bootout` send, `SessionManager.drain` lets the turns already
 sent finish, each up to its reply's final write (footer included), and the background tasks with the turns that report them (a task whose end came without
@@ -51,22 +52,29 @@ on load: each channel keeps its directory, gets an empty thread map and a pendin
 the old session id and bypass switch, which belonged to the channel itself, are dropped.
 
 Each thread also carries three fields for crash repair (issue #19), ids only, never message
-content: `open_reply`, the ts of the open reply's last message (updated on every continuation,
-cleared once the reply closes out or is closed silently); `requests`, the ts of every approval,
-question and D8 hold message still carrying buttons (added on post, removed on delete or answer);
-`status`, the root's reaction name while it is ⏳ or ✋ (cleared once ✅ or ❌ is requested). All
-three default to absent ("nothing open") for a v2 file written before they existed, and are
-ignored by code that reads a v2 file without knowing them: the version stays 2. A graceful close
-(`ThreadSession.close`) clears all three for its thread once it is done, whatever the fields
-looked like partway through (`StateStore.clear_repair`), so only a crash ever leaves them set.
+content: `open_replies`, the ts of every open reply's last message (more than one can be open at
+once, since a background task's own reply can outlive the turn that started it; each `ReplySink`
+owns exactly one entry, added on its first message, replaced on a continuation, removed once its
+final write is known to have landed or it has given up retrying for good); `requests`, the ts of
+every approval, question and D8 hold message still carrying buttons (added on post, removed on
+delete or answer); `status`, the root's reaction name while it is ⏳ or ✋ (cleared once ✅ or ❌ is
+requested). All three default to absent ("nothing open") for a v2 file written before they
+existed, and are ignored by code that reads a v2 file without knowing them: the version stays 2.
+A graceful close (`ThreadSession.close`) clears all three for its thread once it is done, whatever
+the fields looked like partway through (`StateStore.clear_repair`), so only a crash ever leaves
+them set.
 
-On start, once connected to Slack, `code_with_slack.repair.repair_crash` repairs every thread
-`state.json` still shows as left open: it rewrites the open reply's last message (its body
-blocks, minus the daemon's own transient status line, plus the line a graceful shutdown appends),
-deletes each stale request (`message_not_found` counts as done), and sets ❌ on a root left ⏳ or
-✋. Each field is cleared once its own repair has been attempted, successfully or not, so a
-second start never retries what an earlier one gave up on; one thread's failure is logged and
-does not stop the others.
+On start, before the Socket Mode connection opens, `code_with_slack.repair.repair_crash` repairs
+every thread `state.json` still shows as left open: for each open reply it reads the message back
+by its own ts (`conversations.replies` with `ts` and `limit=1`) and rewrites it, its body blocks
+minus the daemon's own transient status line (identified by its fixed block_id,
+`render.sinks.STATUS_BLOCK_ID`, never by matching rendered text) plus the line a graceful shutdown
+appends, kept within Slack's block-count limit; it deletes each stale request
+(`message_not_found` counts as done); and it sets ❌ on a root left ⏳ or ✋, through the same
+`StatusReaction` a live session uses. Each field is cleared once its own repair has been
+attempted, successfully or not (a failed `state.json` write here is logged and swallowed, never
+left to break startup), so a second start never retries what an earlier one gave up on; one
+thread's failure is logged and does not stop the others.
 
 `code_with_slack.lock.single_instance` holds an exclusive `flock` on the configuration directory
 itself. A second process fails to start. The kernel releases the lock when the holder exits, so

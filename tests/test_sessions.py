@@ -480,16 +480,16 @@ async def test_an_approval_request_is_tracked_in_state_while_it_is_open(
     assert h.state.thread(CHANNEL, THREAD).requests == (h.slack.posted_ts[-1],)
 
 
-async def test_the_open_reply_ts_is_tracked_while_writing_and_cleared_at_close_out(
+async def test_the_open_reply_ts_is_tracked_while_writing_and_cleared_once_finished(
     harness_for: Callable[..., Harness],
 ) -> None:
     h = harness_for({"turns": [sdk_messages("tools")]})
     session = h.session()
     turn = await session.submit("list the files")
     await until(lambda: bool(h.slack.posted_ts))
-    assert h.state.thread(CHANNEL, THREAD).open_reply == h.slack.posted_ts[0]
+    assert h.state.thread(CHANNEL, THREAD).open_replies == (h.slack.posted_ts[0],)
     await asyncio.wait_for(turn.done.wait(), 2)
-    assert h.state.thread(CHANNEL, THREAD).open_reply is None
+    assert h.state.thread(CHANNEL, THREAD).open_replies == ()
 
 
 async def test_the_status_field_tracks_working_then_clears_once_done(
@@ -513,9 +513,11 @@ async def test_close_leaves_every_repair_field_cleared(
     await until(lambda: bool(h.approvals._pending))
     await session.close()
     stored = h.state.thread(CHANNEL, THREAD)
-    assert stored.open_reply is None
+    assert stored.open_replies == ()
     assert stored.requests == ()
     assert stored.status is None
+    # Issue #19 fix round item 8: the pending approval's own message is actually deleted too.
+    assert len(h.slack.calls_to("chat.delete")) == 1
 
 
 async def test_waiting_for_owner_reflects_an_open_approval(

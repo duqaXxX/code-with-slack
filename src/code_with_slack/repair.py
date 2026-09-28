@@ -1,21 +1,30 @@
 """Repair what a crashed daemon left open (issue #19): a reply still saying Claude is writing,
 an approval, question or D8 hold request still carrying buttons, and the ⏳/✋ reaction a turn
-mid-flight left on its root. Runs once on start, after connecting to Slack and before
-`state.prune` (a pruned thread's leftovers must still be repaired); a graceful stop clears these
-same fields itself, so a second start finds nothing to do.
+mid-flight left on its root. Runs once on start, right after `auth.test` and before opening the
+Socket Mode connection (the web client works without it) and before `state.prune` (a pruned
+thread's leftovers must still be repaired); a graceful stop clears these same fields itself, so a
+second start finds nothing to do.
 
-`conversations.replies` (docs.slack.dev/reference/methods/conversations.replies, read 2026-09-28):
-`oldest`/`latest` set to the same ts with `inclusive=True` and `limit=1` isolates one message by
-its own ts.
+`conversations.replies` (docs.slack.dev/reference/methods/conversations.replies, read 2026-09-28,
+confirmed against a real workspace 2026-09-28, `actions/data/2026-09-28-replies-readback.json`):
+`ts` set to the reply's own ts, with `limit=1`, returns only that one message (an `oldest`/
+`latest`/`inclusive` range built around the same ts instead returned the thread's root too).
 """
 
 import logging
+from collections.abc import Callable
 
 from slack_sdk.web.async_client import AsyncWebClient
 
 from code_with_slack import texts
-from code_with_slack.render.sinks import UpdateLimiter, describe
-from code_with_slack.render.status import Status
+from code_with_slack.render.sinks import (
+    BLOCKS_LIMIT,
+    STATUS_BLOCK_ID,
+    UpdateLimiter,
+    delete_request,
+    describe,
+)
+from code_with_slack.render.status import Status, StatusReaction
 from code_with_slack.state import StateStore, ThreadState
 
 logger = logging.getLogger(__name__)
@@ -24,6 +33,7 @@ logger = logging.getLogger(__name__)
 # with its default reason): reused verbatim, so a repaired reply reads exactly as one closed by
 # a graceful stop would.
 _STOPPED_LINE = texts.ENDED.format(reason=texts.ENDED_SHUTDOWN)
+_STOPPED_BLOCK = {"type": "markdown", "text": _STOPPED_LINE}
 
 
 async def repair_crash(slack: AsyncWebClient, state: StateStore, limiter: UpdateLimiter) -> None:
@@ -51,34 +61,40 @@ async def _repair_thread(
     thread_ts: str,
     thread: ThreadState,
 ) -> None:
-    if thread.open_reply is not None:
-        await _repair_reply(slack, limiter, channel_id, thread_ts, thread.open_reply)
-        state.set_open_reply(channel_id, thread_ts, None)
+    for message_ts in thread.open_replies:
+        await _repair_reply(slack, limiter, channel_id, thread_ts, message_ts)
+        _safe(state.replace_open_reply, channel_id, thread_ts, message_ts, None)
     for message_ts in thread.requests:
-        await _repair_request(slack, channel_id, thread_ts, message_ts)
-        state.remove_request(channel_id, thread_ts, message_ts)
+        await delete_request(slack, channel=channel_id, ts=message_ts)
+        _safe(state.remove_request, channel_id, thread_ts, message_ts)
     if thread.status is not None:
         await _repair_status(slack, channel_id, thread_ts, thread.status)
-        state.set_status_pending(channel_id, thread_ts, None)
+        _safe(state.set_status_pending, channel_id, thread_ts, None)
+
+
+def _safe(write: Callable[..., None], *args: object) -> None:
+    """A `StateStore` write is a plain synchronous file write, so it can raise like any other
+    (disk full, a permission problem): best-effort here, since repair itself must never crash the
+    daemon's startup over its own bookkeeping. Logged with ids only."""
+    try:
+        write(*args)
+    except Exception as exc:
+        logger.warning("could not update state.json during crash repair: %s", describe(exc))
 
 
 async def _repair_reply(
     slack: AsyncWebClient, limiter: UpdateLimiter, channel_id: str, thread_ts: str, message_ts: str
 ) -> None:
-    """Rewrite the reply's last message: its body blocks, minus the daemon's own transient
-    status line (a context block with no block_id, the shape `ReplySink._render` gives it, never
-    identified by matching its rendered text), plus the line a shutdown writes today. A failed
-    read or a message already gone is logged and left alone: never replaced with a shorter form
-    that would lose its content."""
+    """Rewrite the reply's last message: its body blocks, minus the daemon's own transient status
+    line (identified by `STATUS_BLOCK_ID`, the fixed block_id `ReplySink` gives it: a block posted
+    with no id of its own comes back from Slack with one Slack assigned, so this is the only shape
+    that survives a round trip), plus the line a shutdown writes today. Kept within
+    `BLOCKS_LIMIT` (Slack's own 50-block cap, with the sink's own margin): the status line is
+    dropped first, and if the body is still at the limit the stopped line replaces its last block
+    rather than push the message over it. A failed read or a message already gone is logged and
+    left alone: never replaced with a shorter form that would lose its content."""
     try:
-        reply = await slack.conversations_replies(
-            channel=channel_id,
-            ts=thread_ts,
-            oldest=message_ts,
-            latest=message_ts,
-            inclusive=True,
-            limit=1,
-        )
+        reply = await slack.conversations_replies(channel=channel_id, ts=message_ts, limit=1)
     except Exception as exc:
         logger.warning(
             "could not read a crashed reply's message in %s/%s: %s",
@@ -93,9 +109,12 @@ async def _repair_reply(
         logger.info("a crashed reply's message is gone in %s/%s", channel_id, thread_ts)
         return
     blocks = list(message.get("blocks") or [])
-    if blocks and blocks[-1].get("type") == "context" and "block_id" not in blocks[-1]:
+    if blocks and blocks[-1].get("block_id") == STATUS_BLOCK_ID:
         blocks = blocks[:-1]
-    blocks.append({"type": "markdown", "text": _STOPPED_LINE})
+    if len(blocks) >= BLOCKS_LIMIT:
+        blocks[-1] = _STOPPED_BLOCK
+    else:
+        blocks.append(_STOPPED_BLOCK)
     try:
         await limiter.acquire()
         await slack.chat_update(
@@ -107,45 +126,11 @@ async def _repair_reply(
         )
 
 
-async def _repair_request(
-    slack: AsyncWebClient, channel_id: str, thread_ts: str, message_ts: str
-) -> None:
-    """Delete a stale request, as `remove_request`/`ThreadSession._delete_request` do;
-    `message_not_found` counts as done."""
-    try:
-        await slack.chat_delete(channel=channel_id, ts=message_ts)
-    except Exception as exc:
-        if describe(exc) != "message_not_found":
-            logger.warning(
-                "could not remove a stale request in %s/%s: %s",
-                channel_id,
-                thread_ts,
-                describe(exc),
-            )
-
-
 async def _repair_status(slack: AsyncWebClient, channel_id: str, thread_ts: str, name: str) -> None:
-    """Set ❌ on a root left ⏳ or ✋; `already_reacted`/`no_reaction` count as done, as
-    `StatusReaction` treats them."""
+    """Set ❌ on a root left ⏳ or ✋, through the same `StatusReaction` a live session uses (issue
+    #19 fix round item 9): a fresh instance's first `show` also strips every other stray
+    reaction from the root on its own (D10), which is strictly more thorough than removing just
+    the one name state.json recorded."""
     if name not in (Status.WORKING.value, Status.WAITING.value):
         return
-    try:
-        await slack.reactions_remove(channel=channel_id, timestamp=thread_ts, name=name)
-    except Exception as exc:
-        if describe(exc) != "no_reaction":
-            logger.warning(
-                "could not clear a crashed root's reaction in %s/%s: %s",
-                channel_id,
-                thread_ts,
-                describe(exc),
-            )
-    try:
-        await slack.reactions_add(channel=channel_id, timestamp=thread_ts, name=Status.ERROR.value)
-    except Exception as exc:
-        if describe(exc) != "already_reacted":
-            logger.warning(
-                "could not set the stopped reaction in %s/%s: %s",
-                channel_id,
-                thread_ts,
-                describe(exc),
-            )
+    await StatusReaction(slack, channel=channel_id, root_ts=thread_ts).show(Status.ERROR)

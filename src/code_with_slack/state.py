@@ -30,9 +30,11 @@ class ThreadState:
     # The level set with `/effort`; `None` when unset or set back to the default.
     effort: str | None = None
     # Crash repair (issue #19), each an id only, never message content:
-    # the ts of the open reply's last message, updated on every continuation, cleared once the
-    # reply closes out or is closed silently.
-    open_reply: str | None = None
+    # the ts of every open reply's last message (more than one can be open at once: a background
+    # task's own reply can outlive the turn that started it). Each `ReplySink` owns one entry:
+    # added on its first message, replaced on a continuation, removed once its final write is
+    # known to have landed (or it has given up retrying for good).
+    open_replies: tuple[str, ...] = ()
     # ts of every approval, question or D8 hold request still carrying buttons.
     requests: tuple[str, ...] = ()
     # The root's reaction name while it is ⏳ or ✋ (`render.status.Status.value`); cleared once
@@ -55,9 +57,11 @@ class StateError(Exception):
 def _parse_thread(raw: dict[str, Any]) -> ThreadState:
     """Tolerant of a v2 file written before the repair fields existed (they default to "nothing
     open"), and a v2 file written with them read by code that does not know them yet ignores the
-    extra keys: both directions of the additive version stay 2."""
+    extra keys: both directions of the additive version stay 2. A file written by 1304c5e's single
+    `open_reply` field (never shipped) is read the same as one with none at all: that key is not
+    looked at."""
     effort = raw.get("effort")
-    open_reply = raw.get("open_reply")
+    open_replies = raw.get("open_replies")
     requests = raw.get("requests")
     status = raw.get("status")
     return ThreadState(
@@ -65,7 +69,7 @@ def _parse_thread(raw: dict[str, Any]) -> ThreadState:
         session_id=raw.get("session_id"),
         bypass=raw.get("bypass") is True,
         effort=effort if isinstance(effort, str) else None,
-        open_reply=open_reply if isinstance(open_reply, str) else None,
+        open_replies=tuple(open_replies) if isinstance(open_replies, list) else (),
         requests=tuple(requests) if isinstance(requests, list) else (),
         status=status if isinstance(status, str) else None,
     )
@@ -148,12 +152,23 @@ class StateStore:
         if current is not None and current.effort != effort:
             self._set_thread(channel_id, thread_ts, replace(current, effort=effort))
 
-    def set_open_reply(self, channel_id: str, thread_ts: str, message_ts: str | None) -> None:
-        """Record the ts of an open reply's last message (crash repair); a no-op for a thread
-        that does not exist."""
+    def replace_open_reply(
+        self, channel_id: str, thread_ts: str, old_ts: str | None, new_ts: str | None
+    ) -> None:
+        """One `ReplySink`'s own entry in the open-replies list (crash repair): drop `old_ts` (if
+        it was there), add `new_ts` (if not already there), in one write. A no-op for a thread
+        that does not exist, and for a call that changes nothing (both ends of a fresh sink's
+        first message, `old_ts=None, new_ts=None`, would otherwise still write)."""
         current = self.thread(channel_id, thread_ts)
-        if current is not None and current.open_reply != message_ts:
-            self._set_thread(channel_id, thread_ts, replace(current, open_reply=message_ts))
+        if current is None:
+            return
+        replies = current.open_replies
+        if old_ts is not None and old_ts in replies:
+            replies = tuple(t for t in replies if t != old_ts)
+        if new_ts is not None and new_ts not in replies:
+            replies = (*replies, new_ts)
+        if replies != current.open_replies:
+            self._set_thread(channel_id, thread_ts, replace(current, open_replies=replies))
 
     def add_request(self, channel_id: str, thread_ts: str, message_ts: str) -> None:
         """Record a request message still carrying buttons (crash repair); a no-op for a thread
@@ -186,7 +201,7 @@ class StateStore:
             (channel_id, thread_ts, thread)
             for channel_id, channel in self._channels.items()
             for thread_ts, thread in channel.threads.items()
-            if thread.open_reply is not None or thread.requests or thread.status is not None
+            if thread.open_replies or thread.requests or thread.status is not None
         ]
 
     def clear_repair(self, channel_id: str, thread_ts: str) -> None:
@@ -195,10 +210,10 @@ class StateStore:
         current = self.thread(channel_id, thread_ts)
         if current is None:
             return
-        if current.open_reply is None and not current.requests and current.status is None:
+        if not current.open_replies and not current.requests and current.status is None:
             return
         self._set_thread(
-            channel_id, thread_ts, replace(current, open_reply=None, requests=(), status=None)
+            channel_id, thread_ts, replace(current, open_replies=(), requests=(), status=None)
         )
 
     def remove_thread(self, channel_id: str, thread_ts: str) -> None:
@@ -305,7 +320,7 @@ class StateStore:
                             "session_id": t.session_id,
                             "bypass": t.bypass,
                             "effort": t.effort,
-                            "open_reply": t.open_reply,
+                            "open_replies": list(t.open_replies),
                             "requests": list(t.requests),
                             "status": t.status,
                         }

@@ -108,6 +108,19 @@ class Approvals:
                 denied.append(pending)
         return denied
 
+    def pending_in(self, channel_id: str, thread_ts: str) -> list[Pending]:
+        """A read-only snapshot of this thread's open requests, for a caller that needs to know
+        which messages are still live without resolving them (issue #19 fix round item 8:
+        `ThreadSession.close` captures these before cancelling the reader task, since a request
+        actually being awaited inside it gets `CancelledError` on cancellation regardless of
+        whether `deny_all` resolved its future first, and `deny_all`'s own return list would
+        otherwise already be empty by the time close reaches it)."""
+        return [
+            pending
+            for pending in self._pending.values()
+            if pending.channel_id == channel_id and pending.thread_ts == thread_ts
+        ]
+
     def posted(self, approval_id: str, message_ts: str) -> bool:
         """Record the message that shows a request, so it can be removed once decided; False
         when the request was decided before its message was known (`!stop` while posting)."""

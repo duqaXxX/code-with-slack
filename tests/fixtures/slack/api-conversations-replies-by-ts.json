@@ -1,0 +1,60 @@
+{
+  "ok": true,
+  "messages": [
+    {
+      "user": "U000BOT",
+      "type": "message",
+      "ts": "1790000000.000002",
+      "bot_id": "B000BOT",
+      "app_id": "A000APP",
+      "text": "readback",
+      "team": "T000TEAM",
+      "thread_ts": "1790000000.000001",
+      "parent_user_id": "U000ALICE",
+      "blocks": [
+        {
+          "type": "rich_text",
+          "block_id": "ASueHc",
+          "elements": [
+            {
+              "type": "rich_text_section",
+              "elements": [
+                { "type": "text", "text": "Body " },
+                { "type": "text", "text": "bold", "style": { "bold": true } },
+                { "type": "text", "text": " and " },
+                { "type": "text", "text": "code", "style": { "code": true } },
+                { "type": "text", "text": "." },
+                { "type": "text", "text": "\n\n" }
+              ]
+            },
+            {
+              "type": "rich_text_list",
+              "elements": [
+                { "type": "rich_text_section", "elements": [{ "type": "text", "text": "a" }] },
+                { "type": "rich_text_section", "elements": [{ "type": "text", "text": "b" }] }
+              ],
+              "style": "bullet",
+              "indent": 0
+            }
+          ]
+        },
+        {
+          "type": "context",
+          "block_id": "tools-0",
+          "elements": [{ "type": "mrkdwn", "text": "✓ `Bash(ls)`", "verbatim": false }]
+        },
+        {
+          "type": "context",
+          "block_id": "Pq6Je",
+          "elements": [{ "type": "mrkdwn", "text": "_no id status_", "verbatim": false }]
+        },
+        {
+          "type": "context",
+          "block_id": "status",
+          "elements": [{ "type": "mrkdwn", "text": "_Claude is writing…_", "verbatim": false }]
+        }
+      ]
+    }
+  ],
+  "has_more": false
+}

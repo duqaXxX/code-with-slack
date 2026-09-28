@@ -133,6 +133,18 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
         )
         handler = AsyncSocketModeHandler(app, config.app_token)
 
+        # Issue #19 fix round item 3: repaired, then pruned, before the Socket Mode connection
+        # even opens. `slack` (a plain `AsyncWebClient`, already `auth_test`'d above) works
+        # without it; opening Socket Mode is what starts delivering events, and a pruned thread's
+        # leftovers must still be repaired first.
+        await repair_crash(slack, state, sessions.update_limiter)
+        try:
+            removed = state.prune(_alive_sessions, time.time())
+            if removed:
+                logger.info("pruned %d stale thread(s) from state.json", removed)
+        except Exception as exc:
+            logger.warning("could not prune stale threads: %s", exc)
+
         stop = asyncio.Event()
         received: list[signal.Signals] = []
 
@@ -146,15 +158,6 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
         await handler.connect_async()  # type: ignore[no-untyped-call]  # untyped in Bolt 1.30.0
         logger.info("connected to Slack workspace %s", identity.team_id)
         try:
-            # Before `state.prune` (issue #19): a pruned thread's leftovers must still be
-            # repaired, and repair needs `slack` connected to read a reply back or rewrite it.
-            await repair_crash(slack, state, sessions.update_limiter)
-            try:
-                removed = state.prune(_alive_sessions, time.time())
-                if removed:
-                    logger.info("pruned %d stale thread(s) from state.json", removed)
-            except Exception as exc:
-                logger.warning("could not prune stale threads: %s", exc)
             await _post_upgrade_notices(slack, state)
             await stop.wait()
             # launchd stops and restarts with SIGTERM: the turns already running finish first. Not

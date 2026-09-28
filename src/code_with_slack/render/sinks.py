@@ -61,8 +61,31 @@ def describe(exc: Exception) -> str:
     return type(exc).__name__
 
 
+async def delete_request(slack: AsyncWebClient, *, channel: str, ts: str) -> None:
+    """Delete a request (an approval, a question, a D8 hold) once it is decided or stale:
+    `message_not_found` counts as done, as everywhere else this project deletes one. Shared by
+    `ThreadSession._delete_request`, `slack_app.py`'s `remove_request` and `repair.py` (issue #19
+    fix round item 9), so the one behaviour lives in one place."""
+    try:
+        await slack.chat_delete(channel=channel, ts=ts)
+    except Exception as exc:
+        if describe(exc) != "message_not_found":
+            logger.warning("could not remove a request in %s: %s", channel, describe(exc))
+
+
 def context_block(text: str) -> dict[str, Any]:
     return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
+
+
+# The reply's own status line (Claude is writing, or waiting): a fixed block_id, so crash repair
+# can find and drop it by shape rather than by matching its rendered text (issue #19 fix round: a
+# block posted with no id of its own comes back from Slack with one Slack assigned, so "a context
+# block with no block_id" is not a shape a read-back message ever actually has).
+STATUS_BLOCK_ID = "status"
+
+
+def status_block(text: str) -> dict[str, Any]:
+    return {**context_block(text), "block_id": STATUS_BLOCK_ID}
 
 
 # A text object's limit, as a context block's mrkdwn element holds one (Block Kit reference).
@@ -324,16 +347,21 @@ class ReplySink:
         channel: str,
         thread_ts: str,
         limiter: UpdateLimiter,
-        on_open_reply: Callable[[str | None], None] | None = None,
+        on_open_reply: Callable[[str | None, str | None], None] | None = None,
     ) -> None:
         self._slack = slack
         self._channel = channel
         self._thread_ts = thread_ts
         self._limiter = limiter
-        # Crash repair (issue #19): the ts of this reply's last message while it is still open,
-        # so a crash mid-write can be found and rewritten on the next start. A plain sync
-        # callback (`StateStore`'s setters are sync file writes), never awaited here.
+        # Crash repair (issue #19): `(old_ts, new_ts)`, this sink's own transition in the
+        # thread's open-replies list (more than one sink can be open at once: a background
+        # task's own reply can outlive the turn that started it, so each sink owns exactly one
+        # entry and must never touch another's). A plain sync callback (`StateStore`'s setters
+        # are sync file writes), never awaited here.
         self._on_open_reply = on_open_reply
+        # This sink's own current entry in that list, or None once it has none (not yet posted,
+        # or already settled/given up).
+        self._own_open_reply: str | None = None
         self._parts: list[_Text | _Tool] = []
         self._tools: dict[str, _Tool] = {}
         self._messages: list[str] = []  # ts of each message this reply has posted
@@ -359,6 +387,33 @@ class ReplySink:
         # Bumped by `_changed`: `_flush` compares it before and after a pass to notice a change
         # that arrived while the pass wrote or waited its turn, and runs another pass for it.
         self._version = 0
+
+    def _track_open_reply(self, new_ts: str | None) -> None:
+        """This sink's own transition: drop its current entry (if any), add `new_ts` (if not
+        None), leave every other sink's entry alone. Best-effort (issue #19 fix round item 7): a
+        failed `StateStore` write is logged (ids only) and swallowed, since the reply itself must
+        never fail over crash-repair bookkeeping; this sink's own local view of `new_ts` still
+        updates either way, so it stays correct even if the file write did not land."""
+        old = self._own_open_reply
+        self._own_open_reply = new_ts
+        if self._on_open_reply is None:
+            return
+        try:
+            self._on_open_reply(old, new_ts)
+        except Exception as exc:
+            logger.warning(
+                "could not update the open-reply tracking for %s/%s: %s",
+                self._channel,
+                self._thread_ts,
+                describe(exc),
+            )
+
+    def _settle_open_reply(self) -> None:
+        """Stop tracking once the body's final write is known to have landed, or the sink has
+        given up retrying it for good (issue #19 fix round item 6): from then on the message
+        shows no status line to repair, whatever else may still change on it."""
+        if self._own_open_reply is not None:
+            self._track_open_reply(None)
 
     async def open(self, status: str) -> None:
         """Post the reply at once, showing only its status: the owner sees an answer is coming."""
@@ -420,12 +475,18 @@ class ReplySink:
             # not). `_schedule` must not mistake it for a debounce already in flight.
             self._pending = None
         self._finished = True
-        if not await self._flush(final=True):
+        if await self._flush(final=True):
+            self._settle_open_reply()
+        else:
             self._retry = asyncio.create_task(self._retry_final())
 
     async def _retry_final(self) -> None:
         await asyncio.sleep(FINAL_RETRY_SECONDS)
         await self._flush(final=True)
+        # This is the reply's one and only retry for its final write: whether it just landed or
+        # failed again, nothing else will try again, so tracking stops either way (issue #19 fix
+        # round item 6, "or when the sink gives up for good").
+        self._settle_open_reply()
 
     async def close_out(
         self, footer: str | None, reply_to: str | None = None, *, silent: bool = False
@@ -441,14 +502,15 @@ class ReplySink:
         if self._closed_out:
             return
         self._closed_out = True
-        # Crash repair (issue #19): the reply is no longer open once it closes out, silently or
-        # not, whatever its own body messages still look like at that point.
-        if self._on_open_reply is not None:
-            self._on_open_reply(None)
         self._footer = footer
         if silent:
             self._silent_closed = True
-            if not await self._flush(final=True):
+            # Crash repair (issue #19): only once this write (which folds the footer into the
+            # body's own last message) is known to have landed does the message stop showing a
+            # status line to repair; a failed write keeps tracking it, same as `finish`'s own.
+            if await self._flush(final=True):
+                self._settle_open_reply()
+            else:
                 self._retry = asyncio.create_task(self._retry_final())
             return
         self._reply_to = reply_to
@@ -467,7 +529,8 @@ class ReplySink:
         if self._pending is not None:
             self._pending.cancel()
             self._pending = None
-        await self._flush(final=self._finished)
+        if await self._flush(final=self._finished) and self._finished:
+            self._settle_open_reply()
 
     async def _retry_closing(self) -> None:
         await asyncio.sleep(FINAL_RETRY_SECONDS)
@@ -500,6 +563,8 @@ class ReplySink:
             # took it would lose the message's ts. `finish` waits for the lock instead.
             if not await asyncio.shield(self._flush(final=final)):
                 return
+            if final:
+                self._settle_open_reply()
             if self._version == version:
                 return
             # The reply changed again while that call wrote or waited its turn, in a way it
@@ -581,7 +646,7 @@ class ReplySink:
         if not final:
             status = " · ".join(filter(None, (self._status, self._running)))
             if status:  # neither set (rare, before the first `open`): no status line at all
-                messages[-1].append(context_block(status))
+                messages[-1].append(status_block(status))
         elif self._silent_closed:
             # A silent close (D1): the footer, if any, joins the body's own
             # last message instead of a message of its own, through the ordinary flush below.
@@ -714,8 +779,14 @@ class ReplySink:
                         )
                         self._messages.append(str(posted["ts"]))
                         self._shown.append(blocks)
-                        if self._on_open_reply is not None:
-                            self._on_open_reply(self._messages[-1])
+                        # Crash repair (issue #19 fix round item 5): only while the reply is not
+                        # already closed out. A closed-out reply's final render never carries a
+                        # status line (`_render`'s not-final branch is the only place one is
+                        # added), so a continuation posted after close_out has nothing repair
+                        # would need to fix; tracking it anyway would leave a dangling entry
+                        # nothing ever clears again.
+                        if not self._closed_out:
+                            self._track_open_reply(self._messages[-1])
                 except Exception as exc:
                     logger.warning("could not write a reply to Slack: %s", describe(exc))
                     refused = final and describe(exc) in REFUSED_CONTENT
@@ -735,8 +806,8 @@ class ReplySink:
                     return False
                 self._messages.pop()
                 self._shown.pop()
-                if self._on_open_reply is not None and not self._closed_out:
-                    self._on_open_reply(self._messages[-1] if self._messages else None)
+                if not self._closed_out:
+                    self._track_open_reply(self._messages[-1] if self._messages else None)
             # After the body, so the closing message is posted below it. Only once `close_out`
             # has run: before that, nothing is known about the footer or the notification yet.
             # A silent close has none of its own: `_render` already folded it into the body
