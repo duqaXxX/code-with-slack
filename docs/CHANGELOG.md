@@ -93,12 +93,16 @@ All notable changes to this project are documented here. The format follows
   instead of a second running line.
 - D6 minimum: a Resume click or `!resume <id or name>` that names a session already open in
   another thread of any channel is refused, with a new text, instead of resuming it a second
-  time; the `!resume` list marks such a session and gives it no button.
+  time; the `!resume` list marks such a session and gives it no button. The session id is
+  recorded as soon as Claude Code reports it (its first message), not only at the end of its
+  first turn, so a still-running first turn is already covered by this refusal too.
 - A resumed session whose transcript turned out gone left its worker task, and any armed
   idle-close timer, running forever after the close: `asyncio.all_tasks()` kept growing. A turn
-  that raced the close during its own `sink.open` could be told the wrong reason (or, before this
-  fix, sometimes get no reason at all): it now always gets the same "session gone" reply the
-  turn that found it gone got.
+  that raced the close during its own `sink.open` gets the "session gone" reply when its own
+  thread's entry is gone too, or "session closed" otherwise (an idle close or a restart can also
+  close mid-`sink.open`, and only a gone thread's entry tells the two apart). A turn a direct
+  call (`!status`, `!bypass`) had already taken from the queue, when that same call then finds
+  the session gone, is rescued the same way, instead of being left saying "writing" forever.
 - The stale wording "the channel was bound to another folder or resumed another session" for a
   session closed under a running command is gone (neither still happens): it now says the
   session closed while the command ran, from an idle close or a restart. When a prompt's retry

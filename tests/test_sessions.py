@@ -289,6 +289,37 @@ async def test_a_turn_that_races_sessiongone_during_its_own_open_gets_session_go
     await h.manager.close_all()
 
 
+async def test_a_turn_that_races_a_plain_close_during_its_own_open_gets_session_closed(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Whatever closed the session during `sink.open` (item 2's fix), it must not always be
+    # answered as SessionGone: a plain close (an idle close, a restart) leaves the thread's own
+    # entry in state.json, unlike SessionGone's close (D7), and that is the only thing telling
+    # the two apart once `self._closed` is true either way.
+    h = harness_for({})
+    session = h.session()
+    real_open = sessions.ReplySink.open
+    opened: list[str] = []
+    gate = asyncio.Event()
+
+    async def gated_open(self: Any, status: str) -> None:
+        opened.append(status)
+        if len(opened) == 1:
+            await gate.wait()
+        await real_open(self, status)
+
+    monkeypatch.setattr(sessions.ReplySink, "open", gated_open)
+
+    submit_task = asyncio.create_task(session.submit("hello"))
+    await until(lambda: len(opened) == 1)  # paused inside its own `sink.open`
+    await session.close()  # a plain close: the thread's entry stays in state.json
+    assert h.state.thread(CHANNEL, THREAD) is not None
+    gate.set()
+    turn = await asyncio.wait_for(submit_task, 2)
+    await asyncio.wait_for(turn.done.wait(), 2)
+    assert h.bodies() == [texts.SESSION_CLOSED]
+
+
 async def test_a_direct_sessiongone_call_leaves_no_idle_timer_task(
     harness_for: Callable[..., Harness],
 ) -> None:
@@ -311,6 +342,37 @@ async def test_a_direct_sessiongone_call_leaves_no_idle_timer_task(
     names = {t.get_name() for t in asyncio.all_tasks()}
     assert f"idle-close-{CHANNEL}-{THREAD}" not in names
     assert f"worker-{CHANNEL}-{THREAD}" not in names
+
+
+async def test_a_direct_gone_call_rescues_the_worker_s_taken_turn(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # Regression (proven at 5e435de): a direct call (`!status`) holds `_connect_lock` while it
+    # hits SessionGone; if the worker had already taken a turn and was itself blocked acquiring
+    # that same lock, cancelling the worker (to end it) lost that turn: cancelled mid-`await`,
+    # it never reached its own except clause, so `_taken` was never failed and the reply stayed
+    # "writing" forever.
+    gone = ResultError(
+        "Claude Code returned an error result: No conversation found",
+        data={
+            "subtype": "error_during_execution",
+            "is_error": True,
+            "errors": ["No conversation found with session ID: gone"],
+        },
+    )
+    gate = asyncio.Event()
+    h = harness_for({"connect_error": gone, "connect_gate": gate})
+    session = h.session()
+    h.state.set_session(CHANNEL, THREAD, "gone")
+    status_task = asyncio.create_task(session.status())  # holds the connect lock, gated
+    await until(lambda: len(h.clients) == 1)
+    turn = await session.submit("hello")
+    await until(lambda: session._taken is not None)  # the worker took it, now waits on the lock
+    gate.set()
+    await asyncio.wait_for(status_task, 2)
+    assert session.closed
+    await asyncio.wait_for(turn.done.wait(), 2)  # must not hang
+    assert h.bodies() == [texts.SESSION_GONE]
 
 
 async def test_a_restart_rebuilds_a_stored_thread_with_its_bypass(

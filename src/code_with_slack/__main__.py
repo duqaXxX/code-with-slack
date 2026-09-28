@@ -3,13 +3,15 @@
 import asyncio
 import contextlib
 import logging
+import os
 import signal
 import sys
 import time
+import unicodedata
 from collections.abc import Collection
 from pathlib import Path
 
-from claude_agent_sdk._internal.sessions import _canonicalize_path, _find_project_dir
+from claude_agent_sdk import project_key_for_directory
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from slack_sdk.http_retry.builtin_async_handlers import AsyncRateLimitErrorRetryHandler
 from slack_sdk.web.async_client import AsyncWebClient
@@ -39,16 +41,29 @@ logger = logging.getLogger("code_with_slack")
 DRAIN_LIMIT_SECONDS = 1740
 
 
+def _projects_dir() -> Path:
+    """Where Claude Code keeps every project's transcripts: "Claude Code stores session
+    transcripts locally in plaintext under `~/.claude/projects/`"
+    (https://code.claude.com/docs/en/data-usage, read 2026-09-28), under `CLAUDE_CONFIG_DIR`
+    when that is set (the CLI's own override, already relied on elsewhere in this project)."""
+    override = os.environ.get("CLAUDE_CONFIG_DIR")
+    home = unicodedata.normalize("NFC", override) if override else str(Path.home() / ".claude")
+    return Path(home) / "projects"
+
+
 def _alive_sessions(directory: Path) -> Collection[str]:
     """The session ids alive in `directory`, for `state.prune`: those `directory_sessions`
     shows, unioned with every transcript file actually there. `list_sessions` skips sidechain
     and metadata-only sessions (the SDK's own listing rules, `claude_agent_sdk._internal.sessions`,
     0.2.160, read 2026-09-28): a session real enough to be stored in a thread must never be
-    pruned just because it has not built up a title yet. `_canonicalize_path`/`_find_project_dir`
-    are the same private-but-pinned helpers `resume.py` already relies on for this folder."""
+    pruned just because it has not built up a title yet. `project_key_for_directory` is the
+    public function the SDK offers for its own project-directory naming (its docstring: "the same
+    ... sanitization the CLI uses for project directory names"); when its folder is not found
+    under the documented location, pruning must err on keeping, so nothing extra is added
+    (`directory_sessions`'s own result is not touched either way)."""
     alive = {info.session_id for info in directory_sessions(directory)}
-    folder = _find_project_dir(_canonicalize_path(str(directory)))
-    if folder is not None:
+    folder = _projects_dir() / project_key_for_directory(directory)
+    if folder.is_dir():
         alive |= {p.stem for p in folder.glob("*.jsonl")}
     return alive
 

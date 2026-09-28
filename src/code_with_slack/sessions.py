@@ -469,11 +469,16 @@ class ThreadSession:
             await sink.open(texts.WAITING if waiting else texts.WRITING)
             turn = Turn(prompt, sink)
             if self._closed:
-                # The session closed (most likely `ensure_connected`'s SessionGone branch, which
-                # already drained the queue) while `sink.open` was in flight: no worker will ever
-                # take this turn from the queue, so it is resolved right here instead of left
-                # waiting for one that will not come.
-                await self._fail(turn, texts.SESSION_GONE, notify=True)
+                # The session closed (an idle close or a restart, or `ensure_connected`'s
+                # SessionGone branch, which already drained the queue) while `sink.open` was in
+                # flight: no worker will ever take this turn from the queue, so it is resolved
+                # right here instead of left waiting for one that will not come. Only a
+                # SessionGone close also removes the thread's own entry (D7): that alone is what
+                # tells the two apart, since both leave `self._closed` the same.
+                gone = self._deps.state.thread(self.channel_id, self.thread_ts) is None
+                await self._fail(
+                    turn, texts.SESSION_GONE if gone else texts.SESSION_CLOSED, notify=True
+                )
                 return turn
             self._queue.put_nowait(turn)
         finally:
@@ -519,16 +524,29 @@ class ThreadSession:
                 self.done_closing.set()
                 if self.on_closed is not None:
                     self.on_closed()
-                await self.fail_queued(texts.SESSION_GONE)
                 self._idle_timer_check()  # cancels any armed timer; closed now, so none rearms
                 worker = self._worker
                 if worker is not None and worker is not asyncio.current_task():
                     # Called directly (`!status`, `!bypass`), not from this session's own
-                    # worker: an idle worker left blocked on the queue would never learn to stop
-                    # otherwise (the worker's own loop ends itself once it is the one closing).
+                    # worker: an idle worker left blocked on the queue (most likely on this very
+                    # `_connect_lock`, still held here) would never learn to stop otherwise. It
+                    # is cancelled and awaited first, and its `_taken` turn (if any) rescued only
+                    # once it is confirmed stopped: cancelling it while it still held a turn,
+                    # with nothing rescuing that turn, left that reply saying "writing" forever
+                    # (a real regression, caught by
+                    # test_a_direct_gone_call_rescues_the_worker_s_taken_turn).
+                    # When `worker` IS the current task (the common case: this branch runs inside
+                    # the worker's own call to `ensure_connected`), its own `except SessionGone`
+                    # clause up the stack already fails `self._taken` itself; failing it again
+                    # here too would double the reply's text.
                     worker.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await worker
+                    taken, self._taken = self._taken, None
+                    if taken is not None:
+                        with contextlib.suppress(Exception):
+                            await self._fail(taken, texts.SESSION_GONE, notify=True)
+                await self.fail_queued(texts.SESSION_GONE)
                 raise SessionGone from exc
             try:
                 info = await client.get_server_info() or {}
@@ -837,6 +855,12 @@ class ThreadSession:
             return
         if isinstance(message, SystemMessage) and message.subtype == "init":
             self.cli_version = message.data.get("claude_code_version")
+            # D6: recorded as soon as Claude Code reports it, not only at the turn's
+            # ResultMessage, so a still-running first turn is already this session id's
+            # `holder()` and `!resume` cannot put a second process on the same transcript.
+            init_session_id = message.data.get("session_id")
+            if isinstance(init_session_id, str):
+                self._deps.state.set_session(self.channel_id, self.thread_ts, init_session_id)
         if isinstance(message, TaskStartedMessage):
             self._tasks[message.task_id] = (message.task_type or "", message.description)
             while len(self._tasks) > TASKS_KEPT:

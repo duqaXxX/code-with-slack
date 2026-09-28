@@ -315,8 +315,9 @@ session no longer exists: Claude Code deleted it or cannot find it. Send a new m
 channel to start one.`; a reply in a thread that holds no session at all (a word's own thread, or
 one from before this change) gets `This thread is not a session: send a new message in the
 channel to start one.`, except a word, which acts as if typed at the top level. A Resume click or
-`!resume <id or name>` sent to a thread that already holds a session gets `This thread already
-holds a session: !resume from the channel opens a new thread.` A Resume click or
+`!resume <id or name>` sent to a thread that already holds a session gets
+``This thread already holds a session: `!resume` from the channel opens a new thread.`` A Resume
+click or
 `!resume <id or name>` that names a session already open in another thread of any channel gets
 `This session is already open in another thread: send your message there.` instead: one session
 never runs in two threads at once.

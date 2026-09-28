@@ -790,6 +790,24 @@ async def test_the_list_marks_a_session_held_elsewhere_with_no_button(world: Wor
     assert held_row["text"]["text"].endswith(texts.RESUME_ELSEWHERE_ROW)
 
 
+async def test_a_still_running_first_turn_already_holds_its_session_id(world: World) -> None:
+    # D6: the session id is recorded as soon as Claude Code reports it (the init message), not
+    # only at the turn's ResultMessage, so a still-running first turn is already this session
+    # id's holder and cannot be resumed a second time into another thread.
+    await world.dispatch(message("hello", ts=THREAD))
+    world.clients[0].inject(sdk_messages("tools")[:-1])  # no ResultMessage: still running
+    async with asyncio.timeout(2):
+        stored = world.state.thread(CHANNEL, THREAD)
+        while stored is None or stored.session_id is None:
+            await asyncio.sleep(0.01)
+            stored = world.state.thread(CHANNEL, THREAD)
+    held_id = stored.session_id
+    world.stored_sessions = [SDKSessionInfo(held_id, "tools", 0, 1)]
+    await world.dispatch(message(f"!resume {held_id}", ts=OTHER_THREAD))
+    assert world.state.thread(CHANNEL, OTHER_THREAD) is None
+    assert texts.RESUME_ELSEWHERE in world.ephemerals()
+
+
 async def test_resume_opens_an_independent_thread_while_another_is_busy(world: World) -> None:
     two_sessions(world)
     await world.dispatch(message("hello", ts=THREAD))  # the fake Claude Code never ends this turn
