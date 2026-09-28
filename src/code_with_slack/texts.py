@@ -48,6 +48,8 @@ WAITING = "_Waiting for the previous reply…_"
 ENDED = "_This reply ended before an answer: {reason}._"
 ENDED_SHUTDOWN = "code-with-slack stopped"
 ENDED_RESTARTING = "code-with-slack is restarting; send your message again in a moment"
+# Never shown: an idle close (D9) always finds nothing running, sent or queued to end with it.
+ENDED_IDLE = "code-with-slack closed this idle session"
 RESTARTING = "code-with-slack is restarting; send this again in a moment."
 REPLY_ABOVE = "_This reply appeared in the background update above._"
 BACKGROUND_NOTICE = "_Background task update_"

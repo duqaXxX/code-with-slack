@@ -1891,3 +1891,186 @@ async def test_bypass_whose_client_closes_under_it_says_the_session_closed(
         await session.set_bypass(True)
     stored = h.state.thread(CHANNEL, THREAD)
     assert stored is not None and stored.bypass is False
+
+
+# D9: the effort level `/effort` sets is stored per thread and passed back on the next connect;
+# a Claude Code process with nothing to do for an hour closes itself, and the next message
+# rebuilds it.
+
+
+async def test_a_result_reporting_an_effort_change_stores_it(
+    harness_for: Callable[..., Harness],
+) -> None:
+    turn = sdk_messages("usage")
+    result = turn[-1]
+    assert isinstance(result, ResultMessage)
+    effort_turn = [
+        *turn[:-1],
+        dataclasses.replace(
+            result, result="Set effort level to high (this session only): Comprehensive"
+        ),
+    ]
+    h = harness_for({"turns": [effort_turn]})
+    await asyncio.wait_for((await h.session().submit("/effort high")).done.wait(), 2)
+    assert h.state.thread(CHANNEL, THREAD).effort == "high"
+
+
+async def test_setting_effort_back_to_auto_stores_the_default(
+    harness_for: Callable[..., Harness],
+) -> None:
+    turn = sdk_messages("usage")
+    result = turn[-1]
+    assert isinstance(result, ResultMessage)
+    effort_turn = [
+        *turn[:-1],
+        dataclasses.replace(result, result="Effort level set to auto (this session only)"),
+    ]
+    h = harness_for({"turns": [effort_turn]})
+    session = h.session()  # opens the thread
+    h.state.set_effort(CHANNEL, THREAD, "high")  # a level was stored from an earlier turn
+    await asyncio.wait_for((await session.submit("/effort auto")).done.wait(), 2)
+    assert h.state.thread(CHANNEL, THREAD).effort is None
+
+
+async def test_the_client_is_launched_with_the_stored_effort(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({})
+    h.session()  # opens the thread
+    h.state.set_effort(CHANNEL, THREAD, "low")
+    await h.session().ensure_connected()
+    assert h.clients[0].options.effort == "low"
+
+
+async def test_an_idle_session_closes_itself_after_the_delay_and_posts_nothing(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("hi")).done.wait(), 2)
+    posts_before = len(h.slack.calls_to("chat.postMessage"))
+    await until(lambda: not h.clients[0].connected, limit=1)
+    assert session.closed
+    assert len(h.slack.calls_to("chat.postMessage")) == posts_before  # a silent close
+
+
+async def test_the_idle_close_does_not_fire_while_a_turn_runs(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    ask = CanUseToolCall("Bash", {"command": "ls"})
+    h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
+    session = h.session()
+    turn = await session.submit("list the files")
+    await until(lambda: bool(h.approvals._pending))
+    await asyncio.sleep(0.1)  # past the idle delay, still waiting on the owner's decision
+    assert not session.closed and h.clients[0].connected is True
+    h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, THREAD, Approve())
+    await asyncio.wait_for(turn.done.wait(), 2)
+    await until(lambda: session.closed, limit=1)  # idle again: the timer restarted
+
+
+async def test_the_idle_close_waits_for_a_background_task(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    first, notice, injected = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    assert session._running_kinds()  # the task outlived its turn
+    await asyncio.sleep(0.1)  # past the idle delay, the task is still running
+    assert not session.closed and h.clients[0].connected is True
+    h.clients[0].inject(notice + injected)
+    await until(lambda: not session._running_kinds())
+    await until(lambda: session.closed, limit=1)  # idle again once the task ends
+
+
+async def test_the_idle_close_waits_for_an_expected_report_turn(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    first, notice, injected = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    h.clients[0].inject(notice)  # a report turn is expected; not idle until it arrives
+    await asyncio.sleep(0.1)  # past the idle delay
+    assert not session.closed and h.clients[0].connected is True
+    h.clients[0].inject(injected)
+    await until(lambda: is_report(h.bodies()[-1]))
+    await until(lambda: session.closed, limit=1)
+
+
+async def test_a_message_after_a_close_gets_a_rebuilt_session_never_the_closed_one(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    session = h.session()
+    h.state.set_session(CHANNEL, THREAD, "prior")
+    h.state.set_effort(CHANNEL, THREAD, "high")
+    await session.close()
+    assert session.closed
+    rebuilt = h.manager.get(CHANNEL, THREAD)
+    assert rebuilt is not None and rebuilt is not session
+    turn = await rebuilt.submit("next")
+    await asyncio.wait_for(turn.done.wait(), 2)
+    assert h.clients[-1].options.resume == "prior"
+    assert h.clients[-1].options.effort == "high"
+
+
+async def test_the_next_message_after_an_idle_close_resumes_with_effort(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    turn = sdk_messages("usage")
+    result = turn[-1]
+    assert isinstance(result, ResultMessage)
+    effort_turn = [
+        *turn[:-1],
+        dataclasses.replace(
+            result, result="Set effort level to high (this session only): Comprehensive"
+        ),
+    ]
+    h = harness_for({"turns": [effort_turn]}, {"turns": [sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("/effort high")).done.wait(), 2)
+    await until(lambda: session.closed, limit=1)
+    stored = h.state.thread(CHANNEL, THREAD)
+    rebuilt = h.manager.get(CHANNEL, THREAD)
+    assert rebuilt is not None and rebuilt is not session
+    await asyncio.wait_for((await rebuilt.submit("next")).done.wait(), 2)
+    assert h.clients[1].options.resume == stored.session_id
+    assert h.clients[1].options.effort == "high"
+
+
+async def test_sessions_of_leaves_out_a_closed_session(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({})
+    session = h.session()
+    await session.close()
+    assert h.manager.sessions_of(CHANNEL) == []
+
+
+async def test_a_gone_session_is_left_out_of_sessions_of(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # The case Task 2 left open: a resume that finds its session gone stays a closed entry
+    # in the manager until something looks it up again; sessions_of must not show it meanwhile.
+    gone = ResultError(
+        "Claude Code returned an error result: No conversation found",
+        data={
+            "subtype": "error_during_execution",
+            "is_error": True,
+            "errors": ["No conversation found with session ID: gone"],
+        },
+    )
+    h = harness_for({"connect_error": gone})
+    session = h.session()
+    h.state.set_session(CHANNEL, THREAD, "gone")
+    turn = await session.submit("hello")
+    await asyncio.wait_for(turn.done.wait(), 2)
+    assert session.closed
+    assert h.manager.sessions_of(CHANNEL) == []
