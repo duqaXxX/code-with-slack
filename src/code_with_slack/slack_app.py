@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import logging
 import re
-import sys
 from collections.abc import AsyncIterator, Awaitable
 from dataclasses import replace
 from datetime import datetime
@@ -368,7 +367,7 @@ def build_app(
             # Retried once against a freshly looked-up session: the one this call was handed can
             # still close under it (most likely D9's idle close, though `touch()` at the lookup
             # already guards the common case) during the download above or the steps below.
-            submitted = False
+            submitted = failed = False
             try:
                 for attempt in range(2):
                     try:
@@ -395,17 +394,18 @@ def build_app(
                             # SessionGone close), so a retry would find nothing here again either.
                             raise SessionGone from None
                         session = fresh
+            except BaseException:
+                failed = True
+                raise
             finally:
                 # `submitted` alone, not a fixed set of exception types: `ensure_connected` can
                 # also raise `ResultError` (a logged-out CLI, most likely) or anything a stray
                 # bug throws, and `notice(RESTARTING)` above can itself fail; none of them may
-                # ever leave a Continue's ✋ standing forever. `error`: whether an exception is
-                # actually propagating out of this block (`sys.exc_info` inside a `finally` still
-                # sees it), the same reaction a turn that reached the queue and then failed gets;
-                # a plain return (the drain notice posted fine, nothing raised) restores a
-                # Cancel's own reaction instead.
+                # ever leave a Continue's ✋ standing forever. A failure gets the reaction a turn
+                # that reached the queue and then failed gets; a plain return (the drain notice
+                # posted fine) restores a Cancel's own reaction instead.
                 if held is not None and not submitted:
-                    await held.react_hold_abandoned(error=sys.exc_info()[0] is not None)
+                    await held.react_hold_abandoned(error=failed)
 
     async def hold_before_sending(
         channel: str, thread_ts: str, session: ThreadSession, other: ThreadSession
