@@ -209,6 +209,32 @@ async def test_a_gone_session_is_removed_and_says_so(harness_for: Callable[..., 
     assert posts[-1]["text"] == texts.REPLY_TO.format(prompt="hello")
 
 
+async def test_a_gone_session_fails_a_queued_turn_and_leaks_no_process(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # Regression: the worker used to take the next queued turn after SessionGone and start a
+    # second, unrecorded Claude Code session for it instead of refusing.
+    gone = ResultError(
+        "Claude Code returned an error result: No conversation found",
+        data={
+            "subtype": "error_during_execution",
+            "is_error": True,
+            "errors": ["No conversation found with session ID: gone"],
+        },
+    )
+    h = harness_for({"connect_error": gone})
+    session = h.session()  # opens the thread
+    h.state.set_session(CHANNEL, THREAD, "gone")
+    first = await session.submit("hello")
+    second = await session.submit("again")
+    await asyncio.wait_for(asyncio.gather(first.done.wait(), second.done.wait()), 2)
+    # Only the one failed attempt: no second client started for the queued turn.
+    assert [c.options.resume for c in h.clients] == ["gone"]
+    assert h.bodies() == [texts.SESSION_GONE, texts.SESSION_GONE]
+    await h.manager.close_all()
+    assert all(not c.connected for c in h.clients)
+
+
 async def test_a_restart_rebuilds_a_stored_thread_with_its_bypass(
     harness_for: Callable[..., Harness], tmp_path: Path
 ) -> None:
@@ -338,6 +364,21 @@ async def test_a_failed_directory_closes_with_the_prompt_as_the_notification(
     # An error the owner must act on: its notification carries the prompt.
     failure_closing = h.slack.calls_to("chat.postMessage")[-1]
     assert failure_closing["text"] == texts.REPLY_TO.format(prompt="hello")
+
+
+async def test_a_turn_ended_by_close_does_not_notify(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({})  # no scripted turn: it never answers on its own
+    session = h.session()
+    waiting = await session.submit("world")
+    await until(lambda: h.clients and h.clients[-1].queries == ["world"])
+    await session.close()
+    await asyncio.wait_for(waiting.done.wait(), 2)
+    # No urgent attention was needed here: the close ends it silently, with no new post.
+    posts = h.slack.calls_to("chat.postMessage")
+    assert len(posts) == 1  # only the placeholder the submit already opened
+    assert "Reply to:" not in posts[0]["text"]
 
 
 def test_asked_cuts_a_long_prompt_and_names_an_image_only_prompt() -> None:
@@ -1724,6 +1765,61 @@ async def test_bang_stop_ends_background_tasks_outside_a_stop_too(
     assert await session.stop()
     assert h.clients[0].stopped_tasks == [task_id]
     assert h.clients[0].interrupts == 0  # no turn was running
+
+
+async def test_a_close_while_a_word_starts_the_client_leaves_no_process(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # `!help` or `!status` starts the client in its own task, outside the prompt queue; the
+    # trigger for a concurrent close is now close_all at shutdown (and, later, an idle close).
+    gate = asyncio.Event()
+    h = harness_for({"connect_gate": gate})
+    session = h.session()
+    word = asyncio.create_task(session.ensure_connected())
+    await until(lambda: len(h.clients) == 1)
+    closing = asyncio.create_task(session.close())
+    await asyncio.sleep(0.05)
+    assert not closing.done()  # the close waits for the connect in progress
+    gate.set()
+    await asyncio.wait_for(closing, 2)
+    await asyncio.wait_for(word, 2)
+    assert len(h.clients) == 1 and h.clients[0].connected is False
+
+
+async def test_bypass_asked_while_the_session_closes_is_not_stored(
+    harness_for: Callable[..., Harness],
+) -> None:
+    gate = asyncio.Event()
+    h = harness_for({"connect_gate": gate})
+    session = h.session()
+    word = asyncio.create_task(session.set_bypass(True))
+    await until(lambda: len(h.clients) == 1)
+    closing = asyncio.create_task(session.close())
+    await asyncio.sleep(0.05)
+    gate.set()
+    await asyncio.wait_for(closing, 2)
+    with pytest.raises(sessions.SessionClosed):
+        await asyncio.wait_for(word, 2)
+    stored = h.state.thread(CHANNEL, THREAD)
+    assert stored is not None and stored.bypass is False
+
+
+async def test_the_status_of_a_session_closed_meanwhile_is_not_given(
+    harness_for: Callable[..., Harness],
+) -> None:
+    gate = asyncio.Event()
+    h = harness_for({"connect_gate": gate})
+    session = h.session()
+    word = asyncio.create_task(session.status())
+    await until(lambda: len(h.clients) == 1)
+    closing = asyncio.create_task(session.close())
+    await asyncio.sleep(0.05)
+    gate.set()
+    await asyncio.wait_for(closing, 2)
+    with pytest.raises(sessions.SessionClosed):  # connected before the close, read after it
+        await asyncio.wait_for(word, 2)
+    with pytest.raises(sessions.SessionClosed):
+        await session.status()
 
 
 async def test_a_closed_session_starts_no_client(harness_for: Callable[..., Harness]) -> None:

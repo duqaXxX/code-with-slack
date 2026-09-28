@@ -810,7 +810,7 @@ async def test_reply_to_on_a_reply_not_latest_at_finish_still_posts_and_notifies
     # No footer to show: a bare line stands in for it, so the notification still posts.
     closing = slack.calls_to("chat.postMessage")[-1]
     assert closing["text"] == "Reply to: the question?"
-    bare = sinks.context_block("​")
+    bare = sinks.context_block(sinks.ZERO_WIDTH_SPACE)
     assert slack.message_blocks()[-1] == [bare]
     await sink.set_running("⏳ 1 shell")  # still not latest: no effect
     assert slack.message_blocks()[-1] == [bare]
@@ -843,4 +843,4 @@ async def test_reply_to_with_special_characters_is_escaped(slack: FakeSlack) -> 
     escaped_prompt = mrkdwn_escape("<a> & <b>")
     assert closing["text"] == texts.REPLY_TO.format(prompt=escaped_prompt)
     # With no footer, a bare line stands in for it: the question shows only in the notification.
-    assert slack.message_blocks()[-1] == [sinks.context_block("​")]
+    assert slack.message_blocks()[-1] == [sinks.context_block(sinks.ZERO_WIDTH_SPACE)]

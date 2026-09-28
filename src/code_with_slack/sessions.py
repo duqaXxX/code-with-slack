@@ -123,7 +123,8 @@ class DirectoryUnavailable(Exception):
 
 
 class SessionClosed(Exception):
-    """A `!bind` or a Resume closed the session while a daemon word was using it."""
+    """The session closed (the daemon stopping, or an idle close) while a daemon word, such as
+    `!status` or `!bypass`, was using it."""
 
     def __init__(self) -> None:
         super().__init__(texts.SESSION_CLOSED)
@@ -354,7 +355,8 @@ class ThreadSession:
     @property
     def idle(self) -> bool:
         """Nothing running, sent, taken or queued, and no background task still working: the
-        session can be swapped without a loss (closing it ends its Claude Code process)."""
+        session can be closed without a loss (closing it ends its Claude Code process). `bind`
+        (D5) waits for every thread of a channel to be idle before it stores a new folder."""
         return (
             not self.busy
             and not self._running_counts()
@@ -403,11 +405,15 @@ class ThreadSession:
                 if session_id is None:
                     raise
                 # The stored session is gone (its transcript was deleted): the thread cannot
-                # continue (D7); its entry is dropped, and a new message starts a new one.
+                # continue (D7). Its entry is dropped and the session ends itself here, so no
+                # later turn (already queued, or the next one taken by the worker) starts a
+                # second, unrecorded session in its place: it fails the same way instead.
                 logger.warning(
                     "could not resume the stored session in %s/%s", self.channel_id, self.thread_ts
                 )
                 self._deps.state.remove_thread(self.channel_id, self.thread_ts)
+                self._closed = True
+                await self.fail_queued(texts.SESSION_GONE)
                 raise SessionGone from exc
             try:
                 info = await client.get_server_info() or {}
@@ -441,13 +447,14 @@ class ThreadSession:
             if self._closed:  # the close disconnected the client under the call
                 raise SessionClosed from None
             raise
-        # After a !bind the stored switch belongs to the new folder: never turn it on there.
+        # The session closed while the mode was being set: the thread this would write to may
+        # already be gone, so the switch is never recorded after the fact.
         if self._closed:
             raise SessionClosed
         self._deps.state.set_bypass(self.channel_id, self.thread_ts, on)
 
     async def announce_restart(self) -> None:
-        """Say in the channel that bypass outlives the restart, when it is on."""
+        """Say in the thread that bypass outlives the restart, when it is on."""
         if self.bypass:
             await self._post(texts.BYPASS_RESTARTING)
 
@@ -460,7 +467,7 @@ class ThreadSession:
         await self._post(texts.RESTART_WAITS.format(counts=kinds))
 
     async def stop(self) -> bool:
-        """Interrupt the running turn, deny its pending approvals and stop the channel's
+        """Interrupt the running turn, deny its pending approvals and stop this thread's
         background tasks; queued turns stay queued."""
         if self._client is None:
             return False
@@ -492,12 +499,17 @@ class ThreadSession:
         """
         data: FooterData | None = None
         unavailable: list[str] = []
+        gone = False
         try:
             await self.ensure_connected()
             self._refresh_usage()
             data = await self._footer_data(self.session_tokens)
-        except (DirectoryUnavailable, SessionGone) as exc:
+        except DirectoryUnavailable as exc:
             unavailable = [exc.message]
+        except SessionGone as exc:
+            # This call is the one that found it gone: `ensure_connected` already closed the
+            # session over it, which is not the race the check below guards against.
+            unavailable, gone = [exc.message], True
         except Exception as exc:  # the status still answers, with what a prompt would get
             logger.warning(
                 "could not read the footer's values for the status in %s/%s: %s",
@@ -506,13 +518,13 @@ class ThreadSession:
                 describe(exc),
             )
             unavailable = [texts.ERROR_REPLY.format(error=type(exc).__name__)]
-        # A !bind or a Resume meanwhile: this would describe a session the channel no longer has.
-        if self._closed:
+        # The daemon closed the session (shutdown, an idle close) while this call was reading it.
+        if self._closed and not gone:
             raise SessionClosed
         fields = format_status_fields(data, datetime.now().astimezone()) if data else []
         here = self.working_directory
         if data and here and here != self.directory:
-            # The branch and the changes below describe this folder, not the channel's.
+            # The branch and the changes below describe this folder, not the thread's own.
             fields.insert(0, texts.STATUS_WORKING.format(directory=here))
         if running := self._running_kinds():
             fields.append(texts.STATUS_BACKGROUND.format(counts=running))
@@ -609,10 +621,10 @@ class ThreadSession:
                 prompt = turn.prompt
                 await client.query(prompt if isinstance(prompt, str) else user_message(prompt))
                 await turn.done.wait()
-            except (DirectoryUnavailable, SessionGone) as exc:
+            except (DirectoryUnavailable, SessionGone, SessionClosed) as exc:
                 self._taken = None
                 await self._fail(turn, exc.message, notify=True)
-            except Exception as exc:  # a failed turn must not stop the channel's queue
+            except Exception as exc:  # a failed turn must not stop this thread's queue
                 self._taken = None
                 logger.error(
                     "turn failed in %s/%s: %s", self.channel_id, self.thread_ts, type(exc).__name__
@@ -624,7 +636,7 @@ class ThreadSession:
                 )
 
     async def _read(self, client: ClaudeClient) -> None:
-        """Follow the client's stream until it ends; whatever ends it, release the channel."""
+        """Follow the client's stream until it ends; whatever ends it, release the thread."""
         reason = "the Claude Code process exited"
         try:
             async for message in client.receive_messages():
@@ -730,7 +742,7 @@ class ThreadSession:
         await active.renderer.feed(message)
         if isinstance(message, ResultMessage):
             # The turn stays active until its reply is closed: the footer is read first, and a
-            # drain that saw the channel idle meanwhile would exit before the reply's final
+            # drain that saw this thread idle meanwhile would exit before the reply's final
             # write, leaving it on `Claude is writing…` (#25).
             try:
                 await self._finish(active, message)
@@ -875,7 +887,7 @@ class ThreadSession:
             await self._latest.set_running(self._running_counts())
 
     async def _sink(self) -> ReplySink:
-        """A new reply, which becomes the channel's latest and takes over the running list."""
+        """A new reply, which becomes this thread's latest and takes over the running list."""
         sink = ReplySink(self._deps.slack, channel=self.channel_id, thread_ts=self.thread_ts)
         previous, self._latest = self._latest, sink
         await sink.set_running(self._running_counts())
@@ -1114,11 +1126,12 @@ class SessionManager:
 
     def get(self, channel_id: str, thread_ts: str) -> ThreadSession | None:
         """The live session of a thread, or one rebuilt from its stored entry (after a restart
-        or an idle close); None when the thread is not a session."""
+        or an idle close); None when the thread is not a session. A session whose entry is gone
+        (`SessionGone`, a prune) is left exactly where it is: it may still hold a live client,
+        and the only safe way to end one is `close()` (`close_all` at shutdown, an idle close),
+        never a bare pop out of `_sessions`."""
         thread = self._deps.state.thread(channel_id, thread_ts)
         if thread is None:
-            # Nothing else can still hold this key: it never got a client (see `SessionGone`).
-            self._sessions.pop((channel_id, thread_ts), None)
             return None
         return self._session(channel_id, thread_ts, thread.directory)
 
