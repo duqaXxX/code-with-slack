@@ -1418,6 +1418,27 @@ async def test_a_reply_in_an_old_folder_thread_gets_the_notice_once(world: World
     await world.sessions.close_all()
 
 
+async def test_a_failed_old_folder_notice_still_submits_the_prompt(world: World) -> None:
+    await _idle_message(world, "hi", ts=THREAD)  # opens a session in `app`
+    (world.root / "docs").mkdir()
+    await world.dispatch(message("!bind docs"))
+    old = (world.root / "app").resolve()
+    new = (world.root / "docs").resolve()
+    expected = texts.OLD_THREAD_FOLDER.format(old=old, new=new)
+    world.slack.responses["chat.postMessage"] = [
+        RuntimeError("network down"),
+        {"ok": True, "ts": "1790000000.000099"},
+    ]
+    await world.dispatch(reply("go on", THREAD))
+    assert world.clients[-1].queries[-1] == "go on"  # never dropped, despite the failed notice
+    world.slack.responses["chat.postMessage"] = {"ok": True}
+    await world.dispatch(reply("again", THREAD))
+    # Not marked notified on the failed attempt: the next reply tries the notice again (and this
+    # one succeeds), so its text was sent twice in total.
+    assert said(world).count(expected) == 2
+    await world.sessions.close_all()
+
+
 async def test_a_thread_in_the_current_folder_never_gets_the_notice(world: World) -> None:
     await world.dispatch(message("hi", ts=THREAD))  # opens a session in `app`, still current
     await world.dispatch(reply("go on", THREAD))

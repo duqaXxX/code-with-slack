@@ -297,20 +297,29 @@ def build_app(
 
     async def old_folder_notice(channel: str, thread_ts: str, session: ThreadSession) -> None:
         """D5: a thread whose folder differs from the channel's current one, told once per
-        process (a thread told before this process started, or opened during it, needs no more)."""
+        process (a thread told before this process started, or opened during it, needs no more).
+        A failed post must not drop the prompt that follows it: logged (ids only) and left
+        unmarked, so the next message in this thread tries the notice again rather than the
+        owner losing it for the rest of the process."""
         key = (channel, thread_ts)
         record = state.channel(channel)
         if key in old_folder_notified or record is None or session.directory == record.directory:
             return
+        try:
+            await notice(
+                channel,
+                thread_ts,
+                texts.OLD_THREAD_FOLDER.format(
+                    old=mrkdwn_escape(str(session.directory)),
+                    new=mrkdwn_escape(str(record.directory)),
+                ),
+            )
+        except Exception as exc:
+            logger.warning(
+                "could not post the old-folder notice in %s/%s: %s", channel, thread_ts, describe(exc)
+            )
+            return
         old_folder_notified.add(key)
-        await notice(
-            channel,
-            thread_ts,
-            texts.OLD_THREAD_FOLDER.format(
-                old=mrkdwn_escape(str(session.directory)),
-                new=mrkdwn_escape(str(record.directory)),
-            ),
-        )
 
     async def submit_to_session(
         channel: str,
