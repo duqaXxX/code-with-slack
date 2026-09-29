@@ -4,22 +4,22 @@
     "questions": [
       {
         "question": "Which colour do you prefer?",
-        "header": "Colour preference",
+        "header": "Color Preference",
         "options": [
           {
             "label": "Red",
-            "description": "The colour red"
+            "description": "The color red"
           },
           {
             "label": "Blue",
-            "description": "The colour blue"
+            "description": "The color blue"
           }
         ],
         "multiSelect": false
       },
       {
         "question": "Do you also like green?",
-        "header": "Green preference",
+        "header": "Green Preference",
         "options": [
           {
             "label": "Yes",
@@ -27,7 +27,7 @@
           },
           {
             "label": "No",
-            "description": "I do not like green"
+            "description": "I don't like green"
           }
         ],
         "multiSelect": true

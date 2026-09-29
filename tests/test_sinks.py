@@ -844,7 +844,7 @@ async def test_a_failed_call_shows_its_error_even_if_it_carries_a_preview(slack:
 
 
 async def test_an_edit_and_a_write_show_as_the_terminal_shows_them(slack: FakeSlack) -> None:
-    # edit-write.jsonl (CLI 2.1.283): Write a new file, Read, a failed Edit, an Edit, a Write over
+    # edit-write.jsonl (CLI 2.1.285): Write a new file, Read, a failed Edit, an Edit, a Write over
     # the file. The terminal showed each Edit and Write whole, with its sentence and its lines.
     sink = reply(slack)
     renderer = TurnRenderer(sink, "/home/dev/project")
@@ -902,7 +902,7 @@ async def test_a_stopped_message_shows_its_previews_as_blocks(slack: FakeSlack) 
 
 
 async def test_a_subagent_card_counts_its_calls_from_a_recorded_turn(slack: FakeSlack) -> None:
-    # subagent-foreground.jsonl (CLI 2.1.283): the agent's task ends before the Agent call's result.
+    # subagent-foreground.jsonl (CLI 2.1.285): the agent's task ends before the Agent call's result.
     sink = reply(slack)
     renderer = TurnRenderer(sink)
     for message in sdk_messages("subagent-foreground"):

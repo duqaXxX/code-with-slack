@@ -62,6 +62,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `claude-agent-sdk` 0.2.162, which bundles Claude Code 2.1.285 (was 0.2.160 with 2.1.283); its
+  Python source differs from 0.2.160 only in the version strings. The SDK streams in
+  `tests/fixtures/sdk/` are recorded again on 2.1.285. The background stream's report turn now
+  runs to several sentences, so the debounce test that reads it has enough deltas.
 - A reply is a native Slack stream (`chat.startStream`, `chat.appendStream`, `chat.stopStream`)
   instead of a message rewritten with `chat.update`. It starts with Claude's first content, with
   no `Claude is writing…` or `Waiting for the previous reply…` placeholder, so `texts.WRITING`,

@@ -913,7 +913,7 @@ async def test_a_suppressed_notification_s_closing_still_posts_eventually(
     h = harness_for({"turns": [first]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    a = session._task_replies["bc41naslr"]
+    a = session._task_replies["ba20aqkaa"]
     h.clients[0].inject([m for m in notice if not isinstance(m, TaskNotificationMessage)])
     await until(lambda: a.closed_out, limit=1.0)
 
@@ -932,7 +932,7 @@ async def test_a_report_whose_target_already_closed_out_gets_its_own_reply(
     h = harness_for({"turns": [first]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    a = session._task_replies["bc41naslr"]
+    a = session._task_replies["ba20aqkaa"]
     h.clients[0].inject(ended)
     # closed out already, on the late-notification path
     await until(lambda: a.closed_out, limit=1.0)
@@ -1002,8 +1002,8 @@ def renamed_background() -> tuple[list[Any], list[Any], list[Any]]:
     """The same recorded background run as `split_background`, with its task and tool ids
     changed so a second one can run alongside the first with no id collision (D1)."""
     raw = (FIXTURES / "sdk" / "background.jsonl").read_text()
-    raw = raw.replace("bc41naslr", "bc41other").replace(
-        "toolu_01Uh7Nne3XR1T8n5tWVbhLh4", "toolu_01OTHERxxxxxxxxxxxxxxxxx"
+    raw = raw.replace("ba20aqkaa", "bc41other").replace(
+        "toolu_01C9wrBScqGujc88Q6tBbzZa", "toolu_01OTHERxxxxxxxxxxxxxxxxx"
     )
     messages = [m for m in (parse_message(json.loads(line)) for line in raw.splitlines()) if m]
     first, later = split_turns(messages)[:2]
@@ -1100,7 +1100,7 @@ async def test_two_prompts_tasks_ending_together_each_reply_ends(
     session = h.session()
     await asyncio.wait_for((await session.submit("start A")).done.wait(), 2)
     await asyncio.wait_for((await session.submit("start B")).done.wait(), 2)
-    a = session._task_replies["bc41naslr"]
+    a = session._task_replies["ba20aqkaa"]
     b = session._task_replies["bc41other"]
     assert a is not b
     # Both tasks end while idle, then Claude Code's one report turn, which renders into A's
@@ -1783,7 +1783,7 @@ async def test_status_lists_the_footer_s_values_of_the_latest_reply(
     await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
     await until(lambda: h.usage_fetches == 1)  # the turn's own refresh of the limits
     text = await session.status()
-    assert text.startswith("Directory:") and "Claude Code: `2.1.283`" in text
+    assert text.startswith("Directory:") and "Claude Code: `2.1.285`" in text
     tokens = re.search(r"([\d.]+[kM]?) \*tok\*", statuses(h)[-1])
     assert tokens is not None
     lines = text.splitlines()
@@ -1898,7 +1898,7 @@ async def test_status_follows_a_reply_that_reports_no_tokens(
 async def test_a_skill_typed_as_a_command_shows_its_task_while_it_runs(
     harness_for: Callable[..., Harness],
 ) -> None:
-    # skill-fork-command.jsonl (CLI 2.1.283): the forked skill's task starts and ends before the
+    # skill-fork-command.jsonl (CLI 2.1.285): the forked skill's task starts and ends before the
     # turn's first message, and none of its calls is streamed.
     messages = sdk_messages("skill-fork-command")
     started = next(i for i, m in enumerate(messages) if isinstance(m, TaskStartedMessage))
