@@ -1,15 +1,21 @@
-"""Repair what a crashed daemon left open (issue #19): a reply still saying Claude is writing,
-an approval, question or D8 hold request still carrying buttons, and the ⏳/✋ reaction a turn
-mid-flight left on its root. Runs once on start, right after `auth.test` and before opening the
-Socket Mode connection (the web client works without it) and before `state.prune` (a pruned
-thread's leftovers must still be repaired); a graceful stop clears these same fields itself, so a
-second start finds nothing to do.
+"""Repair what a crashed daemon left open (issue #19): a reply whose stream never stopped or
+whose cards still run, an approval, question or D8 hold request still carrying buttons, and the
+⏳/✋ reaction a turn mid-flight left on its root. Runs once on start, right after `auth.test` and
+before opening the Socket Mode connection (the web client works without it) and before
+`state.prune` (a pruned thread's leftovers must still be repaired); a graceful stop clears these
+same fields itself, so a second start finds nothing to do.
+
+A reply's message is stopped first (`chat.stopStream`; Slack ends a stream itself 5 minutes after
+it started, and answers `message_not_in_streaming_state` to a stop then), which is the one
+notification the message owes; the edit that follows says it stopped and never notifies, and
+nothing is posted.
 
 `conversations.replies` (docs.slack.dev/reference/methods/conversations.replies, read 2026-09-28,
 confirmed against a real `conversations.replies` response recorded from a real workspace on
-2026-09-28, scrubbed and kept as `tests/fixtures/slack/api-conversations-replies-by-ts.json`):
-`ts` set to the reply's own ts, with `limit=1`, returns only that one message (an `oldest`/
-`latest`/`inclusive` range built around the same ts instead returned the thread's root too).
+2026-09-28, scrubbed and kept as `tests/fixtures/slack/api-conversations-replies-by-ts.json`, and
+of a stopped stream on 2026-09-29, `api-conversations-replies-stream.json`): `ts` set to the
+reply's own ts, with `limit=1`, returns only that one message (an `oldest`/`latest`/`inclusive`
+range built around the same ts instead returned the thread's root too).
 """
 
 import logging
@@ -20,8 +26,9 @@ from slack_sdk.web.async_client import AsyncWebClient
 from code_with_slack import texts
 from code_with_slack.render.sinks import (
     BLOCKS_LIMIT,
-    STATUS_BLOCK_ID,
+    NOT_STREAMING,
     UpdateLimiter,
+    context_block,
     delete_request,
     describe,
 )
@@ -30,11 +37,9 @@ from code_with_slack.state import StateStore, ThreadState
 
 logger = logging.getLogger(__name__)
 
-# What a shutdown appends to a reply cut short (`ThreadSession.close`'s own `line`, texts.ENDED
-# with its default reason): reused verbatim, so a repaired reply reads exactly as one closed by
-# a graceful stop would.
-_STOPPED_LINE = texts.ENDED.format(reason=texts.ENDED_SHUTDOWN)
-_STOPPED_BLOCK = {"type": "markdown", "text": _STOPPED_LINE}
+_STOPPED_BLOCK = context_block(texts.STOPPED_BEFORE_ANSWER)
+# What a card left running becomes: it never ended, and will not.
+_RUNNING_CARD = ("pending", "in_progress")
 
 
 async def repair_crash(slack: AsyncWebClient, state: StateStore, limiter: UpdateLimiter) -> None:
@@ -86,14 +91,23 @@ def _safe(write: Callable[..., None], *args: object) -> None:
 async def _repair_reply(
     slack: AsyncWebClient, limiter: UpdateLimiter, channel_id: str, thread_ts: str, message_ts: str
 ) -> None:
-    """Rewrite the reply's last message: its body blocks, minus the daemon's own transient status
-    line (identified by `STATUS_BLOCK_ID`, the fixed block_id `ReplySink` gives it: a block posted
-    with no id of its own comes back from Slack with one Slack assigned, so this is the only shape
-    that survives a round trip), plus the line a shutdown writes today. Kept within
-    `BLOCKS_LIMIT` (Slack's own 50-block cap, with the sink's own margin): the status line is
-    dropped first, and if the body is still at the limit the stopped line replaces its last block
-    rather than push the message over it. A failed read or a message already gone is logged and
-    left alone: never replaced with a shorter form that would lose its content."""
+    """Stop the reply's message, then rewrite it: its blocks as Slack keeps them, every card left
+    running closed as an error (a stopped message would show it so anyway, until it is updated:
+    measured 2026-09-28), plus the line that says it stopped. Kept within `BLOCKS_LIMIT` (Slack's
+    own 50-block cap, with the sink's own margin): if the body is already at the limit the
+    stopped line replaces its last block rather than push the message over it. A failed read or
+    a message already gone is logged and left alone: never replaced with a shorter form that
+    would lose its content."""
+    try:
+        await slack.chat_stopStream(channel=channel_id, ts=message_ts)
+    except Exception as exc:
+        if describe(exc) != NOT_STREAMING:  # the stream is over already: nothing to stop
+            logger.warning(
+                "could not stop a crashed reply's stream in %s/%s: %s",
+                channel_id,
+                thread_ts,
+                describe(exc),
+            )
     try:
         reply = await slack.conversations_replies(channel=channel_id, ts=message_ts, limit=1)
     except Exception as exc:
@@ -109,9 +123,12 @@ async def _repair_reply(
     if message is None:
         logger.info("a crashed reply's message is gone in %s/%s", channel_id, thread_ts)
         return
-    blocks = list(message.get("blocks") or [])
-    if blocks and blocks[-1].get("block_id") == STATUS_BLOCK_ID:
-        blocks = blocks[:-1]
+    blocks = [
+        {**block, "status": "error"}
+        if block.get("type") == "task_card" and block.get("status") in _RUNNING_CARD
+        else block
+        for block in message.get("blocks") or []
+    ]
     if len(blocks) >= BLOCKS_LIMIT:
         blocks[-1] = _STOPPED_BLOCK
     else:
@@ -119,7 +136,7 @@ async def _repair_reply(
     try:
         await limiter.acquire()
         await slack.chat_update(
-            channel=channel_id, ts=message_ts, text=_STOPPED_LINE, blocks=blocks
+            channel=channel_id, ts=message_ts, text=texts.STOPPED_BEFORE_ANSWER, blocks=blocks
         )
     except Exception as exc:
         logger.warning(

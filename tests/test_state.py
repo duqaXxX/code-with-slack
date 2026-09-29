@@ -495,6 +495,21 @@ def test_clear_repair_fields_clears_all_three_and_is_a_no_op_after(tmp_path: Pat
     store.clear_repair("unknown-channel", THREAD_TS)  # unknown thread: a no-op too
 
 
+def test_clear_repair_keeps_what_an_unlanded_answer_still_needs(tmp_path: Path) -> None:
+    # An answer that never reached Slack leaves its open stream and the root's status for the
+    # next start's repair; the requests, which a close deletes itself, are cleared.
+    path = tmp_path / "state.json"
+    store = StateStore(path)
+    store.bind(CHANNEL, tmp_path / "project")
+    store.open_thread(CHANNEL, THREAD_TS)
+    store.replace_open_reply(CHANNEL, THREAD_TS, None, "ts-1")
+    store.add_request(CHANNEL, THREAD_TS, "ts-2")
+    store.set_status_pending(CHANNEL, THREAD_TS, "x")
+    store.clear_repair(CHANNEL, THREAD_TS, keep_open=True)
+    kept = StateStore(path).thread(CHANNEL, THREAD_TS)
+    assert kept == ThreadState(tmp_path / "project", open_replies=("ts-1",), status="x")
+
+
 def test_prune_keeps_every_thread_of_a_folder_it_cannot_decide(tmp_path: Path) -> None:
     # `alive` returns None when it cannot tell which sessions a folder holds: pruning errs on
     # keeping, so none of that folder's threads is removed.

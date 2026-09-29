@@ -204,16 +204,22 @@ class StateStore:
             if thread.open_replies or thread.requests or thread.status is not None
         ]
 
-    def clear_repair(self, channel_id: str, thread_ts: str) -> None:
-        """Clear a thread's three crash-repair fields together, once it has been repaired (or
-        repair failed for good and was logged); a no-op if already clear or the thread is gone."""
+    def clear_repair(self, channel_id: str, thread_ts: str, *, keep_open: bool = False) -> None:
+        """Clear a thread's crash-repair fields together, once it has been repaired (or repair
+        failed for good and was logged); a no-op if already clear or the thread is gone. With
+        `keep_open` the open replies and the root's status stay: an answer never reached Slack,
+        and the next start's repair still has to close it and say so."""
         current = self.thread(channel_id, thread_ts)
         if current is None:
             return
-        if not current.open_replies and not current.requests and current.status is None:
+        replies = current.open_replies if keep_open else ()
+        status = current.status if keep_open else None
+        if not current.requests and current.open_replies == replies and current.status == status:
             return
         self._set_thread(
-            channel_id, thread_ts, replace(current, open_replies=(), requests=(), status=None)
+            channel_id,
+            thread_ts,
+            replace(current, open_replies=replies, requests=(), status=status),
         )
 
     def remove_thread(self, channel_id: str, thread_ts: str) -> None:

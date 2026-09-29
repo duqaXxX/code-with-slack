@@ -9,7 +9,7 @@ shape the SDK would not produce. If a SDK release moves the parser, this import 
 import asyncio
 import json
 from collections.abc import AsyncIterable, AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -189,14 +189,58 @@ class FakeClaudeClient:
         return self._context_usage
 
 
+@dataclass
+class FakeMessage:
+    """One message of the fake workspace, as Slack keeps it: a post, or a stream. A stream takes
+    `chunks` until it is stopped (by `chat.stopStream`, or by Slack after its lifetime:
+    `FakeSlack.expire`); once stopped it takes `chat.update`, which replaces what it shows."""
+
+    ts: str
+    text: str = ""
+    blocks: list[dict[str, Any]] = field(default_factory=list)
+    streaming: bool = False
+    chunks: list[dict[str, Any]] = field(default_factory=list)
+    updated: bool = False  # a chat.update replaced the stream's own content
+    deleted: bool = False
+
+
+def card_of(block_or_chunk: dict[str, Any]) -> dict[str, Any]:
+    """A task card as one plain dict, whether it came as a `task_update` chunk (strings) or a
+    `task_card` block (rich text, as Slack reads it back)."""
+
+    def plain(value: Any) -> str | None:
+        if isinstance(value, dict):
+            return "".join(str(e.get("text", "")) for s in value["elements"] for e in s["elements"])
+        return None if value is None else str(value)
+
+    card = {
+        "id": block_or_chunk.get("id", block_or_chunk.get("task_id")),
+        "title": block_or_chunk["title"],
+        "status": block_or_chunk["status"],
+    }
+    for key in ("details", "output"):
+        if (value := plain(block_or_chunk.get(key))) is not None:
+            card[key] = value
+    return card
+
+
 class FakeSlack(AsyncWebClient):
     """The real AsyncWebClient, with the network replaced: every method builds its real arguments
-    and ends in api_call, which records them and answers from `responses` or the recordings."""
+    and ends in api_call, which records them and answers from `responses` or the recordings.
+
+    Streams behave as the recordings measured (2026-09-28 and 2026-09-29): an open stream refuses
+    `chat.update` (`streaming_state_conflict`) and `chat.delete` (`cant_delete_message`); a
+    stream that is not open refuses `chat.appendStream` and `chat.stopStream`
+    (`message_not_in_streaming_state`)."""
 
     def __init__(self) -> None:
         super().__init__(token="xox" + "b-fake")
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.posted_ts: list[str] = []  # the ts of every chat.postMessage, in order
+        self.stream_ts: list[str] = []  # the ts of every chat.startStream, in order
+        self.created_ts: list[str] = []  # both, in the order the messages were created
+        self.messages: dict[str, FakeMessage] = {}
+        self.stream_ends = 0  # streams that stopped, by the daemon's stop or by `expire`
         # Every call waits this long before answering, as a slow Slack API round trip would.
         self.delay = 0.0
         # A response may be an exception: the call raises it, as a network failure would.
@@ -208,6 +252,59 @@ class FakeSlack(AsyncWebClient):
             "chat.startStream": slack_payload("api-chat-startStream"),
             "chat.getPermalink": slack_payload("api-chat-getPermalink"),
         }
+
+    def _new_ts(self) -> str:
+        return f"1790000000.{len(self.created_ts) + 1:06d}"
+
+    def expire(self, ts: str) -> None:
+        """Slack closes a stream that lived 5 minutes and never stopped (measured)."""
+        self.messages[ts].streaming = False
+        self.stream_ends += 1
+
+    def _stream_state(self, method: str, args: dict[str, Any]) -> dict[str, Any] | None:
+        """Slack's answer when the stream's state refuses `method`, or None when it allows it."""
+        message = self.messages.get(str(args.get("ts")))
+        if message is None:
+            return None
+        if method in ("chat.appendStream", "chat.stopStream") and not message.streaming:
+            return {"ok": False, "error": "message_not_in_streaming_state"}
+        if method == "chat.update" and message.streaming:
+            return {"ok": False, "error": "streaming_state_conflict"}
+        if method == "chat.delete" and message.streaming:
+            return {"ok": False, "error": "cant_delete_message"}
+        return None
+
+    def _record(self, method: str, args: dict[str, Any], answer: dict[str, Any]) -> None:
+        """Keep what each message shows, as the recordings read back."""
+        if method in ("chat.postMessage", "chat.startStream"):
+            ts = str(answer["ts"])
+            self.created_ts.append(ts)
+            message = self.messages[ts] = FakeMessage(ts)
+            if method == "chat.postMessage":
+                self.posted_ts.append(ts)
+                message.text = str(args.get("text", ""))
+                message.blocks = list(args.get("blocks") or [])
+            else:
+                self.stream_ts.append(ts)
+                message.streaming = True
+                message.chunks = list(args.get("chunks") or [])
+            return
+        message = self.messages.get(str(args.get("ts")))
+        if message is None:
+            return
+        if method == "chat.appendStream":
+            message.chunks += list(args.get("chunks") or [])
+        elif method == "chat.stopStream":
+            message.chunks += list(args.get("chunks") or [])
+            message.streaming = False
+            message.blocks = list(args.get("blocks") or [])
+            self.stream_ends += 1
+        elif method == "chat.update":
+            message.updated = True
+            message.text = str(args.get("text", ""))
+            message.blocks = list(args.get("blocks") or [])
+        elif method == "chat.delete":
+            message.deleted = True
 
     async def api_call(  # type: ignore[override]
         self,
@@ -227,10 +324,15 @@ class FakeSlack(AsyncWebClient):
             answer = answer.pop(0) if len(answer) > 1 else answer[0]
         if isinstance(answer, BaseException):
             raise answer
-        if api_method == "chat.postMessage":
-            if answer is self.responses.get(api_method):  # the default: a new ts for each message
-                answer = {**answer, "ts": f"1790000000.{len(self.posted_ts) + 1:06d}"}
-            self.posted_ts.append(str(answer["ts"]))
+        if api_method in ("chat.postMessage", "chat.startStream") and answer is self.responses.get(
+            api_method
+        ):  # the default: a new ts for each message
+            answer = {**answer, "ts": self._new_ts()}
+        refused = self._stream_state(api_method, args)
+        if refused is not None:
+            answer = refused
+        if answer.get("ok", True) is not False:
+            self._record(api_method, args, answer)
         return AsyncSlackResponse(
             client=self,
             http_verb="POST",
@@ -241,46 +343,49 @@ class FakeSlack(AsyncWebClient):
             status_code=200,
         ).validate()
 
+    def _shown(self, ts: str) -> tuple[str, list[dict[str, Any]]]:
+        """What a message shows now: its body text and its cards. A stream shows what its chunks
+        say until a `chat.update` replaces it with the blocks that update carried."""
+        message = self.messages[ts]
+        if message.updated or not message.chunks:
+            text = "\n\n".join(b["text"] for b in message.blocks if b.get("type") == "markdown")
+            cards = [card_of(b) for b in message.blocks if b.get("type") == "task_card"]
+            return text, cards
+        text = "".join(c["text"] for c in message.chunks if c["type"] == "markdown_text")
+        cards: dict[str, dict[str, Any]] = {}
+        for chunk in message.chunks:
+            if chunk["type"] == "task_update":
+                cards[chunk["id"]] = card_of(chunk)
+        return text.strip(), list(cards.values())
+
     def message_texts(self) -> list[str]:
-        """The body each posted message shows last (Claude's text and tool lines, as paragraphs),
-        in the order the messages were posted."""
-        posted = iter(self.posted_ts)
-        order: list[str] = []
-        shown: dict[str, str] = {}
-        for method, args in self.calls:
-            if method == "chat.postMessage":
-                ts = next(posted)
-                order.append(ts)
-            elif method == "chat.update":
-                ts = args["ts"]
-            else:
-                continue
-            body = [
-                b["text"] if b.get("type") == "markdown" else b["elements"][0]["text"]
-                for b in args.get("blocks") or []
-                if b.get("type") == "markdown" or str(b.get("block_id", "")).startswith("tools-")
-            ]
-            shown[ts] = "\n\n".join(body) if body else shown.get(ts, "")
-        return [shown[ts] for ts in order]
+        """The text each message shows last (Claude's words, as paragraphs), in the order the
+        messages were created, posts and streams alike."""
+        return [self._shown(ts)[0] for ts in self.created_ts]
+
+    def stream_texts(self) -> list[str]:
+        """The text of the messages that began as streams, in the order they started: a reply's
+        own messages, with no approval request or notice among them."""
+        return [self._shown(ts)[0] for ts in self.stream_ts]
+
+    def message_cards(self) -> list[list[dict[str, Any]]]:
+        """The task cards each message shows last, as plain dicts, in creation order."""
+        return [self._shown(ts)[1] for ts in self.created_ts]
 
     def message_blocks(self) -> list[list[dict[str, Any]]]:
-        """The blocks each posted message shows last, in the order the messages were posted."""
-        posted = iter(self.posted_ts)
-        order: list[str] = []
-        shown: dict[str, list[dict[str, Any]]] = {}
-        for method, args in self.calls:
-            if method == "chat.postMessage":
-                ts = next(posted)
-                order.append(ts)
-            elif method == "chat.update":
-                ts = args["ts"]
-            else:
-                continue
-            shown[ts] = list(args.get("blocks") or [])
-        return [shown[ts] for ts in order]
+        """The blocks each message shows last (a stream's are the ones its stop wrote), in
+        creation order."""
+        return [self.messages[ts].blocks for ts in self.created_ts]
 
     def calls_to(self, method: str) -> list[dict[str, Any]]:
         return [args for name, args in self.calls if name == method]
+
+    def pushes(self) -> int:
+        """How many times Slack would notify the owner of a thread the owner started: a new
+        message that is a post, and a stream when it stops (measured 2026-09-29: nothing at its
+        start), whichever way it stops (the daemon's stop, or Slack's at the stream's end of
+        life). An edit never does. Posts count only those of a reply: an approval is a post too."""
+        return len(self.posted_ts) + self.stream_ends
 
     async def reactions_add(
         self, *, channel: str, name: str, timestamp: str, **kwargs: Any
@@ -298,3 +403,26 @@ class FakeSlack(AsyncWebClient):
         asserting on recorded calls would otherwise have to filter them out."""
         kwargs.update({"channel": channel, "name": name, "timestamp": timestamp})
         return await self.api_call("reactions.remove", params=kwargs)
+
+
+class FakeClock:
+    """The stream deadline's clock: a sleep ends when `advance` reaches its time, so a test
+    crosses the 280 seconds without waiting."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self._sleepers: list[tuple[float, asyncio.Future[None]]] = []
+
+    async def sleep(self, seconds: float) -> None:
+        wake = asyncio.get_running_loop().create_future()
+        self._sleepers.append((self.now + seconds, wake))
+        await wake
+
+    async def advance(self, seconds: float) -> None:
+        self.now += seconds
+        for due, wake in list(self._sleepers):
+            if due <= self.now and not wake.done():
+                wake.set_result(None)
+        self._sleepers = [(d, w) for d, w in self._sleepers if not w.done()]
+        for _ in range(20):  # let what woke run to its next wait
+            await asyncio.sleep(0)

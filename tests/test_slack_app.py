@@ -376,7 +376,8 @@ async def test_bang_bypass_on_inside_a_thread_switches_the_live_client(world: Wo
     assert world.clients[0].modes == ["bypassPermissions"]
     # The answer is a ✅ on the owner's word: no text, nothing that rings.
     assert reactions_on(world, word["event"]["ts"]) == ["white_check_mark"]
-    assert world.ephemerals() == [] and len(said(world)) == 1  # the session's own first reply
+    # No placeholder for the session's reply: nothing is posted until Claude has something to say.
+    assert world.ephemerals() == [] and said(world) == []
 
 
 async def test_bang_bypass_off_inside_a_thread_reacts_too(world: World) -> None:

@@ -26,10 +26,13 @@ class RecordingSink:
         self.texts: list[str] = []
         self.tasks: list[TaskUpdate] = []
         self.finished: list[TaskUpdate] | None = None
-        self.closed_out: tuple[str | None, str | None, bool] | None = None
+        self.notices: list[str] = []
+        self.closed_out: bool | str | None = False
 
-    async def text(self, markdown: str) -> None:
+    async def text(self, markdown: str, *, notice: bool = False) -> None:
         self.texts.append(markdown)
+        if notice:
+            self.notices.append(markdown)
 
     async def task(self, update: TaskUpdate) -> None:
         self.tasks.append(update)
@@ -37,10 +40,15 @@ class RecordingSink:
     async def finish(self, closing: list[TaskUpdate]) -> None:
         self.finished = closing
 
-    async def close_out(
-        self, footer: str | None, reply_to: str | None = None, *, silent: bool = False
-    ) -> None:
-        self.closed_out = (footer, reply_to, silent)
+    async def close_out(self, footer: str | None) -> bool:
+        self.closed_out = footer
+        return True
+
+    async def wait_landed(self) -> bool:
+        return True
+
+    async def settle(self) -> bool:
+        return True
 
 
 async def render(
@@ -73,7 +81,7 @@ async def test_tools_turn_streams_text_and_one_line_per_tool() -> None:
     assert ids and {t.id for t in sink.tasks} == set(ids)
     finals = {t.id: t for t in sink.tasks}
     assert all(finals[i].status == "complete" for i in ids)
-    assert sink.finished == [] and sink.closed_out == ("footer", None, False)
+    assert sink.finished == [] and sink.closed_out == "footer"
     assert renderer.result is not None
 
 
@@ -302,3 +310,22 @@ async def test_tool_and_task_lines_carry_their_name_and_kind() -> None:
     last = {t.id: t for t in sink.tasks + (sink.finished or [])}
     assert all(t.name for t in last.values())
     assert any(t.task for t in last.values())
+
+
+async def test_the_daemon_s_own_lines_are_notices_and_claude_s_words_are_not() -> None:
+    sink = RecordingSink()
+    renderer = TurnRenderer(sink)
+    await renderer.feed_notice("The previous session could not be resumed.")
+    await renderer.feed_error("The process exited.")
+    for message in sdk_messages("tools"):
+        await renderer.feed(message)
+    assert sink.notices == [
+        "The previous session could not be resumed.\n\n",
+        "\n\nThe process exited.",
+    ]
+    assert len(sink.texts) > len(sink.notices)  # Claude's own text followed, unmarked
+
+
+async def test_a_turn_that_says_nothing_gets_a_notice_not_words() -> None:
+    sink, _ = await render([silent_result()])
+    assert sink.notices == [texts.NO_OUTPUT]
