@@ -215,11 +215,12 @@ RESUME_AMBIGUOUS = (
     "More than one session in `{directory}` is named or starts with `{target}`: pick one from "
     "`!resume`."
 )
+RESUME_STALE = "This list is out of date: send `!resume` again for a current one."
 RESUME_GONE = "That session is not in this channel's directory any more: `!resume` lists them."
 RESUME_HELD = (
     "This thread already holds a session: send `!resume` again in the channel to pick another."
 )
-RESUME_LISTED = "Resumed _{title}_ in {link}."
+RESUME_LISTED = "Resumed {title} in {link}."
 # D6: a session held by any thread of any channel is never resumed a second time; `{link}` is the
 # holding thread's permalink (a plain fallback when Slack would not give one).
 RESUME_ELSEWHERE = "This session is already open in another thread: {link}."

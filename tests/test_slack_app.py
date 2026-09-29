@@ -904,7 +904,8 @@ async def test_a_resume_click_with_a_malformed_thread_changes_nothing(world: Wor
     for value in (SESSION_B, f"{SESSION_B}@", f"{SESSION_B}@not-a-ts", f"@{THREAD}"):
         await world.dispatch(click("session_resume", value))
     assert world.state.channel(CHANNEL).threads == {}
-    assert said(world) == [texts.RESUME_GONE] * 4
+    # A bare session id is a list posted before the value carried its thread.
+    assert said(world) == [texts.RESUME_STALE] * 4
 
 
 @pytest.mark.parametrize("user", [{"id": STRANGER}, {"team_id": OTHER_TEAM}])
@@ -912,6 +913,26 @@ async def test_nobody_else_can_resume(world: World, user: dict[str, str]) -> Non
     two_sessions(world)
     await world.dispatch(resume_click(SESSION_B, **user))
     assert world.state.channel(CHANNEL).threads == {}
+
+
+async def test_a_resume_click_on_a_thread_stored_but_not_live_is_refused(world: World) -> None:
+    # An idle close or a restart evicts the live object, not the entry: the click must not
+    # report a resume that `open_thread` would silently not perform.
+    two_sessions(world)
+    world.state.open_thread(CHANNEL, THREAD, session_id=SESSION_A)
+    await world.dispatch(resume_click(SESSION_B, THREAD))
+    assert world.state.thread(CHANNEL, THREAD).session_id == SESSION_A
+    assert said(world) == [texts.RESUME_HELD]
+    assert world.slack.calls_to("chat.update") == []
+
+
+async def test_a_typed_resume_in_a_non_session_thread_names_that_thread(world: World) -> None:
+    two_sessions(world)
+    await world.dispatch(reply("!resume", OTHER_THREAD))
+    (post,) = world.slack.calls_to("chat.postMessage")
+    values = [b["accessory"]["value"] for b in post["blocks"] if "accessory" in b]
+    assert values == [f"{SESSION_A}@{OTHER_THREAD}", f"{SESSION_B}@{OTHER_THREAD}"]
+    assert "thread_ts" not in post
 
 
 async def test_a_button_is_never_trusted_for_a_session_of_another_directory(world: World) -> None:
@@ -996,6 +1017,19 @@ async def test_resume_opens_an_independent_thread_while_another_is_busy(world: W
     await world.dispatch(message(f"!resume {SESSION_B}", ts=OTHER_THREAD))
     assert world.state.thread(CHANNEL, OTHER_THREAD).session_id == SESSION_B
     assert "Trust gate" in said(world)[-1]
+
+
+async def test_a_top_level_word_whose_failure_report_fails_pushes_nothing(world: World) -> None:
+    # The word's own failure and then the channel post that reports it both fail: the outer
+    # handler must not fall back to a threaded `ERROR_REPLY` under the word (a push).
+    def broken(directory: Path) -> list[SDKSessionInfo]:
+        raise PermissionError("transcripts unreadable")
+
+    world.sessions._deps.sessions_of = broken
+    world.slack.responses["chat.postMessage"] = RuntimeError("network down")
+    await world.dispatch(message("!resume"))
+    posts = world.slack.calls_to("chat.postMessage")
+    assert posts and all("thread_ts" not in p for p in posts)
 
 
 async def test_a_failing_resume_click_tells_the_owner(world: World) -> None:
@@ -1236,6 +1270,28 @@ async def test_a_resumed_title_keeps_its_characters_inside_the_bold(
     world.stored_sessions = [SDKSessionInfo(SESSION_A, title, 0, 1, title)]
     await world.dispatch(message(f"!resume {SESSION_A}"))
     assert said(world) == [texts.RESUME_OK.format(title=shown)]
+
+
+async def test_the_resumed_list_keeps_a_title_with_underscores_readable(world: World) -> None:
+    title = "fix_the_parser"
+    world.stored_sessions = [SDKSessionInfo(SESSION_A, title, 0, 1, title)]
+    body = resume_click(SESSION_A, THREAD)
+    await world.dispatch(body)
+    (edited,) = world.slack.calls_to("chat.update")
+    assert title in edited["text"] and f"_{title}_" not in edited["text"]
+
+
+async def test_a_failing_confirmation_still_updates_the_list(world: World) -> None:
+    two_sessions(world)
+    # The first post (the confirmation) fails; the failure report that follows goes through.
+    world.slack.responses["chat.postMessage"] = [
+        RuntimeError("network down"),
+        {"ok": True, "ts": "1"},
+    ]
+    await world.dispatch(resume_click(SESSION_B, THREAD))
+    assert world.state.thread(CHANNEL, THREAD).session_id == SESSION_B
+    (edited,) = world.slack.calls_to("chat.update")
+    assert all("accessory" not in b for b in edited["blocks"])
 
 
 async def test_a_resumed_session_with_no_title_shows_its_id(world: World) -> None:

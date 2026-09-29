@@ -366,7 +366,13 @@ def build_app(
 
         async def report(text: str) -> None:
             if session is None:
-                await in_channel(channel, text)
+                # Swallowed: this runs inside `reply_on_failure`'s own handler, and a raise here
+                # would reach `on_message`'s outer one, which posts `ERROR_REPLY` threaded under
+                # the word (a push for a word that answers in the channel).
+                try:
+                    await in_channel(channel, text)
+                except Exception as exc:
+                    logger.warning("could not report a word in %s: %s", channel, describe(exc))
             else:
                 await tell_owner(channel, thread_ts, text)
 
@@ -907,7 +913,11 @@ def build_app(
         await resume_into_thread(channel, thread_ts, directory, found[0])
 
     async def resume_into_thread(
-        channel: str, thread_ts: str, directory: Path, chosen: SDKSessionInfo
+        channel: str,
+        thread_ts: str,
+        directory: Path,
+        chosen: SDKSessionInfo,
+        list_ts: str | None = None,
     ) -> bool:
         """Point the thread rooted at `thread_ts` at `chosen`, a session read from `directory`;
         False, after telling the owner why in the channel, when nothing changed: that thread
@@ -915,7 +925,8 @@ def build_app(
         other thread (D6: one session lives in one thread), or the channel was bound to another
         folder while `chosen` was read from `directory`. Every check runs with no `await` before
         the `resume` they guard, so nothing can change between the checks and the call they
-        protect."""
+        protect. `list_ts`: the picker a click came from, edited before the confirmation posts, so
+        a confirmation that fails cannot leave buttons for a session already resumed."""
         if sessions.get(channel, thread_ts) is not None:
             await in_channel(channel, texts.RESUME_HELD)
             return False
@@ -930,6 +941,7 @@ def build_app(
             return False
         session = await sessions.resume(channel, thread_ts, chosen.session_id)
         assert session is not None  # just confirmed the channel is bound to `directory`
+        await show_resumed(channel, thread_ts, list_ts, chosen)
         # A markdown block, not mrkdwn: the title is escaped so it cannot close or open the bold.
         title = markdown_escape(one_line(chosen.summary, TITLE_LIMIT)) or chosen.session_id
         await say(channel, thread_ts, texts.RESUME_OK.format(title=title))
@@ -960,7 +972,8 @@ def build_app(
         # already holds a session).
         parsed = parse_resume_value(str(body["actions"][0].get("value")))
         if parsed is None:
-            await in_channel(channel, texts.RESUME_GONE)
+            # A list posted before the value carried its thread (a bare session id).
+            await in_channel(channel, texts.RESUME_STALE)
             return
         session_id, thread_ts = parsed
         stored = await sessions.sessions_in(record.directory)
@@ -968,8 +981,9 @@ def build_app(
         if chosen is None:
             await in_channel(channel, texts.RESUME_GONE)
             return
-        if await resume_into_thread(channel, thread_ts, record.directory, chosen):
-            await show_resumed(channel, thread_ts, body["message"]["ts"], chosen)
+        await resume_into_thread(
+            channel, thread_ts, record.directory, chosen, list_ts=body["message"]["ts"]
+        )
 
     async def show_resumed(
         channel: str, thread_ts: str, list_ts: str | None, chosen: SDKSessionInfo

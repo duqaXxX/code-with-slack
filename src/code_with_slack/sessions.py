@@ -772,7 +772,9 @@ class ThreadSession:
                     self.thread_ts,
                     describe(exc),
                 )
-        self._react_error()  # D10: `!stop` stopped something
+        # D10: a stop the owner gave is not an error. `_react` clears `_error_standing`, so a
+        # later idle sweep shows the same ✅ and `_note_status` drops the persisted ⏳.
+        self._react(Status.DONE)
         return True
 
     async def status(self) -> str:
@@ -1126,7 +1128,8 @@ class ThreadSession:
                 # `stopped`: an owner `!stop` ended this task; its closing follows at once, but
                 # silently, as `!stop` never rings.
                 await holder.close_out(silent=stopped)
-                # D10: `!stop` already reacted itself; its ❌ must stand, not this closing's ✅.
+                # D10: `!stop` already reacted ✅ itself; skipped so a stopped task's closing
+                # does not show it a second time.
                 if not stopped:
                     await self._react_done_if_idle()
             return
@@ -1287,7 +1290,7 @@ class ThreadSession:
         """✅, once the closing message just posted turns out to have been the last thing the
         session owed (D10): awaited, unlike `_react`, so the checkmark never shows before that
         message does. A no-op while another prompt, a running task or an unreported one still
-        keeps the session going, or while `_error_standing` says a ❌ from `!stop` or
+        keeps the session going, or while `_error_standing` says a ❌ from
         `_abandon(error=True)` already stands: that lasts until new work starts (a submit or a
         report turn shows ⏳ again, both clearing it), not until some unrelated task's own sweep
         decides the session reads idle again. Gated on `_error_standing`, not
