@@ -219,7 +219,7 @@ sends it, so a restart waits up to those 29 minutes. `launchctl bootout` and `la
 kickstart -k` stop the job themselves and kill it `ExitTimeOut` seconds later; on macOS 27.0
 launchd caps `ExitTimeOut` at 60 (`launchctl print` shows 60 for any larger value, and a job
 stopped with `bootout` was killed within 60 seconds, measured 2026-09-26). A turn still running
-then keeps a reply that says Claude is writing.
+then leaves its reply's stream open until Slack closes it, 5 minutes after it started.
 
 `launchctl kill TERM` returns at once, so a Claude Code session running from Slack can restart
 the daemon that hosts it and still finish its turn. `launchctl kickstart -k` waits until the old
@@ -338,18 +338,16 @@ MB, reaches Claude as the path of a copy in `$TMPDIR/code-with-slack/`, kept 3 d
 file (archives, Office documents, binaries) is refused. A file past a limit, or one that fails to
 download, stops the whole message, and the reply says which file and why.
 
-A reply is one message in the session's thread. It appears as soon as you send your message,
-reading `Claude is writing…`, or `Waiting for the previous reply…` when another turn is still
-running in it. It is then rewritten about once a second while Claude works: text in the order it
-is written, and after each piece of text the tool calls that followed it, in small grey text. The
-calls that ended fold into one line of tool names and counts, such as `✓ Bash ×3 · Read · ✗ Bash`,
-where `✗` counts the calls that failed; a call still running (`⏳` and its command), a subagent and
-a background task keep a line of their own below it; a subagent's line counts the calls it made,
-and what it is doing now shows indented below it, under `⎿`.
-While Claude works, its latest call also keeps a line of its own until the next one, so you
-can follow what it does: the call alone, or `✗` and its error when it failed. When the reply is complete, a divider and
-the footer follow in a closing message of its own. A reply longer than one Slack message continues in the next one.
-
+A reply is one message in the session's thread, and a native Slack stream. It appears when Claude
+has something to show: its first words, or the card of the first tool it uses. Text then grows in
+the order it is written, and each tool is a card of its own, titled in the terminal's words
+(`Ran 1 shell command`, `Read notes.txt`), showing the command while it runs and then `complete`
+or `error`. A subagent's card counts the calls it made and shows what it is doing now, and a
+background task keeps its card open until it ends. An Edit or a Write shows its preview under its
+card. When the reply ends, a divider and the footer close the same message. A reply still running
+280 seconds after it started stops being a stream (Slack closes streams at 5 minutes) and goes on
+in the same message, updated instead of streamed; its footer then arrives in a closing message. A
+reply longer than one Slack message (12,000 characters or 50 cards) continues in the next one.
 
 An approval request is a message of its own in the thread, below the reply, and rings, as a
 question does; once you decide, it disappears and the tool's line in the reply records the call.
@@ -397,16 +395,18 @@ A reply, an approval request and a question post inside the session's own thread
 notifies you on a new message in a thread you started, whatever the channel's own notification
 setting is:
 
-- A reply rings once, in its closing message: once the turn has ended and every task it started,
+- A reply rings once, when it ends: Slack pushes a stream when it stops, with the start of
+  Claude's answer as the text. The reply ends once the turn has ended and every task it started,
   and the report for it, are done too.
+- A reply that is still open after about 4 minutes 40 seconds rings when its stream stops, and a
+  second time when it ends, in its closing message.
 - An approval request and a question ring.
-- A reply that fails outright rings once; when the whole process exits instead, only the first
-  reply still open rings the same way.
-- Nothing rings while Claude writes, nor for the continuation of a reply longer than one message,
-  nor for a reply ended by `!stop`, a restart, an idle close or a lost session.
+- A reply that fails outright rings once, as any reply ending does.
+- `!stop` and a restart end the reply the same way, so each rings once. A reply longer than one
+  message rings for every extra message.
+- Nothing rings while Claude writes.
 
-The notification text reads `Reply to: ` and the start of your message. The channel's own setting
-(Part 1) governs only the bot's top-level messages (the answer to `!bind`, `!status`, `!resume`'s
+The channel's own setting (Part 1) governs only the bot's top-level messages (the answer to `!bind`, `!status`, `!resume`'s
 own list, the upgrade notice): with **Just mentions** those stay silent, since the bot writes no
 `@channel` mention anywhere; with **All new posts** they ring too.
 

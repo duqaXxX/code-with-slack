@@ -62,6 +62,33 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- A reply is a native Slack stream (`chat.startStream`, `chat.appendStream`, `chat.stopStream`)
+  instead of a message rewritten with `chat.update`. It starts with Claude's first content, with
+  no `Claude is writing…` or `Waiting for the previous reply…` placeholder, so `texts.WRITING`,
+  `texts.WAITING`, `texts.REPLY_TO` and `texts.REPLY_ABOVE` are gone. Each tool is a task card
+  (`task_update`) in place of a folded tool line, titled in the terminal's words and updated as
+  the call runs; Edit and Write previews go in a `blocks` chunk under the card. The footer is
+  passed to `chat.stopStream` as `blocks`. Measured 2026-09-29 (iPhone locked, Slack open in a
+  browser, channel on Just mentions): a stream pushes once, when it stops, with its first text as
+  the banner. So a reply rings once when it ends, in place of once in a separate closing message,
+  and a reply that runs past `sinks.STREAM_SECONDS` (280 seconds, since Slack closes a stream at
+  5 minutes) stops its stream, which rings, goes on in the same message with `chat.update`, which
+  does not, and ends with a closing message, a second push. A reply past 12,000 characters or 50
+  cards continues in a new message, and each extra message rings. The three stream calls are
+  never retried after a connection reset (`sinks.ConnectionRetryUnlessStream`), since they are
+  not idempotent.
+- `!stop`, a restart and an error end a reply through the same path as a normal end: the stream
+  stops with the footer (a push), and the root shows ✅ or ❌ as before. A message queued in a
+  thread when a restart drops it gets no reply of its own: the end of the running reply, or one
+  message when nothing runs, says `N messages were not sent because code-with-slack restarted:
+  send them again.` with the start of each (`sessions.not_sent`).
+- Crash repair stops each open reply's stream first (`message_not_in_streaming_state` is fine),
+  then edits the message: a card left running becomes an error, and `code-with-slack stopped
+  before this answer.` is appended. Nothing is posted. `open_replies` in `state.json` now holds
+  the ts of the reply's stream or message.
+- `docs/features.md` and `docs/setup.md` describe the notification behaviour above: one push when
+  a reply ends, a second for a reply past about 4 minutes 40 seconds.
+
 - Where the daemon's own answers go. A word typed in the channel, or in a thread that holds no
   session, is answered by a normal post in the channel (never a thread reply, never ephemeral,
   so it stays after a reload): `!help`, `!guide`, `!status`, `!stop`, `!bind` with its list and
