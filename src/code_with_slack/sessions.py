@@ -1591,6 +1591,15 @@ class ThreadSession:
             await previous.set_latest(False)
         return sink
 
+    async def _hand_latest_to(self, sink: Sink) -> None:
+        """Make `sink` the thread's latest reply again, taking over the footer and the running
+        list, when the reply that was the latest will never be written."""
+        if self._latest is sink or not isinstance(sink, ReplySink):
+            return
+        self._latest = sink
+        await sink.set_running(self._running_counts())
+        await sink.set_latest(True)
+
     async def _finish(self, active: ActiveTurn, result: ResultMessage) -> bool:
         """Close the turn's reply and release it; True when `!stop` cut it short, which the
         caller reads once `_active` (still this turn, for `_close_reply`'s own checks) is clear,
@@ -1629,6 +1638,11 @@ class ThreadSession:
                 footer = None
             stopped = result.terminal_reason in INTERRUPTED
             self._interrupting = False  # D10: this turn's own tail, whichever way it ended
+            if active.turn is None and not injected_turn(result) and self._sent:
+                # An owner query crossed a notification: this reply carries its answer, and
+                # `_settle` discards the owner turn's own reply, which is the latest now. The
+                # footer belongs under the answer.
+                await self._hand_latest_to(active.renderer.sink)
             # What a restart dropped meanwhile is said where the running turn ends.
             await self._feed_end_notes(active.renderer)
             # `!stop` cut this turn short, the owner's own or a report's: its reply ends like any

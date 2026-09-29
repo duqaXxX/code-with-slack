@@ -8,7 +8,7 @@ from typing import Any
 
 import aiohttp
 import pytest
-from claude_agent_sdk.types import TaskNotificationMessage
+from claude_agent_sdk.types import TaskNotificationMessage, TaskStartedMessage
 
 from code_with_slack import sessions, texts
 from code_with_slack.approvals import Approve
@@ -383,6 +383,33 @@ async def test_a_crossed_owner_query_is_answered_in_the_reply_it_landed_in(
     await asyncio.wait_for(owner.done.wait(), 2)
     assert len(h.slack.stream_ts) == 1 and h.slack.posted_ts == []
     assert open_streams(h) == []
+    # the reply that carried the answer is the thread's latest, not the discarded owner reply:
+    # it ends with the footer
+    [stop] = h.slack.calls_to("chat.stopStream")
+    assert {"type": "divider"} in stop["blocks"]
+    assert session._latest is not None and session._latest is not owner.sink
+
+
+async def test_a_crossed_owner_query_hands_latest_to_the_reply_that_carried_its_answer(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # The answer went into the reply that started a task (an older reply, no longer the latest
+    # once the owner wrote again). The owner turn's own reply is never written, so it must not
+    # stay the thread's latest, or the footer that belongs under the answer has no reply to show.
+    first, _, _ = split_background()
+    task_id = next(m.task_id for m in first if isinstance(m, TaskStartedMessage))
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    carrier = session._task_replies[task_id].sink
+    owner = await session.submit("next")
+    await until(lambda: h.clients[0].queries == ["start it", "next"])
+    assert session._latest is owner.sink and carrier is not owner.sink
+    session._injected_expected = True  # a report was expected too: the guess that goes wrong
+    session._ended = [(task_id, "✓ the task ended")]
+    h.clients[0].inject(split_turns(sdk_messages("tools"))[0])
+    await asyncio.wait_for(owner.done.wait(), 2)
+    assert session._latest is carrier
 
 
 def test_the_report_helper_still_reads_a_report() -> None:
