@@ -13,7 +13,16 @@ from code_with_slack.render import sinks
 from code_with_slack.render.previews import Preview
 from code_with_slack.render.renderer import STOPPED, TaskUpdate, TurnRenderer
 from code_with_slack.render.sinks import ReplySink, UpdateLimiter
-from tests.fakes import CHANNEL, OWNER, TEAM, THREAD, FakeClock, FakeSlack, sdk_messages
+from tests.fakes import (
+    CHANNEL,
+    OWNER,
+    TEAM,
+    THREAD,
+    FakeClock,
+    FakeSlack,
+    ResetAfterApply,
+    sdk_messages,
+)
 
 WRITE_METHODS = (
     "chat.postMessage",
@@ -591,22 +600,44 @@ async def test_an_error_is_logged_without_message_content(
     assert "secret content" not in caplog.text
 
 
-async def test_a_refused_update_of_the_final_form_is_retried_as_plain_text(
+async def test_a_refused_rewrite_never_replaces_a_message_that_shows_its_body(
     slack: FakeSlack,
 ) -> None:
+    # A reply that ended inline already shows its whole body. Slack refusing a later rewrite of
+    # it (dropping the footer, say) must leave that body as it is: no plain-text fallback.
+    sink = reply(slack)
+    await sink.text("line of text\n" * 400)
+    await sink.task(tool("t1", "Bash"))
+    await sink.finish([])
+    assert await sink.close_out("footer")
+    slack.responses["chat.update"] = rejected("invalid_blocks")
+    await sink.set_latest(False)
+    await settled()
+    updates = slack.calls_to("chat.update")
+    assert updates and all(u["blocks"] != [] for u in updates)
+    tried = len(updates)
+    await settled()
+    assert len(slack.calls_to("chat.update")) == tried  # the change is dropped, not retried
+    slack.responses["chat.update"] = {"ok": True}
+    await sink.set_latest(True)  # a later change is tried again
+    await settled()
+    assert len(slack.calls_to("chat.update")) == tried + 1
+
+
+async def test_a_refused_continuation_post_is_posted_as_plain_text(slack: FakeSlack) -> None:
     clock = FakeClock()
     sink = reply(slack, clock=clock)
-    await sink.text("All **done**.")
+    await sink.text("start\n")
     await settled()
     await clock.advance(sinks.STREAM_SECONDS + 1)
-    await sink.text(" More.")
-    # the draft at `finish` is refused and left; the final form at `close_out` is refused and
-    # retried as text
-    slack.responses["chat.update"] = [rejected("invalid_blocks")] * 2 + [{"ok": True}]
+    slack.responses["chat.postMessage"] = [rejected("invalid_blocks")] * 2 + [
+        {"ok": True, "ts": "9.9"}
+    ]
+    await sink.text("a line of text\n" * 1_000)
     await sink.finish([])
-    await sink.close_out("footer")
-    final = slack.calls_to("chat.update")[-1]
-    assert final["blocks"] == [] and final["text"] == "All **done**. More."
+    await sink.close_out(None)
+    plain = [p for p in slack.calls_to("chat.postMessage") if "blocks" not in p]
+    assert plain and plain[0]["text"].startswith("a line of text")
 
 
 async def test_a_refused_draft_update_is_not_retried_as_plain_text(slack: FakeSlack) -> None:
@@ -643,9 +674,10 @@ async def test_the_open_reply_is_the_stream_until_the_end_lands(slack: FakeSlack
     await sink.text("x" * (sinks.MESSAGE_LIMIT + 10))  # two streams
     await settled()
     first, second = slack.stream_ts
-    assert seen == [(None, first), (first, second)]
+    # the first is whole once the second starts (its cards are final): only the last stays open
+    assert seen == [(None, first), (None, second), (first, None)]
     await sink.finish([])
-    assert seen[-1] == (first, second)  # still open: the reply has not ended
+    assert seen[-1] == (first, None)  # still open: the reply has not ended
     await sink.close_out("footer")
     assert seen[-1] == (second, None)
 
@@ -771,8 +803,12 @@ async def test_a_new_file_preview_follows_its_card_as_a_code_block(slack: FakeSl
     await sink.task(tool("w", "Write", preview=view))
     await settled()
     [append] = slack.calls_to("chat.appendStream")
-    assert [c["type"] for c in append["chunks"]] == ["task_update", "markdown_text"]
-    assert append["chunks"][1]["text"].startswith("```\n1 alpha\n2 beta\n```")
+    assert [c["type"] for c in append["chunks"]] == ["task_update", "blocks"]
+    # a blocks chunk holding a markdown block: measured accepted 2026-09-29
+    assert append["chunks"][1] == {
+        "type": "blocks",
+        "blocks": [{"type": "markdown", "text": "```\n1 alpha\n2 beta\n```"}],
+    }
 
 
 async def test_a_preview_is_sent_once_however_often_the_card_changes(slack: FakeSlack) -> None:
@@ -822,14 +858,20 @@ async def test_an_edit_and_a_write_show_as_the_terminal_shows_them(slack: FakeSl
     ]
     assert cards[0]["output"] == "Wrote 15 lines to new.txt"
     chunks = [c for _, a in slack.calls if "chunks" in a for c in a["chunks"]]
-    diffs = [b for c in chunks if c["type"] == "blocks" for b in c["blocks"]]
+    diffs = [
+        b for c in chunks if c["type"] == "blocks" for b in c["blocks"] if b["type"] == "container"
+    ]
     assert [sinks.block_text(d) for d in diffs] == [
         "    1 alpha\n-\U0001f7e5 2 beta\n+\U0001f7e9 2 gamma\n    3 delta",
         "-\U0001f7e5 1 alpha\n-\U0001f7e5 2 gamma\n-\U0001f7e5 3 delta\n"
         "+\U0001f7e9 1 one\n+\U0001f7e9 2 two",
     ]
     code = [
-        c["text"] for c in chunks if c["type"] == "markdown_text" and c["text"].startswith("```")
+        b["text"]
+        for c in chunks
+        if c["type"] == "blocks"
+        for b in c["blocks"]
+        if b["type"] == "markdown"
     ]
     assert code[0].splitlines()[1:3] == [" 1 1", " 2 2"] and "… +5 lines" in code[0]
 
@@ -1143,3 +1185,129 @@ async def test_update_limiter_refund_never_exceeds_burst() -> None:
     await limiter.refund()
     await limiter.refund()  # never more than a full burst, whatever was actually spent
     assert limiter._tokens == 2
+
+
+# A call whose outcome is unknown: Slack may have applied it. Stream calls are not idempotent.
+
+
+async def test_an_append_of_unknown_outcome_is_never_sent_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slack = ResetAfterApply()
+    sink = reply(slack)
+    await sink.text("Hello. ")
+    await settled()
+    slack.reset_next = "chat.appendStream"
+    await sink.text("World. ")
+    await settled()
+    await sink.text("Again.")
+    await settled()
+    # the message went on by update, from the model: each word once
+    assert len(slack.calls_to("chat.appendStream")) == 1
+    assert slack.stream_texts()[0].count("World.") == 1
+    assert slack.stream_texts()[0] == "Hello. World. Again."
+    assert slack.messages[slack.stream_ts[0]].streaming is False
+
+
+async def test_a_stop_of_unknown_outcome_that_carried_the_footer_ends_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.05)
+    slack = ResetAfterApply()
+    sink = reply(slack)
+    await sink.text("Answer.")
+    await settled()
+    slack.reset_next = "chat.stopStream"
+    await sink.finish([])
+    assert await sink.close_out("footer") is False
+    assert await sink.wait_landed() is True
+    await asyncio.sleep(0.1)
+    assert slack.pushes() == 1 and slack.posted_ts == []  # no closing message, footer once
+    assert slack.messages[slack.stream_ts[0]].blocks[-1]["elements"][0]["text"] == "footer"
+
+
+async def test_a_start_of_unknown_outcome_says_so_in_the_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    slack = ResetAfterApply()
+    slack.reset_next = "chat.startStream"
+    sink = reply(slack)
+    with caplog.at_level("WARNING"):
+        await sink.text("one")
+        await settled()
+    assert "outcome unknown" in caplog.text
+
+
+def test_the_connection_retry_skips_stream_calls_and_keeps_the_rest() -> None:
+    import asyncio as aio
+
+    from slack_sdk.http_retry.request import HttpRequest
+    from slack_sdk.http_retry.state import RetryState
+
+    handler = sinks.ConnectionRetryUnlessStream()
+    error = aiohttp.ClientOSError(104, "Connection reset by peer")
+
+    async def can(method: str) -> bool:
+        request = HttpRequest(
+            method="POST",
+            url=f"https://slack.com/api/{method}",
+            headers={},
+            body_params={},
+            data={},
+        )
+        return await handler.can_retry_async(state=RetryState(), request=request, error=error)
+
+    assert aio.run(can("chat.postMessage")) is True
+    for stream in ("chat.startStream", "chat.appendStream", "chat.stopStream"):
+        assert aio.run(can(stream)) is False
+
+
+async def test_settle_during_the_retry_does_not_lose_the_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.01)
+    slack = FakeSlack()
+    sink = reply(slack)
+    await sink.text("Answer.")
+    await settled()
+    slack.responses["chat.stopStream"] = [aiohttp.ClientConnectionError("down"), {"ok": True}]
+    await sink.finish([])
+    assert await sink.close_out("footer") is False
+    slack.delay = 0.05  # the retry's stop is in flight when the shutdown settles the reply
+    await asyncio.sleep(0.03)
+    assert await sink.settle() is True
+    assert slack.pushes() == 1 and slack.posted_ts == []
+
+
+async def test_a_message_stays_tracked_while_its_cards_run_after_a_roll_over(
+    slack: FakeSlack,
+) -> None:
+    seen: list[tuple[str | None, str | None]] = []
+    sink = reply(slack, on_open_reply=lambda old, new: seen.append((old, new)))
+    await sink.task(tool("t0", "Bash", "in_progress", task=True, details="Running in background"))
+    for i in range(1, 60):
+        await sink.task(tool(f"t{i}", "Read"))
+    await settled()
+    first, second = slack.stream_ts
+    assert (None, second) in seen and (first, None) not in seen  # a card still runs in the first
+    await sink.task(tool("t0", "Bash", "complete", task=True))
+    await settled()
+    assert (first, None) in seen  # final now: nothing left for a repair to close
+
+
+async def test_a_reply_whose_body_landed_is_not_tracked_when_only_the_closing_post_fails(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 60.0)
+    clock = FakeClock()
+    seen: list[tuple[str | None, str | None]] = []
+    sink = reply(slack, clock=clock, on_open_reply=lambda old, new: seen.append((old, new)))
+    await sink.text("A complete answer.")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    slack.responses["chat.postMessage"] = aiohttp.ClientConnectionError("down")
+    await sink.finish([])
+    assert await sink.close_out("footer") is False
+    # the answer is whole: a repair must not say it stopped before it
+    assert seen[-1] == (slack.stream_ts[0], None)
+    await sink.settle()

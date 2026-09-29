@@ -19,6 +19,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from slack_sdk.errors import SlackApiError
+from slack_sdk.http_retry.builtin_async_handlers import AsyncConnectionErrorRetryHandler
+from slack_sdk.http_retry.request import HttpRequest
+from slack_sdk.http_retry.state import RetryState
 from slack_sdk.web.async_client import AsyncWebClient
 
 from code_with_slack.render.escape import mrkdwn_escape
@@ -71,6 +74,35 @@ def describe(exc: Exception) -> str:
     if isinstance(exc, SlackApiError):
         return str(exc.response.get("error"))
     return type(exc).__name__
+
+
+STREAM_METHODS = ("chat.startStream", "chat.appendStream", "chat.stopStream")
+
+
+class ConnectionRetryUnlessStream(AsyncConnectionErrorRetryHandler):
+    """slack-sdk's retry of a call that failed on the connection, except for the stream calls:
+    a start, an append and a stop are not idempotent, and a reset can come after Slack applied
+    the call, so a retry would duplicate text, or stop a stream twice."""
+
+    async def _can_retry_async(
+        self,
+        *,
+        state: RetryState,
+        request: HttpRequest,
+        response: Any = None,
+        error: Exception | None = None,
+    ) -> bool:
+        if request.url.rstrip("/").endswith(STREAM_METHODS):
+            return False
+        return await super()._can_retry_async(
+            state=state, request=request, response=response, error=error
+        )
+
+
+def unknown_outcome(exc: Exception) -> bool:
+    """Whether a failed call may have been applied: Slack answering with an error says it was
+    not, anything else (a reset, a timeout) says nothing."""
+    return not isinstance(exc, SlackApiError)
 
 
 class Clock:
@@ -351,12 +383,9 @@ def piece_blocks(tool: _Tool, index: int) -> list[dict[str, Any]]:
 
 
 def piece_chunk(tool: _Tool, index: int) -> dict[str, Any]:
-    """The same piece for a stream. A diff is a `blocks` chunk holding its container (measured
-    2026-09-28); the code of a new file is markdown, which a stream takes as text."""
-    blocks = piece_blocks(tool, index)
-    if blocks[0]["type"] == "container":
-        return {"type": "blocks", "blocks": blocks}
-    return {"type": "markdown_text", "text": "\n\n".join(b["text"] for b in blocks) + "\n\n"}
+    """The same piece for a stream: a `blocks` chunk (measured 2026-09-28 for a diff's container
+    and 2026-09-29 for a markdown block, which reads back as rich text)."""
+    return {"type": "blocks", "blocks": piece_blocks(tool, index)}
 
 
 @dataclass
@@ -396,6 +425,12 @@ class _Message:
     shown: list[dict[str, Any]] | None = None
     footer: list[dict[str, Any]] = field(default_factory=list)  # the footer it shows
     deadline: asyncio.Task[None] | None = None
+    # An append whose outcome is unknown: the stream is no longer told anything, it is stopped
+    # and the message goes on by update, from the model.
+    blind: bool = False
+    # The blocks a stop of unknown outcome carried: if the next stop finds the stream over, that
+    # stop is the one that landed.
+    stop_unknown: list[dict[str, Any]] | None = None
 
 
 class ReplySink:
@@ -435,10 +470,11 @@ class ReplySink:
         # entry and must never touch another's). A plain sync callback (`StateStore`'s setters
         # are sync file writes), never awaited here.
         self._on_open_reply = on_open_reply
-        # This sink's own current entry in that list, or None once it has none (not yet
-        # written, or already ended).
-        self._own_open_reply: str | None = None
+        # This sink's own entries in that list: the messages a crash would leave unfinished.
+        self._tracked: set[str] = set()
         self._ended = False  # the end landed: nothing is left for a repair to close
+        # The last message's body is whole, and only the closing message is owed.
+        self._body_landed = False
         self._parts: list[_Text | _Tool] = []
         self._tools: dict[str, _Tool] = {}
         self._messages: list[_Message] = []
@@ -462,41 +498,66 @@ class ReplySink:
         # that arrived while the pass wrote or waited its turn, and runs another pass for it.
         self._version = 0
 
-    def _track_open_reply(self, new_ts: str | None) -> None:
-        """This sink's own transition: drop its current entry (if any), add `new_ts` (if not
-        None), leave every other sink's entry alone. Best-effort (issue #19 fix round item 7): a
-        failed `StateStore` write is logged (ids only) and swallowed, since the reply itself must
-        never fail over crash-repair bookkeeping. `_own_open_reply` only advances once the
-        callback actually succeeds (fix round 2 item 3): advancing it regardless would make the
-        next call believe the old ts no longer needs removing, orphaning it in state.json
-        forever, since nothing else ever asks to remove a ts this sink no longer remembers."""
-        old = self._own_open_reply
-        if self._on_open_reply is not None:
-            try:
-                self._on_open_reply(old, new_ts)
-            except Exception as exc:
-                logger.warning(
-                    "could not update the open-reply tracking for %s/%s: %s",
-                    self._channel,
-                    self._thread_ts,
-                    describe(exc),
-                )
-                return
-        self._own_open_reply = new_ts
+    def _track(self, old: str | None, new: str | None) -> bool:
+        """One transition of this sink's own entries in the thread's open-replies list: add
+        `new`, or drop `old`; every other sink's entry is left alone. Best-effort (issue #19 fix
+        round item 7): a failed `StateStore` write is logged (ids only) and swallowed, since the
+        reply itself must never fail over crash-repair bookkeeping. False then: the caller keeps
+        its set as it was (fix round 2 item 3), or it would believe a ts no longer needs removing
+        and orphan it in state.json forever, since nothing else ever asks to remove a ts this
+        sink no longer remembers."""
+        if self._on_open_reply is None:
+            return True
+        try:
+            self._on_open_reply(old, new)
+        except Exception as exc:
+            logger.warning(
+                "could not update the open-reply tracking for %s/%s: %s",
+                self._channel,
+                self._thread_ts,
+                describe(exc),
+            )
+            return False
+        return True
 
-    def _open_reply(self, ts: str) -> None:
-        """A message this reply just wrote and a crash would leave unfinished: tracked until the
-        reply's end lands (a continuation written after that has nothing for a repair to fix)."""
-        if not self._ended:
-            self._track_open_reply(ts)
+    def _keeps_open(self, message: _Message, end: Cursor | None) -> bool:
+        """Whether a crash would leave the message unfinished: its stream still open, or a card
+        of it still running (a stopped message stores such a card as an error until it is
+        updated), or, for the reply's last message, the end not yet landed. Once the body is
+        whole and only the closing message is owed, there is nothing of the answer left to fix."""
+        if message.ts is None:
+            return False
+        if message.streaming:
+            return True
+        if any(
+            self._tool_elements(part, floor, ceil)[0] and part.update.status not in TERMINAL
+            for _, part, floor, ceil in self._span(message.start, end)
+            if isinstance(part, _Tool)
+        ):
+            return True
+        return message is self._messages[-1] and not self._ended and not self._body_landed
+
+    def _retrack(self) -> None:
+        """Bring this sink's open-reply entries to the messages that are unfinished now: one is
+        added the moment it is written, and dropped once nothing is left for a repair to close."""
+        wanted = set()
+        for index, message in enumerate(self._messages):
+            following = self._messages[index + 1 :]
+            end = following[0].start if following else None
+            if message.ts is not None and self._keeps_open(message, end):
+                wanted.add(message.ts)
+        for ts in sorted(wanted - self._tracked):
+            if self._track(None, ts):
+                self._tracked.add(ts)
+        for ts in sorted(self._tracked - wanted):
+            if self._track(ts, None):
+                self._tracked.discard(ts)
 
     def _settle_open_reply(self) -> None:
-        """Stop tracking once the reply's end is known to have landed (issue #19 fix round item
-        6): from then on nothing is left open for a repair to close, whatever else may still
-        change on it."""
+        """The reply's end landed (issue #19 fix round item 6): from then on nothing is left
+        open for a repair to close, but a card still running."""
         self._ended = True
-        if self._own_open_reply is not None:
-            self._track_open_reply(None)
+        self._retrack()
 
     async def text(self, markdown: str, *, notice: bool = False) -> None:
         """Claude's words, or with `notice` a line of the daemon's own (never a banner)."""
@@ -577,7 +638,9 @@ class ReplySink:
 
     async def _retry_final(self) -> None:
         await asyncio.sleep(FINAL_RETRY_SECONDS)
-        self._resolve(await self._flush())
+        # Shielded: a shutdown's `settle` cancels this task, and a write cancelled after Slack
+        # took it would lose what it did.
+        self._resolve(await asyncio.shield(self._flush()))
 
     async def settle(self) -> bool:
         """Force this reply to its current, true form right now, cancelling any debounce still
@@ -882,11 +945,10 @@ class ReplySink:
             if code == STILL_STREAMING:
                 # The daemon's stop never reached Slack: stopped now, the next write passes.
                 await self._stop(message, None, end)
-            elif (
-                self._closed_out
-                and code in REFUSED_CONTENT
-                and await self._write_plain(message, blocks)
-            ):
+            elif code in REFUSED_CONTENT:
+                # The message already shows what it showed: never replaced by a plainer one.
+                # The change is dropped; the next one is tried.
+                message.shown, message.exact, message.footer = blocks, False, footer
                 return True, overflow
             return False, None
         message.shown, message.exact, message.footer = blocks, False, footer
@@ -905,30 +967,23 @@ class ReplySink:
         return message.shown == blocks
 
     async def _write_plain(self, message: _Message, blocks: list[dict[str, Any]]) -> bool:
-        """Slack refused the final form of a message: without this one retry it would never show
-        it. An empty `blocks` makes Slack drop the old ones and render the text (chat.update
-        reference, 2026-09-25); a message not yet posted is posted as text alone."""
-        text = plain_text(blocks)
+        """Slack refused the blocks of a message not yet posted: without this one retry it would
+        never show, so it is posted as text alone. Never used on a message that shows something
+        already, which a plainer form would replace."""
         try:
-            if message.ts is None:
-                posted = await self._slack.chat_postMessage(
-                    channel=self._channel,
-                    thread_ts=self._thread_ts,
-                    text=text,
-                    unfurl_links=False,
-                    unfurl_media=False,
-                )
-                message.ts = str(posted["ts"])
-                self._open_reply(message.ts)
-            else:
-                await self._limiter.acquire()
-                await self._slack.chat_update(
-                    channel=self._channel, ts=message.ts, text=text, blocks=[]
-                )
+            posted = await self._slack.chat_postMessage(
+                channel=self._channel,
+                thread_ts=self._thread_ts,
+                text=plain_text(blocks),
+                unfurl_links=False,
+                unfurl_media=False,
+            )
         except Exception as exc:
             logger.warning("could not write a reply to Slack as plain text: %s", describe(exc))
             return False
+        message.ts = str(posted["ts"])
         message.shown, message.exact, message.footer = [], False, []
+        self._retrack()
         return True
 
     async def _post_step(self, message: _Message) -> tuple[bool, Cursor | None]:
@@ -960,7 +1015,7 @@ class ReplySink:
             return False, None
         message.ts = str(posted["ts"])
         message.shown, message.footer = blocks, footer
-        self._open_reply(message.ts)
+        self._retrack()
         return True, overflow
 
     async def _stream_step(self, message: _Message) -> tuple[bool, Cursor | None]:
@@ -980,11 +1035,17 @@ class ReplySink:
                     task_display_mode="timeline",
                 )
             except Exception as exc:
-                logger.warning("could not start a reply's stream: %s", describe(exc))
+                logger.warning(
+                    "could not start a reply's stream: %s%s",
+                    describe(exc),
+                    " (outcome unknown: a stream may be open that this reply never learned of)"
+                    if unknown_outcome(exc)
+                    else "",
+                )
                 return False, None
             message.ts, message.streaming = str(started["ts"]), True
             self._sent(message, plan)
-            self._open_reply(message.ts)
+            self._retrack()
             message.deadline = asyncio.create_task(self._expire(message))
             return True, plan.overflow
         try:
@@ -1004,6 +1065,13 @@ class ReplySink:
                 # Slack ended the stream first: the message goes on by update.
                 self._gone(message)
                 return await self._update_step(message, None)
+            if unknown_outcome(exc):
+                # An append is not idempotent: sent again it may show twice. The stream is told
+                # nothing more; the message is stopped and goes on by update, from the model.
+                logger.warning(
+                    "a stream append's outcome is unknown: the message goes on by update"
+                )
+                message.blind = True
             return False, None
         self._sent(message, plan)
         return True, plan.overflow
@@ -1031,8 +1099,14 @@ class ReplySink:
         except Exception as exc:
             if describe(exc) != NOT_STREAMING:
                 logger.warning("could not stop a reply's stream: %s", describe(exc))
+                if unknown_outcome(exc) and message.stop_unknown is None:
+                    message.stop_unknown = list(blocks or [])
                 return "failed"
-            result = "gone"
+            if message.stop_unknown is not None:
+                # The stop that failed on the connection is the one that landed, footer and all.
+                blocks, result = message.stop_unknown, "stopped"
+            else:
+                result = "gone"
         self._gone(message)
         message.exact = self._stream_shows(message, end)
         message.footer = list(blocks or []) if result == "stopped" else []
@@ -1065,7 +1139,13 @@ class ReplySink:
 
     async def _sync(self) -> bool:
         """Bring every message of the reply to the model, then, once the reply has ended, end
-        it. The lock is held."""
+        it, and follow which messages a crash would leave unfinished. The lock is held."""
+        try:
+            return await self._sync_messages()
+        finally:
+            self._retrack()
+
+    async def _sync_messages(self) -> bool:
         if not self._messages:
             if not self._has_content():
                 return await self._end() if self._closed_out else True
@@ -1078,6 +1158,16 @@ class ReplySink:
                 return False
         while True:
             message = self._messages[-1]
+            if message.streaming and message.blind:
+                # Told nothing more: stopped now (with the footer, if the reply has ended), and
+                # the update below writes the whole message from the model.
+                footer = self._closing_blocks() if self._closed_out else None
+                result = await self._stop(message, footer, None)
+                if result == "failed":
+                    return False
+                if self._closed_out and result == "stopped":
+                    self._end_mode = "inline"
+                message.exact = False
             if message.ts is None:
                 step = self._stream_step if message.mode == "stream" else self._post_step
                 ok, overflow = await step(message)
@@ -1114,6 +1204,7 @@ class ReplySink:
                 self._end_mode = "inline"
                 return True
         self._end_mode = "post"
+        self._body_landed = True  # every message is written: only the closing message is owed
         return await self._write_closing()
 
     async def _write_closing(self) -> bool:

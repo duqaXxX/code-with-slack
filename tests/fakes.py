@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import aiohttp
 from claude_agent_sdk import ClaudeAgentOptions, Message, ResultMessage
 from claude_agent_sdk._internal.message_parser import parse_message
 from claude_agent_sdk.types import PermissionResult, ToolPermissionContext
@@ -320,6 +321,12 @@ class FakeSlack(AsyncWebClient):
         args = {**(params or {}), **(json or {}), **(data if isinstance(data, dict) else {})}
         self.calls.append((api_method, args))
         answer = self.responses.get(api_method, {"ok": True})
+        if (
+            api_method in ("chat.appendStream", "chat.stopStream")
+            and api_method not in self.responses
+        ):
+            # Measured 2026-09-29: both answer the channel and the message's ts.
+            answer = {"ok": True, "channel": args.get("channel"), "ts": args.get("ts")}
         if isinstance(answer, list):  # a scripted sequence: one answer per call, the last repeats
             answer = answer.pop(0) if len(answer) > 1 else answer[0]
         if isinstance(answer, BaseException):
@@ -426,3 +433,21 @@ class FakeClock:
         self._sleepers = [(d, w) for d, w in self._sleepers if not w.done()]
         for _ in range(20):  # let what woke run to its next wait
             await asyncio.sleep(0)
+
+
+class ResetAfterApply(FakeSlack):
+    """Slack applied the call, then the connection reset before the answer came back: the
+    daemon cannot tell whether it took effect. `reset_next` names the method that does it once."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.reset_next: str | None = None
+
+    async def api_call(  # type: ignore[override]
+        self, api_method: str, **kwargs: Any
+    ) -> AsyncSlackResponse:
+        answer = await super().api_call(api_method, **kwargs)
+        if api_method == self.reset_next:
+            self.reset_next = None
+            raise aiohttp.ClientOSError(104, "Connection reset by peer")
+        return answer

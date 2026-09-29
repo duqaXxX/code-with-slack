@@ -24,7 +24,12 @@ from code_with_slack.footer import UsageCache, UsageProbe
 from code_with_slack.guards import ChannelGuard, Identity
 from code_with_slack.hold import Holds
 from code_with_slack.lock import AlreadyRunning, single_instance
-from code_with_slack.render.sinks import context_block, describe, notice_text
+from code_with_slack.render.sinks import (
+    ConnectionRetryUnlessStream,
+    context_block,
+    describe,
+    notice_text,
+)
 from code_with_slack.repair import repair_crash
 from code_with_slack.sessions import (
     SessionDeps,
@@ -102,8 +107,15 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
         state = StateStore(config_dir / "state.json")
         uploads = uploads_dir()
         prepare_uploads(uploads)
-        slack = AsyncWebClient(token=config.bot_token)
-        slack.retry_handlers.append(AsyncRateLimitErrorRetryHandler(max_retry_count=3))
+        # A retry after a reset is safe for every call but a stream's (not idempotent): see
+        # `ConnectionRetryUnlessStream`. A rate limit retry is safe for all, the call never ran.
+        slack = AsyncWebClient(
+            token=config.bot_token,
+            retry_handlers=[
+                ConnectionRetryUnlessStream(),
+                AsyncRateLimitErrorRetryHandler(max_retry_count=3),
+            ],
+        )
         auth = await slack.auth_test()
         identity = Identity(config.owner_user_id, str(auth["team_id"]), str(auth["user_id"]))
         probe = UsageProbe(Path.home(), default_client_factory)
