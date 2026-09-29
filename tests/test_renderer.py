@@ -91,7 +91,7 @@ async def test_a_failed_tool_is_an_error_line() -> None:
 
 
 async def test_a_long_command_in_the_foreground_stays_a_call_line() -> None:
-    # foreground.jsonl (CLI 2.1.283): task_started with is_backgrounded false, then the task's
+    # foreground.jsonl (CLI 2.1.285): task_started with is_backgrounded false, then the task's
     # end, then the call's result.
     sink, renderer = await render(sdk_messages("foreground"))
     assert not any(t.task or t.details == BACKGROUND for t in sink.tasks)
