@@ -3,6 +3,7 @@ import dataclasses
 import itertools
 import time
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -65,6 +66,149 @@ async def test_finish_alone_posts_no_closing_message(slack: FakeSlack) -> None:
     assert len(slack.calls_to("chat.postMessage")) == 1
     await sink.close_out("footer")
     assert len(slack.calls_to("chat.postMessage")) == 2
+
+
+async def test_on_open_reply_tracks_the_last_message_and_clears_once_finish_lands(
+    slack: FakeSlack,
+) -> None:
+    # Crash repair (issue #19 fix round item 6): `open` and every continuation report the
+    # (old, new) transition that would need rewriting after a crash; tracking clears once the
+    # body's own final write is known to have landed, not merely once `close_out` is called.
+    seen: list[tuple[str | None, str | None]] = []
+    sink = ReplySink(
+        slack,
+        channel=CHANNEL,
+        thread_ts=THREAD,
+        limiter=UpdateLimiter(),
+        on_open_reply=lambda old, new: seen.append((old, new)),
+    )
+    await sink.open(texts.WRITING)
+    assert seen == [(None, slack.posted_ts[0])]
+    await sink.text("x" * (sinks.MESSAGE_LIMIT + 10))  # forces a continuation message
+    await asyncio.sleep(0.05)
+    assert seen[-1] == (slack.posted_ts[0], slack.posted_ts[1]) and len(slack.posted_ts) == 2
+    await sink.finish([])
+    assert seen[-1] == (slack.posted_ts[1], None)
+    await sink.close_out("footer")
+    assert seen[-1] == (slack.posted_ts[1], None)  # close_out itself adds nothing further
+
+
+async def test_two_sinks_open_at_once_never_step_on_each_other_s_entry(
+    slack: FakeSlack, tmp_path: Path
+) -> None:
+    # Reproduces the fix round's measured bug: two replies open at once (a background task's own
+    # reply outliving the turn that started it) must never overwrite each other's tracking.
+    from code_with_slack.state import StateStore
+
+    store = StateStore(tmp_path / "state.json")
+    store.bind(CHANNEL, tmp_path)
+    store.open_thread(CHANNEL, THREAD)
+    limiter = UpdateLimiter()
+
+    def track(old: str | None, new: str | None) -> None:
+        store.replace_open_reply(CHANNEL, THREAD, old, new)
+
+    a = ReplySink(slack, channel=CHANNEL, thread_ts=THREAD, limiter=limiter, on_open_reply=track)
+    await a.open(texts.WRITING)
+    await a.text("A")
+    await a.settle()
+    await a.finish([])
+
+    b = ReplySink(slack, channel=CHANNEL, thread_ts=THREAD, limiter=limiter, on_open_reply=track)
+    await b.open(texts.WRITING)
+    await b.text("B")
+    await b.settle()
+    # A settled (its final write landed); B is still writing: only B's own message stays tracked.
+    assert store.thread(CHANNEL, THREAD).open_replies == (b._own_open_reply,)
+
+    await a.close_out(None, silent=True)  # A's own closing: B's entry is untouched
+    assert store.thread(CHANNEL, THREAD).open_replies == (b._own_open_reply,)
+
+
+async def test_a_continuation_posted_after_close_out_is_never_tracked(slack: FakeSlack) -> None:
+    # Fix round 2 item 6: a closed-out reply's own render never shows a status line again (only
+    # `_render`'s not-final branch ever adds one), so a continuation posted afterward (a task
+    # still outliving the turn, growing past MESSAGE_LIMIT) has nothing left for repair to fix.
+    seen: list[tuple[str | None, str | None]] = []
+    sink = ReplySink(
+        slack,
+        channel=CHANNEL,
+        thread_ts=THREAD,
+        limiter=UpdateLimiter(),
+        on_open_reply=lambda old, new: seen.append((old, new)),
+    )
+    await sink.open(texts.WRITING)
+    await sink.text("Started it.")
+    await sink.finish([])
+    await sink.close_out(None, silent=True)
+    assert seen[-1][1] is None  # settled: nothing tracked once closed out
+    seen.clear()
+    for i in range(300):  # in_progress lines never fold: enough to force a second message
+        await sink.task(TaskUpdate(f"t{i}", f"Read: {'x' * 40}{i}", "in_progress", name="Read"))
+    await asyncio.sleep(0.05)
+    assert len(slack.calls_to("chat.postMessage")) > 1  # did grow into a continuation
+    assert seen == []  # the continuation was never reported to state.json
+
+
+async def test_a_failed_final_write_keeps_tracking_until_the_retry_lands(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Fix round 2 item 6: the message still shows "Claude is writing" until the retry succeeds,
+    # so repair must still find it tracked in between.
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.01)
+    seen: list[tuple[str | None, str | None]] = []
+    sink = ReplySink(
+        slack,
+        channel=CHANNEL,
+        thread_ts=THREAD,
+        limiter=UpdateLimiter(),
+        on_open_reply=lambda old, new: seen.append((old, new)),
+    )
+    await sink.open(texts.WRITING)
+    ts = slack.posted_ts[0]
+    slack.responses["chat.update"] = [aiohttp.ClientConnectionError("network down"), {"ok": True}]
+    await sink.text("Done.")
+    await sink.finish([])
+    assert seen[-1] == (None, ts)  # only the initial post: the final write failed, not settled
+    assert sink._own_open_reply == ts
+    await asyncio.sleep(0.05)  # the retry lands
+    assert seen[-1] == (ts, None)
+    assert sink._own_open_reply is None
+
+
+async def test_a_failed_open_reply_write_never_orphans_the_stored_ts(
+    slack: FakeSlack, tmp_path: Path
+) -> None:
+    # Fix round 2 item 3: `_own_open_reply` only advances once the write actually lands, or a
+    # later successful call would report the wrong `old` and leave the real one stuck forever.
+    from code_with_slack.state import StateStore
+
+    store = StateStore(tmp_path / "state.json")
+    store.bind(CHANNEL, tmp_path)
+    store.open_thread(CHANNEL, THREAD)
+    failing = False
+
+    def track(old: str | None, new: str | None) -> None:
+        if failing:
+            raise RuntimeError("disk full")
+        store.replace_open_reply(CHANNEL, THREAD, old, new)
+
+    sink = ReplySink(
+        slack, channel=CHANNEL, thread_ts=THREAD, limiter=UpdateLimiter(), on_open_reply=track
+    )
+    await sink.open(texts.WRITING)  # first message: ts1 recorded for real
+    ts1 = sink._own_open_reply
+    assert store.thread(CHANNEL, THREAD).open_replies == (ts1,)
+
+    failing = True
+    await sink.text("x" * (sinks.MESSAGE_LIMIT + 10))  # forces a continuation to ts2; write fails
+    await asyncio.sleep(0.05)
+    assert sink._own_open_reply == ts1  # never advanced: the write for ts2 never landed
+    assert store.thread(CHANNEL, THREAD).open_replies == (ts1,)  # still what's really tracked
+
+    failing = False
+    await sink.finish([])  # succeeds now: must report the true old (ts1), not the failed ts2
+    assert store.thread(CHANNEL, THREAD).open_replies == ()
 
 
 async def test_a_second_close_out_call_is_a_no_op(slack: FakeSlack) -> None:
@@ -222,9 +366,9 @@ async def test_a_divider_separates_the_closing_message_from_the_footer(slack: Fa
 async def test_opening_shows_the_status_before_any_content(slack: FakeSlack) -> None:
     sink = reply(slack)
     await sink.open(texts.WAITING)
-    assert last_blocks(slack) == [sinks.context_block(texts.WAITING)]
+    assert last_blocks(slack) == [sinks.status_block(texts.WAITING)]
     await sink.announce(texts.WRITING)
-    assert last_blocks(slack) == [sinks.context_block(texts.WRITING)]
+    assert last_blocks(slack) == [sinks.status_block(texts.WRITING)]
     await sink.text("Hello.")
     await sink.finish([])
     await sink.close_out(None)
@@ -272,7 +416,7 @@ async def test_running_counts_follow_the_status_while_writing(slack: FakeSlack) 
     await sink.text("Working.")
     await sink.set_running("⏳ 2 agents")
     await asyncio.sleep(0.05)
-    assert last_blocks(slack)[-1] == sinks.context_block(f"{texts.WRITING} · ⏳ 2 agents")
+    assert last_blocks(slack)[-1] == sinks.status_block(f"{texts.WRITING} · ⏳ 2 agents")
 
 
 async def test_unchanged_running_counts_write_nothing(slack: FakeSlack) -> None:

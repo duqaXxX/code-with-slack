@@ -69,6 +69,19 @@ async def test_deny_all_releases_every_pending_request_of_the_same_thread() -> N
     assert not other_channel.future.done()
 
 
+async def test_pending_in_reads_a_thread_s_requests_without_resolving_them() -> None:
+    approvals = Approvals()
+    a_id, a = approvals.open("C000CHAN", THREAD, "a")
+    _, other_thread = approvals.open("C000CHAN", OTHER_THREAD, "c")
+    approvals.posted(a_id, "ts-a")
+    assert {(p.title, p.message_ts) for p in approvals.pending_in("C000CHAN", THREAD)} == {
+        ("a", "ts-a")
+    }
+    assert not a.future.done() and not other_thread.future.done()
+    # A no-op read: the same request is still there, and still answerable, afterward.
+    assert {p.title for p in approvals.pending_in("C000CHAN", THREAD)} == {"a"}
+
+
 async def test_ids_are_unguessable_and_unique() -> None:
     approvals = Approvals()
     ids = {approvals.open("C000CHAN", THREAD, "t")[0] for _ in range(100)}

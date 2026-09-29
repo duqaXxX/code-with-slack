@@ -25,6 +25,7 @@ from code_with_slack.guards import ChannelGuard, Identity
 from code_with_slack.hold import Holds
 from code_with_slack.lock import AlreadyRunning, single_instance
 from code_with_slack.render.sinks import context_block, describe, notice_text
+from code_with_slack.repair import repair_crash
 from code_with_slack.sessions import (
     SessionDeps,
     SessionManager,
@@ -99,12 +100,6 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
     config = load_config(config_dir)
     with single_instance(config_dir):
         state = StateStore(config_dir / "state.json")
-        try:
-            removed = state.prune(_alive_sessions, time.time())
-            if removed:
-                logger.info("pruned %d stale thread(s) from state.json", removed)
-        except Exception as exc:
-            logger.warning("could not prune stale threads: %s", exc)
         uploads = uploads_dir()
         prepare_uploads(uploads)
         slack = AsyncWebClient(token=config.bot_token)
@@ -146,8 +141,28 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
             stop.set()
 
         loop = asyncio.get_running_loop()
+        # Issue #19 fix round item 5: installed before repair runs below, not after, so a
+        # SIGTERM that arrives during a long repair (many threads, each Slack call under the
+        # shared rate limiter) is caught rather than left to Python's default disposition for
+        # SIGTERM, which terminates the process at once and skips every `finally` below (the
+        # single-instance lock, the Socket Mode connection, every session). Repair itself still
+        # runs to completion either way (nothing here cancels it); the signal is only lost if
+        # nothing is listening for it yet.
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, on_signal, sig)
+
+        # Issue #19 fix round item 3: repaired, then pruned, before the Socket Mode connection
+        # even opens. `slack` (a plain `AsyncWebClient`, already `auth_test`'d above) works
+        # without it; opening Socket Mode is what starts delivering events, and a pruned thread's
+        # leftovers must still be repaired first.
+        await repair_crash(slack, state, sessions.update_limiter)
+        try:
+            removed = state.prune(_alive_sessions, time.time())
+            if removed:
+                logger.info("pruned %d stale thread(s) from state.json", removed)
+        except Exception as exc:
+            logger.warning("could not prune stale threads: %s", exc)
+
         await handler.connect_async()  # type: ignore[no-untyped-call]  # untyped in Bolt 1.30.0
         logger.info("connected to Slack workspace %s", identity.team_id)
         try:

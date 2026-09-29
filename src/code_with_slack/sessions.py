@@ -78,6 +78,7 @@ from code_with_slack.render.sinks import (
     ReplySink,
     UpdateLimiter,
     context_block,
+    delete_request,
     describe,
     notice_text,
 )
@@ -533,6 +534,7 @@ class ThreadSession:
         error stands, ⏳/✋ (whichever this thread still holds) otherwise."""
         stored = self._deps.state.thread(self.channel_id, self.thread_ts)
         if stored is None or stored.session_id is None:
+            self._deps.state.set_status_pending(self.channel_id, self.thread_ts, None)
             await self._status.clear()
             return
         if self._error_standing:
@@ -849,6 +851,20 @@ class ThreadSession:
         cut_short = not self.idle
         self._closed = True
         try:
+            # Issue #19 fix round item 8: a snapshot taken before any cancellation below, not
+            # `deny_all`'s own return list read afterward. `_cancel_tasks` cancels the reader
+            # task, which throws `CancelledError` into a request genuinely being awaited inside
+            # `_can_use_tool` regardless of whether its future was resolved first (asyncio does
+            # this once `cancel()` is requested before the task's next resume actually runs), and
+            # `_can_use_tool`'s own `finally` discards the approval from `Approvals` either way
+            # (cancelled or resolved): by the time `deny_all` ran after that, there would be
+            # nothing left in it. Deleting each message here does not depend on `_can_use_tool`
+            # ever seeing a decision, so the cancel-first order below (kept exactly as it was, for
+            # its own reason) stays untouched.
+            requests_to_delete = [
+                pending.message_ts
+                for pending in self._deps.approvals.pending_in(self.channel_id, self.thread_ts)
+            ]
             # The worker may hold the connect lock while the CLI starts: cancelled first.
             await self._cancel_tasks()
             # A daemon word may be starting the client in its own task. Its connect finishes,
@@ -857,6 +873,8 @@ class ThreadSession:
             async with self._connect_lock:
                 await self._cancel_tasks()
             self._deps.approvals.deny_all(self.channel_id, self.thread_ts)
+            for message_ts in requests_to_delete:
+                await self._delete_request(message_ts)
             # A turn the worker took but had not sent yet is in no queue.
             taken, self._taken = self._taken, None
             line = texts.ENDED.format(reason=reason)
@@ -884,12 +902,27 @@ class ThreadSession:
                 # session and hand the same root to a freshly built one right away, whose own
                 # `StatusReaction` strips every other name on its own first `show` (D10) — this
                 # ❌ must already be on the root before that race can even start.
+                self._note_status(Status.ERROR)
                 await self._status.show(Status.ERROR)
             if self._latest is not None:
                 # The last chance a change still only debounced (item 7) gets: `asyncio.run`'s
                 # own exit never lets a `_later` still waiting on its own timer run.
                 with contextlib.suppress(Exception):
                     await self._latest.settle()
+            # Crash repair (issue #19): a graceful close is not what repair is for, whatever is
+            # still live in Slack when it ends (an approval message `_cancel_tasks` cut off
+            # mid-await, most likely: `_can_use_tool`'s own finally never reached the point that
+            # would have cleared it), so this thread's fields end up empty either way. Best-effort
+            # (fix round item 7): a failed write here must never skip `done_closing`/`on_closed`.
+            try:
+                self._deps.state.clear_repair(self.channel_id, self.thread_ts)
+            except Exception as exc:
+                logger.warning(
+                    "could not clear state.json's crash-repair fields for %s/%s: %s",
+                    self.channel_id,
+                    self.thread_ts,
+                    describe(exc),
+                )
             # Only now: the CLI process (if any) has had its chance to flush and exit, or closing
             # failed partway through and there is nothing left worth waiting for either way.
             self.done_closing.set()
@@ -1227,9 +1260,17 @@ class ThreadSession:
         the state asked for last, set here synchronously, since `StatusReaction.current` changes
         only once Slack has answered."""
         self._error_standing = state is Status.ERROR
+        self._note_status(state)
         task = asyncio.create_task(self._status.show(state))
         self._background.add(task)
         task.add_done_callback(self._background.discard)
+
+    def _note_status(self, state: Status) -> None:
+        """Crash repair (issue #19): the root's reaction while it is ⏳ or ✋, cleared once ✅ or
+        ❌ is requested. Called from `_react` and from the two other places that ask
+        `StatusReaction` for a state directly (`close`'s ❌, `_react_done_if_idle`'s ✅)."""
+        pending = state.value if state in (Status.WORKING, Status.WAITING) else None
+        self._deps.state.set_status_pending(self.channel_id, self.thread_ts, pending)
 
     def _react_error(self) -> None:
         """❌ (D10). It stands until another state is asked for: `_react` records it in
@@ -1253,6 +1294,7 @@ class ThreadSession:
         `StatusReaction.current`: the reaction only updates once its own `reactions.add`
         returns, which a quick turn can easily outrun."""
         if not self.waiting_for_owner and self.idle and not self._error_standing:
+            self._note_status(Status.DONE)
             await self._status.show(Status.DONE)
 
     def _idle_timer_check(self) -> None:
@@ -1455,6 +1497,9 @@ class ThreadSession:
             channel=self.channel_id,
             thread_ts=self.thread_ts,
             limiter=self._deps.update_limiter,
+            on_open_reply=lambda old, new: self._deps.state.replace_open_reply(
+                self.channel_id, self.thread_ts, old, new
+            ),
         )
         previous, self._latest = self._latest, sink
         await sink.set_running(self._running_counts())
@@ -1686,8 +1731,22 @@ class ThreadSession:
                     describe(exc),
                 )
                 return PermissionResultDeny(message=texts.APPROVAL_UNPOSTED)
-            if not self._deps.approvals.posted(approval_id, str(posted["ts"])):
-                await self._delete_request(str(posted["ts"]))  # decided while it was posted
+            message_ts = str(posted["ts"])
+            if self._deps.approvals.posted(approval_id, message_ts):
+                # Crash repair (issue #19): still carrying buttons, until it is answered.
+                # Best-effort (fix round item 7): the message is already live either way, so a
+                # failed write here is logged loudly rather than left silently unrecorded.
+                try:
+                    self._deps.state.add_request(self.channel_id, self.thread_ts, message_ts)
+                except Exception as exc:
+                    logger.error(
+                        "posted a request in %s/%s that state.json could not record: %s",
+                        self.channel_id,
+                        self.thread_ts,
+                        describe(exc),
+                    )
+            else:
+                await self._delete_request(message_ts)  # decided while it was posted
             decision = await pending.future
         finally:
             self._deps.approvals.discard(approval_id)
@@ -1738,11 +1797,15 @@ class ThreadSession:
         """Remove a decided request: the tool's line in the reply records what happened."""
         if message_ts is None:
             return
+        await delete_request(self._deps.slack, channel=self.channel_id, ts=message_ts)
         try:
-            await self._deps.slack.chat_delete(channel=self.channel_id, ts=message_ts)
+            # Crash repair (issue #19): the request is spoken for either way, so a startup
+            # repair never retries a delete this call already made (or gave up on). Best-effort
+            # (fix round item 7): a failed write here must never surface past this point.
+            self._deps.state.remove_request(self.channel_id, self.thread_ts, message_ts)
         except Exception as exc:
-            logger.error(
-                "could not remove a request in %s/%s: %s",
+            logger.warning(
+                "could not clear a deleted request from state.json in %s/%s: %s",
                 self.channel_id,
                 self.thread_ts,
                 describe(exc),

@@ -69,7 +69,14 @@ from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, hold_blocks
 from code_with_slack.prompt import Prompt
 from code_with_slack.render.escape import markdown_escape, mrkdwn_escape
 from code_with_slack.render.renderer import one_line
-from code_with_slack.render.sinks import FALLBACK_LIMIT, context_block, describe, notice_text, split
+from code_with_slack.render.sinks import (
+    FALLBACK_LIMIT,
+    context_block,
+    delete_request,
+    describe,
+    notice_text,
+    split,
+)
 from code_with_slack.resume import RESUME_ACTION, RESUME_ROWS, TITLE_LIMIT, matching, resume_blocks
 from code_with_slack.sessions import (
     DirectoryUnavailable,
@@ -437,6 +444,19 @@ def build_app(
             return False
         message_ts = str(posted["ts"])
         if holds.posted(hold_id, message_ts):
+            # Crash repair (issue #19): a D8 hold question is a request like an approval.
+            # Best-effort (fix round 2 item 1): outside the try/finally below on purpose, so a
+            # failed write here can never skip `hold_start`/`hold_end` and leave the hold itself
+            # undiscarded; the message is already live either way, so a failure is logged loudly.
+            try:
+                state.add_request(channel, thread_ts, message_ts)
+            except Exception as exc:
+                logger.error(
+                    "posted a D8 hold in %s/%s that state.json could not record: %s",
+                    channel,
+                    thread_ts,
+                    describe(exc),
+                )
             continued = False
             try:
                 session.hold_start()
@@ -448,7 +468,7 @@ def build_app(
             # Decided (a fast `!stop` or drain) before the message's own ts was known: nobody
             # else learned it in time to remove it, and the wait below is already over, so
             # `hold_start`/`hold_end` (and their ✋) never ran for it either.
-            await remove_request(channel, message_ts)
+            await remove_request(channel, thread_ts, message_ts)
             continued = pending.future.result()
         if not continued:
             await notice(channel, thread_ts, texts.NOT_SENT)
@@ -468,7 +488,7 @@ def build_app(
         if holds.resolve(hold_id, channel, thread_ts, continue_=continue_) is None:
             await tell_owner(channel, thread_ts, texts.HOLD_GONE)
             return
-        await remove_request(channel, body["message"]["ts"])
+        await remove_request(channel, thread_ts, body["message"]["ts"])
 
     for action_id in (HOLD_CONTINUE, HOLD_CANCEL):
         app.action(action_id)(on_hold_decision)
@@ -628,7 +648,7 @@ def build_app(
         if approvals.resolve(approval_id, channel, thread_ts, decision) is None:
             await tell_owner(channel, thread_ts, texts.APPROVAL_GONE)
             return
-        await remove_request(channel, body["message"]["ts"])
+        await remove_request(channel, thread_ts, body["message"]["ts"])
 
     for action_id in DECISION_ACTIONS:
         app.action(action_id)(on_decision)
@@ -752,7 +772,7 @@ def build_app(
             await notice(channel, thread_ts, texts.BIND_BUSY)
             return
         await announce_bind(channel, thread_ts, directory)
-        await remove_request(channel, body["message"]["ts"])
+        await remove_request(channel, thread_ts, body["message"]["ts"])
 
     async def handle_resume(channel: str, thread_ts: str, target: str) -> None:
         record = state.channel(channel)
@@ -859,19 +879,28 @@ def build_app(
             await tell_owner(channel, thread_ts, texts.RESUME_GONE)
             return
         if await resume_into_new_thread(channel, thread_ts, record.directory, chosen):
-            await remove_request(channel, body["message"]["ts"])
+            await remove_request(channel, thread_ts, body["message"]["ts"])
 
-    async def remove_request(channel: str, ts: str | None) -> None:
+    async def remove_request(channel: str, thread_ts: str, ts: str | None) -> None:
         # The tool's line in the reply records the call: the request message has done its job.
         if ts is None:
             return
+        await delete_request(slack, channel=channel, ts=ts)
         try:
-            await slack.chat_delete(channel=channel, ts=ts)
+            # Crash repair (issue #19): spoken for either way, as `ThreadSession._delete_request`
+            # does. A no-op for a ts this thread never recorded (a folder or resume picker click).
+            # Best-effort (fix round 2 item 1): a failed write here is logged and swallowed.
+            state.remove_request(channel, thread_ts, ts)
         except Exception as exc:
-            logger.warning("could not remove a request in %s: %s", channel, describe(exc))
+            logger.warning(
+                "could not clear a deleted request from state.json in %s: %s",
+                channel,
+                describe(exc),
+            )
 
     async def show_answered(
         channel: str,
+        thread_ts: str,
         ts: str | None,
         questions: list[dict[str, Any]],
         answers: dict[str, str | list[str]],
@@ -892,7 +921,20 @@ def build_app(
         except Exception as exc:
             # The request must not keep buttons that no longer work: remove it, as before.
             logger.warning("could not record an answer in %s: %s", channel, describe(exc))
-            await remove_request(channel, ts)
+            await remove_request(channel, thread_ts, ts)
+            return
+        # Crash repair (issue #19): answered without a delete, so it no longer carries buttons and
+        # must still leave the tracked list. Kept outside the try above on purpose (fix round 2
+        # item 1): a failed write here must never look like the chat.update itself failed and
+        # trigger a delete of a message that was just successfully updated. Best-effort: logged.
+        try:
+            state.remove_request(channel, thread_ts, ts)
+        except Exception as exc:
+            logger.warning(
+                "could not clear an answered request from state.json in %s: %s",
+                channel,
+                describe(exc),
+            )
 
     @app.action("question_open")
     async def on_question_open(ack: AsyncAck, body: dict[str, Any]) -> None:
@@ -973,7 +1015,9 @@ def build_app(
         if resolved is None:
             await tell_owner(draft.channel_id, draft.thread_ts, texts.APPROVAL_GONE)
             return
-        await show_answered(draft.channel_id, pending.message_ts, questions, answers)
+        await show_answered(
+            draft.channel_id, draft.thread_ts, pending.message_ts, questions, answers
+        )
 
     @app.error
     async def on_error(error: Exception) -> None:

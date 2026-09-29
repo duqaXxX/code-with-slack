@@ -7,6 +7,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Crash repair (issue #19): `state.json` now tracks, per thread, the ts of every open reply's
+  last message (`open_replies`, a list: a background task's own reply can outlive the turn that
+  started it, so more than one can be open at once), the ts of every approval, question and D8
+  hold request still carrying buttons, and the root's reaction while it is ⏳ or ✋, ids only,
+  never message content (`state.json` stays version 2, additive). On start, before the Socket
+  Mode connection opens, `code_with_slack.repair.repair_crash` reads each open reply back by its
+  own ts and rewrites it to say the daemon stopped before an answer, dropping the daemon's own
+  status line (found by its own fixed block_id, since Slack assigns one to a block that was
+  posted without one) rather than the whole message; deletes each stale request; and sets ❌ on a
+  root left mid-turn, through the same reaction helper a live session uses. A graceful close now
+  also deletes any request it denies (as `!stop` already did) and clears these fields itself, so
+  a second start repairs nothing.
 - A status reaction on each session's root message: ⏳ working, ✋ waiting for the owner, ✅ once
   everything has ended, ❌ on an error, `!stop` or a restart that cut a busy session short (D10).
   `reactions:write` is added to the bot's Slack scopes.

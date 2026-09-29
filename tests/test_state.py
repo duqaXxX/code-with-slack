@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from code_with_slack.state import ChannelRecord, StateError, StateStore, ThreadState
+from code_with_slack.state import ChannelRecord, StateError, StateStore, ThreadState, _parse_thread
 
 CHANNEL = "C000CHAN"
 OTHER_CHANNEL = "C000OTHR"
@@ -146,6 +146,9 @@ def test_v2_round_trips_every_field(tmp_path: Path) -> None:
                         "session_id": SESSION,
                         "bypass": True,
                         "effort": "low",
+                        "open_replies": [],
+                        "requests": [],
+                        "status": None,
                     }
                 },
             }
@@ -320,6 +323,176 @@ class TestPrune:
             store.prune(alive=boom, now=1790549806.565369)
         assert path.read_text() == before
         assert store.thread(CHANNEL, THREAD_TS) is not None
+
+
+def test_a_v2_file_with_no_repair_fields_loads_with_them_empty(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "channels": {
+                    CHANNEL: {
+                        "directory": str(tmp_path / "project"),
+                        "notice_pending": False,
+                        "threads": {
+                            THREAD_TS: {
+                                "directory": str(tmp_path / "project"),
+                                "session_id": SESSION,
+                                "bypass": False,
+                                "effort": None,
+                            }
+                        },
+                    }
+                },
+            }
+        )
+    )
+    thread = StateStore(path).thread(CHANNEL, THREAD_TS)
+    assert thread == ThreadState(tmp_path / "project", session_id=SESSION)
+    assert thread is not None
+    assert thread.open_replies == ()
+    assert thread.requests == ()
+    assert thread.status is None
+
+
+def test_a_file_with_1304c5e_s_single_open_reply_field_loads_as_nothing_open(
+    tmp_path: Path,
+) -> None:
+    # That field never shipped past the fix round: a file written by it is read exactly like one
+    # written before crash repair existed at all.
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "channels": {
+                    CHANNEL: {
+                        "directory": str(tmp_path / "project"),
+                        "notice_pending": False,
+                        "threads": {
+                            THREAD_TS: {
+                                "directory": str(tmp_path / "project"),
+                                "session_id": None,
+                                "bypass": False,
+                                "effort": None,
+                                "open_reply": "1790000000.000001",
+                            }
+                        },
+                    }
+                },
+            }
+        )
+    )
+    thread = StateStore(path).thread(CHANNEL, THREAD_TS)
+    assert thread is not None
+    assert thread.open_replies == ()
+
+
+def test_repair_fields_round_trip_and_are_ignored_by_code_that_predates_them(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "state.json"
+    store = StateStore(path)
+    store.bind(CHANNEL, tmp_path / "project")
+    store.open_thread(CHANNEL, THREAD_TS)
+    store.replace_open_reply(CHANNEL, THREAD_TS, None, "1790000000.000001")
+    store.add_request(CHANNEL, THREAD_TS, "1790000000.000002")
+    store.add_request(CHANNEL, THREAD_TS, "1790000000.000003")
+    store.set_status_pending(CHANNEL, THREAD_TS, "hourglass_flowing_sand")
+
+    reloaded = StateStore(path).thread(CHANNEL, THREAD_TS)
+    assert reloaded == ThreadState(
+        tmp_path / "project",
+        open_replies=("1790000000.000001",),
+        requests=("1790000000.000002", "1790000000.000003"),
+        status="hourglass_flowing_sand",
+    )
+    # Code that only knows `_parse_thread`'s old fields ignores the extra keys.
+    raw = json.loads(path.read_text())
+    old_shape = {
+        "directory": raw["channels"][CHANNEL]["threads"][THREAD_TS]["directory"],
+        "session_id": raw["channels"][CHANNEL]["threads"][THREAD_TS]["session_id"],
+        "bypass": raw["channels"][CHANNEL]["threads"][THREAD_TS]["bypass"],
+        "effort": raw["channels"][CHANNEL]["threads"][THREAD_TS]["effort"],
+    }
+    assert _parse_thread(old_shape) == ThreadState(tmp_path / "project")
+
+
+def test_replace_open_reply_tracks_two_sinks_independently(tmp_path: Path) -> None:
+    # The bug the fix round measured: two replies open at once (a background task's own reply
+    # outliving the turn that started it) must never step on each other's entry.
+    store = StateStore(tmp_path / "state.json")
+    store.bind(CHANNEL, tmp_path)
+    store.open_thread(CHANNEL, THREAD_TS)
+    store.replace_open_reply(CHANNEL, THREAD_TS, None, "a-1")  # sink A's first message
+    store.replace_open_reply(CHANNEL, THREAD_TS, None, "b-1")  # sink B's first message
+    assert set(store.thread(CHANNEL, THREAD_TS).requests) == set()  # sanity: unrelated field
+    assert sorted(store.thread(CHANNEL, THREAD_TS).open_replies) == ["a-1", "b-1"]
+    store.replace_open_reply(CHANNEL, THREAD_TS, "a-1", None)  # sink A settles; B untouched
+    assert store.thread(CHANNEL, THREAD_TS).open_replies == ("b-1",)
+    store.replace_open_reply(CHANNEL, THREAD_TS, "b-1", "b-2")  # sink B's continuation
+    assert store.thread(CHANNEL, THREAD_TS).open_replies == ("b-2",)
+    store.replace_open_reply(CHANNEL, THREAD_TS, "b-2", None)
+    assert store.thread(CHANNEL, THREAD_TS).open_replies == ()
+
+
+def test_replace_open_reply_is_a_no_op_that_changes_nothing_for_an_unknown_thread(
+    tmp_path: Path,
+) -> None:
+    store = StateStore(tmp_path / "state.json")
+    store.bind(CHANNEL, tmp_path)
+    store.replace_open_reply(CHANNEL, THREAD_TS, None, "ts-1")
+    assert store.thread(CHANNEL, THREAD_TS) is None
+
+
+def test_remove_request_drops_only_the_named_one(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.json")
+    store.bind(CHANNEL, tmp_path / "project")
+    store.open_thread(CHANNEL, THREAD_TS)
+    store.add_request(CHANNEL, THREAD_TS, "ts-1")
+    store.add_request(CHANNEL, THREAD_TS, "ts-2")
+    store.remove_request(CHANNEL, THREAD_TS, "ts-1")
+    thread = store.thread(CHANNEL, THREAD_TS)
+    assert thread is not None
+    assert thread.requests == ("ts-2",)
+    store.remove_request(CHANNEL, THREAD_TS, "ts-1")  # already gone: a no-op
+    assert store.thread(CHANNEL, THREAD_TS) == thread
+
+
+def test_repair_setters_are_a_no_op_for_an_unknown_thread(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.json")
+    store.bind(CHANNEL, tmp_path)
+    store.replace_open_reply(CHANNEL, THREAD_TS, None, "ts-1")
+    store.add_request(CHANNEL, THREAD_TS, "ts-1")
+    store.set_status_pending(CHANNEL, THREAD_TS, "x")
+    assert store.thread(CHANNEL, THREAD_TS) is None
+
+
+def test_repairs_pending_lists_only_threads_with_something_open(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.json")
+    store.bind(CHANNEL, tmp_path / "project")
+    store.open_thread(CHANNEL, THREAD_TS)
+    store.open_thread(CHANNEL, OTHER_THREAD_TS)
+    store.replace_open_reply(CHANNEL, OTHER_THREAD_TS, None, "ts-1")
+    assert store.repairs_pending() == [
+        (CHANNEL, OTHER_THREAD_TS, store.thread(CHANNEL, OTHER_THREAD_TS))
+    ]
+
+
+def test_clear_repair_fields_clears_all_three_and_is_a_no_op_after(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    store = StateStore(path)
+    store.bind(CHANNEL, tmp_path / "project")
+    store.open_thread(CHANNEL, THREAD_TS)
+    store.replace_open_reply(CHANNEL, THREAD_TS, None, "ts-1")
+    store.add_request(CHANNEL, THREAD_TS, "ts-2")
+    store.set_status_pending(CHANNEL, THREAD_TS, "x")
+    store.clear_repair(CHANNEL, THREAD_TS)
+    assert store.thread(CHANNEL, THREAD_TS) == ThreadState(tmp_path / "project")
+    assert StateStore(path).thread(CHANNEL, THREAD_TS) == ThreadState(tmp_path / "project")
+    store.clear_repair(CHANNEL, THREAD_TS)  # already clear: a no-op, no extra write
+    store.clear_repair("unknown-channel", THREAD_TS)  # unknown thread: a no-op too
 
 
 def test_prune_keeps_every_thread_of_a_folder_it_cannot_decide(tmp_path: Path) -> None:
