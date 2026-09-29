@@ -49,7 +49,7 @@ All notable changes to this project are documented here. The format follows
   nothing rings while Claude writes, nor for `!stop`, a restart or an idle close. `docs/setup.md`
   gains the notification section and `docs/features.md` the measurements behind it.
 - D5/D6: a bind's answer names each existing thread's own folder when it differs from the new
-  one, and that thread's first reply after the bind repeats the notice once per process; the
+  one, and every prompt sent in that thread after the bind repeats the notice, as an ephemeral message; the
   resume picker's row for a session already held by another thread, and the refusal when that
   session is named or clicked, both carry a permalink to the holding thread instead of a plain
   marker.
@@ -75,7 +75,8 @@ All notable changes to this project are documented here. The format follows
   (a button holding a bare session id) answers that it is out of date.
 - `!stop` shows ✅ on the stopped session's root, for a thread stop and for each session a channel
   `!stop` stops, instead of ❌: a stop the owner gave is not an error. ❌ stays for errors and for
-  a restart that cuts work short.
+  a restart that cuts work short. `!stop` inside a thread with nothing running answers `Nothing
+  is running in this session.` as an ephemeral message.
 - `!bypass`, `!stop`, `!status`, `!bind` and `!help` answer differently at the top level than
   inside a session's thread: `!bypass on`/`off` is per thread and refused at the top level;
   `!stop` and `!status` act on every session of the channel at the top level and on one session

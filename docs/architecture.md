@@ -103,10 +103,11 @@ in the channel (`in_channel`, or `say` with no thread), which is neither ephemer
 reply, so it stays after a reload and never notifies. A word typed inside a session's thread is
 answered by `tell_owner` or an ephemeral `say` under the owner's message (`chat.postEphemeral`
 with `thread_ts`), which Slack drops on reload, or by `acknowledge`, a ✅ reaction on the word
-(`!bypass`); `!stop` posts nothing there, the session reacts on its own root. `word_report`
-chooses the same place for a word's failure, and swallows a failed channel post, since a raise
-there would reach the message handler's own failure path, which posts `ERROR_REPLY` threaded
-under the word. The D5 old-folder notice and `Not sent.` are ephemeral as well. A Resume button
+(`!bypass`); `!stop` there posts nothing when it stops something, since the session reacts on its own root,
+and `texts.NOTHING_TO_STOP_THREAD` (ephemeral) when nothing runs. `word_report` chooses the same
+place for a word's failure, and `reply_on_failure` logs a report that itself fails instead of
+letting it raise, since a raise would reach the message handler's own failure path, which posts
+`ERROR_REPLY` threaded under the word. The D5 old-folder notice and `Not sent.` are ephemeral as well. A Resume button
 carries `<session id>@<thread ts>`, the thread of the owner's `!resume` message (`resume.parse_resume_value`);
 the click is checked like any other inbound path, and a value in another shape (a list posted by
 an older version) answers `texts.RESUME_STALE`.
@@ -340,9 +341,9 @@ every bound channel. A top-level message opens one in the channel's current fold
 (`SessionManager.open`); a reply inside a thread hands back its existing one, rebuilding it first
 if a restart, an idle close or a gone resume dropped it (`SessionManager.get`); a Resume click or
 `!resume <id or title>` opens one already set to a chosen session id, in the thread of the owner's
-`!resume` message (`SessionManager.resume`); `slack_app.resume_into_thread` edits the list the click
-came from before it posts the confirmation, so a confirmation Slack refuses cannot leave buttons for
-a session already resumed.
+`!resume` message (`SessionManager.resume`); `slack_app.resume_into_thread` posts the confirmation, then edits the list the click
+came from whether or not the confirmation posted, so buttons never outlive a resume and a failed
+edit never blocks the confirmation.
 Each thread keeps the folder it was opened in for as long as it exists: `!bind` changes only
 where the *next* thread starts, and refuses while any of the channel's threads is not idle
 (`SessionManager.bind`).
@@ -531,9 +532,10 @@ does not offer: `code_with_slack.resume` lists the directory's sessions from the
 activity, git branch, size), the first 8 characters of the session id and a Resume button each, or matches
 `!resume <id or name>`. The terminal's picker shows no id; the list shows its start because
 `!resume` takes a full id or any start of one at least 8 characters long (`resume.ID_SHOWN`). The
-list is posted in the thread of the `!resume` message itself, and a Resume click or a typed
-`!resume <id or name>` (`slack_app.resume_into_new_thread`) opens the chosen session in that same
-thread (`sessions.resume`), with a fresh thread entry: bypass off and no `/effort` level, whatever
+list is posted in the channel, and each button carries the session id and the ts of the `!resume`
+message (`resume.parse_resume_value`). A Resume click or a typed `!resume <id or name>`
+(`slack_app.resume_into_thread`) opens the chosen session in the thread of that message
+(`sessions.resume`), with a fresh thread entry: bypass off and no `/effort` level, whatever
 the session had before. It is refused, with no `await` between the check and the `resume` call it
 guards so nothing can change in between, when that thread already holds a session
 (`texts.RESUME_HELD`: a resume is never a swap) or the channel was bound to another folder while
