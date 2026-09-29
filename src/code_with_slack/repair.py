@@ -20,12 +20,12 @@ range built around the same ts instead returned the thread's root too).
 
 import logging
 from collections.abc import Callable
+from typing import Any
 
 from slack_sdk.web.async_client import AsyncWebClient
 
 from code_with_slack import texts
 from code_with_slack.render.sinks import (
-    BLOCKS_LIMIT,
     NOT_STREAMING,
     UpdateLimiter,
     context_block,
@@ -40,6 +40,9 @@ logger = logging.getLogger(__name__)
 _STOPPED_BLOCK = context_block(texts.STOPPED_BEFORE_ANSWER)
 # What a card left running becomes: it never ended, and will not.
 _RUNNING_CARD = ("pending", "in_progress")
+# Slack's own cap: the read-back count is Slack's (streamed markdown reads back as several
+# blocks), not the sink's, which keeps a margin under it for what it writes itself.
+SLACK_BLOCKS = 50
 
 
 async def repair_crash(slack: AsyncWebClient, state: StateStore, limiter: UpdateLimiter) -> None:
@@ -93,11 +96,10 @@ async def _repair_reply(
 ) -> None:
     """Stop the reply's message, then rewrite it: its blocks as Slack keeps them, every card left
     running closed as an error (a stopped message would show it so anyway, until it is updated:
-    measured 2026-09-28), plus the line that says it stopped. Kept within `BLOCKS_LIMIT` (Slack's
-    own 50-block cap, with the sink's own margin): if the body is already at the limit the
-    stopped line replaces its last block rather than push the message over it. A failed read or
-    a message already gone is logged and left alone: never replaced with a shorter form that
-    would lose its content."""
+    measured 2026-09-28), plus the line that says it stopped. Kept within Slack's 50 blocks: at
+    the cap the line goes into the last context block (the footer), or is left out if there is
+    none; a block that holds content is never replaced. A failed read or a message already gone
+    is logged and left alone: never replaced with a shorter form that would lose its content."""
     try:
         await slack.chat_stopStream(channel=channel_id, ts=message_ts)
     except Exception as exc:
@@ -129,10 +131,10 @@ async def _repair_reply(
         else block
         for block in message.get("blocks") or []
     ]
-    if len(blocks) >= BLOCKS_LIMIT:
-        blocks[-1] = _STOPPED_BLOCK
-    else:
+    if len(blocks) < SLACK_BLOCKS:
         blocks.append(_STOPPED_BLOCK)
+    else:
+        _say_stopped_in_the_footer(blocks)
     try:
         await limiter.acquire()
         await slack.chat_update(
@@ -142,6 +144,17 @@ async def _repair_reply(
         logger.warning(
             "could not rewrite a crashed reply in %s/%s: %s", channel_id, thread_ts, describe(exc)
         )
+
+
+def _say_stopped_in_the_footer(blocks: list[dict[str, Any]]) -> None:
+    """Add the stopped line to the text of the last context block, in place; nothing when the
+    message has none: the edit's own `text` says it."""
+    last = next((b for b in reversed(blocks) if b.get("type") == "context"), None)
+    if last is None or not last.get("elements"):
+        return
+    first = last["elements"][0]
+    joined = f"{first.get('text', '')} · {texts.STOPPED_BEFORE_ANSWER}".lstrip(" ·")
+    last["elements"] = [{**first, "text": joined}, *last["elements"][1:]]
 
 
 async def _repair_status(slack: AsyncWebClient, channel_id: str, thread_ts: str, name: str) -> None:
