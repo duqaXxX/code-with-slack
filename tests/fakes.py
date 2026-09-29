@@ -25,6 +25,7 @@ STRANGER = "U000BOB"
 TEAM = "T000TEAM"
 OTHER_TEAM = "T000OTHER"
 CHANNEL = "C000CHAN"
+OTHER_CHANNEL = "C000CHN2"
 BOT = "U000BOT"
 # The root message's ts of a synthetic thread: a Slack thread_ts is that message's own epoch time.
 THREAD = "1780000000.000001"

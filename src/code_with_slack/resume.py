@@ -124,7 +124,7 @@ def _size(size: int | None) -> str | None:
     return f"{size / (1024 * 1024):.1f}MB"
 
 
-def _row(session: SDKSessionInfo, held: bool, now: datetime) -> dict[str, Any]:
+def _row(session: SDKSessionInfo, held: str | None, now: datetime) -> dict[str, Any]:
     # Shown as the terminal's picker shows it, HEAD outside a repository included.
     branch = shown_as_written(session.git_branch) if session.git_branch else None
     title = shown_as_written(one_line(session.summary, TITLE_LIMIT))
@@ -137,13 +137,14 @@ def _row(session: SDKSessionInfo, held: bool, now: datetime) -> dict[str, Any]:
         _size(session.file_size),
         session.session_id[:ID_SHOWN],
     ]
-    line = " · ".join(p for p in parts if p) + (texts.RESUME_ELSEWHERE_ROW if held else "")
+    suffix = texts.RESUME_ELSEWHERE_ROW.format(link=held) if held is not None else ""
+    line = " · ".join(p for p in parts if p) + suffix
     block: dict[str, Any] = {
         "type": "section",
         "block_id": f"session-{session.session_id}",
         "text": {"type": "mrkdwn", "text": line},
     }
-    if not held:
+    if held is None:
         block["accessory"] = {
             "type": "button",
             "action_id": RESUME_ACTION,
@@ -156,12 +157,13 @@ def _row(session: SDKSessionInfo, held: bool, now: datetime) -> dict[str, Any]:
 def resume_blocks(
     directory: Path,
     sessions: list[SDKSessionInfo],
-    held: Callable[[str], bool],
+    held: Callable[[str], str | None],
     now: datetime,
 ) -> list[dict[str, Any]]:
-    """The picker: the newest RESUME_ROWS sessions of `directory`. `held` is true for a session
-    id already held by a thread of any channel (D6): its row shows no Resume button, since
-    resuming it there is refused anyway."""
+    """The picker: the newest RESUME_ROWS sessions of `directory`. `held` gives the mrkdwn link
+    to the thread already holding a session id (D6: one session lives in one thread), or None for
+    a session no thread of any channel holds; a held row shows that link and no Resume button,
+    since resuming it there is refused anyway."""
     # The list's own lines are the daemon's notices, small and grey; the rows keep their button.
     shown = shown_as_written(str(directory))
     if not sessions:

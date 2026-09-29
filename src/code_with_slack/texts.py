@@ -59,8 +59,19 @@ COMPACTED = "Compacted the conversation: {before} → {after} tokens."
 COMPACTED_PLAIN = "Compacted the conversation."
 NO_OUTPUT = "_Done. Claude Code returned no text._"
 BIND_OK = "Bound this channel to `{directory}`. The next message starts a new session there."
+# D5: an old thread's session keeps the folder it was created in; `{old}` names each of them
+# (comma-separated, backticked).
+BIND_OK_ELSEWHERE = (
+    "Bound this channel to `{directory}`. New messages start sessions there; existing threads "
+    "keep working in {old}, where their sessions live."
+)
 BIND_UNAVAILABLE = (
     "Bound this channel to `{directory}`, but no session can start there yet. {reason}"
+)
+# D5: the first reply in a thread whose folder differs from the channel's, once per process.
+OLD_THREAD_FOLDER = (
+    "This session works in `{old}`, the folder it was created in: Claude Code resumes a session "
+    "only there. New messages in the channel use `{new}`."
 )
 BIND_OUTSIDE = (
     "`{path}` is not a folder under `{root}`. Give its path relative to that folder, for "
@@ -123,6 +134,18 @@ RESTART_WAITS = (
 )
 NOTHING_TO_STOP = "Nothing is running in this channel."
 NOTHING_TO_STOP_THREAD = "Nothing is running in this session."
+# D8: two sessions in one folder at once.
+HOLD_QUESTION = "Another session is working in this folder: {link}. Send anyway?"
+HOLD_CONTINUE_BUTTON = "Continue"
+HOLD_CANCEL_BUTTON = "Cancel"
+HOLD_UNPOSTED = (
+    "code-with-slack could not show this question in Slack, so the message was not sent. "
+    "Send it again."
+)
+HOLD_GONE = (
+    "This question is no longer open: it was already answered, or code-with-slack restarted."
+)
+NOT_SENT = "Not sent."
 STATUS = (
     "Directory: `{directory}`\nSession: `{session}`\nMode: `{mode}`\n"
     "Claude Code: `{version}`\nNow: {activity}"
@@ -201,8 +224,10 @@ RESUME_AMBIGUOUS = (
 )
 RESUME_GONE = "That session is not in this channel's directory any more: `!resume` lists them."
 RESUME_HELD = "This thread already holds a session: `!resume` from the channel opens a new thread."
-RESUME_ELSEWHERE = "This session is already open in another thread: send your message there."
-RESUME_ELSEWHERE_ROW = " · _open elsewhere_"
+# D6: a session held by any thread of any channel is never resumed a second time; `{link}` is the
+# holding thread's permalink (a plain fallback when Slack would not give one).
+RESUME_ELSEWHERE = "This session is already open in another thread: {link}."
+RESUME_ELSEWHERE_ROW = " · {link}"
 # `!guide`: how to use the bot, in the owner's words. tests/test_commands.py fails when a word of
 # the daemon is missing here; keep the tone plain and every line true of the current behaviour.
 GUIDE = """**code-with-slack**

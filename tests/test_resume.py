@@ -26,8 +26,8 @@ def rows(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [b for b in blocks if b.get("block_id", "").startswith("session-")]
 
 
-def nothing_held(session_id: str) -> bool:
-    return False
+def nothing_held(session_id: str) -> str | None:
+    return None
 
 
 def test_each_session_is_a_row_with_the_picker_s_columns_and_a_button() -> None:
@@ -51,12 +51,23 @@ def test_each_session_is_a_row_with_the_picker_s_columns_and_a_button() -> None:
     assert button["text"]["text"] == texts.RESUME_BUTTON
 
 
-def test_a_session_held_elsewhere_is_marked_and_has_no_button() -> None:
+def test_a_session_held_elsewhere_is_marked_with_a_link_and_has_no_button() -> None:
     sessions = [info("68da9311-0000-4000-8000-000000000001", "Now", 0.1)]
     held_id = sessions[0].session_id
-    (row,) = rows(resume_blocks(Path("/srv/dev/app"), sessions, lambda sid: sid == held_id, NOW))
+    link = "<https://example.slack.com/archives/C000CHAN/p1|open elsewhere>"
+    blocks = resume_blocks(
+        Path("/srv/dev/app"), sessions, lambda sid: link if sid == held_id else None, NOW
+    )
+    (row,) = rows(blocks)
     assert "accessory" not in row
-    assert row["text"]["text"] == "Now · 6 minutes ago · 68da9311 · _open elsewhere_"
+    assert row["text"]["text"] == f"Now · 6 minutes ago · 68da9311 · {link}"
+
+
+def test_a_free_row_carries_no_link() -> None:
+    sessions = [info("68da9311-0000-4000-8000-000000000001", "Now", 0.1)]
+    (row,) = rows(resume_blocks(Path("/srv/dev/app"), sessions, nothing_held, NOW))
+    assert "accessory" in row
+    assert row["text"]["text"] == "Now · 6 minutes ago · 68da9311"
 
 
 def test_the_branch_reads_as_the_terminal_shows_it() -> None:

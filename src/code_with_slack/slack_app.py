@@ -65,11 +65,12 @@ from code_with_slack.guards import (
     is_prompt_message,
     message_actor,
 )
+from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, hold_blocks
 from code_with_slack.prompt import Prompt
 from code_with_slack.render.escape import markdown_escape, mrkdwn_escape
 from code_with_slack.render.renderer import one_line
 from code_with_slack.render.sinks import FALLBACK_LIMIT, context_block, describe, notice_text, split
-from code_with_slack.resume import RESUME_ACTION, TITLE_LIMIT, matching, resume_blocks
+from code_with_slack.resume import RESUME_ACTION, RESUME_ROWS, TITLE_LIMIT, matching, resume_blocks
 from code_with_slack.sessions import (
     DirectoryUnavailable,
     SessionClosed,
@@ -105,13 +106,21 @@ def slack_unescape(text: str) -> str:
     return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
 
-def bound_text(directory: Path, unavailable: DirectoryUnavailable | None) -> str:
-    """The answer to a bind: what keeps a session from starting in the folder, if anything."""
-    if unavailable is None:
+def bound_text(
+    directory: Path, unavailable: DirectoryUnavailable | None, old_folders: list[Path]
+) -> str:
+    """The answer to a bind: what keeps a session from starting in the folder, if anything
+    (D5's BIND_UNAVAILABLE keeps priority: what would stop every session there matters more than
+    where an existing thread's session lives), else the old folders existing threads keep working
+    in, if any."""
+    if unavailable is not None:
+        return texts.BIND_UNAVAILABLE.format(
+            directory=mrkdwn_escape(str(directory)), reason=unavailable.message
+        )
+    if not old_folders:
         return texts.BIND_OK.format(directory=mrkdwn_escape(str(directory)))
-    return texts.BIND_UNAVAILABLE.format(
-        directory=mrkdwn_escape(str(directory)), reason=unavailable.message
-    )
+    old = ", ".join(f"`{mrkdwn_escape(str(folder))}`" for folder in old_folders)
+    return texts.BIND_OK_ELSEWHERE.format(directory=mrkdwn_escape(str(directory)), old=old)
 
 
 def click_thread(body: dict[str, Any]) -> str:
@@ -144,6 +153,7 @@ def build_app(
     identity: Identity,
     sessions: SessionManager,
     approvals: Approvals,
+    holds: Holds,
     guard: ChannelGuard,
     state: StateStore,
     uploads: Path,
@@ -157,6 +167,9 @@ def build_app(
     # opening new threads for as long as it runs; a lock kept forever would leak).
     arrival_order: dict[tuple[str, str], asyncio.Lock] = {}
     arrival_waiters: dict[tuple[str, str], int] = {}
+    # D5: threads already told (or opened) since this process started, so the old-folder notice
+    # (plan 7) shows once per thread per process, not on every reply.
+    old_folder_notified: set[tuple[str, str]] = set()
 
     @contextlib.asynccontextmanager
     async def arrival_lock(key: tuple[str, str]) -> AsyncIterator[None]:
@@ -267,6 +280,7 @@ def build_app(
             await handle_word(channel, thread_ts, command, session=session)
             return
         if session is not None:
+            await old_folder_notice(channel, thread_ts, session)
             await submit_to_session(
                 channel, thread_ts, session, text, files, command, in_thread=True
             )
@@ -280,6 +294,35 @@ def build_app(
             await tell_owner(channel, thread_ts, texts.UNBOUND.format(root=config.allowed_root))
             return
         await submit_to_session(channel, thread_ts, opened, text, files, command, in_thread=False)
+
+    async def old_folder_notice(channel: str, thread_ts: str, session: ThreadSession) -> None:
+        """D5: a thread whose folder differs from the channel's current one, told once per
+        process (a thread told before this process started, or opened during it, needs no more).
+        A failed post must not drop the prompt that follows it: logged (ids only) and left
+        unmarked, so the next message in this thread tries the notice again rather than the
+        owner losing it for the rest of the process."""
+        key = (channel, thread_ts)
+        record = state.channel(channel)
+        if key in old_folder_notified or record is None or session.directory == record.directory:
+            return
+        try:
+            await notice(
+                channel,
+                thread_ts,
+                texts.OLD_THREAD_FOLDER.format(
+                    old=mrkdwn_escape(str(session.directory)),
+                    new=mrkdwn_escape(str(record.directory)),
+                ),
+            )
+        except Exception as exc:
+            logger.warning(
+                "could not post the old-folder notice in %s/%s: %s",
+                channel,
+                thread_ts,
+                describe(exc),
+            )
+            return
+        old_folder_notified.add(key)
 
     async def submit_to_session(
         channel: str,
@@ -300,33 +343,135 @@ def build_app(
             prompt = await with_attachments(channel, thread_ts, text, files) if files else text
             if prompt is None:
                 return
+            # Checked before D8 too: a drain already cancelled every hold open when it started
+            # (SessionManager.drain) and will never cancel one opened after, so a message that
+            # arrives once draining has begun must never open a new one (it would wait forever).
+            if sessions.draining:
+                await notice(channel, thread_ts, texts.RESTARTING)
+                return
+            # D8: this message would wake `session` (busy just queues behind what is already
+            # running); ask first when another live session, of any channel, is already busy in
+            # the same resolved folder. Later messages of this thread queue behind the wait,
+            # since it runs inside the arrival lock. `held` is the object a Continue's ✋ was left
+            # standing on (`hold_end(continued=True)` bets on the `submit()` below to replace it
+            # with ⏳): kept apart from `session`, which a `SessionClosed` retry below can
+            # reassign, so a non-submit exit always restores the reaction on the object that
+            # actually shows it.
+            held: ThreadSession | None = None
+            if not session.busy:
+                other = sessions.working_in(besides=session)
+                if other is not None:
+                    if not await hold_before_sending(channel, thread_ts, session, other):
+                        return
+                    held = session
             # Retried once against a freshly looked-up session: the one this call was handed can
             # still close under it (most likely D9's idle close, though `touch()` at the lookup
             # already guards the common case) during the download above or the steps below.
-            for attempt in range(2):
-                try:
-                    if isinstance(command, Passthrough):
-                        await session.ensure_connected()
-                        known = {str(c.get("name")) for c in session.commands}
-                        name = command.text.split(" ", 1)[0]
-                        prompt = f"/{command.text}" if name in known else text
-                    # Checked last, with no await before the submit: a stop can start during a
-                    # download. The daemon's words still work meanwhile (`!stop` shortens the
-                    # wait); a new turn would not finish, and Slack does not resend this event.
-                    if sessions.draining:
-                        await notice(channel, thread_ts, texts.RESTARTING)
+            submitted = failed = False
+            try:
+                for attempt in range(2):
+                    try:
+                        if isinstance(command, Passthrough):
+                            await session.ensure_connected()
+                            known = {str(c.get("name")) for c in session.commands}
+                            name = command.text.split(" ", 1)[0]
+                            prompt = f"/{command.text}" if name in known else text
+                        # Checked last, with no await before the submit: a stop can start during a
+                        # download. The daemon's words still work meanwhile (`!stop` shortens the
+                        # wait); a new turn would not finish, and Slack does not resend this event.
+                        if sessions.draining:
+                            await notice(channel, thread_ts, texts.RESTARTING)
+                            return
+                        await session.submit(prompt)
+                        submitted = True
                         return
-                    await session.submit(prompt)
-                    return
-                except SessionClosed:
-                    if attempt:
-                        raise
-                    fresh = sessions.get(channel, thread_ts)
-                    if fresh is None:
-                        # Not just closed: its thread's own entry is gone too (D7's SessionGone
-                        # close), so a retry would find nothing here again either.
-                        raise SessionGone from None
-                    session = fresh
+                    except SessionClosed:
+                        if attempt:
+                            raise
+                        fresh = sessions.get(channel, thread_ts)
+                        if fresh is None:
+                            # Not just closed: its thread's own entry is gone too (D7's
+                            # SessionGone close), so a retry would find nothing here again either.
+                            raise SessionGone from None
+                        session = fresh
+            except BaseException:
+                failed = True
+                raise
+            finally:
+                # `submitted` alone, not a fixed set of exception types: `ensure_connected` can
+                # also raise `ResultError` (a logged-out CLI, most likely) or anything a stray
+                # bug throws, and `notice(RESTARTING)` above can itself fail; none of them may
+                # ever leave a Continue's ✋ standing forever. A failure gets the reaction a turn
+                # that reached the queue and then failed gets; a plain return (the drain notice
+                # posted fine) restores a Cancel's own reaction instead.
+                if held is not None and not submitted:
+                    await held.react_hold_abandoned(error=failed)
+
+    async def hold_before_sending(
+        channel: str, thread_ts: str, session: ThreadSession, other: ThreadSession
+    ) -> bool:
+        """D8: post `Another session is working in this folder: <link>. Send anyway?` and wait
+        for the owner's Continue or Cancel, cancelled the same way by `!stop` (in this thread or
+        the whole channel) or a drain. True to send the message on; False when it was not,
+        either way telling the owner `Not sent.` already."""
+        link = await thread_mrkdwn_link(other.channel_id, other.thread_ts, "Session")
+        if sessions.draining:  # a restart could have started during the permalink call above
+            await notice(channel, thread_ts, texts.RESTARTING)
+            return False
+        hold_id, pending = holds.open(channel, thread_ts)
+        try:
+            posted = await slack.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                text=texts.HOLD_QUESTION.format(link=link),
+                blocks=hold_blocks(hold_id, link),
+                unfurl_links=False,
+                unfurl_media=False,
+            )
+        except Exception as exc:
+            # Nobody can answer a question that was never shown: fail closed, as an unpostable
+            # approval does, rather than send into a folder another session is using.
+            logger.error("could not post a D8 hold in %s/%s: %s", channel, thread_ts, describe(exc))
+            holds.discard(hold_id)
+            await tell_owner(channel, thread_ts, texts.HOLD_UNPOSTED)
+            return False
+        message_ts = str(posted["ts"])
+        if holds.posted(hold_id, message_ts):
+            continued = False
+            try:
+                session.hold_start()
+                continued = await pending.future
+            finally:
+                await session.hold_end(continued=continued)
+                holds.discard(hold_id)  # a no-op once resolved; catches a cancelled wait
+        else:
+            # Decided (a fast `!stop` or drain) before the message's own ts was known: nobody
+            # else learned it in time to remove it, and the wait below is already over, so
+            # `hold_start`/`hold_end` (and their ✋) never ran for it either.
+            await remove_request(channel, message_ts)
+            continued = pending.future.result()
+        if not continued:
+            await notice(channel, thread_ts, texts.NOT_SENT)
+        return continued
+
+    async def on_hold_decision(ack: AsyncAck, body: dict[str, Any]) -> None:
+        await ack()
+        user, team = interaction_actor(body)
+        channel = (body.get("channel") or {}).get("id")
+        thread_ts = click_thread(body)
+        if not await admitted(user, team, channel, thread_ts):
+            return
+        assert channel is not None
+        action = body["actions"][0]
+        hold_id = str(action.get("value"))
+        continue_ = action["action_id"] == HOLD_CONTINUE
+        if holds.resolve(hold_id, channel, thread_ts, continue_=continue_) is None:
+            await tell_owner(channel, thread_ts, texts.HOLD_GONE)
+            return
+        await remove_request(channel, body["message"]["ts"])
+
+    for action_id in (HOLD_CONTINUE, HOLD_CANCEL):
+        app.action(action_id)(on_hold_decision)
 
     async def handle_word(
         channel: str, thread_ts: str, command: Word, *, session: ThreadSession | None
@@ -368,18 +513,27 @@ def build_app(
             case Stop():
                 if session is None:
                     stopped = await sessions.stop_channel(channel)
-                    await notice(
-                        channel,
-                        thread_ts,
-                        texts.STOPPED_CHANNEL if stopped else texts.NOTHING_TO_STOP,
-                    )
+                    # None: only a D8 hold was cancelled somewhere in the channel (`Not sent.`,
+                    # from its own waiter); no second notice, since nothing Claude Code was doing
+                    # stopped.
+                    if stopped is not None:
+                        await notice(
+                            channel,
+                            thread_ts,
+                            texts.STOPPED_CHANNEL if stopped else texts.NOTHING_TO_STOP,
+                        )
                 else:
-                    stopped = await session.stop()
-                    await notice(
-                        channel,
-                        thread_ts,
-                        texts.STOPPED_THREAD if stopped else texts.NOTHING_TO_STOP_THREAD,
-                    )
+                    thread_stopped = await session.stop()
+                    # None: only a D8 hold was here, cancelled already (`Not sent.`, from the
+                    # waiter); no second notice, since nothing Claude Code was doing stopped.
+                    if thread_stopped is not None:
+                        await notice(
+                            channel,
+                            thread_ts,
+                            texts.STOPPED_THREAD
+                            if thread_stopped
+                            else texts.NOTHING_TO_STOP_THREAD,
+                        )
             case Resume(target=target):
                 if session is not None:
                     await notice(channel, thread_ts, texts.WORD_IN_THREAD.format(word=command.WORD))
@@ -426,19 +580,31 @@ def build_app(
             row += texts.STATUS_CHANNEL_FOLDER.format(directory=session.directory)
         return row
 
-    async def thread_link(channel: str, thread_ts: str) -> str:
-        # `say` posts a markdown block: standard Markdown links (docs.slack.dev, markdown
-        # block), not mrkdwn's `<url|label>`.
+    async def _permalink(channel: str, thread_ts: str) -> str | None:
         try:
-            permalink = (await slack.chat_getPermalink(channel=channel, message_ts=thread_ts))[
-                "permalink"
-            ]
+            return str(
+                (await slack.chat_getPermalink(channel=channel, message_ts=thread_ts))["permalink"]
+            )
         except Exception as exc:
             logger.warning(
                 "could not get a permalink for %s/%s: %s", channel, thread_ts, describe(exc)
             )
+            return None
+
+    async def thread_link(channel: str, thread_ts: str) -> str:
+        # `say` posts a markdown block: standard Markdown links (docs.slack.dev, markdown
+        # block), not mrkdwn's `<url|label>`.
+        permalink = await _permalink(channel, thread_ts)
+        if permalink is None:
             return texts.STATUS_CHANNEL_LINK_FALLBACK.format(thread_ts=thread_ts)
         return f"[Session]({permalink})"
+
+    async def thread_mrkdwn_link(channel: str, thread_ts: str, label: str) -> str:
+        # A resume row and a notice are mrkdwn (`context_block`), which takes `<url|label>`.
+        permalink = await _permalink(channel, thread_ts)
+        if permalink is None:
+            return texts.STATUS_CHANNEL_LINK_FALLBACK.format(thread_ts=thread_ts)
+        return f"<{permalink}|{label}>"
 
     @app.action("answer")
     async def on_answer(ack: AsyncAck) -> None:
@@ -525,8 +691,16 @@ def build_app(
         if not await sessions.bind(channel, directory):
             await notice(channel, thread_ts, texts.BIND_BUSY)
             return
+        await announce_bind(channel, thread_ts, directory)
+
+    async def announce_bind(channel: str, thread_ts: str, directory: Path) -> None:
+        # Thread entries keep their own folder either side of the bind (state.bind), so the old
+        # folders (D5) can be read now: those of the channel's threads that differ from the new one.
         unavailable = await sessions.unavailable(directory)
-        await notice(channel, thread_ts, bound_text(directory, unavailable))
+        record = state.channel(channel)
+        threads = record.threads.values() if record is not None else []
+        old_folders = sorted({t.directory for t in threads if t.directory != directory}, key=str)
+        await notice(channel, thread_ts, bound_text(directory, unavailable, old_folders))
 
     async def folder_named(channel: str, thread_ts: str, path: str) -> Path | None:
         directory = resolve_directory(path, config.allowed_root)
@@ -577,8 +751,7 @@ def build_app(
         if not await sessions.bind(channel, directory):
             await notice(channel, thread_ts, texts.BIND_BUSY)
             return
-        unavailable = await sessions.unavailable(directory)
-        await notice(channel, thread_ts, bound_text(directory, unavailable))
+        await announce_bind(channel, thread_ts, directory)
         await remove_request(channel, body["message"]["ts"])
 
     async def handle_resume(channel: str, thread_ts: str, target: str) -> None:
@@ -590,10 +763,25 @@ def build_app(
         # Only the list shows dates: matching a target needs none, and dating reads every file.
         stored = await sessions.sessions_in(directory, dated=not target)
         if not target:
+            # A permalink is a Slack round trip: fetched only for the held rows the list shows.
+            candidates = [(s.session_id, state.holder(s.session_id)) for s in stored[:RESUME_ROWS]]
+            held = [(sid, holder) for sid, holder in candidates if holder is not None]
+            links = dict(
+                zip(
+                    (sid for sid, _ in held),
+                    await asyncio.gather(
+                        *(
+                            thread_mrkdwn_link(holder[0], holder[1], "open elsewhere")
+                            for _, holder in held
+                        )
+                    ),
+                    strict=True,
+                )
+            )
             blocks = resume_blocks(
                 directory,
                 stored,
-                lambda sid: state.holder(sid) is not None,
+                lambda sid: links.get(sid),
                 datetime.now().astimezone(),
             )
             await slack.chat_postMessage(
@@ -630,8 +818,10 @@ def build_app(
         if sessions.get(channel, thread_ts) is not None:
             await tell_owner(channel, thread_ts, texts.RESUME_HELD)
             return False
-        if state.holder(chosen.session_id) is not None:
-            await tell_owner(channel, thread_ts, texts.RESUME_ELSEWHERE)
+        holder = state.holder(chosen.session_id)
+        if holder is not None:
+            link = await thread_mrkdwn_link(holder[0], holder[1], "Session")
+            await tell_owner(channel, thread_ts, texts.RESUME_ELSEWHERE.format(link=link))
             return False
         record = state.channel(channel)
         if record is None or record.directory != directory:
