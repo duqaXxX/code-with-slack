@@ -26,6 +26,10 @@ def rows(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [b for b in blocks if b.get("block_id", "").startswith("session-")]
 
 
+def nothing_held(session_id: str) -> bool:
+    return False
+
+
 def test_each_session_is_a_row_with_the_picker_s_columns_and_a_button() -> None:
     sessions = [
         info("68da9311-0000-4000-8000-000000000001", "Fix footer effort", 2, git_branch="main",
@@ -33,7 +37,7 @@ def test_each_session_is_a_row_with_the_picker_s_columns_and_a_button() -> None:
         info("68da9311-0000-4000-8000-000000000002", "Add trust gate", 26,
              git_branch="security-fixes", file_size=1_100_000),
     ]  # fmt: skip
-    blocks = resume_blocks(Path("/srv/dev/app"), sessions, None, NOW)
+    blocks = resume_blocks(Path("/srv/dev/app"), sessions, nothing_held, NOW)
     assert "/srv/dev/app" in blocks[0]["elements"][0]["text"]
     first, second = rows(blocks)
     # The id's first characters close the row, in plain text like the rest of it.
@@ -47,11 +51,12 @@ def test_each_session_is_a_row_with_the_picker_s_columns_and_a_button() -> None:
     assert button["text"]["text"] == texts.RESUME_BUTTON
 
 
-def test_the_current_session_is_marked_and_has_no_button() -> None:
+def test_a_session_held_elsewhere_is_marked_and_has_no_button() -> None:
     sessions = [info("68da9311-0000-4000-8000-000000000001", "Now", 0.1)]
-    (row,) = rows(resume_blocks(Path("/srv/dev/app"), sessions, sessions[0].session_id, NOW))
-    assert "current" in row["text"]["text"] and "accessory" not in row
-    assert row["text"]["text"] == "Now · 6 minutes ago · 68da9311 · _current_"
+    held_id = sessions[0].session_id
+    (row,) = rows(resume_blocks(Path("/srv/dev/app"), sessions, lambda sid: sid == held_id, NOW))
+    assert "accessory" not in row
+    assert row["text"]["text"] == "Now · 6 minutes ago · 68da9311 · _open elsewhere_"
 
 
 def test_the_branch_reads_as_the_terminal_shows_it() -> None:
@@ -60,13 +65,13 @@ def test_the_branch_reads_as_the_terminal_shows_it() -> None:
         info("68da9311-0000-4000-8000-000000000001", "Notes", 50, git_branch="HEAD",
              file_size=976_000),
     ]  # fmt: skip
-    (row,) = rows(resume_blocks(Path("/srv/dev/notes"), sessions, None, NOW))
+    (row,) = rows(resume_blocks(Path("/srv/dev/notes"), sessions, nothing_held, NOW))
     assert row["text"]["text"] == "Notes · 2 days ago · HEAD · 953.1KB · 68da9311"
 
 
 def test_only_the_newest_sessions_are_listed() -> None:
     sessions = [info(f"68da9311-0000-4000-8000-{i:012d}", f"s{i}", i) for i in range(25)]
-    blocks = resume_blocks(Path("/srv/dev/app"), sessions, None, NOW)
+    blocks = resume_blocks(Path("/srv/dev/app"), sessions, nothing_held, NOW)
     listed = rows(blocks)
     assert len(listed) == RESUME_ROWS == 20  # the maintainer, 2026-09-25: ten were too few
     assert listed[0]["accessory"]["value"].endswith("000000000000")
@@ -77,18 +82,18 @@ def test_only_the_newest_sessions_are_listed() -> None:
 
 def test_no_more_line_when_every_session_fits() -> None:
     sessions = [info(f"68da9311-0000-4000-8000-{i:012d}", f"s{i}", i) for i in range(RESUME_ROWS)]
-    blocks = resume_blocks(Path("/srv/dev/app"), sessions, None, NOW)
+    blocks = resume_blocks(Path("/srv/dev/app"), sessions, nothing_held, NOW)
     assert len(rows(blocks)) == RESUME_ROWS and "accessory" in blocks[-1]
 
 
 def test_a_title_is_shown_as_written() -> None:
     sessions = [info("68da9311-0000-4000-8000-000000000001", "see <http://x|ok> ```", 1)]
-    (row,) = rows(resume_blocks(Path("/srv/dev/app"), sessions, None, NOW))
+    (row,) = rows(resume_blocks(Path("/srv/dev/app"), sessions, nothing_held, NOW))
     assert "&lt;http://x|ok&gt;" in row["text"]["text"] and "```" not in row["text"]["text"]
 
 
 def test_no_session_yet_says_so() -> None:
-    blocks = resume_blocks(Path("/srv/dev/app"), [], None, NOW)
+    blocks = resume_blocks(Path("/srv/dev/app"), [], nothing_held, NOW)
     assert blocks[0]["elements"][0]["text"] == texts.RESUME_EMPTY.format(directory="/srv/dev/app")
     assert rows(blocks) == []
 
@@ -187,7 +192,7 @@ def test_dating_stops_once_the_rest_cannot_enter_the_list(monkeypatch: pytest.Mo
 def test_the_branch_and_the_folder_are_shown_as_written() -> None:
     # git accepts `<`, `>` and `&` in a branch name; unescaped, `<!here>` would notify the channel.
     sessions = [info("68da9311-0000-4000-8000-000000000001", "t", 1, git_branch="fix/<!here>")]
-    blocks = resume_blocks(Path("/srv/R&D"), sessions, None, NOW)
+    blocks = resume_blocks(Path("/srv/R&D"), sessions, nothing_held, NOW)
     assert "R&amp;D" in blocks[0]["elements"][0]["text"]
     assert "fix/&lt;!here&gt;" in rows(blocks)[0]["text"]["text"]
 

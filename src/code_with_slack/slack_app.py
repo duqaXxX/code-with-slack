@@ -1,9 +1,10 @@
 """The Slack side: every inbound path, each checked on its own before it reaches a session."""
 
 import asyncio
+import contextlib
 import logging
 import re
-from collections.abc import Awaitable
+from collections.abc import AsyncIterator, Awaitable
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -70,12 +71,14 @@ from code_with_slack.render.renderer import one_line
 from code_with_slack.render.sinks import FALLBACK_LIMIT, context_block, describe, notice_text, split
 from code_with_slack.resume import RESUME_ACTION, TITLE_LIMIT, matching, resume_blocks
 from code_with_slack.sessions import (
-    ChannelSession,
     DirectoryUnavailable,
     SessionClosed,
+    SessionGone,
     SessionManager,
+    ThreadSession,
     resolve_directory,
 )
+from code_with_slack.state import StateStore
 
 logger = logging.getLogger(__name__)
 DECISION_ACTIONS = ("approval_allow", "approval_deny", "question_skip")
@@ -102,17 +105,29 @@ def slack_unescape(text: str) -> str:
     return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
 
-def bound_text(directory: Path, bypass: bool, unavailable: DirectoryUnavailable | None) -> str:
-    """The answer to a bind: what keeps a session from starting in the folder, if anything, and
-    that bypass ended with the old session when it was on."""
-    bound = (
-        texts.BIND_OK.format(directory=mrkdwn_escape(str(directory)))
-        if unavailable is None
-        else texts.BIND_UNAVAILABLE.format(
-            directory=mrkdwn_escape(str(directory)), reason=unavailable.message
-        )
+def bound_text(directory: Path, unavailable: DirectoryUnavailable | None) -> str:
+    """The answer to a bind: what keeps a session from starting in the folder, if anything."""
+    if unavailable is None:
+        return texts.BIND_OK.format(directory=mrkdwn_escape(str(directory)))
+    return texts.BIND_UNAVAILABLE.format(
+        directory=mrkdwn_escape(str(directory)), reason=unavailable.message
     )
-    return bound + (texts.BIND_BYPASS_OFF if bypass else "")
+
+
+def click_thread(body: dict[str, Any]) -> str:
+    """The thread a button or a form sits in: `container.thread_ts`, falling back to
+    `message.thread_ts` then the message's own ts (a button is never trusted, so the thread it
+    answers in is read the same way for every kind of click)."""
+    container = body.get("container") or {}
+    message = body.get("message") or {}
+    thread_ts = container.get("thread_ts") or message.get("thread_ts") or message.get("ts")
+    return str(thread_ts)
+
+
+def is_clear(command: Passthrough) -> bool:
+    """Whether a passthrough is `!clear`: refused inside a thread (one thread is one session),
+    left as an ordinary passthrough everywhere else."""
+    return command.text.split(" ", 1)[0].lower() == "clear"
 
 
 class Fetch(Protocol):
@@ -130,6 +145,7 @@ def build_app(
     sessions: SessionManager,
     approvals: Approvals,
     guard: ChannelGuard,
+    state: StateStore,
     uploads: Path,
     fetch: Fetch | None = None,
 ) -> AsyncApp:
@@ -137,7 +153,23 @@ def build_app(
         return await download(url, config.bot_token, mimetype, limit)
 
     fetch_file = fetch or download_file
-    arrival_order: dict[str, asyncio.Lock] = {}
+    # One lock per thread, alive only while someone holds or waits on it (a channel keeps
+    # opening new threads for as long as it runs; a lock kept forever would leak).
+    arrival_order: dict[tuple[str, str], asyncio.Lock] = {}
+    arrival_waiters: dict[tuple[str, str], int] = {}
+
+    @contextlib.asynccontextmanager
+    async def arrival_lock(key: tuple[str, str]) -> AsyncIterator[None]:
+        arrival_waiters[key] = arrival_waiters.get(key, 0) + 1
+        lock = arrival_order.setdefault(key, asyncio.Lock())
+        try:
+            async with lock:
+                yield
+        finally:
+            arrival_waiters[key] -= 1
+            if arrival_waiters[key] == 0:
+                del arrival_waiters[key]
+                del arrival_order[key]
 
     async def authorize() -> AuthorizeResult:
         # auth.test already ran at startup; who may act is decided by the guards below.
@@ -150,10 +182,11 @@ def build_app(
 
     app = AsyncApp(client=slack, authorize=authorize)
 
-    async def tell_owner(channel: str, text: str) -> None:
+    async def tell_owner(channel: str, thread_ts: str | None, text: str) -> None:
         try:
             await slack.chat_postEphemeral(
                 channel=channel,
+                thread_ts=thread_ts,
                 user=identity.owner_user_id,
                 text=text,
                 blocks=[context_block(notice_text(text))],
@@ -161,43 +194,47 @@ def build_app(
         except Exception as exc:
             logger.warning("could not reach the owner in %s: %s", channel, describe(exc))
 
-    async def reply_on_failure(channel: str, work: Awaitable[None]) -> None:
+    async def reply_on_failure(channel: str, thread_ts: str, work: Awaitable[None]) -> None:
         """A failure after the checks reaches the owner as a line of its own, never as silence."""
         try:
             await work
-        except (DirectoryUnavailable, SessionClosed) as exc:
-            await tell_owner(channel, exc.message)
+        except (DirectoryUnavailable, SessionClosed, SessionGone) as exc:
+            await tell_owner(channel, thread_ts, exc.message)
         except Exception as exc:
-            logger.error("a request failed in %s: %s", channel, type(exc).__name__)
-            await tell_owner(channel, texts.ERROR_REPLY.format(error=type(exc).__name__))
+            logger.error("a request failed in %s/%s: %s", channel, thread_ts, type(exc).__name__)
+            await tell_owner(channel, thread_ts, texts.ERROR_REPLY.format(error=type(exc).__name__))
 
-    async def admitted(user: str | None, team: str | None, channel: str | None) -> bool:
+    async def admitted(
+        user: str | None, team: str | None, channel: str | None, thread_ts: str | None
+    ) -> bool:
         if not channel or not is_owner(identity, user, team):
             logger.info("ignored an inbound event from someone other than the owner")
             return False
         reason = await guard.refusal(channel)
         if reason is not None:
-            await tell_owner(channel, texts.CHANNEL_REFUSED.format(reason=reason))
+            await tell_owner(channel, thread_ts, texts.CHANNEL_REFUSED.format(reason=reason))
             return False
         return True
 
-    async def notice(channel: str, text: str) -> None:
+    async def notice(channel: str, thread_ts: str, text: str) -> None:
         """One of the daemon's own notices (a bind, a resume, a restart), small and grey as the
         footer, so it reads apart from Claude's replies. `text` is mrkdwn."""
         await slack.chat_postMessage(
             channel=channel,
+            thread_ts=thread_ts,
             text=text[:FALLBACK_LIMIT],
             blocks=[context_block(notice_text(text))],
             unfurl_links=False,
             unfurl_media=False,
         )
 
-    async def say(channel: str, text: str) -> None:
+    async def say(channel: str, thread_ts: str, text: str) -> None:
         """A reference the owner reads (`!help`, `!guide`, `!status`), at full size in the
-        channel: a long `!help` continues in a new message past a markdown block's limit."""
+        thread: a long one continues in a new message past a markdown block's limit."""
         for chunk in split(text):
             await slack.chat_postMessage(
                 channel=channel,
+                thread_ts=thread_ts,
                 text=chunk[:FALLBACK_LIMIT],
                 blocks=[{"type": "markdown", "text": chunk}],
                 unfurl_links=False,
@@ -210,90 +247,198 @@ def build_app(
             return
         user, team = message_actor(event)
         channel = event.get("channel")
-        if not await admitted(user, team, channel):
+        ts = str(event.get("ts"))
+        thread_ts = str(event.get("thread_ts") or ts)
+        if not await admitted(user, team, channel, thread_ts):
             return
         assert channel is not None
-        await reply_on_failure(channel, handle_message(channel, event))
+        await reply_on_failure(channel, thread_ts, handle_message(channel, thread_ts, ts, event))
 
-    async def handle_message(channel: str, event: dict[str, Any]) -> None:
+    async def handle_message(channel: str, thread_ts: str, ts: str, event: dict[str, Any]) -> None:
+        top_level = thread_ts == ts
         text = slack_unescape(event.get("text") or "")
         files: list[dict[str, Any]] = event.get("files") or []
         # A message with files is a prompt: no daemon word or command takes a file.
         command = None if files else parse_bang(text)
-        if isinstance(command, Help | Guide | Bind):
-            await handle_word(channel, command)
+        # A known session's thread routes a word to it; anywhere else (truly top-level, or a
+        # thread that is not a session) a word acts exactly as a top-level one would.
+        session = None if top_level else sessions.get(channel, thread_ts)
+        if isinstance(command, Word):
+            await handle_word(channel, thread_ts, command, session=session)
             return
-        session = sessions.get(channel)
-        if session is None:
-            await tell_owner(channel, texts.UNBOUND.format(root=config.allowed_root))
+        if session is not None:
+            await submit_to_session(
+                channel, thread_ts, session, text, files, command, in_thread=True
+            )
             return
-        if not (files or command is None or isinstance(command, Passthrough)):
-            await handle_word(channel, command)
+        if not top_level:
+            # Anything but a daemon word, in a thread that holds no session: nowhere to send it.
+            await tell_owner(channel, thread_ts, texts.NOT_A_SESSION)
+            return
+        opened = sessions.open(channel, thread_ts)
+        if opened is None:
+            await tell_owner(channel, thread_ts, texts.UNBOUND.format(root=config.allowed_root))
+            return
+        await submit_to_session(channel, thread_ts, opened, text, files, command, in_thread=False)
+
+    async def submit_to_session(
+        channel: str,
+        thread_ts: str,
+        session: ThreadSession,
+        text: str,
+        files: list[dict[str, Any]],
+        command: Passthrough | None,
+        *,
+        in_thread: bool,
+    ) -> None:
+        if in_thread and isinstance(command, Passthrough) and is_clear(command):
+            await notice(channel, thread_ts, texts.CLEAR_IN_THREAD)
             return
         # Prompts and commands for Claude Code enter the queue in the order they were sent,
-        # although files take a while to download. Every reply goes to the main window.
-        directory = session.directory
-        async with arrival_order.setdefault(channel, asyncio.Lock()):
-            prompt = await with_attachments(channel, text, files) if files else text
+        # although files take a while to download. Every reply goes to the thread.
+        async with arrival_lock((channel, thread_ts)):
+            prompt = await with_attachments(channel, thread_ts, text, files) if files else text
             if prompt is None:
                 return
-            # A !bind or a Resume meanwhile closed the session read above: take the channel's
-            # own now, and send nothing if the folder changed under the message.
-            current = sessions.get(channel)
-            if current is None or current.directory != directory:
-                await notice(channel, texts.PROMPT_REBOUND)
-                return
-            if isinstance(command, Passthrough):
-                await current.ensure_connected()
-                known = {str(c.get("name")) for c in current.commands}
-                name = command.text.split(" ", 1)[0]
-                prompt = f"/{command.text}" if name in known else text
-            # Checked last, with no await before the submit: a stop can start during a download.
-            # The daemon's words still work meanwhile (`!stop` shortens the wait); a new turn
-            # would not finish, and Slack does not send this event again to the next instance.
-            if sessions.draining:
-                await notice(channel, texts.RESTARTING)
-                return
-            await current.submit(prompt)
+            # Retried once against a freshly looked-up session: the one this call was handed can
+            # still close under it (most likely D9's idle close, though `touch()` at the lookup
+            # already guards the common case) during the download above or the steps below.
+            for attempt in range(2):
+                try:
+                    if isinstance(command, Passthrough):
+                        await session.ensure_connected()
+                        known = {str(c.get("name")) for c in session.commands}
+                        name = command.text.split(" ", 1)[0]
+                        prompt = f"/{command.text}" if name in known else text
+                    # Checked last, with no await before the submit: a stop can start during a
+                    # download. The daemon's words still work meanwhile (`!stop` shortens the
+                    # wait); a new turn would not finish, and Slack does not resend this event.
+                    if sessions.draining:
+                        await notice(channel, thread_ts, texts.RESTARTING)
+                        return
+                    await session.submit(prompt)
+                    return
+                except SessionClosed:
+                    if attempt:
+                        raise
+                    fresh = sessions.get(channel, thread_ts)
+                    if fresh is None:
+                        # Not just closed: its thread's own entry is gone too (D7's SessionGone
+                        # close), so a retry would find nothing here again either.
+                        raise SessionGone from None
+                    session = fresh
 
-    async def handle_word(channel: str, command: Word) -> None:
+    async def handle_word(
+        channel: str, thread_ts: str, command: Word, *, session: ThreadSession | None
+    ) -> None:
         match command:
             case Help() | Invalid():
                 # A mistyped word gets the full list, which shows how each word is written.
                 query = command.query if isinstance(command, Help) else ""
-                session = sessions.get(channel)
                 if session is not None:
                     await session.ensure_connected()
-                await say(channel, help_text(session.commands if session else None, query))
+                commands = session.commands if session else None
+                await say(channel, thread_ts, help_text(commands, query))
             case Guide():
-                await say(channel, texts.GUIDE)
-            case Bind(path=""):
-                await list_folders(channel)
-            case Bind(path=path):
-                await bind_to(channel, path)
-            case _:
-                session = sessions.get(channel)
-                assert session is not None
-                match command:
-                    case Bypass(on=on):
-                        await session.set_bypass(on)
-                        await notice(
-                            channel,
-                            texts.BYPASS_ON
-                            if on
-                            else texts.BYPASS_OFF.format(mode=session.native_mode),
-                        )
-                    case Status():
-                        await say(channel, await session.status())
-                    case Stop():
-                        await notice(
-                            channel,
-                            texts.STOPPED_CHANNEL
-                            if await session.stop()
-                            else texts.NOTHING_TO_STOP,
-                        )
-                    case Resume(target=target):
-                        await handle_resume(channel, session, target)
+                await say(channel, thread_ts, texts.GUIDE)
+            case Bind():
+                if session is not None:
+                    await notice(channel, thread_ts, texts.WORD_IN_THREAD.format(word=command.WORD))
+                elif command.path:
+                    await bind_to(channel, thread_ts, command.path)
+                else:
+                    await list_folders(channel, thread_ts)
+            case Bypass(on=on):
+                if session is None:
+                    await notice(channel, thread_ts, texts.BYPASS_TOP_LEVEL)
+                else:
+                    await session.set_bypass(on)
+                    await notice(
+                        channel,
+                        thread_ts,
+                        texts.BYPASS_ON
+                        if on
+                        else texts.BYPASS_OFF.format(mode=session.native_mode),
+                    )
+            case Status():
+                if session is None:
+                    await channel_status(channel, thread_ts)
+                else:
+                    await say(channel, thread_ts, await session.status())
+            case Stop():
+                if session is None:
+                    stopped = await sessions.stop_channel(channel)
+                    await notice(
+                        channel,
+                        thread_ts,
+                        texts.STOPPED_CHANNEL if stopped else texts.NOTHING_TO_STOP,
+                    )
+                else:
+                    stopped = await session.stop()
+                    await notice(
+                        channel,
+                        thread_ts,
+                        texts.STOPPED_THREAD if stopped else texts.NOTHING_TO_STOP_THREAD,
+                    )
+            case Resume(target=target):
+                if session is not None:
+                    await notice(channel, thread_ts, texts.WORD_IN_THREAD.format(word=command.WORD))
+                else:
+                    await handle_resume(channel, thread_ts, target)
+
+    async def channel_status(channel: str, thread_ts: str) -> None:
+        record = state.channel(channel)
+        if record is None:
+            await tell_owner(channel, thread_ts, texts.UNBOUND.format(root=config.allowed_root))
+            return
+        lines = [texts.STATUS_CHANNEL_HEADER.format(directory=record.directory)]
+        live = sessions.sessions_of(channel)
+        if not live:
+            lines.append(texts.STATUS_CHANNEL_EMPTY)
+        else:
+            lines.extend(
+                await asyncio.gather(
+                    *(
+                        channel_status_row(channel, record.directory, live_session)
+                        for live_session in live
+                    )
+                )
+            )
+        await say(channel, thread_ts, "\n".join(lines))
+
+    async def channel_status_row(
+        channel: str, channel_directory: Path, session: ThreadSession
+    ) -> str:
+        link = await thread_link(channel, session.thread_ts)
+        if session.waiting_for_owner:
+            activity = texts.STATUS_CHANNEL_WAITING
+        elif session.busy or session.running_kinds:
+            # A session with only a background task running is not idle either.
+            activity = texts.STATUS_CHANNEL_BUSY
+        else:
+            activity = texts.STATUS_CHANNEL_IDLE
+        row = texts.STATUS_CHANNEL_ROW.format(link=link, activity=activity)
+        if session.running_kinds:
+            row += f" · {texts.RUNNING.format(counts=session.running_kinds)}"
+        if session.bypass:
+            row += texts.STATUS_CHANNEL_BYPASS
+        if session.directory != channel_directory:
+            row += texts.STATUS_CHANNEL_FOLDER.format(directory=session.directory)
+        return row
+
+    async def thread_link(channel: str, thread_ts: str) -> str:
+        # `say` posts a markdown block: standard Markdown links (docs.slack.dev, markdown
+        # block), not mrkdwn's `<url|label>`.
+        try:
+            permalink = (await slack.chat_getPermalink(channel=channel, message_ts=thread_ts))[
+                "permalink"
+            ]
+        except Exception as exc:
+            logger.warning(
+                "could not get a permalink for %s/%s: %s", channel, thread_ts, describe(exc)
+            )
+            return texts.STATUS_CHANNEL_LINK_FALLBACK.format(thread_ts=thread_ts)
+        return f"[Session]({permalink})"
 
     @app.action("answer")
     async def on_answer(ack: AsyncAck) -> None:
@@ -303,22 +448,19 @@ def build_app(
         await ack()
         user, team = interaction_actor(body)
         channel = (body.get("channel") or {}).get("id")
-        if not await admitted(user, team, channel):
+        thread_ts = click_thread(body)
+        if not await admitted(user, team, channel, thread_ts):
             return
         assert channel is not None
         action = body["actions"][0]
-        pending = approvals.get(str(action.get("value")))
-        if pending is None or pending.channel_id != channel:
-            await tell_owner(channel, texts.APPROVAL_GONE)
+        approval_id = str(action.get("value"))
+        pending = approvals.get(approval_id)
+        if pending is None or pending.channel_id != channel or pending.thread_ts != thread_ts:
+            await tell_owner(channel, thread_ts, texts.APPROVAL_GONE)
             return
-        decision: Decision
-        match action["action_id"]:
-            case "approval_allow":
-                decision = Approve()
-            case _:
-                decision = Deny()
-        if approvals.resolve(str(action["value"]), channel, decision) is None:
-            await tell_owner(channel, texts.APPROVAL_GONE)
+        decision: Decision = Approve() if action["action_id"] == "approval_allow" else Deny()
+        if approvals.resolve(approval_id, channel, thread_ts, decision) is None:
+            await tell_owner(channel, thread_ts, texts.APPROVAL_GONE)
             return
         await remove_request(channel, body["message"]["ts"])
 
@@ -326,14 +468,14 @@ def build_app(
         app.action(action_id)(on_decision)
 
     async def with_attachments(
-        channel: str, text: str, files: list[dict[str, Any]]
+        channel: str, thread_ts: str, text: str, files: list[dict[str, Any]]
     ) -> Prompt | None:
         """The prompt for `text` and its files; None, after telling the owner why, when any file
         cannot reach Claude: the message is sent whole or not at all."""
 
         async def refuse(file: dict[str, Any], reason: str) -> None:
             name = mrkdwn_escape(str(file.get("name") or file.get("id")))
-            await notice(channel, texts.UPLOAD_FAILED.format(name=name, reason=reason))
+            await notice(channel, thread_ts, texts.UPLOAD_FAILED.format(name=name, reason=reason))
 
         for file in files:
             reason = refusal(file)
@@ -342,7 +484,7 @@ def build_app(
                 return None
         together = images_refusal(files)
         if together is not None:
-            await notice(channel, together)
+            await notice(channel, thread_ts, together)
             return None
         fetched = await asyncio.gather(
             *(
@@ -376,28 +518,33 @@ def build_app(
                     return None
         return prompt_for(text, images, paths)
 
-    async def bind_to(channel: str, path: str) -> None:
-        directory = await folder_named(channel, path)
-        if directory is not None:
-            bypass = sessions.bypass_on(channel)
-            await sessions.bind(channel, directory)
-            unavailable = await sessions.unavailable(directory)
-            await notice(channel, bound_text(directory, bypass, unavailable))
+    async def bind_to(channel: str, thread_ts: str, path: str) -> None:
+        directory = await folder_named(channel, thread_ts, path)
+        if directory is None:
+            return
+        if not await sessions.bind(channel, directory):
+            await notice(channel, thread_ts, texts.BIND_BUSY)
+            return
+        unavailable = await sessions.unavailable(directory)
+        await notice(channel, thread_ts, bound_text(directory, unavailable))
 
-    async def folder_named(channel: str, path: str) -> Path | None:
+    async def folder_named(channel: str, thread_ts: str, path: str) -> Path | None:
         directory = resolve_directory(path, config.allowed_root)
         if directory is None:
             root = mrkdwn_escape(str(config.allowed_root))
-            await notice(channel, texts.BIND_OUTSIDE.format(path=mrkdwn_escape(path), root=root))
+            await notice(
+                channel, thread_ts, texts.BIND_OUTSIDE.format(path=mrkdwn_escape(path), root=root)
+            )
         return directory
 
-    async def list_folders(channel: str) -> None:
+    async def list_folders(channel: str, thread_ts: str) -> None:
         root = config.allowed_root
-        stored = sessions.get(channel)
+        record = state.channel(channel)
         folders = await sessions.folders_in(root)
-        blocks = bind_blocks(root, folders, stored.directory if stored else None)
+        blocks = bind_blocks(root, folders, record.directory if record else None)
         await slack.chat_postMessage(
             channel=channel,
+            thread_ts=thread_ts,
             text=(texts.BIND_LIST if folders else texts.BIND_EMPTY).format(root=root),
             blocks=blocks,
             unfurl_links=False,
@@ -409,39 +556,50 @@ def build_app(
         await ack()
         user, team = interaction_actor(body)
         channel = (body.get("channel") or {}).get("id")
-        if not await admitted(user, team, channel):
+        thread_ts = click_thread(body)
+        if not await admitted(user, team, channel, thread_ts):
             return
         assert channel is not None
-        await reply_on_failure(channel, bind_clicked(channel, body))
+        await reply_on_failure(channel, thread_ts, bind_clicked(channel, body))
 
     async def bind_clicked(channel: str, body: dict[str, Any]) -> None:
+        thread_ts = click_thread(body)
         # The button is not trusted: its folder goes through the same check as a typed `!bind`.
-        directory = await folder_named(channel, str(body["actions"][0].get("value")))
+        directory = await folder_named(channel, thread_ts, str(body["actions"][0].get("value")))
         if directory is None:
             return
-        current = sessions.get(channel)
-        if current is not None and current.directory == directory:
+        record = state.channel(channel)
+        if record is not None and record.directory == directory:
             shown = mrkdwn_escape(str(directory))
-            await notice(channel, texts.BIND_ALREADY.format(directory=shown))
+            await notice(channel, thread_ts, texts.BIND_ALREADY.format(directory=shown))
             return
-        # A list can be old: unlike a typed `!bind`, a click never ends work in flight.
-        bypass = sessions.bypass_on(channel)
-        if not await sessions.bind_when_idle(channel, directory):
-            await notice(channel, texts.BIND_BUSY)
+        # A list can be old: unlike a typed `!bind`, a click never ends work in flight either.
+        if not await sessions.bind(channel, directory):
+            await notice(channel, thread_ts, texts.BIND_BUSY)
             return
         unavailable = await sessions.unavailable(directory)
-        await notice(channel, bound_text(directory, bypass, unavailable))
+        await notice(channel, thread_ts, bound_text(directory, unavailable))
         await remove_request(channel, body["message"]["ts"])
 
-    async def handle_resume(channel: str, session: ChannelSession, target: str) -> None:
+    async def handle_resume(channel: str, thread_ts: str, target: str) -> None:
+        record = state.channel(channel)
+        if record is None:
+            await tell_owner(channel, thread_ts, texts.UNBOUND.format(root=config.allowed_root))
+            return
+        directory = record.directory
         # Only the list shows dates: matching a target needs none, and dating reads every file.
-        stored = await sessions.sessions_in(session.directory, dated=not target)
+        stored = await sessions.sessions_in(directory, dated=not target)
         if not target:
-            current = sessions.current_session(channel)
-            blocks = resume_blocks(session.directory, stored, current, datetime.now().astimezone())
+            blocks = resume_blocks(
+                directory,
+                stored,
+                lambda sid: state.holder(sid) is not None,
+                datetime.now().astimezone(),
+            )
             await slack.chat_postMessage(
                 channel=channel,
-                text=texts.RESUME_LIST.format(directory=session.directory),
+                thread_ts=thread_ts,
+                text=texts.RESUME_LIST.format(directory=directory),
                 blocks=blocks,
                 unfurl_links=False,
                 unfurl_media=False,
@@ -452,32 +610,38 @@ def build_app(
             template = texts.RESUME_AMBIGUOUS if found else texts.RESUME_NONE
             await notice(
                 channel,
+                thread_ts,
                 template.format(
-                    directory=mrkdwn_escape(str(session.directory)), target=mrkdwn_escape(target)
+                    directory=mrkdwn_escape(str(directory)), target=mrkdwn_escape(target)
                 ),
             )
             return
-        await resume_session(channel, found[0], session.directory)
+        await resume_into_new_thread(channel, thread_ts, directory, found[0])
 
-    async def resume_session(channel: str, chosen: SDKSessionInfo, directory: Path) -> bool:
-        """Point the channel at `chosen`, a session read from `directory`; False when nothing
-        changed and the owner was told why."""
-        current = sessions.get(channel)
-        # The listing awaited: a `!bind` meanwhile moved the channel, and `chosen` belongs to
-        # the old folder. No await from this check to the store in `sessions.resume`.
-        if current is None or current.directory != directory:
-            await tell_owner(channel, texts.RESUME_GONE)
+    async def resume_into_new_thread(
+        channel: str, thread_ts: str, directory: Path, chosen: SDKSessionInfo
+    ) -> bool:
+        """Point a new thread at `chosen`, a session read from `directory`; False, after telling
+        the owner why, when nothing changed: this thread already holds a session (a resume is
+        never a swap), `chosen` is already held by some other thread (D6: one session lives in
+        one thread), or the channel was bound to another folder while `chosen` was read from
+        `directory`. Every check runs with no `await` before the `resume` they guard, so nothing
+        can change between the checks and the call they protect."""
+        if sessions.get(channel, thread_ts) is not None:
+            await tell_owner(channel, thread_ts, texts.RESUME_HELD)
             return False
-        if chosen.session_id == sessions.current_session(channel):
-            # Resuming it again would close the live client and turn bypass off for nothing.
-            await notice(channel, texts.RESUME_ALREADY)
+        if state.holder(chosen.session_id) is not None:
+            await tell_owner(channel, thread_ts, texts.RESUME_ELSEWHERE)
             return False
-        if not await sessions.resume(channel, chosen.session_id):
-            await notice(channel, texts.RESUME_BUSY)
+        record = state.channel(channel)
+        if record is None or record.directory != directory:
+            await tell_owner(channel, thread_ts, texts.RESUME_GONE)
             return False
+        session = await sessions.resume(channel, thread_ts, chosen.session_id)
+        assert session is not None  # just confirmed the channel is bound to `directory`
         # A markdown block, not mrkdwn: the title is escaped so it cannot close or open the bold.
         title = markdown_escape(one_line(chosen.summary, TITLE_LIMIT)) or chosen.session_id
-        await say(channel, texts.RESUME_OK.format(title=title))
+        await say(channel, thread_ts, texts.RESUME_OK.format(title=title))
         return True
 
     @app.action(RESUME_ACTION)
@@ -485,24 +649,26 @@ def build_app(
         await ack()
         user, team = interaction_actor(body)
         channel = (body.get("channel") or {}).get("id")
-        if not await admitted(user, team, channel):
+        thread_ts = click_thread(body)
+        if not await admitted(user, team, channel, thread_ts):
             return
         assert channel is not None
-        await reply_on_failure(channel, resume_clicked(channel, body))
+        await reply_on_failure(channel, thread_ts, resume_clicked(channel, body))
 
     async def resume_clicked(channel: str, body: dict[str, Any]) -> None:
-        session = sessions.get(channel)
-        if session is None:
-            await tell_owner(channel, texts.UNBOUND.format(root=config.allowed_root))
+        thread_ts = click_thread(body)
+        record = state.channel(channel)
+        if record is None:
+            await tell_owner(channel, thread_ts, texts.UNBOUND.format(root=config.allowed_root))
             return
         # The button is not trusted: the session must still belong to the channel's directory.
         session_id = str(body["actions"][0].get("value"))
-        stored = await sessions.sessions_in(session.directory)
+        stored = await sessions.sessions_in(record.directory)
         chosen = next((s for s in stored if s.session_id == session_id), None)
         if chosen is None:
-            await tell_owner(channel, texts.RESUME_GONE)
+            await tell_owner(channel, thread_ts, texts.RESUME_GONE)
             return
-        if await resume_session(channel, chosen, session.directory):
+        if await resume_into_new_thread(channel, thread_ts, record.directory, chosen):
             await remove_request(channel, body["message"]["ts"])
 
     async def remove_request(channel: str, ts: str | None) -> None:
@@ -540,20 +706,27 @@ def build_app(
         await ack()
         user, team = interaction_actor(body)
         channel = (body.get("channel") or {}).get("id")
-        if not await admitted(user, team, channel):
+        thread_ts = click_thread(body)
+        if not await admitted(user, team, channel, thread_ts):
             return
         assert channel is not None
         approval_id = str(body["actions"][0].get("value"))
         pending = approvals.get(approval_id)
-        if pending is None or pending.channel_id != channel or not pending.questions:
-            await tell_owner(channel, texts.APPROVAL_GONE)
+        if (
+            pending is None
+            or pending.channel_id != channel
+            or pending.thread_ts != thread_ts
+            or not pending.questions
+        ):
+            await tell_owner(channel, thread_ts, texts.APPROVAL_GONE)
             return
         # trigger_id lives 3 seconds: the checks above are the only work before this call.
-        view = question_view(Draft(approval_id, channel), pending.questions)
+        view = question_view(Draft(approval_id, channel, thread_ts), pending.questions)
         try:
             await slack.views_open(trigger_id=body["trigger_id"], view=view)
         except Exception as exc:  # an expired trigger_id, say: the turn must not wait unseen
-            await tell_owner(channel, texts.QUESTION_NOT_OPENED.format(error=describe(exc)))
+            message = texts.QUESTION_NOT_OPENED.format(error=describe(exc))
+            await tell_owner(channel, thread_ts, message)
 
     @app.view(QUESTION_FORM)
     async def on_question_submit(ack: AsyncAck, body: dict[str, Any]) -> None:
@@ -571,9 +744,14 @@ def build_app(
             logger.info("ignored an inbound event from someone other than the owner")
             return
         pending = approvals.get(draft.approval_id)
-        if pending is None or pending.channel_id != draft.channel_id or not pending.questions:
+        if (
+            pending is None
+            or pending.channel_id != draft.channel_id
+            or pending.thread_ts != draft.thread_ts
+            or not pending.questions
+        ):
             await ack()
-            await tell_owner(draft.channel_id, texts.APPROVAL_GONE)
+            await tell_owner(draft.channel_id, draft.thread_ts, texts.APPROVAL_GONE)
             return
         questions = pending.questions
         draft = absorb(draft, (view.get("state") or {}).get("values") or {})
@@ -592,12 +770,15 @@ def build_app(
             return
 
         await ack()
-        if not await admitted(user, team, draft.channel_id):
+        if not await admitted(user, team, draft.channel_id, draft.thread_ts):
             return
         answers = draft_answers(draft, questions)
         assert answers is not None
-        if approvals.resolve(draft.approval_id, draft.channel_id, Answer(answers)) is None:
-            await tell_owner(draft.channel_id, texts.APPROVAL_GONE)
+        resolved = approvals.resolve(
+            draft.approval_id, draft.channel_id, draft.thread_ts, Answer(answers)
+        )
+        if resolved is None:
+            await tell_owner(draft.channel_id, draft.thread_ts, texts.APPROVAL_GONE)
             return
         await show_answered(draft.channel_id, pending.message_ts, questions, answers)
 

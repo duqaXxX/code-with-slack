@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import itertools
 import json
 import time
 from collections.abc import AsyncIterator
@@ -7,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from claude_agent_sdk import ClaudeAgentOptions, SDKSessionInfo
+from claude_agent_sdk import ClaudeAgentOptions, ResultError, SDKSessionInfo
 from slack_bolt.request.async_request import AsyncBoltRequest
 
 from code_with_slack import texts
@@ -24,13 +25,24 @@ from tests.fakes import (
     CHANNEL,
     FIXTURES,
     OTHER_TEAM,
+    OTHER_THREAD,
     OWNER,
     STRANGER,
     TEAM,
+    THREAD,
+    CanUseToolCall,
     FakeClaudeClient,
     FakeSlack,
+    sdk_messages,
     slack_payload,
+    split_turns,
 )
+
+# The click fixtures (000-005-block_actions.json) sit at their message's own ts, no thread_ts:
+# `click_thread` reads it from `container.thread_ts`.
+CLICK_THREAD = "1790192011.564799"
+# form-open-click.json carries no thread_ts at all: `click_thread` falls back to `message.ts`.
+FORM_THREAD = "1790285951.735939"
 
 
 def recorded(kind: str) -> dict[str, Any]:
@@ -61,13 +73,18 @@ class World:
         self.slow_downloads = 0.0
         # Holds every client's connect until set, as a CLI that is still starting.
         self.connect_gate: asyncio.Event | None = None
+        # Every client factored from here on fails to connect with this, as a session whose
+        # stored id no longer resumes (D7).
+        self.connect_error: Exception | None = None
         identity = Identity(OWNER, TEAM, BOT)
 
         async def no_usage() -> str:
             return ""
 
         def factory(options: ClaudeAgentOptions) -> FakeClaudeClient:
-            client = FakeClaudeClient(options, connect_gate=self.connect_gate)
+            client = FakeClaudeClient(
+                options, connect_gate=self.connect_gate, connect_error=self.connect_error
+            )
             self.clients.append(client)
             return client
 
@@ -97,6 +114,7 @@ class World:
             sessions=self.sessions,
             approvals=self.approvals,
             guard=ChannelGuard(slack, identity),
+            state=self.state,
             fetch=self.fetch,
             uploads=self.uploads,
         )
@@ -132,8 +150,21 @@ async def world(slack: FakeSlack, tmp_path: Path) -> AsyncIterator[World]:
 
 
 def message(text: str = "hello", **event: Any) -> dict[str, Any]:
+    """A top-level message: its `thread_ts` defaults to its own `ts` (a fresh fixture ts unless
+    `ts=` is given), so each call with a distinct `ts` opens an independent thread."""
     body = recorded("event_callback-message")
     body["event"].update({"text": text, **event})
+    return body
+
+
+_REPLY_SEQ = itertools.count(1)
+
+
+def reply(text: str, thread_ts: str, **event: Any) -> dict[str, Any]:
+    """A reply inside `thread_ts`'s thread: its own `ts` always differs from it."""
+    body = recorded("event_callback-message")
+    own_ts = f"179019{next(_REPLY_SEQ):04d}.900000"
+    body["event"].update({"text": text, "thread_ts": thread_ts, "ts": own_ts, **event})
     return body
 
 
@@ -143,20 +174,42 @@ async def test_owner_message_becomes_a_prompt(world: World) -> None:
     assert world.queries() == ["list the files"]
 
 
-async def test_a_message_in_a_thread_is_a_prompt_too(world: World) -> None:
-    thread_bodies = [
-        p.stem for p in sorted((FIXTURES / "slack").glob("*-event_callback-message.json"))
-    ]
-    replies = [slack_payload(n) for n in thread_bodies if "thread_ts" in slack_payload(n)["event"]]
-    assert replies, "the recording holds a thread reply"
-    await world.dispatch(copy.deepcopy(replies[0]))
-    assert world.queries() == [replies[0]["event"]["text"]]
+def _recorded_thread_reply() -> dict[str, Any]:
+    """A recorded reply inside a thread (its own shape, faithfully reused): 010 or 012."""
+    return next(
+        slack_payload(p.stem)
+        for p in sorted((FIXTURES / "slack").glob("*-event_callback-message.json"))
+        if "thread_ts" in slack_payload(p.stem)["event"]
+    )
+
+
+async def test_a_reply_in_a_known_session_s_thread_is_a_prompt_too(world: World) -> None:
+    thread_body = _recorded_thread_reply()
+    thread_ts = thread_body["event"]["thread_ts"]
+    world.sessions.open(CHANNEL, thread_ts)  # a session already lives in this thread
+    await world.dispatch(copy.deepcopy(thread_body))
+    assert world.queries() == [thread_body["event"]["text"]]
+
+
+async def test_a_reply_in_a_thread_that_holds_no_session_is_refused(world: World) -> None:
+    # Same recorded shape as above, but its thread was never opened: nothing to continue.
+    thread_body = _recorded_thread_reply()
+    await world.dispatch(copy.deepcopy(thread_body))
+    assert world.queries() == []
+    assert world.ephemerals() == [texts.NOT_A_SESSION]
 
 
 @pytest.mark.parametrize(("user", "team"), [(STRANGER, TEAM), (OWNER, OTHER_TEAM)])
 async def test_a_message_from_anyone_else_does_nothing(world: World, user: str, team: str) -> None:
     await world.dispatch(message("rm -rf /", user=user, team=team))
     assert world.queries() == [] and not world.posted_anything()
+
+
+@pytest.mark.parametrize(("user", "team"), [(STRANGER, TEAM), (OWNER, OTHER_TEAM)])
+async def test_a_reply_from_anyone_else_does_nothing(world: World, user: str, team: str) -> None:
+    await world.dispatch(message("hi", ts=THREAD))  # the owner opens the session
+    await world.dispatch(reply("rm -rf /", THREAD, user=user, team=team))
+    assert world.queries() == ["hi"] and not world.ephemerals()
 
 
 async def test_edits_do_nothing(world: World) -> None:
@@ -195,37 +248,89 @@ async def test_slack_escapes_are_undone() -> None:
 
 
 def said(world: World) -> list[str]:
-    """What the bot posted in the channel (not ephemeral), in order."""
+    """What the bot posted in a thread (not ephemeral), in order."""
     return [a["text"] for a in world.slack.calls_to("chat.postMessage")]
 
 
 async def test_bang_bind_inside_and_outside_the_root(world: World) -> None:
     await world.dispatch(message(f"!bind {world.root / 'app'}"))
-    assert world.state.get(CHANNEL).directory == (world.root / "app").resolve()
+    assert world.state.channel(CHANNEL).directory == (world.root / "app").resolve()
     await world.dispatch(message("!bind /"))
     assert said(world)[-1] == texts.BIND_OUTSIDE.format(path="/", root=world.root.resolve())
     await world.dispatch(message("!bind app"))  # relative to the allowed root, as the text says
-    assert world.state.get(CHANNEL).directory == (world.root / "app").resolve()
+    assert world.state.channel(CHANNEL).directory == (world.root / "app").resolve()
 
 
 async def test_bang_bind_works_in_an_unbound_channel(slack: FakeSlack, tmp_path: Path) -> None:
     world = World(slack, tmp_path, bound=False)
     await world.dispatch(message(f"!bind {world.root / 'app'}"))
-    assert world.state.get(CHANNEL).directory == (world.root / "app").resolve()
+    assert world.state.channel(CHANNEL).directory == (world.root / "app").resolve()
     assert world.queries() == []
     await world.sessions.close_all()
 
 
+async def test_bang_bind_is_refused_inside_a_thread(world: World) -> None:
+    await world.dispatch(message("hi", ts=THREAD))  # opens a session at THREAD
+    await world.dispatch(reply(f"!bind {world.root / 'docs'}", THREAD))
+    assert said(world)[-1] == texts.WORD_IN_THREAD.format(word="bind")
+    assert world.state.channel(CHANNEL).directory == (world.root / "app").resolve()
+
+
+async def test_bang_resume_is_refused_inside_a_thread(world: World) -> None:
+    await world.dispatch(message("hi", ts=THREAD))
+    await world.dispatch(reply("!resume", THREAD))
+    assert said(world)[-1] == texts.WORD_IN_THREAD.format(word="resume")
+
+
+async def test_bang_bypass_is_refused_at_top_level(world: World) -> None:
+    await world.dispatch(message("!bypass on"))
+    assert said(world) == [texts.BYPASS_TOP_LEVEL]
+    assert world.clients == []  # no session was even started
+
+
+async def test_bang_clear_is_refused_inside_a_thread(world: World) -> None:
+    await world.dispatch(message("hi", ts=THREAD))
+    await world.dispatch(reply("!clear", THREAD))
+    assert said(world)[-1] == texts.CLEAR_IN_THREAD
+    assert world.queries() == ["hi"]  # the earlier prompt is the only one that reached Claude
+
+
+async def test_bang_clear_at_top_level_opens_a_session_like_any_other_word(world: World) -> None:
+    await world.dispatch(message("!clear"))
+    assert world.queries() == ["/clear"]
+
+
+async def test_a_daemon_word_in_a_dead_thread_acts_as_top_level(world: World) -> None:
+    # A reply inside the thread of an old request (never a session) still gets an answer there,
+    # exactly as a top-level `!bind` would: the channel's own folder ("app") shows as current.
+    await world.dispatch(reply("!bind", CLICK_THREAD))
+    (post,) = world.slack.calls_to("chat.postMessage")
+    assert post["thread_ts"] == CLICK_THREAD
+    rows = [b["text"]["text"] for b in post["blocks"] if b.get("type") == "section"]
+    assert any(row.startswith("`app`") and texts.BIND_CURRENT in row for row in rows)
+    values = [b["accessory"]["value"] for b in post["blocks"] if "accessory" in b]
+    assert values == ["."]  # the current folder ("app") shows with no button
+
+
 async def test_bang_help_lists_the_session_commands(world: World) -> None:
+    await world.dispatch(message("hi", ts=THREAD))
+    await world.dispatch(reply("!help", THREAD))
+    (text,) = said(world)[1:]
+    assert "`!compact" in text and "`!bypass" in text
+
+
+async def test_bang_help_top_level_lists_only_the_daemon_words(world: World) -> None:
     await world.dispatch(message("!help"))
     (text,) = said(world)
-    assert "`!compact" in text and "`!bypass" in text
-    assert world.queries() == []
+    assert "`!bypass" in text and "`!compact" not in text
+    assert texts.HELP_UNBOUND in text
+    assert world.clients == []
 
 
 async def test_bang_help_with_a_filter_lists_only_matches(world: World) -> None:
-    await world.dispatch(message("!help compact"))
-    (text,) = said(world)
+    await world.dispatch(message("hi", ts=THREAD))
+    await world.dispatch(reply("!help compact", THREAD))
+    (text,) = said(world)[1:]
     assert "`!compact" in text and "`!bypass" not in text
 
 
@@ -237,18 +342,20 @@ async def test_bang_help_works_in_an_unbound_channel(slack: FakeSlack, tmp_path:
     assert world.clients == []
 
 
-async def test_bang_bypass_on_switches_the_live_client(world: World) -> None:
-    await world.dispatch(message("!bypass on"))
+async def test_bang_bypass_on_inside_a_thread_switches_the_live_client(world: World) -> None:
+    await world.dispatch(message("hi", ts=THREAD))
+    await world.dispatch(reply("!bypass on", THREAD))
     assert world.clients[0].modes == ["bypassPermissions"]
-    assert said(world) == [texts.BYPASS_ON]
+    assert said(world)[-1] == texts.BYPASS_ON
 
 
 async def test_a_notice_is_small_and_grey_a_reference_full_size(world: World) -> None:
     # The daemon's notices read apart from Claude's replies, as the footer does (the owner,
     # 2026-09-27); `!help`, `!guide` and `!status` stay full size, since they are read.
-    await world.dispatch(message("!bypass on"))
-    await world.dispatch(message("!help"))
-    notice, reference = world.slack.calls_to("chat.postMessage")
+    await world.dispatch(message("hi", ts=THREAD))
+    await world.dispatch(reply("!bypass on", THREAD))
+    await world.dispatch(reply("!help", THREAD))
+    _, notice, reference = world.slack.calls_to("chat.postMessage")
     assert notice["blocks"] == [
         {"type": "context", "elements": [{"type": "mrkdwn", "text": texts.BYPASS_ON}]}
     ]
@@ -263,58 +370,136 @@ async def test_a_bound_folder_is_shown_as_written_in_the_notice(world: World) ->
     assert "R&amp;D" in notice["blocks"][0]["elements"][0]["text"]
 
 
-async def test_bypass_on_while_the_channel_is_rebound_tells_the_owner(world: World) -> None:
+async def test_a_bind_never_touches_an_existing_thread_s_bypass(world: World) -> None:
     (world.root / "docs").mkdir()
-    world.connect_gate = asyncio.Event()
-    word = asyncio.create_task(world.dispatch(message("!bypass on")))
-    async with asyncio.timeout(2):
-        while not world.clients:  # noqa: ASYNC110
-            await asyncio.sleep(0.01)
-    rebind = asyncio.create_task(world.dispatch(message("!bind docs")))
-    await asyncio.sleep(0.05)
-    world.connect_gate.set()
-    await asyncio.wait_for(asyncio.gather(word, rebind), 2)
-    docs = (world.root / "docs").resolve()
-    async with asyncio.timeout(2):  # the listeners run on after dispatch returns
-        while texts.BIND_OK.format(directory=docs) not in said(world):  # noqa: ASYNC110
-            await asyncio.sleep(0.01)
-    assert world.ephemerals() == [texts.SESSION_CLOSED]
-    assert world.clients[0].connected is False
-    stored = world.state.get(CHANNEL)
-    assert stored.directory == docs and stored.bypass is False
-    await world.sessions.close_all()
+    await world.dispatch(message("hi", ts=THREAD))
+    await world.dispatch(reply("!bypass on", THREAD))
+    await world.dispatch(message("!bind docs"))  # a new default-folder thread from here on
+    assert world.state.thread(CHANNEL, THREAD).bypass is True
+    assert world.clients[0].connected is True  # never closed by the bind
 
 
-async def test_a_bind_says_that_it_ended_bypass(world: World) -> None:
-    (world.root / "docs").mkdir()
-    await world.dispatch(message("!bypass on"))
-    await world.dispatch(click("folder_bind", "docs"))
-    docs = (world.root / "docs").resolve()
-    assert said(world)[-1] == texts.BIND_OK.format(directory=docs) + texts.BIND_BYPASS_OFF
-    await world.dispatch(message("!bypass on"))
-    await world.dispatch(message("!bind app"))
-    app = (world.root / "app").resolve()
-    assert said(world)[-1] == texts.BIND_OK.format(directory=app) + texts.BIND_BYPASS_OFF
-    await world.dispatch(message("!bind docs"))  # bypass was never switched on in app
-    assert said(world)[-1] == texts.BIND_OK.format(directory=docs)
-    await world.sessions.close_all()
+async def test_a_gone_session_answers_bypass_with_no_new_session(world: World) -> None:
+    world.state.open_thread(CHANNEL, THREAD, session_id="68da9311-0000-4000-8000-00000000dead")
+    world.connect_error = ResultError("transcript missing")
+    await world.dispatch(reply("!bypass on", THREAD))
+    assert world.ephemerals() == [texts.SESSION_GONE]
+    assert world.state.thread(CHANNEL, THREAD) is None
 
 
-async def test_bang_status_and_stop_answer_in_the_channel(world: World) -> None:
+async def test_bang_status_and_stop_top_level_summarize_the_channel(world: World) -> None:
     await world.dispatch(message("!stop"))
     await world.dispatch(message("!status"))
     assert said(world)[0] == texts.NOTHING_TO_STOP
-    assert said(world)[1].startswith("Directory:")
+    assert said(world)[1] == "\n".join(
+        [
+            texts.STATUS_CHANNEL_HEADER.format(directory=(world.root / "app").resolve()),
+            texts.STATUS_CHANNEL_EMPTY,
+        ]
+    )
     assert world.queries() == []
-    assert "\nContext: `7%`" in said(world)[1]
 
 
-async def test_a_malformed_daemon_word_shows_the_help(world: World) -> None:
+async def test_bang_status_lists_every_live_session_with_a_link(world: World) -> None:
+    await world.dispatch(message("hello", ts=THREAD))  # never ends: stays busy
+    await world.dispatch(message("!status", ts=OTHER_THREAD))
+    text = said(world)[-1]
+    lines = text.splitlines()
+    directory = (world.root / "app").resolve()
+    assert lines[0] == texts.STATUS_CHANNEL_HEADER.format(directory=directory)
+    # `say` posts a markdown block: a standard Markdown link, not mrkdwn's `<url|label>`.
+    link = f"https://example.slack.com/archives/{CHANNEL}/p1780000000000001"
+    assert lines[1] == f"[Session]({link}): busy"
+
+
+async def test_bang_status_fetches_permalinks_concurrently(world: World) -> None:
+    await world.dispatch(message("hello", ts=THREAD))
+    await world.dispatch(message("hello", ts=OTHER_THREAD))
+    await world.dispatch(message("hello", ts=CLICK_THREAD))
+
+    in_flight = 0
+    max_in_flight = 0
+    real = world.slack.chat_getPermalink
+
+    async def tracked(**kwargs: Any) -> Any:
+        nonlocal in_flight, max_in_flight
+        in_flight += 1
+        max_in_flight = max(max_in_flight, in_flight)
+        await asyncio.sleep(0.01)
+        try:
+            return await real(**kwargs)
+        finally:
+            in_flight -= 1
+
+    world.slack.chat_getPermalink = tracked  # type: ignore[method-assign]
+    await world.dispatch(message("!status", ts="1790300000.000001"))
+    assert max_in_flight == 3  # all three fetched at once, not one after another
+    text = said(world)[-1]
+    assert len(text.splitlines()) == 4  # header + one row per session, order kept
+
+
+async def test_bang_status_shows_waiting_for_the_owner(world: World) -> None:
+    await world.dispatch(message("hi", ts=THREAD))
+    world.clients[0].inject([CanUseToolCall("Bash", {"command": "ls"})])
+    async with asyncio.timeout(2):
+        while not world.approvals._pending:  # noqa: ASYNC110
+            await asyncio.sleep(0.01)
+    await world.dispatch(message("!status", ts=OTHER_THREAD))
+    line = said(world)[-1].splitlines()[1]
+    assert f": {texts.STATUS_CHANNEL_WAITING}" in line
+
+
+async def test_bang_status_shows_a_background_only_session_as_busy_not_idle(world: World) -> None:
+    # A task that outlived its turn: `session.busy` is False, yet it is not idle either.
+    first = split_turns(sdk_messages("background"))[0]
+    await world.dispatch(message("start it", ts=THREAD))
+    world.clients[0].inject(first)
+    session = world.sessions.get(CHANNEL, THREAD)
+    assert session is not None
+    async with asyncio.timeout(2):
+        while session.busy or not session.running_kinds:  # noqa: ASYNC110
+            await asyncio.sleep(0.01)
+    await world.dispatch(message("!status", ts=OTHER_THREAD))
+    line = said(world)[-1].splitlines()[1]
+    assert f": {texts.STATUS_CHANNEL_BUSY}" in line
+    assert "⏳" in line
+
+
+async def test_bang_status_inside_a_thread_shows_that_session(world: World) -> None:
+    await world.dispatch(message("hi", ts=THREAD))
+    await world.dispatch(reply("!status", THREAD))
+    text = said(world)[-1]
+    assert text.startswith("Directory:")
+    assert "\nContext: `7%`" in text
+
+
+async def test_bang_stop_inside_a_thread_stops_only_that_session(world: World) -> None:
+    await world.dispatch(message("hello", ts=THREAD))  # never ends
+    await world.dispatch(message("hello", ts=OTHER_THREAD))  # never ends either
+    await world.dispatch(reply("!stop", THREAD))
+    assert said(world)[-1] == texts.STOPPED_THREAD
+    assert world.clients[0].interrupts == 1
+    assert world.clients[1].interrupts == 0
+
+
+async def test_a_malformed_daemon_word_at_top_level_shows_only_the_daemon_words(
+    world: World,
+) -> None:
     await world.dispatch(message("!bypass maybe"))
+    text = said(world)[-1]
+    assert "`!bypass" in text and "`!compact" not in text
+    assert texts.HELP_UNBOUND in text
+    assert world.queries() == []
+
+
+async def test_a_malformed_daemon_word_inside_a_thread_shows_the_session_s_help_too(
+    world: World,
+) -> None:
+    await world.dispatch(message("hi", ts=THREAD))
+    await world.dispatch(reply("!bypass maybe", THREAD))
     text = said(world)[-1]
     assert "`!bypass" in text and "`!compact" in text
     assert texts.HELP_UNBOUND not in text
-    assert world.queries() == []
 
 
 async def test_bang_from_anyone_else_does_nothing(world: World) -> None:
@@ -329,8 +514,8 @@ def click(action_id: str, value: str, **user: Any) -> dict[str, Any]:
     return body
 
 
-async def open_request(world: World) -> tuple[str, Any]:
-    approval_id, pending = world.approvals.open(CHANNEL, "Bash: ls")
+async def open_request(world: World, thread_ts: str = CLICK_THREAD) -> tuple[str, Any]:
+    approval_id, pending = world.approvals.open(CHANNEL, thread_ts, "Bash: ls")
     return approval_id, pending
 
 
@@ -358,7 +543,14 @@ async def test_stale_approval_click_gets_a_note(world: World) -> None:
 
 
 async def test_a_request_from_another_channel_cannot_be_answered_here(world: World) -> None:
-    approval_id, pending = world.approvals.open("C000ELSEWHERE", "Bash: ls")
+    approval_id, pending = world.approvals.open("C000ELSEWHERE", CLICK_THREAD, "Bash: ls")
+    await world.dispatch(click("approval_allow", approval_id))
+    assert not pending.future.done()
+    assert world.ephemerals() == [texts.APPROVAL_GONE]
+
+
+async def test_a_request_from_another_thread_cannot_be_answered_here(world: World) -> None:
+    approval_id, pending = world.approvals.open(CHANNEL, OTHER_THREAD, "Bash: ls")
     await world.dispatch(click("approval_allow", approval_id))
     assert not pending.future.done()
     assert world.ephemerals() == [texts.APPROVAL_GONE]
@@ -395,7 +587,7 @@ def picked(index: int, value: str) -> dict[str, Any]:
 
 
 async def test_answer_opens_the_form(world: World) -> None:
-    approval_id, _ = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
+    approval_id, _ = world.approvals.open(CHANNEL, FORM_THREAD, "Colour", QUESTIONS)
     body = recorded("open-click")  # the Answer click, recorded 2026-09-24
     body["actions"][0]["value"] = approval_id
     body["trigger_id"] = "0000000000.0000000000.fake"  # real clicks carry one; the scrub drops it
@@ -404,18 +596,20 @@ async def test_answer_opens_the_form(world: World) -> None:
     assert opened["trigger_id"] == body["trigger_id"]
     view = json.loads(opened["view"]) if isinstance(opened["view"], str) else opened["view"]
     assert view["callback_id"] == "question_form"
-    assert Draft.load(view["private_metadata"]) == Draft(approval_id, CHANNEL)
+    assert Draft.load(view["private_metadata"]) == Draft(approval_id, CHANNEL, FORM_THREAD)
 
 
-async def test_nobody_else_can_open_the_form(world: World) -> None:
-    approval_id, _ = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
-    await world.dispatch(click("question_open", approval_id, id=STRANGER))
+@pytest.mark.parametrize("user", [{"id": STRANGER}, {"team_id": OTHER_TEAM}])
+async def test_nobody_else_can_open_the_form(world: World, user: dict[str, str]) -> None:
+    approval_id, _ = world.approvals.open(CHANNEL, FORM_THREAD, "Colour", QUESTIONS)
+    await world.dispatch(click("question_open", approval_id, **user))
     assert not world.slack.calls_to("views.open") and not world.posted_anything()
 
 
 async def test_submit_with_the_open_question_unanswered_shows_an_error(world: World) -> None:
-    approval_id, pending = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
-    response = await world.dispatch(form_body("view_submission", Draft(approval_id, CHANNEL), {}))
+    approval_id, pending = world.approvals.open(CHANNEL, FORM_THREAD, "Colour", QUESTIONS)
+    draft = Draft(approval_id, CHANNEL, FORM_THREAD)
+    response = await world.dispatch(form_body("view_submission", draft, {}))
     assert json.loads(response.body) == {
         "response_action": "errors",
         "errors": {"q0": texts.QUESTION_MISSING},
@@ -424,22 +618,21 @@ async def test_submit_with_the_open_question_unanswered_shows_an_error(world: Wo
 
 
 async def test_next_with_an_answer_moves_to_the_next_question(world: World) -> None:
-    approval_id, pending = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
-    response = await world.dispatch(
-        form_body("view_submission", Draft(approval_id, CHANNEL), picked(0, "0"))
-    )
+    approval_id, pending = world.approvals.open(CHANNEL, FORM_THREAD, "Colour", QUESTIONS)
+    draft = Draft(approval_id, CHANNEL, FORM_THREAD)
+    response = await world.dispatch(form_body("view_submission", draft, picked(0, "0")))
     answer = json.loads(response.body)
     assert answer["response_action"] == "update"
     assert Draft.load(answer["view"]["private_metadata"]) == Draft(
-        approval_id, CHANNEL, 1, {0: [0]}
+        approval_id, CHANNEL, FORM_THREAD, 1, {0: [0]}
     )
     assert not pending.future.done()
 
 
 async def test_a_complete_submit_answers_claude_and_keeps_the_answers(world: World) -> None:
-    approval_id, pending = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
+    approval_id, pending = world.approvals.open(CHANNEL, FORM_THREAD, "Colour", QUESTIONS)
     pending.message_ts = "1790000000.000009"
-    draft = Draft(approval_id, CHANNEL, active=1, picks={0: [1]})
+    draft = Draft(approval_id, CHANNEL, FORM_THREAD, active=1, picks={0: [1]})
     values = {
         "q1": {"answer": {"type": "checkboxes", "selected_options": [{"value": "0"}]}},
         "o1": {"other": {"type": "plain_text_input", "value": "xl"}},
@@ -456,21 +649,23 @@ async def test_a_complete_submit_answers_claude_and_keeps_the_answers(world: Wor
     )
 
 
-async def test_nobody_else_can_submit_the_form(world: World) -> None:
-    approval_id, pending = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
-    draft = Draft(approval_id, CHANNEL, picks={0: [0], 1: [0]})
-    await world.dispatch(form_body("view_submission", draft, {}, id=STRANGER))
+@pytest.mark.parametrize("user", [{"id": STRANGER}, {"team_id": OTHER_TEAM}])
+async def test_nobody_else_can_submit_the_form(world: World, user: dict[str, str]) -> None:
+    approval_id, pending = world.approvals.open(CHANNEL, FORM_THREAD, "Colour", QUESTIONS)
+    draft = Draft(approval_id, CHANNEL, FORM_THREAD, picks={0: [0], 1: [0]})
+    await world.dispatch(form_body("view_submission", draft, {}, **user))
     assert not pending.future.done()
 
 
-async def test_a_failing_command_tells_the_owner(world: World) -> None:
+async def test_a_bypass_inside_a_thread_fails_when_the_directory_is_gone(world: World) -> None:
+    world.sessions.open(CHANNEL, THREAD)
     (world.root / "app").rmdir()
-    await world.dispatch(message("!bypass on"))
+    await world.dispatch(reply("!bypass on", THREAD))
     assert world.ephemerals() == [texts.DIRECTORY_MISSING.format(directory=world.root / "app")]
 
 
 async def test_a_form_that_cannot_open_tells_the_owner(world: World) -> None:
-    approval_id, _ = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
+    approval_id, _ = world.approvals.open(CHANNEL, FORM_THREAD, "Colour", QUESTIONS)
     world.slack.responses["views.open"] = {"ok": False, "error": "expired_trigger_id"}
     body = recorded("open-click")
     body["actions"][0]["value"] = approval_id
@@ -480,8 +675,9 @@ async def test_a_form_that_cannot_open_tells_the_owner(world: World) -> None:
 
 
 async def test_a_submit_that_needs_more_answers_makes_no_slack_call_first(world: World) -> None:
-    approval_id, _ = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
-    await world.dispatch(form_body("view_submission", Draft(approval_id, CHANNEL), {}))
+    approval_id, _ = world.approvals.open(CHANNEL, FORM_THREAD, "Colour", QUESTIONS)
+    draft = Draft(approval_id, CHANNEL, FORM_THREAD)
+    await world.dispatch(form_body("view_submission", draft, {}))
     assert not [m for m, _ in world.slack.calls if m.startswith("conversations.")]
 
 
@@ -525,12 +721,12 @@ async def test_bang_resume_lists_the_directory_s_sessions_with_buttons(world: Wo
     assert world.clients == []  # listing starts no Claude Code process
 
 
-async def test_bang_resume_by_name_or_id_points_the_channel_at_it(world: World) -> None:
+async def test_bang_resume_by_name_or_id_opens_a_new_thread_on_it(world: World) -> None:
     two_sessions(world)
-    await world.dispatch(message("!resume footer"))
-    assert world.state.get(CHANNEL).session_id == SESSION_A
-    await world.dispatch(message(f"!resume {SESSION_B}"))
-    assert world.state.get(CHANNEL).session_id == SESSION_B
+    await world.dispatch(message("!resume footer", ts=THREAD))
+    assert world.state.thread(CHANNEL, THREAD).session_id == SESSION_A
+    await world.dispatch(message(f"!resume {SESSION_B}", ts=OTHER_THREAD))
+    assert world.state.thread(CHANNEL, OTHER_THREAD).session_id == SESSION_B
     confirmation = said(world)[-1]
     assert "Trust gate" in confirmation and "\n" not in confirmation.split("**")[1]
 
@@ -539,14 +735,14 @@ async def test_bang_resume_of_an_unknown_session_says_so(world: World) -> None:
     two_sessions(world)
     await world.dispatch(message("!resume nothing-like-it"))
     assert "`nothing-like-it`" in said(world)[-1]
-    assert world.state.get(CHANNEL).session_id is None
+    assert world.state.channel(CHANNEL).threads == {}
 
 
 async def test_the_owner_resumes_from_the_list(world: World) -> None:
     two_sessions(world)
     body = click("session_resume", SESSION_B)
     await world.dispatch(body)
-    assert world.state.get(CHANNEL).session_id == SESSION_B
+    assert world.state.thread(CHANNEL, CLICK_THREAD).session_id == SESSION_B
     deleted = [(a["channel"], a["ts"]) for a in world.slack.calls_to("chat.delete")]
     assert deleted == [(CHANNEL, body["message"]["ts"])]
 
@@ -555,23 +751,69 @@ async def test_the_owner_resumes_from_the_list(world: World) -> None:
 async def test_nobody_else_can_resume(world: World, user: dict[str, str]) -> None:
     two_sessions(world)
     await world.dispatch(click("session_resume", SESSION_B, **user))
-    assert world.state.get(CHANNEL).session_id is None and not world.posted_anything()
+    assert world.state.channel(CHANNEL).threads == {}
 
 
 async def test_a_button_is_never_trusted_for_a_session_of_another_directory(world: World) -> None:
     two_sessions(world)
     await world.dispatch(click("session_resume", "68da9311-0000-4000-8000-0000000000ff"))
-    assert world.state.get(CHANNEL).session_id is None
+    assert world.state.channel(CHANNEL).threads == {}
     assert world.ephemerals() == [texts.RESUME_GONE]
 
 
-async def test_resume_while_a_turn_runs_is_refused_and_the_list_stays(world: World) -> None:
+async def test_a_typed_resume_of_a_session_held_by_another_thread_is_refused(world: World) -> None:
+    # D6 minimum: two live processes on one transcript is never reachable.
     two_sessions(world)
-    await world.dispatch(message("hello"))  # the fake Claude Code never ends this turn
-    await world.dispatch(click("session_resume", SESSION_B))
-    assert world.state.get(CHANNEL).session_id != SESSION_B
-    assert said(world)[-1] == texts.RESUME_BUSY
-    assert world.slack.calls_to("chat.delete") == []
+    await world.dispatch(message(f"!resume {SESSION_B}", ts=OTHER_THREAD))
+    assert world.state.thread(CHANNEL, OTHER_THREAD).session_id == SESSION_B
+    await world.dispatch(message(f"!resume {SESSION_B}", ts=THREAD))
+    assert world.state.thread(CHANNEL, THREAD) is None
+    assert texts.RESUME_ELSEWHERE in world.ephemerals()
+
+
+async def test_a_resume_click_of_a_session_held_by_another_thread_is_refused(world: World) -> None:
+    two_sessions(world)
+    await world.dispatch(message(f"!resume {SESSION_B}", ts=OTHER_THREAD))
+    await world.dispatch(click("session_resume", SESSION_B))  # a different thread (CLICK_THREAD)
+    assert world.state.thread(CHANNEL, CLICK_THREAD) is None
+    assert texts.RESUME_ELSEWHERE in world.ephemerals()
+
+
+async def test_the_list_marks_a_session_held_elsewhere_with_no_button(world: World) -> None:
+    two_sessions(world)
+    await world.dispatch(message(f"!resume {SESSION_B}", ts=OTHER_THREAD))
+    await world.dispatch(message("!resume"))
+    post = world.slack.calls_to("chat.postMessage")[-1]
+    held_row = next(b for b in post["blocks"] if b.get("block_id") == f"session-{SESSION_B}")
+    free_row = next(b for b in post["blocks"] if b.get("block_id") == f"session-{SESSION_A}")
+    assert "accessory" not in held_row and "accessory" in free_row
+    assert held_row["text"]["text"].endswith(texts.RESUME_ELSEWHERE_ROW)
+
+
+async def test_a_still_running_first_turn_already_holds_its_session_id(world: World) -> None:
+    # D6: the session id is recorded as soon as Claude Code reports it (the init message), not
+    # only at the turn's ResultMessage, so a still-running first turn is already this session
+    # id's holder and cannot be resumed a second time into another thread.
+    await world.dispatch(message("hello", ts=THREAD))
+    world.clients[0].inject(sdk_messages("tools")[:-1])  # no ResultMessage: still running
+    async with asyncio.timeout(2):
+        stored = world.state.thread(CHANNEL, THREAD)
+        while stored is None or stored.session_id is None:
+            await asyncio.sleep(0.01)
+            stored = world.state.thread(CHANNEL, THREAD)
+    held_id = stored.session_id
+    world.stored_sessions = [SDKSessionInfo(held_id, "tools", 0, 1)]
+    await world.dispatch(message(f"!resume {held_id}", ts=OTHER_THREAD))
+    assert world.state.thread(CHANNEL, OTHER_THREAD) is None
+    assert texts.RESUME_ELSEWHERE in world.ephemerals()
+
+
+async def test_resume_opens_an_independent_thread_while_another_is_busy(world: World) -> None:
+    two_sessions(world)
+    await world.dispatch(message("hello", ts=THREAD))  # the fake Claude Code never ends this turn
+    await world.dispatch(message(f"!resume {SESSION_B}", ts=OTHER_THREAD))
+    assert world.state.thread(CHANNEL, OTHER_THREAD).session_id == SESSION_B
+    assert "Trust gate" in said(world)[-1]
 
 
 async def test_a_failing_resume_click_tells_the_owner(world: World) -> None:
@@ -607,7 +849,7 @@ async def test_the_owner_binds_from_the_list(slack: FakeSlack, tmp_path: Path) -
     world = World(slack, tmp_path, bound=False)
     body = click("folder_bind", "app")
     await world.dispatch(body)
-    assert world.state.get(CHANNEL).directory == (world.root / "app").resolve()
+    assert world.state.channel(CHANNEL).directory == (world.root / "app").resolve()
     assert said(world) == [texts.BIND_OK.format(directory=(world.root / "app").resolve())]
     deleted = [(a["channel"], a["ts"]) for a in world.slack.calls_to("chat.delete")]
     assert deleted == [(CHANNEL, body["message"]["ts"])]
@@ -620,12 +862,12 @@ async def test_nobody_else_can_bind_from_the_list(
 ) -> None:
     world = World(slack, tmp_path, bound=False)
     await world.dispatch(click("folder_bind", "app", **user))
-    assert world.state.get(CHANNEL) is None and not world.posted_anything()
+    assert world.state.channel(CHANNEL) is None and not world.posted_anything()
 
 
 async def test_a_bind_button_is_never_trusted_for_a_folder_outside_the_root(world: World) -> None:
     await world.dispatch(click("folder_bind", "../.."))
-    assert world.state.get(CHANNEL).directory == (world.root / "app").resolve()
+    assert world.state.channel(CHANNEL).directory == (world.root / "app").resolve()
     assert said(world) == [texts.BIND_OUTSIDE.format(path="../..", root=world.root.resolve())]
     assert world.slack.calls_to("chat.delete") == []
 
@@ -646,17 +888,16 @@ async def test_no_trusted_folder_says_so_in_the_notification_too(
 
 
 async def test_a_bind_click_on_the_channel_s_own_folder_changes_nothing(world: World) -> None:
-    world.state.set_session(CHANNEL, SESSION_A)
     await world.dispatch(click("folder_bind", "app"))
-    assert world.state.get(CHANNEL).session_id == SESSION_A
     assert said(world) == [texts.BIND_ALREADY.format(directory=(world.root / "app").resolve())]
+    assert world.state.channel(CHANNEL).directory == (world.root / "app").resolve()
 
 
 async def test_a_bind_click_while_a_turn_runs_is_refused_and_the_list_stays(world: World) -> None:
     (world.root / "docs").mkdir()
     await world.dispatch(message("hello"))  # the fake Claude Code never ends this turn
     await world.dispatch(click("folder_bind", "docs"))
-    assert world.state.get(CHANNEL).directory == (world.root / "app").resolve()
+    assert world.state.channel(CHANNEL).directory == (world.root / "app").resolve()
     assert said(world)[-1] == texts.BIND_BUSY
     assert world.slack.calls_to("chat.delete") == []
 
@@ -678,6 +919,72 @@ async def test_only_the_list_reads_the_transcripts_for_dates(
     assert dated == []
     await world.dispatch(message("!resume"))
     assert dated == [(world.root / "app").resolve()]
+
+
+async def test_a_second_resume_click_on_the_same_list_is_refused(world: World) -> None:
+    two_sessions(world)
+    await world.dispatch(click("session_resume", SESSION_A))
+    await world.dispatch(click("session_resume", SESSION_B))  # a quick second click, same list
+    assert world.state.thread(CHANNEL, CLICK_THREAD).session_id == SESSION_A
+    assert texts.RESUME_HELD in world.ephemerals()
+
+
+async def test_a_resume_click_after_a_typed_resume_in_the_same_thread_is_refused(
+    world: World,
+) -> None:
+    two_sessions(world)
+    # A non-session thread that holds the picker: `!resume footer` there acts as top-level.
+    await world.dispatch(reply("!resume footer", CLICK_THREAD))
+    assert world.state.thread(CHANNEL, CLICK_THREAD).session_id == SESSION_A
+    await world.dispatch(click("session_resume", SESSION_B))  # the picker's own thread
+    assert world.state.thread(CHANNEL, CLICK_THREAD).session_id == SESSION_A
+    assert texts.RESUME_HELD in world.ephemerals()
+
+
+async def test_a_resume_click_never_stores_a_session_of_a_folder_bound_meanwhile(
+    world: World,
+) -> None:
+    two_sessions(world)
+    (world.root / "docs").mkdir()
+    listed = asyncio.Event()
+
+    def slow(directory: Path) -> list[SDKSessionInfo]:
+        listed.set()
+        time.sleep(0.2)  # list_sessions reading the old folder's transcripts
+        return world.stored_sessions
+
+    world.sessions._deps.sessions_of = slow
+    click_task = asyncio.create_task(world.dispatch(click("session_resume", SESSION_B)))
+    await listed.wait()
+    await world.dispatch(message("!bind docs"))
+    await click_task
+    await asyncio.sleep(0.3)
+    assert world.state.channel(CHANNEL).directory == (world.root / "docs").resolve()
+    assert world.state.channel(CHANNEL).threads == {}
+    assert texts.RESUME_GONE in world.ephemerals()
+
+
+async def test_a_typed_resume_never_stores_a_session_of_a_folder_bound_meanwhile(
+    world: World,
+) -> None:
+    two_sessions(world)
+    (world.root / "docs").mkdir()
+    listed = asyncio.Event()
+
+    def slow(directory: Path) -> list[SDKSessionInfo]:
+        listed.set()
+        time.sleep(0.2)
+        return world.stored_sessions
+
+    world.sessions._deps.sessions_of = slow
+    resume_task = asyncio.create_task(world.dispatch(message(f"!resume {SESSION_B}", ts=THREAD)))
+    await listed.wait()
+    await world.dispatch(message("!bind docs"))
+    await resume_task
+    await asyncio.sleep(0.3)
+    assert world.state.channel(CHANNEL).directory == (world.root / "docs").resolve()
+    assert world.state.thread(CHANNEL, THREAD) is None
+    assert texts.RESUME_GONE in world.ephemerals()
 
 
 @pytest.mark.parametrize(
@@ -702,36 +1009,6 @@ async def test_a_resumed_session_with_no_title_shows_its_id(world: World) -> Non
     world.stored_sessions = [SDKSessionInfo(SESSION_A, "", 0, 1)]
     await world.dispatch(message(f"!resume {SESSION_A}"))
     assert said(world) == [texts.RESUME_OK.format(title=SESSION_A)]
-
-
-async def test_resuming_the_channel_s_own_session_changes_nothing(world: World) -> None:
-    two_sessions(world)
-    world.state.set_session(CHANNEL, SESSION_A)
-    await world.dispatch(message("!help"))  # an idle, connected client, which a resume closes
-    await world.dispatch(message("!resume footer"))
-    assert said(world)[-1] == texts.RESUME_ALREADY
-    assert world.clients[0].connected
-
-
-async def test_a_resume_never_stores_a_session_of_a_folder_bound_meanwhile(world: World) -> None:
-    two_sessions(world)
-    (world.root / "docs").mkdir()
-    listed = asyncio.Event()
-
-    def slow(directory: Path) -> list[SDKSessionInfo]:
-        listed.set()
-        time.sleep(0.2)  # list_sessions reading the old folder's transcripts
-        return world.stored_sessions
-
-    world.sessions._deps.sessions_of = slow
-    click_task = asyncio.create_task(world.dispatch(click("session_resume", SESSION_B)))
-    await listed.wait()
-    await world.dispatch(message("!bind docs"))
-    await click_task
-    await asyncio.sleep(0.3)
-    stored = world.state.get(CHANNEL)
-    assert stored.directory == (world.root / "docs").resolve() and stored.session_id is None
-    assert texts.RESUME_GONE in world.ephemerals()
 
 
 def shared_file(kind: str, **fields: Any) -> dict[str, Any]:
@@ -811,13 +1088,18 @@ async def test_a_file_on_another_host_is_never_downloaded(world: World) -> None:
 async def test_a_message_with_files_keeps_its_place_in_the_queue(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Downloads take time: a text sent right after must not enter the queue first.
+    # Downloads take time: a reply sent right after must not enter the queue first.
     body = shared_file("snippet")
+    file_thread = str(body["event"]["ts"])
     world.downloads[body["event"]["files"][0]["url_private_download"]] = b"hello\n"
     world.slow_downloads = 0.2
-    session = world.sessions.get(CHANNEL)
-    assert session is not None
     queued: list[Any] = []
+    first = asyncio.create_task(world.dispatch(body))
+    async with asyncio.timeout(2):
+        session = None
+        while session is None:
+            session = world.sessions.get(CHANNEL, file_thread)
+            await asyncio.sleep(0.01)
     submit = session.submit
 
     async def spy(prompt: Any) -> Any:
@@ -825,9 +1107,8 @@ async def test_a_message_with_files_keeps_its_place_in_the_queue(
         return await submit(prompt)
 
     monkeypatch.setattr(session, "submit", spy)
-    first = asyncio.create_task(world.dispatch(body))
     await asyncio.sleep(0.05)
-    await world.dispatch(message("focus on the errors"))
+    await world.dispatch(reply("focus on the errors", file_thread))
     await first
     await asyncio.sleep(0.3)
     assert [str(p).startswith(body["event"]["text"]) for p in queued] == [True, False]
@@ -852,8 +1133,10 @@ async def test_too_many_images_send_nothing_and_download_nothing(world: World) -
     assert said(world) == [texts.UPLOAD_TOO_MANY.format(count=6, limit=5)]
 
 
-async def test_a_rebind_during_the_downloads_sends_the_prompt_nowhere(world: World) -> None:
-    # The session read before the downloads is closed by the rebind: nothing may reach it.
+async def test_a_bind_during_the_downloads_never_moves_the_thread_already_opened(
+    world: World,
+) -> None:
+    # The file's own thread keeps the folder it opened in: a bind only affects new threads.
     (world.root / "docs").mkdir()
     body = shared_file("snippet")
     world.downloads[body["event"]["files"][0]["url_private_download"]] = b"hello\n"
@@ -863,19 +1146,24 @@ async def test_a_rebind_during_the_downloads_sends_the_prompt_nowhere(world: Wor
     await world.dispatch(message("!bind docs"))
     await first
     await asyncio.sleep(0.3)
-    assert world.queries() == [] and world.clients == []
-    assert said(world)[-1] == texts.PROMPT_REBOUND
+    assert world.queries() != []
+    assert world.state.channel(CHANNEL).directory == (world.root / "docs").resolve()
 
 
 async def test_a_command_after_a_message_with_files_waits_its_turn(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     body = shared_file("snippet")
+    file_thread = str(body["event"]["ts"])
     world.downloads[body["event"]["files"][0]["url_private_download"]] = b"hello\n"
     world.slow_downloads = 0.2
-    session = world.sessions.get(CHANNEL)
-    assert session is not None
     queued: list[Any] = []
+    first = asyncio.create_task(world.dispatch(body))
+    async with asyncio.timeout(2):
+        session = None
+        while session is None:
+            session = world.sessions.get(CHANNEL, file_thread)
+            await asyncio.sleep(0.01)
     submit = session.submit
 
     async def spy(prompt: Any) -> Any:
@@ -883,12 +1171,59 @@ async def test_a_command_after_a_message_with_files_waits_its_turn(
         return await submit(prompt)
 
     monkeypatch.setattr(session, "submit", spy)
-    first = asyncio.create_task(world.dispatch(body))
     await asyncio.sleep(0.05)
-    await world.dispatch(message("!compact"))
+    await world.dispatch(reply("!compact", file_thread))
     await first
     await asyncio.sleep(0.3)
     assert [str(p).startswith(body["event"]["text"]) for p in queued] == [True, False]
+
+
+async def test_a_session_closed_during_a_slow_download_is_retried_on_a_fresh_one(
+    world: World,
+) -> None:
+    # D9: whatever closed the session handed to this call (an idle close, most likely, though
+    # `touch()` at the lookup already guards that common case) during the slow step below must
+    # not lose the prompt: submit_to_session retries once against a freshly looked-up session.
+    body = shared_file("snippet")
+    file_thread = str(body["event"]["ts"])
+    world.downloads[body["event"]["files"][0]["url_private_download"]] = b"hello\n"
+    world.slow_downloads = 0.2
+    dispatching = asyncio.create_task(world.dispatch(body))
+    async with asyncio.timeout(2):
+        session = None
+        while session is None:
+            session = world.sessions.get(CHANNEL, file_thread)
+            await asyncio.sleep(0.01)
+    await session.close()  # something else closes it while the download is still running
+    await dispatching
+    await asyncio.sleep(0.3)  # let the slow download finish and the retried submit run
+    queries = world.queries()
+    assert len(queries) == 1  # the retry queues the prompt once, never twice
+    assert str(queries[0]).startswith(body["event"]["text"])
+    rebuilt = world.sessions.get(CHANNEL, file_thread)
+    assert rebuilt is not None and rebuilt is not session
+
+
+async def test_a_retry_that_finds_the_thread_gone_answers_session_gone(world: World) -> None:
+    # D7: a `SessionGone` close (unlike an idle close) also removes the thread's own entry, so
+    # the retry's fresh lookup finds nothing: answering the stale `SessionClosed` text, which
+    # promises a retry will help, would be wrong.
+    body = shared_file("snippet")
+    file_thread = str(body["event"]["ts"])
+    world.downloads[body["event"]["files"][0]["url_private_download"]] = b"hello\n"
+    world.slow_downloads = 0.2
+    dispatching = asyncio.create_task(world.dispatch(body))
+    async with asyncio.timeout(2):
+        session = None
+        while session is None:
+            session = world.sessions.get(CHANNEL, file_thread)
+            await asyncio.sleep(0.01)
+    await session.close()  # closed, and its thread's entry gone, as SessionGone leaves it
+    world.state.remove_thread(CHANNEL, file_thread)
+    await dispatching
+    await asyncio.sleep(0.3)
+    assert world.queries() == []
+    assert texts.SESSION_GONE in world.ephemerals()
 
 
 async def test_a_prompt_while_the_daemon_stops_is_refused_and_words_still_work(
@@ -931,7 +1266,7 @@ async def test_a_bind_to_an_untrusted_folder_says_no_session_can_start_yet(
         await world.dispatch(click("folder_bind", "docs"))
     reason = texts.DIRECTORY_UNTRUSTED.format(directory=docs)
     assert said(world)[-1] == texts.BIND_UNAVAILABLE.format(directory=docs, reason=reason)
-    assert world.state.get(CHANNEL).directory == docs
+    assert world.state.channel(CHANNEL).directory == docs
     await world.sessions.close_all()
 
 
@@ -945,9 +1280,9 @@ def test_long_answers_fit_slack_s_limit() -> None:
 
 
 async def test_an_answer_slack_will_not_record_removes_the_request(world: World) -> None:
-    approval_id, pending = world.approvals.open(CHANNEL, "Colour", QUESTIONS)
+    approval_id, pending = world.approvals.open(CHANNEL, FORM_THREAD, "Colour", QUESTIONS)
     pending.message_ts = "1790000000.000009"
-    draft = Draft(approval_id, CHANNEL, active=1, picks={0: [1]})
+    draft = Draft(approval_id, CHANNEL, FORM_THREAD, active=1, picks={0: [1]})
     values = {
         "q1": {"answer": {"type": "checkboxes", "selected_options": [{"value": "0"}]}},
         "o1": {"other": {"type": "plain_text_input", "value": "xl"}},

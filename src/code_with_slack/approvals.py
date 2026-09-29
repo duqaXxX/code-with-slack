@@ -49,6 +49,7 @@ Decision = Approve | Deny | Answer
 @dataclass
 class Pending:
     channel_id: str
+    thread_ts: str
     title: str
     future: asyncio.Future[Decision]
     questions: list[dict[str, Any]] | None = None
@@ -62,29 +63,46 @@ class Approvals:
         self._pending: dict[str, Pending] = {}
 
     def open(
-        self, channel_id: str, title: str, questions: list[dict[str, Any]] | None = None
+        self,
+        channel_id: str,
+        thread_ts: str,
+        title: str,
+        questions: list[dict[str, Any]] | None = None,
     ) -> tuple[str, Pending]:
         approval_id = secrets.token_urlsafe(16)
-        pending = Pending(channel_id, title, asyncio.get_running_loop().create_future(), questions)
+        pending = Pending(
+            channel_id, thread_ts, title, asyncio.get_running_loop().create_future(), questions
+        )
         self._pending[approval_id] = pending
         return approval_id, pending
 
     def get(self, approval_id: str) -> Pending | None:
         return self._pending.get(approval_id)
 
-    def resolve(self, approval_id: str, channel_id: str, decision: Decision) -> Pending | None:
-        """Resolve once, and only from the channel the request was posted in."""
+    def resolve(
+        self, approval_id: str, channel_id: str, thread_ts: str, decision: Decision
+    ) -> Pending | None:
+        """Resolve once, and only from the channel and thread the request was posted in."""
         pending = self._pending.get(approval_id)
-        if pending is None or pending.channel_id != channel_id or pending.future.done():
+        if (
+            pending is None
+            or pending.channel_id != channel_id
+            or pending.thread_ts != thread_ts
+            or pending.future.done()
+        ):
             return None
         pending.future.set_result(decision)
         del self._pending[approval_id]
         return pending
 
-    def deny_all(self, channel_id: str) -> list[Pending]:
+    def deny_all(self, channel_id: str, thread_ts: str) -> list[Pending]:
         denied = []
         for approval_id, pending in list(self._pending.items()):
-            if pending.channel_id == channel_id and not pending.future.done():
+            if (
+                pending.channel_id == channel_id
+                and pending.thread_ts == thread_ts
+                and not pending.future.done()
+            ):
                 pending.future.set_result(Deny())
                 del self._pending[approval_id]
                 denied.append(pending)
@@ -129,10 +147,6 @@ def _code_chunks(text: str, limit: int) -> list[str]:
     return [*chunks, chunk] if chunk or not chunks else chunks
 
 
-# A request stops the turn until the owner answers: it ends with the mention that rings.
-MENTION_BLOCK = {"type": "context", "elements": [{"type": "mrkdwn", "text": texts.MENTION}]}
-
-
 def approval_blocks(
     approval_id: str, tool_name: str, tool_input: dict[str, Any], context: ToolPermissionContext
 ) -> list[dict[str, Any]]:
@@ -151,7 +165,7 @@ def approval_blocks(
         blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": description}]})
     detail = json.dumps(tool_input, indent=2, ensure_ascii=False)
     chunks = _code_chunks(detail, SECTION_LIMIT - len("```\n\n```"))
-    room = MESSAGE_BLOCKS - len(blocks) - 2  # the actions block and the mention close it
+    room = MESSAGE_BLOCKS - len(blocks) - 1  # the actions block closes it
     if len(chunks) > room:
         # Past one message, the start and the end stay (a payload hides at the end of padding)
         # and a line says how much is not shown, so the owner can Deny rather than guess.
@@ -172,7 +186,6 @@ def approval_blocks(
                 _button("approval_deny", "Deny", approval_id, "danger"),
             ],
         },
-        MENTION_BLOCK,
     ]
     return blocks
 
@@ -232,7 +245,6 @@ def question_blocks(approval_id: str, questions: list[dict[str, Any]]) -> list[d
                 _button("question_skip", "Skip", approval_id),
             ],
         },
-        MENTION_BLOCK,
     ]
 
 
@@ -243,6 +255,7 @@ class Draft:
 
     approval_id: str
     channel_id: str
+    thread_ts: str
     active: int = 0
     picks: dict[int, list[int]] = field(default_factory=dict)
     typed: dict[int, str] = field(default_factory=dict)
@@ -252,6 +265,7 @@ class Draft:
             {
                 "a": self.approval_id,
                 "c": self.channel_id,
+                "h": self.thread_ts,
                 "n": self.active,
                 "p": {str(k): v for k, v in self.picks.items()},
                 "t": {str(k): v for k, v in self.typed.items()},
@@ -266,6 +280,7 @@ class Draft:
         return cls(
             str(data["a"]),
             str(data["c"]),
+            str(data["h"]),
             int(data["n"]),
             {int(k): [int(i) for i in v] for k, v in data["p"].items()},
             {int(k): str(v) for k, v in data["t"].items()},

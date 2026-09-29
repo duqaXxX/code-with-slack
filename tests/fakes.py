@@ -26,11 +26,9 @@ TEAM = "T000TEAM"
 OTHER_TEAM = "T000OTHER"
 CHANNEL = "C000CHAN"
 BOT = "U000BOT"
-
-
-def rings(post: dict[str, Any]) -> bool:
-    """Whether a posted message rings the owner on "Just mentions": @channel in its blocks."""
-    return "<!channel>" in json.dumps(post.get("blocks") or [])
+# The root message's ts of a synthetic thread: a Slack thread_ts is that message's own epoch time.
+THREAD = "1780000000.000001"
+OTHER_THREAD = "1780000000.000002"
 
 
 def sdk_messages(name: str) -> list[Message]:
@@ -97,6 +95,7 @@ class FakeClaudeClient:
         server_info_error: Exception | None = None,
         context_usage_error: Exception | None = None,
         disconnect_error: Exception | None = None,
+        disconnect_gate: asyncio.Event | None = None,
     ) -> None:
         self.options = options
         self._turns = list(turns or [])
@@ -114,6 +113,9 @@ class FakeClaudeClient:
         self._server_info_error = server_info_error
         self._context_usage_error = context_usage_error
         self._disconnect_error = disconnect_error
+        # A disconnect that waits for the test, as a CLI takes real time to flush and exit after
+        # EOF (SubprocessCLITransport.close()).
+        self._disconnect_gate = disconnect_gate
         self.connected = False
         # A prompt as sent: text, or the user messages of an image prompt (streaming input).
         self.queries: list[Any] = []
@@ -130,6 +132,8 @@ class FakeClaudeClient:
         self.connected = True
 
     async def disconnect(self) -> None:
+        if self._disconnect_gate is not None:
+            await self._disconnect_gate.wait()
         self.connected = False
         if self._disconnect_error is not None:
             raise self._disconnect_error
@@ -192,6 +196,8 @@ class FakeSlack(AsyncWebClient):
         super().__init__(token="xox" + "b-fake")
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.posted_ts: list[str] = []  # the ts of every chat.postMessage, in order
+        # Every call waits this long before answering, as a slow Slack API round trip would.
+        self.delay = 0.0
         # A response may be an exception: the call raises it, as a network failure would.
         self.responses: dict[str, Any] = {
             "auth.test": slack_payload("api-auth-test"),
@@ -199,6 +205,7 @@ class FakeSlack(AsyncWebClient):
             "conversations.members": slack_payload("api-conversations-members"),
             "chat.postMessage": slack_payload("api-chat-postMessage"),
             "chat.startStream": slack_payload("api-chat-startStream"),
+            "chat.getPermalink": slack_payload("api-chat-getPermalink"),
         }
 
     async def api_call(  # type: ignore[override]
@@ -210,6 +217,8 @@ class FakeSlack(AsyncWebClient):
         data: Any = None,
         **_: Any,
     ) -> AsyncSlackResponse:
+        if self.delay:
+            await asyncio.sleep(self.delay)
         args = {**(params or {}), **(json or {}), **(data if isinstance(data, dict) else {})}
         self.calls.append((api_method, args))
         answer = self.responses.get(api_method, {"ok": True})

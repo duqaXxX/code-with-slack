@@ -1,24 +1,77 @@
-"""The daemon's only written file: the directory, the session id and the bypass switch of each
-bound channel."""
+"""The daemon's only written file: per channel, its bound directory and any pending migration
+notice; per thread within it, the folder it was opened in, its session id, bypass switch and
+effort level."""
 
 import contextlib
 import json
 import os
 import tempfile
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Collection, Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import MappingProxyType
+from typing import Any
+
+# A thread with no session id whose root message is older than this never finished its first
+# turn: `prune` drops it. A Slack `thread_ts` is the root message's epoch time in seconds.
+ONE_DAY = 24 * 60 * 60
+
+
+def _empty_threads() -> Mapping[str, "ThreadState"]:
+    return MappingProxyType({})
 
 
 @dataclass(frozen=True)
-class ChannelState:
+class ThreadState:
     directory: Path
     session_id: str | None = None
     # `!bypass on`, kept across restarts: a restart is the daemon's doing, not the owner's.
     bypass: bool = False
+    # The level set with `/effort`; `None` when unset or set back to the default.
+    effort: str | None = None
+
+
+@dataclass(frozen=True)
+class ChannelRecord:
+    directory: Path
+    # Set by the v1 migration, cleared once the migration notice is posted to the channel.
+    notice_pending: bool = False
+    threads: Mapping[str, ThreadState] = field(default_factory=_empty_threads)
 
 
 class StateError(Exception):
     """state.json exists but cannot be read; the daemon refuses to guess."""
+
+
+def _parse_thread(raw: dict[str, Any]) -> ThreadState:
+    effort = raw.get("effort")
+    return ThreadState(
+        directory=Path(raw["directory"]),
+        session_id=raw.get("session_id"),
+        bypass=raw.get("bypass") is True,
+        effort=effort if isinstance(effort, str) else None,
+    )
+
+
+def _parse_v2(raw: dict[str, Any]) -> dict[str, ChannelRecord]:
+    channels: dict[str, ChannelRecord] = {}
+    for channel_id, entry in raw["channels"].items():
+        threads = {thread_ts: _parse_thread(t) for thread_ts, t in entry.get("threads", {}).items()}
+        channels[channel_id] = ChannelRecord(
+            directory=Path(entry["directory"]),
+            notice_pending=entry.get("notice_pending") is True,
+            threads=MappingProxyType(threads),
+        )
+    return channels
+
+
+def _migrate_v1(raw: dict[str, Any]) -> dict[str, ChannelRecord]:
+    """Each channel keeps its directory, gets empty threads and a pending notice; the old
+    session id and bypass switch belonged to the channel, not to a thread, and are dropped."""
+    return {
+        channel_id: ChannelRecord(directory=Path(entry["directory"]), notice_pending=True)
+        for channel_id, entry in raw["channels"].items()
+    }
 
 
 class StateStore:
@@ -28,55 +81,164 @@ class StateStore:
         self._path = path
         self._channels = self._load()
 
-    def get(self, channel_id: str) -> ChannelState | None:
+    def channel(self, channel_id: str) -> ChannelRecord | None:
         return self._channels.get(channel_id)
 
+    def thread(self, channel_id: str, thread_ts: str) -> ThreadState | None:
+        channel = self._channels.get(channel_id)
+        return channel.threads.get(thread_ts) if channel is not None else None
+
     def bind(self, channel_id: str, directory: Path) -> None:
-        """Bind a channel to a directory; the old session and its bypass stay with the old one."""
-        self._channels[channel_id] = ChannelState(directory)
+        """Bind a channel to a directory; its threads and their own folders stay untouched
+        (each thread keeps the folder it was created in), and so does its pending notice."""
+        current = self._channels.get(channel_id)
+        self._channels[channel_id] = ChannelRecord(
+            directory,
+            notice_pending=current.notice_pending if current is not None else False,
+            threads=current.threads if current is not None else _empty_threads(),
+        )
         self._save()
 
-    def set_session(self, channel_id: str, session_id: str | None) -> None:
-        """Record a bound channel's session; a channel with no directory has none to record."""
-        current = self._channels.get(channel_id)
+    def open_thread(
+        self, channel_id: str, thread_ts: str, session_id: str | None = None
+    ) -> ThreadState:
+        """Create a thread's entry with the channel's current folder, or return the existing
+        one unchanged. Raises `KeyError` for a channel that has never been bound."""
+        channel = self._channels[channel_id]
+        existing = channel.threads.get(thread_ts)
+        if existing is not None:
+            return existing
+        created = ThreadState(directory=channel.directory, session_id=session_id)
+        self._replace_threads(channel_id, {**channel.threads, thread_ts: created})
+        return created
+
+    def set_session(self, channel_id: str, thread_ts: str, session_id: str | None) -> None:
+        """Record a thread's session id; a no-op for a thread that does not exist."""
+        current = self.thread(channel_id, thread_ts)
         if current is not None and current.session_id != session_id:
-            self._channels[channel_id] = replace(current, session_id=session_id)
-            self._save()
+            self._set_thread(channel_id, thread_ts, replace(current, session_id=session_id))
 
-    def set_bypass(self, channel_id: str, on: bool) -> None:
-        """Record a bound channel's bypass switch; a resumed session keeps it."""
-        current = self._channels.get(channel_id)
+    def set_bypass(self, channel_id: str, thread_ts: str, on: bool) -> None:
+        """Record a thread's bypass switch; a no-op for a thread that does not exist."""
+        current = self.thread(channel_id, thread_ts)
         if current is not None and current.bypass != on:
-            self._channels[channel_id] = replace(current, bypass=on)
-            self._save()
+            self._set_thread(channel_id, thread_ts, replace(current, bypass=on))
 
-    def _load(self) -> dict[str, ChannelState]:
+    def set_effort(self, channel_id: str, thread_ts: str, effort: str | None) -> None:
+        """Record the effort level `/effort` set for a thread; a no-op for an unknown thread."""
+        current = self.thread(channel_id, thread_ts)
+        if current is not None and current.effort != effort:
+            self._set_thread(channel_id, thread_ts, replace(current, effort=effort))
+
+    def remove_thread(self, channel_id: str, thread_ts: str) -> None:
+        """Drop a thread's entry; a no-op if it is not there."""
+        channel = self._channels.get(channel_id)
+        if channel is None or thread_ts not in channel.threads:
+            return
+        remaining = {ts: t for ts, t in channel.threads.items() if ts != thread_ts}
+        self._replace_threads(channel_id, remaining)
+
+    def holder(self, session_id: str) -> tuple[str, str] | None:
+        """The (channel_id, thread_ts) whose thread holds this session id, across all channels."""
+        for channel_id, channel in self._channels.items():
+            for thread_ts, thread in channel.threads.items():
+                if thread.session_id == session_id:
+                    return channel_id, thread_ts
+        return None
+
+    def pending_notices(self) -> list[str]:
+        """Channel ids whose v1-to-v2 migration notice has not been posted yet."""
+        return [channel_id for channel_id, c in self._channels.items() if c.notice_pending]
+
+    def clear_notice(self, channel_id: str) -> None:
+        """Mark a channel's migration notice as posted; a no-op if already clear or unbound."""
+        channel = self._channels.get(channel_id)
+        if channel is None or not channel.notice_pending:
+            return
+        self._channels[channel_id] = replace(channel, notice_pending=False)
+        self._save()
+
+    def prune(self, alive: Callable[[Path], Collection[str] | None], now: float) -> int:
+        """Remove a thread whose session id is gone from its folder's sessions, and a
+        no-session thread whose root message is older than `ONE_DAY`. Calls `alive` once per
+        distinct folder; None means it cannot tell, and that folder's threads are kept. If
+        `alive` raises, nothing is removed or written; the caller decides what to do next.
+        Returns how many entries were removed."""
+        alive_cache: dict[Path, Collection[str] | None] = {}
+        updated: dict[str, ChannelRecord] = {}
+        removed = 0
+        for channel_id, channel in self._channels.items():
+            kept: dict[str, ThreadState] = {}
+            for thread_ts, thread in channel.threads.items():
+                if thread.session_id is not None:
+                    if thread.directory not in alive_cache:
+                        alive_cache[thread.directory] = alive(thread.directory)
+                    sessions = alive_cache[thread.directory]
+                    if sessions is not None and thread.session_id not in sessions:
+                        removed += 1
+                        continue
+                elif now - float(thread_ts) > ONE_DAY:
+                    removed += 1
+                    continue
+                kept[thread_ts] = thread
+            updated[channel_id] = (
+                channel
+                if len(kept) == len(channel.threads)
+                else replace(channel, threads=MappingProxyType(kept))
+            )
+        if removed:
+            self._channels = updated
+            self._save()
+        return removed
+
+    def _set_thread(self, channel_id: str, thread_ts: str, updated: ThreadState) -> None:
+        channel = self._channels[channel_id]
+        self._replace_threads(channel_id, {**channel.threads, thread_ts: updated})
+
+    def _replace_threads(self, channel_id: str, threads: dict[str, ThreadState]) -> None:
+        channel = self._channels[channel_id]
+        self._channels[channel_id] = replace(channel, threads=MappingProxyType(threads))
+        self._save()
+
+    def _load(self) -> dict[str, ChannelRecord]:
         try:
-            raw = json.loads(self._path.read_text())
-            if raw.get("version") != 1:
-                raise StateError(f"{self._path} has an unknown version; fix or delete it")
-            return {
-                # Only a literal true switches bypass on: a hand-edited "false" must not.
-                channel: ChannelState(
-                    Path(entry["directory"]), entry.get("session_id"), entry.get("bypass") is True
-                )
-                for channel, entry in raw["channels"].items()
-            }
+            text = self._path.read_text()
         except FileNotFoundError:
             return {}
+        try:
+            raw = json.loads(text)
+            version = raw["version"]
+            if version == 2:
+                return _parse_v2(raw)
+            if version == 1:
+                channels = _migrate_v1(raw)
+                self._write(channels)
+                return channels
+            raise StateError(f"{self._path} has an unknown version; fix or delete it")
         except (json.JSONDecodeError, KeyError, TypeError, AttributeError) as exc:
             raise StateError(f"{self._path} cannot be read ({exc}); fix or delete it") from exc
 
     def _save(self) -> None:
+        self._write(self._channels)
+
+    def _write(self, channels: dict[str, ChannelRecord]) -> None:
         data = {
-            "version": 1,
+            "version": 2,
             "channels": {
-                channel: {
-                    "directory": str(s.directory),
-                    "session_id": s.session_id,
-                    "bypass": s.bypass,
+                channel_id: {
+                    "directory": str(c.directory),
+                    "notice_pending": c.notice_pending,
+                    "threads": {
+                        thread_ts: {
+                            "directory": str(t.directory),
+                            "session_id": t.session_id,
+                            "bypass": t.bypass,
+                            "effort": t.effort,
+                        }
+                        for thread_ts, t in c.threads.items()
+                    },
                 }
-                for channel, s in self._channels.items()
+                for channel_id, c in channels.items()
             },
         }
         # Write beside the target and rename: a crash leaves the old file or the new one.

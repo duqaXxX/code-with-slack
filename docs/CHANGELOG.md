@@ -11,17 +11,36 @@ All notable changes to this project are documented here. The format follows
   `(+42,-10)`, counted as the terminal's ccstatusline counts them (#39), and the time to the
   weekly limit's reset, `7d 45% ↻ 3d 4h`, as they already did for the 5-hour one (#42).
 - Probe claim P14: a hook's `cwd` follows a `cd`, which the footer's branch depends on.
-- With the channel on Slack's "Just mentions", a reply rings once, when it is complete, and its
-  closing message ends its footer with `@channel`, its notification reading `Reply to: ` and the
-  start of the owner's message; an approval request, a question and a reply that ends in an error
-  ring too. Nothing rings while Claude writes, nor for
-  `!stop`, a restart or a turn started by a background task (#26). `docs/setup.md` gains the
-  channel setting.
+- One Claude Code session per Slack thread, instead of one per channel: a top-level message opens
+  a new thread with its own session id, bypass switch and effort level, kept in `state.json`
+  (now version 2); a reply inside a thread continues that session, even after code-with-slack
+  restarts or the thread's Claude Code process closes from an hour with nothing to do (the next
+  message resumes it). A channel bound under version 1 keeps its directory and gets one top-level
+  notice explaining the new model, with its old session still reachable through `!resume`.
+- Probe claims P15 and P16: a resumed session keeps the model set with `/model`, and loses the
+  effort set with `/effort` until `ClaudeAgentOptions(effort=...)` restores it.
+- `!resume`, typed at the top level, lists the channel's folder's sessions in its own thread; a
+  Resume click or `!resume <id or title>` makes that thread the resumed session's thread. It is
+  refused inside a thread that already holds a session.
+- Every reply, approval request and question posts inside the session's own thread, and Slack
+  notifies the owner on a new message in a thread it started, mention or none, once when a reply
+  is complete, for an approval request and a question, and for a reply that ends in an error;
+  nothing rings while Claude writes, nor for `!stop`, a restart or an idle close. `docs/setup.md`
+  gains the notification section and `docs/features.md` the measurements behind it.
 
 ### Changed
 
-- The footer is a closing message of its own, posted when the reply ends. A reply that ends
-  below a newer one keeps its closing message, holding `@channel` alone.
+- `!bypass`, `!stop`, `!status`, `!bind` and `!help` answer differently at the top level than
+  inside a session's thread: `!bypass on`/`off` is per thread and refused at the top level;
+  `!stop` and `!status` act on every session of the channel at the top level and on one session
+  inside its thread; `!bind` works only at the top level, refused inside a thread; `!help` lists
+  the daemon's words everywhere and a session's own commands only inside its thread.
+- Approvals and questions are resolved only in the channel and thread they were posted in,
+  instead of the channel alone, and `!stop` denies only the pending requests of the session it
+  stops.
+- The footer is a closing message of its own, posted in the session's thread when the reply ends.
+  A reply that ends below a newer one keeps its closing message, now a bare line with no text of
+  its own, since a new message in the thread is what notifies.
 - An Edit or Write diff shows whole, as the terminal shows it, in a collapsible full-width
   container closed by default: the call's line is its title and `Added … lines, removed … lines`
   its subtitle. It no longer stops at 20 lines.
@@ -72,6 +91,35 @@ All notable changes to this project are documented here. The format follows
   inside a background subagent now goes to the reply that holds that subagent. An agent the
   command starts inside it shows on the command's line (`⏳ /review · 1 call`, then `⎿ Run the tests`)
   instead of a second running line.
+- D6 minimum: a Resume click or `!resume <id or name>` that names a session already open in
+  another thread of any channel is refused, with a new text, instead of resuming it a second
+  time; the `!resume` list marks such a session and gives it no button. The session id is
+  recorded as soon as Claude Code reports it (its first message), not only at the end of its
+  first turn, so a still-running first turn is already covered by this refusal too.
+- A resumed session whose transcript turned out gone left its worker task, and any armed
+  idle-close timer, running forever after the close: `asyncio.all_tasks()` kept growing. A turn
+  that raced the close during its own `sink.open` gets the "session gone" reply when its own
+  thread's entry is gone too, or "session closed" otherwise (an idle close or a restart can also
+  close mid-`sink.open`, and only a gone thread's entry tells the two apart). A turn a direct
+  call (`!status`, `!bypass`) had already taken from the queue, when that same call then finds
+  the session gone, is rescued the same way, instead of being left saying "writing" forever.
+- The stale wording "the channel was bound to another folder or resumed another session" for a
+  session closed under a running command is gone (neither still happens): it now says the
+  session closed while the command ran, from an idle close or a restart. When a prompt's retry
+  after such a close finds the thread's own entry gone too (not just closed), it now says the
+  session is gone, instead of implying a retry would help.
+- `close_all` (a restart, or the daemon stopping) stopped closing sessions at the first one
+  whose `close()` raised, leaving the channel's other sessions never closed. Each is now closed
+  under its own `try`/`except`, logged by id and skipped on failure, before the call waits for
+  every close in flight to finish.
+- Pruning stale threads on start treated a session the SDK's `list_sessions` filters out
+  (sidechain or metadata-only) as gone even when its transcript file exists, and could drop a
+  thread that should have survived. Pruning now also checks the transcript file itself.
+- `!status` at the top level fetched each live session's permalink one after another; it now
+  fetches them at once, in the same order.
+- A level set with `!effort` showed as unknown right after a reconnect (an idle close or a
+  restart), until the first turn ended and Claude Code reported one. The footer and `!status` now
+  show the requested level at once, until Claude Code's own report corrects it.
 
 ### Changed
 

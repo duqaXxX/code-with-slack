@@ -40,14 +40,15 @@ from code_with_slack.state import StateStore
 from tests.fakes import (
     BOT,
     CHANNEL,
+    OTHER_THREAD,
     OWNER,
     TEAM,
+    THREAD,
     CanUseToolCall,
     EndOfStream,
     FakeClaudeClient,
     FakeSlack,
     HookRun,
-    rings,
     sdk_json,
     sdk_messages,
     split_turns,
@@ -96,8 +97,9 @@ class Harness:
         self.clients.append(client)
         return client
 
-    def session(self) -> Any:
-        session = self.manager.get(CHANNEL)
+    def session(self, thread: str = THREAD) -> Any:
+        """The live session of `thread`, opened as a top-level owner message would."""
+        session = self.manager.open(CHANNEL, thread)
         assert session is not None
         return session
 
@@ -133,7 +135,7 @@ async def harness_for(slack: FakeSlack, tmp_path: Path) -> AsyncIterator[Callabl
         await harness.manager.close_all()
 
 
-async def test_a_turn_replies_in_the_main_window_and_records_the_session(
+async def test_a_turn_replies_in_the_thread_and_records_the_session(
     harness_for: Callable[..., Harness],
 ) -> None:
     turn_messages = sdk_messages("tools")
@@ -141,10 +143,10 @@ async def test_a_turn_replies_in_the_main_window_and_records_the_session(
     turn = await h.session().submit("list the files")
     await asyncio.wait_for(turn.done.wait(), 2)
     assert h.clients[0].queries == ["list the files"]
-    assert all(a.get("thread_ts") is None for a in h.slack.calls_to("chat.postMessage"))
+    assert all(a.get("thread_ts") == THREAD for a in h.slack.calls_to("chat.postMessage"))
     result = turn_messages[-1]
     assert isinstance(result, ResultMessage)
-    assert h.state.get(CHANNEL).session_id == result.session_id
+    assert h.state.thread(CHANNEL, THREAD).session_id == result.session_id
     last = [a for m, a in h.slack.calls if m in ("chat.postMessage", "chat.update")][-1]
     assert last["blocks"][-1]["type"] == "context"  # the footer closes the reply
 
@@ -166,7 +168,8 @@ async def test_the_client_is_launched_as_the_design_says(
 
 async def test_a_restart_resumes_the_stored_session(harness_for: Callable[..., Harness]) -> None:
     h = harness_for({})
-    h.state.set_session(CHANNEL, "stored-session")
+    h.session()  # opens the thread
+    h.state.set_session(CHANNEL, THREAD, "stored-session")
     await h.session().ensure_connected()
     assert h.clients[0].options.resume == "stored-session"
 
@@ -178,10 +181,11 @@ async def test_clear_records_the_new_session_id(harness_for: Callable[..., Harne
     await asyncio.wait_for((await session.submit("hi")).done.wait(), 2)
     await asyncio.wait_for((await session.submit("/clear")).done.wait(), 2)
     assert isinstance(second[-1], ResultMessage)
-    assert h.state.get(CHANNEL).session_id == second[-1].session_id
+    assert h.state.thread(CHANNEL, THREAD).session_id == second[-1].session_id
 
 
-async def test_stale_session_starts_fresh_and_says_so(harness_for: Callable[..., Harness]) -> None:
+async def test_a_gone_session_is_removed_and_says_so(harness_for: Callable[..., Harness]) -> None:
+    # D7: a stored session id that fails to resume no longer falls back to a fresh session.
     gone = ResultError(
         "Claude Code returned an error result: No conversation found",
         data={
@@ -190,32 +194,205 @@ async def test_stale_session_starts_fresh_and_says_so(harness_for: Callable[...,
             "errors": ["No conversation found with session ID: gone"],
         },
     )
-    h = harness_for({"connect_error": gone}, {"turns": [sdk_messages("tools")]})
-    h.state.set_session(CHANNEL, "gone")
+    h = harness_for({"connect_error": gone})
+    h.session()  # opens the thread
+    h.state.set_session(CHANNEL, THREAD, "gone")
     turn = await h.session().submit("hello")
     await asyncio.wait_for(turn.done.wait(), 2)
-    assert [c.options.resume for c in h.clients] == ["gone", None]
-    assert "could not be resumed" in h.written_text()
-    assert h.state.get(CHANNEL).session_id not in (None, "gone")
+    assert [c.options.resume for c in h.clients] == ["gone"]
+    assert h.bodies() == [texts.SESSION_GONE]
+    assert h.state.thread(CHANNEL, THREAD) is None
+    assert h.manager.get(CHANNEL, THREAD) is None
+    # The body, then a closing message: posting in the thread is what notifies here.
+    posts = h.slack.calls_to("chat.postMessage")
+    assert len(posts) == 2
+    assert posts[-1]["text"] == texts.REPLY_TO.format(prompt="hello")
 
 
-async def test_bypass_survives_a_restart(
+async def test_a_gone_session_fails_a_queued_turn_and_leaks_no_process(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # Regression: the worker used to take the next queued turn after SessionGone and start a
+    # second, unrecorded Claude Code session for it instead of refusing.
+    gone = ResultError(
+        "Claude Code returned an error result: No conversation found",
+        data={
+            "subtype": "error_during_execution",
+            "is_error": True,
+            "errors": ["No conversation found with session ID: gone"],
+        },
+    )
+    h = harness_for({"connect_error": gone})
+    session = h.session()  # opens the thread
+    h.state.set_session(CHANNEL, THREAD, "gone")
+    first = await session.submit("hello")
+    second = await session.submit("again")
+    await asyncio.wait_for(asyncio.gather(first.done.wait(), second.done.wait()), 2)
+    # Only the one failed attempt: no second client started for the queued turn.
+    assert [c.options.resume for c in h.clients] == ["gone"]
+    assert h.bodies() == [texts.SESSION_GONE, texts.SESSION_GONE]
+    # The worker must not be left spinning on an empty queue nobody will ever fill again.
+    await asyncio.sleep(0)
+    names = {t.get_name() for t in asyncio.all_tasks()}
+    assert f"worker-{CHANNEL}-{THREAD}" not in names
+    assert f"idle-close-{CHANNEL}-{THREAD}" not in names
+    await h.manager.close_all()
+    assert all(not c.connected for c in h.clients)
+
+
+async def test_a_turn_that_races_sessiongone_during_its_own_open_gets_session_gone(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A second `submit` can be suspended inside its own `sink.open` while the first turn's
+    # `ensure_connected` finds the stored session gone, closes the session and drains the queue
+    # (empty at that point). The second turn is queued only after that: nothing will ever take
+    # it from an ended worker, so it must be resolved right there, as gone too.
+    gone = ResultError(
+        "Claude Code returned an error result: No conversation found",
+        data={
+            "subtype": "error_during_execution",
+            "is_error": True,
+            "errors": ["No conversation found with session ID: gone"],
+        },
+    )
+    h = harness_for({"connect_error": gone})
+    session = h.session()
+    h.state.set_session(CHANNEL, THREAD, "gone")
+
+    gates = [asyncio.Event(), asyncio.Event()]
+    opened: list[str] = []
+    real_open = sessions.ReplySink.open
+
+    async def gated_open(self: Any, status: str) -> None:
+        gate = gates[len(opened)]
+        opened.append(status)
+        await gate.wait()
+        await real_open(self, status)
+
+    monkeypatch.setattr(sessions.ReplySink, "open", gated_open)
+
+    first_task = asyncio.create_task(session.submit("hello"))
+    await until(lambda: len(opened) == 1)  # "hello" is paused inside its own `sink.open`
+    second_task = asyncio.create_task(session.submit("again"))
+    await until(lambda: len(opened) == 2)  # "again" is paused inside its own `sink.open` too
+    gates[0].set()  # let "hello" queue itself and start its worker
+    first_turn = await first_task
+    await asyncio.wait_for(first_turn.done.wait(), 2)
+    assert session.closed  # the SessionGone branch has already closed and drained the queue
+    gates[1].set()  # only now does "again" reach the point where it would enqueue itself
+    second_turn = await asyncio.wait_for(second_task, 2)
+    await asyncio.wait_for(second_turn.done.wait(), 2)
+    assert h.bodies() == [texts.SESSION_GONE, texts.SESSION_GONE]
+    await asyncio.sleep(0)
+    names = {t.get_name() for t in asyncio.all_tasks()}
+    assert f"worker-{CHANNEL}-{THREAD}" not in names
+    await h.manager.close_all()
+
+
+async def test_a_turn_that_races_a_plain_close_during_its_own_open_gets_session_closed(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Whatever closed the session during `sink.open` (item 2's fix), it must not always be
+    # answered as SessionGone: a plain close (an idle close, a restart) leaves the thread's own
+    # entry in state.json, unlike SessionGone's close (D7), and that is the only thing telling
+    # the two apart once `self._closed` is true either way.
+    h = harness_for({})
+    session = h.session()
+    real_open = sessions.ReplySink.open
+    opened: list[str] = []
+    gate = asyncio.Event()
+
+    async def gated_open(self: Any, status: str) -> None:
+        opened.append(status)
+        if len(opened) == 1:
+            await gate.wait()
+        await real_open(self, status)
+
+    monkeypatch.setattr(sessions.ReplySink, "open", gated_open)
+
+    submit_task = asyncio.create_task(session.submit("hello"))
+    await until(lambda: len(opened) == 1)  # paused inside its own `sink.open`
+    await session.close()  # a plain close: the thread's entry stays in state.json
+    assert h.state.thread(CHANNEL, THREAD) is not None
+    gate.set()
+    turn = await asyncio.wait_for(submit_task, 2)
+    await asyncio.wait_for(turn.done.wait(), 2)
+    assert h.bodies() == [texts.SESSION_CLOSED]
+
+
+async def test_a_direct_sessiongone_call_leaves_no_idle_timer_task(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # `!status` (or `!bypass`) can hit SessionGone with no worker ever created: the idle-close
+    # timer armed when the session was handed out (D9) must not be left running past the close.
+    gone = ResultError(
+        "Claude Code returned an error result: No conversation found",
+        data={
+            "subtype": "error_during_execution",
+            "is_error": True,
+            "errors": ["No conversation found with session ID: gone"],
+        },
+    )
+    h = harness_for({"connect_error": gone})
+    session = h.session()  # touched on hand-out: its idle-close timer is armed already
+    h.state.set_session(CHANNEL, THREAD, "gone")
+    await session.status()
+    assert session.closed
+    await asyncio.sleep(0)
+    names = {t.get_name() for t in asyncio.all_tasks()}
+    assert f"idle-close-{CHANNEL}-{THREAD}" not in names
+    assert f"worker-{CHANNEL}-{THREAD}" not in names
+
+
+async def test_a_direct_gone_call_rescues_the_worker_s_taken_turn(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # Regression (proven at 5e435de): a direct call (`!status`) holds `_connect_lock` while it
+    # hits SessionGone; if the worker had already taken a turn and was itself blocked acquiring
+    # that same lock, cancelling the worker (to end it) lost that turn: cancelled mid-`await`,
+    # it never reached its own except clause, so `_taken` was never failed and the reply stayed
+    # "writing" forever.
+    gone = ResultError(
+        "Claude Code returned an error result: No conversation found",
+        data={
+            "subtype": "error_during_execution",
+            "is_error": True,
+            "errors": ["No conversation found with session ID: gone"],
+        },
+    )
+    gate = asyncio.Event()
+    h = harness_for({"connect_error": gone, "connect_gate": gate})
+    session = h.session()
+    h.state.set_session(CHANNEL, THREAD, "gone")
+    status_task = asyncio.create_task(session.status())  # holds the connect lock, gated
+    await until(lambda: len(h.clients) == 1)
+    turn = await session.submit("hello")
+    await until(lambda: session._taken is not None)  # the worker took it, now waits on the lock
+    gate.set()
+    await asyncio.wait_for(status_task, 2)
+    assert session.closed
+    await asyncio.wait_for(turn.done.wait(), 2)  # must not hang
+    assert h.bodies() == [texts.SESSION_GONE]
+
+
+async def test_a_restart_rebuilds_a_stored_thread_with_its_bypass(
     harness_for: Callable[..., Harness], tmp_path: Path
 ) -> None:
     h = harness_for({}, {})
     session = h.session()
     await session.set_bypass(True)
     assert h.clients[0].modes == ["bypassPermissions"] and session.bypass
-    assert json.loads((tmp_path / "state.json").read_text())["channels"][CHANNEL]["bypass"]
+    stored = json.loads((tmp_path / "state.json").read_text())
+    assert stored["channels"][CHANNEL]["threads"][THREAD]["bypass"]
     # A new daemon: state.json read again, a new manager, a new Claude Code process.
     reloaded = dataclasses.replace(h.deps, state=StateStore(tmp_path / "state.json"))
-    restarted = SessionManager(reloaded).get(CHANNEL)
+    restarted = SessionManager(reloaded).get(CHANNEL, THREAD)
     assert restarted is not None and restarted.bypass
     await restarted.ensure_connected()
     assert h.clients[1].modes == ["bypassPermissions"]
     await restarted.set_bypass(False)
     assert h.clients[1].modes[-1] == "default"
-    assert not StateStore(tmp_path / "state.json").get(CHANNEL).bypass
+    assert not StateStore(tmp_path / "state.json").thread(CHANNEL, THREAD).bypass
     await restarted.close()
 
 
@@ -229,7 +406,7 @@ async def test_queue_waits_while_approval_pending(harness_for: Callable[..., Har
     await asyncio.sleep(0.05)
     assert h.clients[0].queries == ["first"] and session.busy
     approval_id = next(iter(h.approvals._pending))
-    assert h.approvals.resolve(approval_id, CHANNEL, Approve()) is not None
+    assert h.approvals.resolve(approval_id, CHANNEL, THREAD, Approve()) is not None
     await asyncio.wait_for(second.done.wait(), 2)
     assert first.done.is_set()
     assert h.clients[0].queries == ["first", "second"]
@@ -263,24 +440,68 @@ async def test_ask_user_question_returns_answers(harness_for: Callable[..., Harn
     await until(lambda: bool(h.approvals._pending))
     approval_id = next(iter(h.approvals._pending))
     answers = {q["question"]: q["options"][0]["label"] for q in recorded["input"]["questions"]}
-    h.approvals.resolve(approval_id, CHANNEL, Answer(answers))
+    h.approvals.resolve(approval_id, CHANNEL, THREAD, Answer(answers))
     await asyncio.wait_for(turn.done.wait(), 2)
     result = h.clients[0].permission_results[0]
     assert isinstance(result, PermissionResultAllow)
     assert result.updated_input == {"questions": recorded["input"]["questions"], "answers": answers}
 
 
-async def test_an_owner_turn_that_completes_rings_with_its_prompt(
+async def test_waiting_for_owner_reflects_an_open_approval(
+    harness_for: Callable[..., Harness],
+) -> None:
+    ask = CanUseToolCall("Bash", {"command": "ls"})
+    h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
+    session = h.session()
+    await session.submit("list the files")
+    await until(lambda: bool(h.approvals._pending))
+    assert session.waiting_for_owner is True
+    h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, THREAD, Approve())
+    await until(lambda: session.waiting_for_owner is False)
+
+
+async def test_running_kinds_reflects_a_task_that_outlives_its_turn(
+    harness_for: Callable[..., Harness],
+) -> None:
+    first = split_turns(sdk_messages("background"))[0]
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    assert session.busy is False
+    assert session.running_kinds  # a task still runs, though the session itself is not busy
+
+
+async def test_no_reply_ever_carries_a_channel_mention(harness_for: Callable[..., Harness]) -> None:
+    # `<!channel>` was removed with the thread model: a full turn that ends with a closing
+    # message, posts an approval request and a question request must never bring it back.
+    recorded = sdk_json("ask-can-use-tool")
+    ask = CanUseToolCall("Bash", {"command": "ls"})
+    question = CanUseToolCall(recorded["tool_name"], recorded["input"])
+    h = harness_for({"turns": [[ask, question, *sdk_messages("tools")]]})
+    turn = await h.session().submit("do it")
+    await until(lambda: bool(h.approvals._pending))
+    approval_id = next(iter(h.approvals._pending))
+    assert h.approvals.resolve(approval_id, CHANNEL, THREAD, Approve()) is not None
+    await until(lambda: bool(h.approvals._pending))
+    question_id = next(iter(h.approvals._pending))
+    answers = {q["question"]: q["options"][0]["label"] for q in recorded["input"]["questions"]}
+    assert h.approvals.resolve(question_id, CHANNEL, THREAD, Answer(answers)) is not None
+    await asyncio.wait_for(turn.done.wait(), 2)
+    for _, args in h.slack.calls:
+        assert "<!channel>" not in json.dumps(args)
+
+
+async def test_an_owner_turn_that_completes_closes_with_its_prompt_as_the_notification(
     harness_for: Callable[..., Harness],
 ) -> None:
     h = harness_for({"turns": [sdk_messages("tools")]})
     turn = await h.session().submit("list the files")
     await asyncio.wait_for(turn.done.wait(), 2)
     closing = h.slack.calls_to("chat.postMessage")[-1]
-    assert closing["text"] == texts.REPLY_TO.format(prompt="list the files") and rings(closing)
+    assert closing["text"] == texts.REPLY_TO.format(prompt="list the files")
 
 
-async def test_a_turn_stopped_by_the_owner_does_not_ring(
+async def test_a_turn_stopped_by_the_owner_has_no_reply_to_notification(
     harness_for: Callable[..., Harness],
 ) -> None:
     h = harness_for(
@@ -296,10 +517,10 @@ async def test_a_turn_stopped_by_the_owner_does_not_ring(
     assert await session.stop() is True
     await asyncio.wait_for(turn.done.wait(), 2)
     closing = h.slack.calls_to("chat.postMessage")[-1]
-    assert not rings(closing)
+    assert "Reply to:" not in closing["text"]
 
 
-async def test_a_background_turn_s_reply_does_not_ring(
+async def test_a_background_turn_s_reply_has_no_reply_to_notification(
     harness_for: Callable[..., Harness],
 ) -> None:
     turns = split_turns(sdk_messages("background"))
@@ -311,10 +532,10 @@ async def test_a_background_turn_s_reply_does_not_ring(
     await until(lambda: any(is_report(r) for r in h.replies()))
     await asyncio.sleep(0.05)
     closing = h.slack.calls_to("chat.postMessage")[-1]  # the background report's own closing
-    assert not rings(closing)
+    assert "Reply to:" not in closing["text"]
 
 
-async def test_a_failed_directory_rings_but_a_rebind_ends_silently(
+async def test_a_failed_directory_closes_with_the_prompt_as_the_notification(
     harness_for: Callable[..., Harness], tmp_path: Path
 ) -> None:
     gone = tmp_path / "gone"
@@ -324,42 +545,24 @@ async def test_a_failed_directory_rings_but_a_rebind_ends_silently(
     gone.rmdir()
     failed = await h.session().submit("hello")
     await asyncio.wait_for(failed.done.wait(), 2)
-    # An error the owner must act on: it rings.
+    # An error the owner must act on: its notification carries the prompt.
     failure_closing = h.slack.calls_to("chat.postMessage")[-1]
-    assert rings(failure_closing)
+    assert failure_closing["text"] == texts.REPLY_TO.format(prompt="hello")
 
-    other = tmp_path / "other"
-    other.mkdir()
-    await h.manager.bind(CHANNEL, other)
+
+async def test_a_turn_ended_by_close_does_not_notify(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({})  # no scripted turn: it never answers on its own
     session = h.session()
-    waiting = await session.submit("world")  # no scripted turn: it never answers on its own
+    waiting = await session.submit("world")
     await until(lambda: h.clients and h.clients[-1].queries == ["world"])
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-    await h.manager.bind(CHANNEL, elsewhere)  # ends the waiting reply, as a restart would
+    await session.close()
     await asyncio.wait_for(waiting.done.wait(), 2)
-    # No urgent attention was needed here: it does not ring.
-    ended_closing = h.slack.calls_to("chat.postMessage")[-1]
-    assert not rings(ended_closing)
-
-
-async def test_an_approval_request_rings(harness_for: Callable[..., Harness]) -> None:
-    ask = CanUseToolCall("Bash", {"command": "ls"})
-    h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
-    await h.session().submit("do it")
-    await until(lambda: bool(h.approvals._pending))
-    request = h.slack.calls_to("chat.postMessage")[-1]
-    assert rings(request)
-
-
-async def test_an_ask_user_question_request_rings(harness_for: Callable[..., Harness]) -> None:
-    recorded = sdk_json("ask-can-use-tool")
-    call = CanUseToolCall(recorded["tool_name"], recorded["input"])
-    h = harness_for({"turns": [[call, *sdk_messages("tools")]]})
-    await h.session().submit("ask me")
-    await until(lambda: bool(h.approvals._pending))
-    request = h.slack.calls_to("chat.postMessage")[-1]
-    assert rings(request)
+    # No urgent attention was needed here: the close ends it silently, with no new post.
+    posts = h.slack.calls_to("chat.postMessage")
+    assert len(posts) == 1  # only the placeholder the submit already opened
+    assert "Reply to:" not in posts[0]["text"]
 
 
 def test_asked_cuts_a_long_prompt_and_names_an_image_only_prompt() -> None:
@@ -410,51 +613,72 @@ async def test_logs_hold_no_message_content(
     assert "SECRET-PROMPT-CONTENT" not in caplog.text
 
 
-async def test_rebinding_closes_the_client_and_forgets_the_session(
+async def test_bind_is_refused_while_a_thread_of_the_channel_is_busy(
     harness_for: Callable[..., Harness], tmp_path: Path
 ) -> None:
-    h = harness_for({}, {})
-    h.state.set_session(CHANNEL, "old")
-    await h.session().ensure_connected()
-    other = tmp_path / "other"
-    other.mkdir()
-    await h.manager.bind(CHANNEL, other)
-    assert h.clients[0].connected is False
-    assert h.state.get(CHANNEL).session_id is None
-    assert h.session().directory == other
-
-
-async def test_rebinding_ends_the_waiting_replies_and_says_why(
-    harness_for: Callable[..., Harness], tmp_path: Path
-) -> None:
-    h = harness_for({})  # no scripted turn: the first query never answers
+    ask = CanUseToolCall("Bash", {"command": "ls"})
+    h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
     session = h.session()
-    first = await session.submit("one")
-    second = await session.submit("two")
-    await until(lambda: h.clients and h.clients[0].queries == ["one"])
+    await session.submit("list the files")
+    await until(lambda: bool(h.approvals._pending))
     other = tmp_path / "other"
     other.mkdir()
-    await h.manager.bind(CHANNEL, other)
-    await asyncio.wait_for(asyncio.gather(first.done.wait(), second.done.wait()), 2)
-    ended = texts.ENDED.format(reason=texts.ENDED_REBOUND)
-    assert all(ended in r for r in h.replies())
-    shown = [blocks[-1] for blocks in h.slack.message_blocks()]
-    assert all(texts.WRITING not in str(b) and texts.WAITING not in str(b) for b in shown)
+    assert await h.manager.bind(CHANNEL, other) is False
+    assert h.state.channel(CHANNEL).directory == h.tmp_path
+    h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, THREAD, Approve())
+    await until(lambda: session.idle)
 
 
-async def test_a_message_during_a_bind_gets_the_new_directory(
+async def test_bind_accepted_when_every_thread_is_idle_keeps_the_old_thread_s_folder(
     harness_for: Callable[..., Harness], tmp_path: Path
 ) -> None:
-    h = harness_for({}, {})
-    await h.session().ensure_connected()
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
     other = tmp_path / "other"
     other.mkdir()
-    binding = asyncio.create_task(h.manager.bind(CHANNEL, other))
-    await asyncio.sleep(0)  # the bind is closing the old session
-    during = h.manager.get(CHANNEL)
-    await binding
-    assert during is not None and during.directory == other
-    assert h.manager.get(CHANNEL) is during
+    assert await h.manager.bind(CHANNEL, other) is True
+    assert h.state.channel(CHANNEL).directory == other
+    # The thread already open is untouched: same folder, same live session, no closing.
+    assert h.state.thread(CHANNEL, THREAD).directory == h.tmp_path
+    assert session.directory == h.tmp_path and h.session() is session
+    assert h.clients[0].connected is True
+    # A thread opened after the bind gets the new folder.
+    fresh = h.manager.open(CHANNEL, OTHER_THREAD)
+    assert fresh is not None and fresh.directory == other
+
+
+async def test_two_threads_of_one_channel_are_two_sessions_with_separate_clients(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"turns": [sdk_messages("tools")]}, {"turns": [sdk_messages("tools")]})
+    first = h.manager.open(CHANNEL, THREAD)
+    second = h.manager.open(CHANNEL, OTHER_THREAD)
+    assert first is not None and second is not None and first is not second
+    assert h.manager.get(CHANNEL, THREAD) is first  # the same live session, not rebuilt
+    await asyncio.wait_for((await first.submit("a")).done.wait(), 2)
+    await asyncio.wait_for((await second.submit("b")).done.wait(), 2)
+    assert len(h.clients) == 2
+    assert h.clients[0].queries == ["a"] and h.clients[1].queries == ["b"]
+    assert set(h.manager.sessions_of(CHANNEL)) == {first, second}
+    posts = h.slack.calls_to("chat.postMessage")
+    assert {p.get("thread_ts") for p in posts} == {THREAD, OTHER_THREAD}
+
+
+async def test_stop_channel_stops_every_busy_session_of_the_channel(
+    harness_for: Callable[..., Harness],
+) -> None:
+    turn = [CanUseToolCall("Bash", {"command": "rm -rf build"}), *sdk_messages("interrupt")]
+    h = harness_for({"turns": [turn]}, {"turns": [turn]})
+    first = h.manager.open(CHANNEL, THREAD)
+    second = h.manager.open(CHANNEL, OTHER_THREAD)
+    a = await first.submit("a")
+    b = await second.submit("b")
+    await until(lambda: len(h.approvals._pending) == 2)
+    assert await h.manager.stop_channel(CHANNEL) is True
+    await asyncio.wait_for(asyncio.gather(a.done.wait(), b.done.wait()), 2)
+    assert h.clients[0].interrupts == 1 and h.clients[1].interrupts == 1
+    assert await h.manager.stop_channel(CHANNEL) is False
 
 
 def test_resolve_directory(tmp_path: Path) -> None:
@@ -644,7 +868,6 @@ def running_block(blocks: list[dict[str, Any]]) -> str | None:
     blocks = [b for b in blocks if not str(b.get("block_id", "")).startswith("spacer")]
     footer = blocks[-1] if blocks and blocks[-1].get("type") == "context" else None
     text = str(footer["elements"][0]["text"]) if footer else ""
-    text = text.removesuffix(f" · {texts.MENTION}")  # a ringing reply's mention ends the line
     return text[text.index("⏳") :] if "⏳" in text else None
 
 
@@ -837,12 +1060,16 @@ async def test_a_cli_that_exits_ends_the_turn_and_the_next_message_reconnects(
     assert [c.queries for c in h.clients] == [["first"], ["second"]]
 
 
-async def test_a_cli_that_exits_mid_turn_rings_once(harness_for: Callable[..., Harness]) -> None:
+async def test_a_cli_that_exits_mid_turn_notifies_once(
+    harness_for: Callable[..., Harness],
+) -> None:
     h = harness_for({"turns": [[*sdk_messages("tools")[:3], EndOfStream()]]})
     session = h.session()
     await asyncio.wait_for((await session.submit("first")).done.wait(), 2)
-    rang = [p for p in h.slack.calls_to("chat.postMessage") if rings(p)]
-    assert [p["text"] for p in rang] == [texts.REPLY_TO.format(prompt="first")]
+    notifying = [
+        p for p in h.slack.calls_to("chat.postMessage") if p["text"].startswith("Reply to:")
+    ]
+    assert [p["text"] for p in notifying] == [texts.REPLY_TO.format(prompt="first")]
 
 
 async def test_a_failed_background_post_still_releases_the_queue(
@@ -876,8 +1103,8 @@ async def test_a_missing_directory_asks_to_bind_again(
     await asyncio.wait_for(turn.done.wait(), 2)
     assert h.clients == []
     assert h.bodies() == [texts.DIRECTORY_MISSING.format(directory=gone)]
-    closing = h.slack.calls_to("chat.postMessage")[-1]  # an error the owner must act on: it rings
-    assert closing["text"] == texts.REPLY_TO.format(prompt="hello") and rings(closing)
+    closing = h.slack.calls_to("chat.postMessage")[-1]  # its notification carries the prompt
+    assert closing["text"] == texts.REPLY_TO.format(prompt="hello")
 
 
 async def test_an_unreadable_directory_says_how_to_grant_access(
@@ -895,8 +1122,8 @@ async def test_an_unreadable_directory_says_how_to_grant_access(
         locked.chmod(0o755)
     assert h.clients == []
     assert h.bodies() == [texts.DIRECTORY_UNREADABLE.format(directory=locked)]
-    closing = h.slack.calls_to("chat.postMessage")[-1]  # an error the owner must act on: it rings
-    assert closing["text"] == texts.REPLY_TO.format(prompt="hello") and rings(closing)
+    closing = h.slack.calls_to("chat.postMessage")[-1]  # its notification carries the prompt
+    assert closing["text"] == texts.REPLY_TO.format(prompt="hello")
 
 
 def statuses(h: Harness) -> list[str]:
@@ -921,7 +1148,7 @@ async def test_a_reply_shows_that_claude_is_writing_right_away(
     second = await session.submit("second")
     await until(lambda: bool(h.approvals._pending))
     assert statuses(h)[:2] == [texts.WRITING, texts.WAITING]
-    h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, Approve())
+    h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, THREAD, Approve())
     await asyncio.wait_for(second.done.wait(), 2)
     assert first.done.is_set()
     replies = [
@@ -1111,20 +1338,21 @@ async def test_a_setup_failure_after_connect_closes_the_client(
     assert len(h.clients) == 2 and h.clients[1].connected
 
 
-async def test_a_rebind_never_records_the_old_directory_s_session(
+async def test_a_bind_after_a_turn_never_touches_that_thread_s_own_record(
     harness_for: Callable[..., Harness], tmp_path: Path
 ) -> None:
     messages = sdk_messages("tools")
-    h = harness_for({"turns": [messages[:-1]]})
-    await h.session().submit("list the files")
-    await until(lambda: len(h.clients) == 1 and h.clients[0].queries == ["list the files"])
-    await asyncio.sleep(0.05)
+    h = harness_for({"turns": [messages]})
+    result = messages[-1]
+    assert isinstance(result, ResultMessage)
+    await asyncio.wait_for((await h.session().submit("list the files")).done.wait(), 2)
+    assert h.state.thread(CHANNEL, THREAD).session_id == result.session_id
     other = tmp_path / "other"
     other.mkdir()
-    h.clients[0].inject([messages[-1]])  # the old turn's result is waiting to be read
-    await h.manager.bind(CHANNEL, other)
-    stored = h.state.get(CHANNEL)
-    assert stored is not None and stored.directory == other and stored.session_id is None
+    assert await h.manager.bind(CHANNEL, other) is True  # affects only the channel's next thread
+    assert h.state.channel(CHANNEL).directory == other
+    assert h.state.thread(CHANNEL, THREAD).directory == h.tmp_path
+    assert h.state.thread(CHANNEL, THREAD).session_id == result.session_id
 
 
 def test_a_relative_bind_path_is_read_under_the_allowed_root(tmp_path: Path) -> None:
@@ -1170,64 +1398,61 @@ async def test_every_message_is_posted_without_link_previews(
     h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
     turn = await h.session().submit("list the files")
     await until(lambda: len(h.approvals._pending) == 1)
-    h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, Approve())
+    h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, THREAD, Approve())
     await asyncio.wait_for(turn.done.wait(), 2)
     posts = h.slack.calls_to("chat.postMessage")
     assert len(posts) >= 2
     assert all(p.get("unfurl_links") is False and p.get("unfurl_media") is False for p in posts)
 
 
-async def test_resume_points_the_channel_at_another_session_of_its_directory(
+async def test_resume_creates_a_new_thread_already_on_the_given_session(
     harness_for: Callable[..., Harness],
 ) -> None:
     h = harness_for({"turns": [sdk_messages("tools")]}, {})
     await asyncio.wait_for((await h.session().submit("list the files")).done.wait(), 2)
     other = "68da9311-0000-4000-8000-00000000abcd"
-    assert await h.manager.resume(CHANNEL, other)
-    assert h.state.get(CHANNEL).session_id == other
-    await h.session().ensure_connected()  # the next message starts Claude Code on that session
+    resumed = await h.manager.resume(CHANNEL, OTHER_THREAD, other)
+    assert resumed is not None
+    assert h.state.thread(CHANNEL, OTHER_THREAD).session_id == other
+    assert h.state.thread(CHANNEL, THREAD).session_id != other  # the original thread is untouched
+    await resumed.ensure_connected()  # the next message on the new thread starts on that session
     assert h.clients[-1].options.resume == other
 
 
-async def test_resume_keeps_bypass_as_the_terminal_s_resume_does(
+async def test_resume_creates_a_thread_with_bypass_off_regardless_of_others(
     harness_for: Callable[..., Harness],
 ) -> None:
     h = harness_for({}, {})
-    await h.session().set_bypass(True)
-    assert await h.manager.resume(CHANNEL, "68da9311-0000-4000-8000-00000000abcd")
-    assert h.manager.bypass_on(CHANNEL)
-    await h.session().ensure_connected()
-    assert h.clients[-1].modes == ["bypassPermissions"]
+    await h.session().set_bypass(True)  # bypass is per thread (D3): only the original thread's
+    resumed = await h.manager.resume(CHANNEL, OTHER_THREAD, "68da9311-0000-4000-8000-00000000abcd")
+    assert resumed is not None and not resumed.bypass
+    await resumed.ensure_connected()
+    assert h.clients[-1].modes == []
 
 
-async def test_resume_without_bypass_leaves_the_mode_alone(
+async def test_resume_creates_an_independent_thread_even_while_another_is_busy(
     harness_for: Callable[..., Harness],
 ) -> None:
-    h = harness_for({}, {})
-    await h.session().ensure_connected()
-    assert await h.manager.resume(CHANNEL, "68da9311-0000-4000-8000-00000000abcd")
-    await h.session().ensure_connected()
-    assert h.clients[-1].modes == [] and not h.manager.bypass_on(CHANNEL)
-
-
-async def test_resume_waits_for_an_idle_channel(harness_for: Callable[..., Harness]) -> None:
     ask = CanUseToolCall("Bash", {"command": "ls"})
     h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
     await h.session().submit("list the files")
     await until(lambda: len(h.approvals._pending) == 1)
-    before = h.state.get(CHANNEL).session_id
-    assert not await h.manager.resume(CHANNEL, "68da9311-0000-4000-8000-00000000abcd")
-    assert h.state.get(CHANNEL).session_id == before and h.session().busy
+    resumed = await h.manager.resume(CHANNEL, OTHER_THREAD, "68da9311-0000-4000-8000-00000000abcd")
+    assert resumed is not None
+    assert h.state.thread(CHANNEL, OTHER_THREAD) is not None
+    assert h.session().busy  # the original thread's turn is unaffected
 
 
-async def test_resume_waits_for_background_tasks_to_end(
+async def test_resume_returns_none_when_the_channel_is_unbound(
     harness_for: Callable[..., Harness],
 ) -> None:
-    first, _, _ = split_background()
-    h = harness_for({"turns": [first]})
-    await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
-    assert h.session()._running_counts()  # the recorded background shell still runs
-    assert not await h.manager.resume(CHANNEL, "68da9311-0000-4000-8000-00000000abcd")
+    h = harness_for()
+    assert await h.manager.resume("C000OTHER", THREAD, "some-session") is None
+
+
+def test_open_returns_none_when_the_channel_is_unbound(harness_for: Callable[..., Harness]) -> None:
+    h = harness_for()
+    assert h.manager.open("C000OTHER", THREAD) is None
 
 
 def test_the_list_holds_only_this_directory_s_worktree(
@@ -1388,7 +1613,7 @@ async def test_status_shows_the_tasks_still_running_as_the_latest_reply_does(
     h = harness_for({"turns": [first]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    assert statuses(h)[-1].endswith(f"⏳ 1 shell · {texts.MENTION}")
+    assert statuses(h)[-1].endswith("⏳ 1 shell")
     assert (await session.status()).endswith("\nBackground: `1 shell`")
 
 
@@ -1529,7 +1754,7 @@ async def test_a_stop_lets_the_running_turn_finish_and_ends_the_queued_one(
     assert first.done.is_set()
     assert h.clients[0].queries == ["first"]
     assert texts.ENDED.format(reason=texts.ENDED_RESTARTING) in h.replies()[1]
-    assert h.state.get(CHANNEL).session_id == result.session_id
+    assert h.state.thread(CHANNEL, THREAD).session_id == result.session_id
 
 
 async def test_a_stop_waits_for_the_reply_s_final_write(
@@ -1581,7 +1806,8 @@ async def test_an_approval_asked_during_a_stop_stays_open_and_the_turn_finishes(
     await asyncio.sleep(0.05)
     assert not drained.done() and not turn.done.is_set()
     # The owner answers while the daemon stops, as a Slack session that restarted it would need.
-    assert h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, Approve()) is not None
+    approval_id = next(iter(h.approvals._pending))
+    assert h.approvals.resolve(approval_id, CHANNEL, THREAD, Approve()) is not None
     await asyncio.wait_for(drained, 2)
     assert turn.done.is_set()
     assert isinstance(h.clients[0].permission_results[0], PermissionResultAllow)
@@ -1725,31 +1951,59 @@ async def test_bang_stop_ends_background_tasks_outside_a_stop_too(
     assert h.clients[0].interrupts == 0  # no turn was running
 
 
-async def swap(h: Harness, how: str, tmp_path: Path) -> None:
-    if how == "bind":
-        other = tmp_path / "other"
-        other.mkdir()
-        await h.manager.bind(CHANNEL, other)
-    else:
-        assert await h.manager.resume(CHANNEL, "another")
-
-
-@pytest.mark.parametrize("how", ["bind", "resume"])
-async def test_a_swap_while_a_word_starts_the_client_leaves_no_process(
-    harness_for: Callable[..., Harness], tmp_path: Path, how: str
+async def test_a_close_while_a_word_starts_the_client_leaves_no_process(
+    harness_for: Callable[..., Harness],
 ) -> None:
-    # `!help` or `!status` starts the client in its own task, outside the prompt queue.
+    # `!help` or `!status` starts the client in its own task, outside the prompt queue; the
+    # trigger for a concurrent close is now close_all at shutdown (and, later, an idle close).
     gate = asyncio.Event()
     h = harness_for({"connect_gate": gate})
-    word = asyncio.create_task(h.session().ensure_connected())
+    session = h.session()
+    word = asyncio.create_task(session.ensure_connected())
     await until(lambda: len(h.clients) == 1)
-    swapping = asyncio.create_task(swap(h, how, tmp_path))
+    closing = asyncio.create_task(session.close())
     await asyncio.sleep(0.05)
-    assert not swapping.done()  # the close waits for the connect in progress
+    assert not closing.done()  # the close waits for the connect in progress
     gate.set()
-    await asyncio.wait_for(swapping, 2)
+    await asyncio.wait_for(closing, 2)
     await asyncio.wait_for(word, 2)
     assert len(h.clients) == 1 and h.clients[0].connected is False
+
+
+async def test_bypass_asked_while_the_session_closes_is_not_stored(
+    harness_for: Callable[..., Harness],
+) -> None:
+    gate = asyncio.Event()
+    h = harness_for({"connect_gate": gate})
+    session = h.session()
+    word = asyncio.create_task(session.set_bypass(True))
+    await until(lambda: len(h.clients) == 1)
+    closing = asyncio.create_task(session.close())
+    await asyncio.sleep(0.05)
+    gate.set()
+    await asyncio.wait_for(closing, 2)
+    with pytest.raises(sessions.SessionClosed):
+        await asyncio.wait_for(word, 2)
+    stored = h.state.thread(CHANNEL, THREAD)
+    assert stored is not None and stored.bypass is False
+
+
+async def test_the_status_of_a_session_closed_meanwhile_is_not_given(
+    harness_for: Callable[..., Harness],
+) -> None:
+    gate = asyncio.Event()
+    h = harness_for({"connect_gate": gate})
+    session = h.session()
+    word = asyncio.create_task(session.status())
+    await until(lambda: len(h.clients) == 1)
+    closing = asyncio.create_task(session.close())
+    await asyncio.sleep(0.05)
+    gate.set()
+    await asyncio.wait_for(closing, 2)
+    with pytest.raises(sessions.SessionClosed):  # connected before the close, read after it
+        await asyncio.wait_for(word, 2)
+    with pytest.raises(sessions.SessionClosed):
+        await session.status()
 
 
 async def test_a_closed_session_starts_no_client(harness_for: Callable[..., Harness]) -> None:
@@ -1759,41 +2013,6 @@ async def test_a_closed_session_starts_no_client(harness_for: Callable[..., Harn
     with pytest.raises(sessions.SessionClosed):
         await session.ensure_connected()
     assert h.clients == []
-
-
-async def test_bypass_asked_on_a_session_rebound_meanwhile_is_not_stored(
-    harness_for: Callable[..., Harness], tmp_path: Path
-) -> None:
-    gate = asyncio.Event()
-    h = harness_for({"connect_gate": gate})
-    word = asyncio.create_task(h.session().set_bypass(True))
-    await until(lambda: len(h.clients) == 1)
-    swapping = asyncio.create_task(swap(h, "bind", tmp_path))
-    await asyncio.sleep(0.05)
-    gate.set()
-    await asyncio.wait_for(swapping, 2)
-    with pytest.raises(sessions.SessionClosed):
-        await asyncio.wait_for(word, 2)
-    stored = h.state.get(CHANNEL)
-    assert stored is not None and stored.bypass is False
-
-
-async def test_the_status_of_a_session_closed_meanwhile_is_not_given(
-    harness_for: Callable[..., Harness], tmp_path: Path
-) -> None:
-    gate = asyncio.Event()
-    h = harness_for({"connect_gate": gate})
-    session = h.session()
-    word = asyncio.create_task(session.status())
-    await until(lambda: len(h.clients) == 1)
-    swapping = asyncio.create_task(swap(h, "bind", tmp_path))
-    await asyncio.sleep(0.05)
-    gate.set()
-    await asyncio.wait_for(swapping, 2)
-    with pytest.raises(sessions.SessionClosed):  # connected before the close, read after it
-        await asyncio.wait_for(word, 2)
-    with pytest.raises(sessions.SessionClosed):
-        await session.status()
 
 
 async def test_bypass_whose_client_closes_under_it_says_the_session_closed(
@@ -1810,5 +2029,518 @@ async def test_bypass_whose_client_closes_under_it_says_the_session_closed(
     client.set_permission_mode = closing
     with pytest.raises(sessions.SessionClosed):
         await session.set_bypass(True)
-    stored = h.state.get(CHANNEL)
+    stored = h.state.thread(CHANNEL, THREAD)
     assert stored is not None and stored.bypass is False
+
+
+# D9: the effort level `/effort` sets is stored per thread and passed back on the next connect;
+# a Claude Code process with nothing to do for an hour closes itself, and the next message
+# rebuilds it.
+
+
+async def test_a_result_reporting_an_effort_change_stores_it(
+    harness_for: Callable[..., Harness],
+) -> None:
+    turn = sdk_messages("usage")
+    result = turn[-1]
+    assert isinstance(result, ResultMessage)
+    effort_turn = [
+        *turn[:-1],
+        dataclasses.replace(
+            result, result="Set effort level to high (this session only): Comprehensive"
+        ),
+    ]
+    h = harness_for({"turns": [effort_turn]})
+    await asyncio.wait_for((await h.session().submit("/effort high")).done.wait(), 2)
+    assert h.state.thread(CHANNEL, THREAD).effort == "high"
+
+
+async def test_setting_effort_back_to_auto_stores_the_default(
+    harness_for: Callable[..., Harness],
+) -> None:
+    turn = sdk_messages("usage")
+    result = turn[-1]
+    assert isinstance(result, ResultMessage)
+    effort_turn = [
+        *turn[:-1],
+        dataclasses.replace(result, result="Effort level set to auto (this session only)"),
+    ]
+    h = harness_for({"turns": [effort_turn]})
+    session = h.session()  # opens the thread
+    h.state.set_effort(CHANNEL, THREAD, "high")  # a level was stored from an earlier turn
+    await asyncio.wait_for((await session.submit("/effort auto")).done.wait(), 2)
+    assert h.state.thread(CHANNEL, THREAD).effort is None
+
+
+async def test_the_client_is_launched_with_the_stored_effort(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({})
+    h.session()  # opens the thread
+    h.state.set_effort(CHANNEL, THREAD, "low")
+    await h.session().ensure_connected()
+    assert h.clients[0].options.effort == "low"
+
+
+async def test_the_footer_shows_a_stored_effort_at_once_after_a_reconnect(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # A stored `!effort` is sent to Claude Code on every reconnect; the footer must not show
+    # "unknown" for the level the daemon itself just asked for, before any turn reports another.
+    h = harness_for({})
+    h.session()
+    h.state.set_effort(CHANNEL, THREAD, "low")
+    assert "Effort: `low`" in await h.session().status()
+
+
+async def test_an_idle_session_closes_itself_after_the_delay_and_posts_nothing(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("hi")).done.wait(), 2)
+    calls_before = len(h.slack.calls)  # every kind: postMessage, update, delete
+    await until(lambda: not h.clients[0].connected, limit=1)
+    assert session.closed
+    assert len(h.slack.calls) == calls_before  # a silent close
+
+
+async def test_the_idle_close_does_not_fire_while_a_turn_runs(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    ask = CanUseToolCall("Bash", {"command": "ls"})
+    h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
+    session = h.session()
+    turn = await session.submit("list the files")
+    await until(lambda: bool(h.approvals._pending))
+    await asyncio.sleep(0.1)  # past the idle delay, still waiting on the owner's decision
+    assert not session.closed and h.clients[0].connected is True
+    h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, THREAD, Approve())
+    await asyncio.wait_for(turn.done.wait(), 2)
+    await until(lambda: session.closed, limit=1)  # idle again: the timer restarted
+
+
+async def test_the_idle_close_waits_for_a_background_task(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    first, notice, injected = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    assert session._running_kinds()  # the task outlived its turn
+    await asyncio.sleep(0.1)  # past the idle delay, the task is still running
+    assert not session.closed and h.clients[0].connected is True
+    h.clients[0].inject(notice + injected)
+    await until(lambda: not session._running_kinds())
+    await until(lambda: session.closed, limit=1)  # idle again once the task ends
+
+
+async def test_the_idle_close_waits_for_an_expected_report_turn(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    first, notice, injected = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    h.clients[0].inject(notice)  # a report turn is expected; not idle until it arrives
+    await asyncio.sleep(0.1)  # past the idle delay
+    assert not session.closed and h.clients[0].connected is True
+    h.clients[0].inject(injected)
+    await until(lambda: is_report(h.bodies()[-1]))
+    await until(lambda: session.closed, limit=1)
+
+
+async def test_a_message_after_a_close_gets_a_rebuilt_session_never_the_closed_one(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    session = h.session()
+    h.state.set_session(CHANNEL, THREAD, "prior")
+    h.state.set_effort(CHANNEL, THREAD, "high")
+    await session.close()
+    assert session.closed
+    rebuilt = h.manager.get(CHANNEL, THREAD)
+    assert rebuilt is not None and rebuilt is not session
+    turn = await rebuilt.submit("next")
+    await asyncio.wait_for(turn.done.wait(), 2)
+    assert h.clients[-1].options.resume == "prior"
+    assert h.clients[-1].options.effort == "high"
+
+
+async def test_the_next_message_after_an_idle_close_resumes_with_effort(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    turn = sdk_messages("usage")
+    result = turn[-1]
+    assert isinstance(result, ResultMessage)
+    effort_turn = [
+        *turn[:-1],
+        dataclasses.replace(
+            result, result="Set effort level to high (this session only): Comprehensive"
+        ),
+    ]
+    h = harness_for({"turns": [effort_turn]}, {"turns": [sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("/effort high")).done.wait(), 2)
+    await until(lambda: session.closed, limit=1)
+    stored = h.state.thread(CHANNEL, THREAD)
+    rebuilt = h.manager.get(CHANNEL, THREAD)
+    assert rebuilt is not None and rebuilt is not session
+    await asyncio.wait_for((await rebuilt.submit("next")).done.wait(), 2)
+    assert h.clients[1].options.resume == stored.session_id
+    assert h.clients[1].options.effort == "high"
+
+
+async def test_sessions_of_leaves_out_a_closed_session(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({})
+    session = h.session()
+    await session.close()
+    assert h.manager.sessions_of(CHANNEL) == []
+
+
+async def test_a_gone_session_is_left_out_of_sessions_of(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # The case Task 2 left open: a resume that finds its session gone stays a closed entry
+    # in the manager until something looks it up again; sessions_of must not show it meanwhile.
+    gone = ResultError(
+        "Claude Code returned an error result: No conversation found",
+        data={
+            "subtype": "error_during_execution",
+            "is_error": True,
+            "errors": ["No conversation found with session ID: gone"],
+        },
+    )
+    h = harness_for({"connect_error": gone})
+    session = h.session()
+    h.state.set_session(CHANNEL, THREAD, "gone")
+    turn = await session.submit("hello")
+    await asyncio.wait_for(turn.done.wait(), 2)
+    assert session.closed
+    assert h.manager.sessions_of(CHANNEL) == []
+
+
+# D9 races: the resume race, the routing race, the re-arm points after a word's connect and an
+# expired report wait, the effort edge cases and the eviction of a closed session.
+
+
+async def test_ensure_connected_waits_for_the_predecessor_s_disconnect_before_resuming(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # SubprocessCLITransport.close() notes the CLI needs real time to flush and exit after EOF:
+    # a rebuild must never resume the same session id while that is still in flight.
+    gate = asyncio.Event()
+    h = harness_for({"disconnect_gate": gate}, {"turns": [sdk_messages("tools")]})
+    session = h.session()
+    await session.ensure_connected()
+    h.state.set_session(CHANNEL, THREAD, "prior")
+    closing = asyncio.create_task(session.close())
+    await asyncio.sleep(0.05)  # close() is now blocked inside the gated disconnect
+    assert not closing.done()
+    assert session.closed  # closing has started...
+    assert h.clients[0].connected is True  # ...but has not finished
+    rebuilt = h.manager.get(CHANNEL, THREAD)
+    assert rebuilt is not None and rebuilt is not session
+    connecting = asyncio.create_task(rebuilt.ensure_connected())
+    await asyncio.sleep(0.05)
+    assert not connecting.done()  # waiting on the predecessor: no second client started yet
+    assert len(h.clients) == 1
+    gate.set()
+    await asyncio.wait_for(closing, 2)
+    await asyncio.wait_for(connecting, 2)
+    assert len(h.clients) == 2
+    assert h.clients[1].options.resume == "prior"
+
+
+async def test_close_all_waits_for_an_idle_close_already_in_flight(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    gate = asyncio.Event()
+    h = harness_for({"disconnect_gate": gate})
+    session = h.session()
+    await session.ensure_connected()
+    await until(lambda: session.closed, limit=1)  # the idle close fired and is now in flight
+    assert h.clients[0].connected is True  # blocked inside the gated disconnect
+    closing_all = asyncio.create_task(h.manager.close_all())
+    await asyncio.sleep(0.05)
+    assert not closing_all.done()  # waits for the in-flight close rather than returning early
+    gate.set()
+    await asyncio.wait_for(closing_all, 2)
+    assert h.clients[0].connected is False
+
+
+async def test_close_all_continues_past_a_session_whose_close_raises(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({}, {})
+    first = h.session(THREAD)
+    second = h.session(OTHER_THREAD)
+    await first.ensure_connected()
+    await second.ensure_connected()
+
+    async def raising_close(reason: str = texts.ENDED_SHUTDOWN) -> None:
+        # A real `close()` always sets `done_closing` from its own `finally`, whatever fails.
+        first.done_closing.set()
+        raise RuntimeError("boom")
+
+    first.close = raising_close  # type: ignore[method-assign]
+    await asyncio.wait_for(h.manager.close_all(), 2)
+    assert h.clients[1].connected is False  # the second session still closed
+    assert h.manager.sessions_of(CHANNEL) == []
+
+
+async def test_a_lookup_touches_the_idle_timer_before_any_await(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The timer armed when the turn ended is close to firing; a lookup (a message arriving) must
+    # reset it to a fresh IDLE_CLOSE_SECONDS, synchronously, before any slow step (a download, a
+    # Slack call) a caller might do on the way to its own submit.
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.1)
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("hi")).done.wait(), 2)
+    await asyncio.sleep(0.07)  # close to the stale timer's own delay, not yet closed
+    looked_up = h.manager.get(CHANNEL, THREAD)
+    assert looked_up is session
+    await asyncio.sleep(0.07)  # past where the STALE timer would have fired (0.1s from the end)
+    assert not session.closed  # the touch gave it a fresh window instead
+
+
+async def test_a_lookup_of_an_idle_session_still_closes_it_eventually(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The touch above resets the clock; it does not disarm it. A lookup with no submit ever
+    # following stays a session with nothing to do, and closes on its own new schedule.
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("hi")).done.wait(), 2)
+    assert h.manager.get(CHANNEL, THREAD) is session
+    await until(lambda: session.closed, limit=1)
+
+
+async def test_submit_on_a_closed_session_raises_session_closed(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({})
+    session = h.session()
+    await session.close()
+    with pytest.raises(sessions.SessionClosed):
+        await session.submit("hi")
+
+
+async def test_ensure_connected_arms_the_idle_close_too(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A daemon word (`!status`, `!help`, `!bypass`) connects with no turn ever submitted.
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    h = harness_for({})
+    session = h.session()
+    await session.ensure_connected()
+    await until(lambda: session.closed, limit=1)
+
+
+async def test_the_idle_close_arms_again_when_no_report_turn_ever_comes(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.05)
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    first, notice, _ = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    h.clients[0].inject(notice)  # a report turn is expected, but never sent in this test
+    await until(lambda: session.closed, limit=2)  # INJECTED_TURN_WAIT elapses, then the timer
+
+
+async def test_a_model_change_with_no_effort_does_not_clear_the_stored_level(
+    harness_for: Callable[..., Harness],
+) -> None:
+    turn = sdk_messages("usage")
+    result = turn[-1]
+    assert isinstance(result, ResultMessage)
+    model_turn = [
+        *turn[:-1],
+        dataclasses.replace(result, result="Set model to `Sonnet 5` for this session only"),
+    ]
+    h = harness_for({"turns": [model_turn]})
+    session = h.session()  # opens the thread
+    h.state.set_effort(CHANNEL, THREAD, "high")  # stored from an earlier turn
+    await asyncio.wait_for((await session.submit("/model sonnet")).done.wait(), 2)
+    assert h.state.thread(CHANNEL, THREAD).effort == "high"  # unknown, not cleared
+
+
+async def test_an_unrecognized_stored_effort_is_dropped_not_sent(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({})
+    h.session()  # opens the thread
+    h.state.set_effort(CHANNEL, THREAD, "ultra")  # not one of the SDK's EffortLevel values
+    await h.session().ensure_connected()
+    assert h.clients[0].options.effort is None
+
+
+async def test_an_idle_closed_session_is_evicted_even_with_no_further_lookup(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("hi")).done.wait(), 2)
+    await until(lambda: not h.clients[0].connected, limit=1)
+    key = (CHANNEL, THREAD)
+    await until(lambda: key not in h.manager._sessions, limit=1)
+
+
+async def test_the_idle_close_does_not_fire_while_a_plain_turn_runs(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No approval at all this time: just a turn that has not finished yet.
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    h = harness_for({"turns": [[]]})  # a turn with no messages: stays "sent" forever
+    session = h.session()
+    turn = await session.submit("still working")
+    await asyncio.sleep(0.1)
+    assert not session.closed
+    assert not turn.done.is_set()
+
+
+async def test_drain_suppresses_the_idle_close(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("hi")).done.wait(), 2)
+    session.draining = True
+    await asyncio.sleep(0.1)
+    assert not session.closed
+
+
+# D9 close ordering: close() must signal done_closing even when a step inside it raises, the
+# predecessor chain must hold past an unconnected middle generation, submit's own awaits must
+# not be closeable under it, and a few more missed re-arm points.
+
+
+async def test_close_sets_done_closing_even_if_a_step_inside_it_raises(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h = harness_for({})
+    session = h.session()
+    await session.ensure_connected()
+
+    async def boom() -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(session, "_stop_task_replies", boom)
+    with pytest.raises(RuntimeError):
+        await session.close()
+    assert session.done_closing.is_set()
+    assert h.manager.sessions_of(CHANNEL) == []  # on_closed still ran too
+
+
+async def test_close_all_waits_for_a_predecessor_evicted_before_it_but_still_disconnecting(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # A (idle-closing, gated) is evicted by a lookup that builds B; B never connects. close_all
+    # only ever sees B in `_sessions`, yet must still wait for A's own disconnect to finish.
+    gate = asyncio.Event()
+    h = harness_for({"disconnect_gate": gate})
+    session_a = h.session()
+    await session_a.ensure_connected()
+    closing_a = asyncio.create_task(session_a.close())
+    await asyncio.sleep(0.05)  # A is now blocked inside the gated disconnect
+    assert session_a.closed and h.clients[0].connected is True
+    session_b = h.manager.get(CHANNEL, THREAD)
+    assert session_b is not None and session_b is not session_a
+    closing_all = asyncio.create_task(h.manager.close_all())
+    await asyncio.sleep(0.05)
+    assert not closing_all.done()  # chained through B, waiting on A's still-gated disconnect
+    gate.set()
+    await asyncio.wait_for(closing_a, 2)
+    await asyncio.wait_for(closing_all, 2)
+    assert h.clients[0].connected is False
+
+
+async def test_a_third_generation_session_waits_through_an_unconnected_middle_one(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # A disconnecting (gated); B is built as its replacement but closes before ever connecting
+    # (so it never itself waited on A); C must still wait for A, through B's own close().
+    gate = asyncio.Event()
+    h = harness_for({"disconnect_gate": gate}, {"turns": [sdk_messages("tools")]})
+    session_a = h.session()
+    await session_a.ensure_connected()
+    h.state.set_session(CHANNEL, THREAD, "prior")
+    closing_a = asyncio.create_task(session_a.close())
+    await asyncio.sleep(0.05)  # A is now blocked inside the gated disconnect
+    assert session_a.closed and h.clients[0].connected is True
+    session_b = h.manager.get(CHANNEL, THREAD)
+    assert session_b is not None and session_b is not session_a
+    closing_b = asyncio.create_task(session_b.close())
+    await asyncio.sleep(0.05)
+    assert not closing_b.done()  # B's own close is chained behind A's still-open disconnect
+    session_c = h.manager.get(CHANNEL, THREAD)
+    assert session_c is not None and session_c not in (session_a, session_b)
+    connecting_c = asyncio.create_task(session_c.ensure_connected())
+    await asyncio.sleep(0.05)
+    assert not connecting_c.done()  # must not resume the same id while A is still exiting
+    assert len(h.clients) == 1
+    gate.set()
+    await asyncio.wait_for(closing_a, 2)
+    await asyncio.wait_for(closing_b, 2)
+    await asyncio.wait_for(connecting_c, 2)
+    assert len(h.clients) == 2
+    assert h.clients[1].options.resume == "prior"
+
+
+async def test_the_idle_close_cannot_fire_during_submit_s_own_awaits(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    h = harness_for({"turns": [sdk_messages("tools"), sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("hi")).done.wait(), 2)
+    # `submit`'s own chat.postMessage calls (through `_sink`/`sink.open`) now take longer than
+    # the idle delay: without the fix, the timer armed at submit's own entry would reset instead
+    # of staying cancelled, and fire while `submit` is still awaiting one of them.
+    h.slack.delay = 0.2
+    turn = await session.submit("again")
+    await asyncio.wait_for(turn.done.wait(), 2)
+    assert h.clients[0].queries == ["hi", "again"]
+
+
+async def test_the_crash_tail_re_arms_the_idle_close(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    h = harness_for({"turns": [[*sdk_messages("tools")[:3], EndOfStream()]]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("first")).done.wait(), 2)
+    await until(lambda: session._client is None, limit=1)  # the reader's crash tail ran
+    await until(lambda: session.closed, limit=1)  # ...and re-armed the timer there
+
+
+async def test_a_failed_query_re_arms_the_idle_close(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "IDLE_CLOSE_SECONDS", 0.05)
+    h = harness_for({})
+    session = h.session()
+    await session.ensure_connected()
+
+    async def boom(prompt: Any) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(h.clients[0], "query", boom)
+    turn = await session.submit("hi")
+    await asyncio.wait_for(turn.done.wait(), 2)
+    await until(lambda: session.closed, limit=1)

@@ -64,21 +64,21 @@ CLAIMS = [
         "P1",
         "gesture",
         "a session starts and its init message names the CLI version",
-        "code_with_slack.sessions.ChannelSession._dispatch",
+        "code_with_slack.sessions.ThreadSession._dispatch",
         "send any message in a bound channel; `!status` shows the Claude Code version",
     ),
     Claim(
         "P2",
         "gesture",
         "`!status` reads the server info and the context usage",
-        "code_with_slack.sessions.ChannelSession.status",
+        "code_with_slack.sessions.ThreadSession.status",
         "send `!status`; it lists the model and a `Context:` line",
     ),
     Claim(
         "P3",
         "gesture",
         "a text prompt gets a result whose session id is stored",
-        "code_with_slack.sessions.ChannelSession._finish",
+        "code_with_slack.sessions.ThreadSession._finish",
         "send a message; the reply closes with its footer",
     ),
     Claim(
@@ -113,14 +113,14 @@ CLAIMS = [
         "P8",
         "gesture",
         "`!stop` interrupts a running turn and its reply closes",
-        "code_with_slack.sessions.ChannelSession.stop",
+        "code_with_slack.sessions.ThreadSession.stop",
         "ask for a long answer and send `!stop` while it writes",
     ),
     Claim(
         "P9",
         "model",
         "with `!bypass on`, a Bash call runs without asking",
-        "code_with_slack.sessions.ChannelSession.set_bypass",
+        "code_with_slack.sessions.ThreadSession.set_bypass",
         "send `!bypass on`, ask Claude to run a command: no Approve button; then `!bypass off`",
     ),
     Claim(
@@ -141,7 +141,7 @@ CLAIMS = [
         "P12",
         "model",
         "`!stop` ends a background command",
-        "code_with_slack.sessions.ChannelSession.stop",
+        "code_with_slack.sessions.ThreadSession.stop",
         "ask Claude to run `tail -f` on a file in the background, then send `!stop`",
     ),
     Claim(
@@ -155,9 +155,26 @@ CLAIMS = [
         "P14",
         "model",
         "a hook's `cwd` follows a `cd`, so the footer shows that folder's branch",
-        "code_with_slack.sessions.ChannelSession._note_cwd",
+        "code_with_slack.sessions.ThreadSession._note_cwd",
         "bind a folder holding a repo one level down, ask Claude to `cd` into it; the footer "
         "shows the repo's branch",
+    ),
+    Claim(
+        "P15",
+        "gesture",
+        "a resumed session keeps the model set with `/model`",
+        "code_with_slack.sessions.client_options",
+        "in a thread, send `!model sonnet`, let the session idle-close or restart the daemon, "
+        "send a message; `!status` shows the model",
+    ),
+    Claim(
+        "P16",
+        "gesture",
+        "a resumed session loses the effort set with `/effort`, and "
+        "`ClaudeAgentOptions(effort=...)` restores it",
+        "code_with_slack.sessions.client_options",
+        "in a thread, send `!effort low`, restart the daemon, send a message; the footer shows "
+        "`low`",
     ),
 ]
 

@@ -1,4 +1,4 @@
-"""One Claude Code session per bound channel: its client, its queue of turns, and the reader
+"""One Claude Code session per Slack thread: its client, its queue of turns, and the reader
 that turns the SDK's message stream into replies."""
 
 import asyncio
@@ -10,7 +10,7 @@ from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, cast, get_args
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -27,6 +27,7 @@ from claude_agent_sdk import (
 from claude_agent_sdk.types import (
     TERMINAL_TASK_STATUSES,
     CanUseTool,
+    EffortLevel,
     HookCallback,
     HookContext,
     HookInput,
@@ -109,8 +110,16 @@ SUMMARY_IS_END_LINE = {"local_bash"}
 TASK_REPLIES_KEPT = 100
 # How often a stopping daemon checks whether every channel's turns have ended.
 DRAIN_POLL_SECONDS = 0.5
+# D9: a session's Claude Code process closes after this long with nothing to do (idle, and no
+# approval, question or background report pending); the next message rebuilds it and resumes.
+# Read at fire time, like INJECTED_TURN_WAIT, so a test can lower it with monkeypatch.
+IDLE_CLOSE_SECONDS = 3600.0
 # How much of the owner's question a notification quotes.
 ASKED_LIMIT = 100
+# The levels `ClaudeAgentOptions.effort` accepts. A stored value outside this set (a CLI wording
+# `footer.effort_change` parsed that the SDK's own type does not know, such as "auto") is never
+# sent: `_connect` drops it rather than pass something the SDK was not built to validate.
+VALID_EFFORT_LEVELS = frozenset(get_args(EffortLevel))
 
 
 class DirectoryUnavailable(Exception):
@@ -123,11 +132,22 @@ class DirectoryUnavailable(Exception):
 
 
 class SessionClosed(Exception):
-    """A `!bind` or a Resume closed the session while a daemon word was using it."""
+    """The session closed (the daemon stopping, or D9's idle close, most likely) while something
+    was using it: a daemon word (`!status`, `!bypass`), or `submit` queuing an owner's prompt
+    (the caller retries once, against a freshly looked-up session)."""
 
     def __init__(self) -> None:
         super().__init__(texts.SESSION_CLOSED)
         self.message = texts.SESSION_CLOSED
+
+
+class SessionGone(Exception):
+    """A thread's stored session id could not be resumed: its entry was removed (D7), and the
+    thread needs a new top-level message to start again."""
+
+    def __init__(self) -> None:
+        super().__init__(texts.SESSION_GONE)
+        self.message = texts.SESSION_GONE
 
 
 class DirectoryMissing(DirectoryUnavailable):
@@ -190,6 +210,7 @@ def injected_turn(result: ResultMessage) -> bool:
 def client_options(
     directory: Path,
     session_id: str | None,
+    effort: EffortLevel | None,
     can_use_tool: CanUseTool,
     on_stop: HookCallback,
     on_tool_done: HookCallback,
@@ -197,6 +218,11 @@ def client_options(
     return ClaudeAgentOptions(
         cwd=str(directory),
         resume=session_id,
+        # D9: the model set with `/model` survives a resume by itself (measured); the effort
+        # `/effort` set does not, so the daemon stores it per thread and passes it back here.
+        # Validated against VALID_EFFORT_LEVELS by the caller, so this is always a level the SDK
+        # itself would accept.
+        effort=effort,
         setting_sources=["user", "project", "local"],
         include_partial_messages=True,
         can_use_tool=can_use_tool,
@@ -271,9 +297,18 @@ class ActiveTurn:
     renderer: TurnRenderer
 
 
-class ChannelSession:
-    def __init__(self, channel_id: str, directory: Path, deps: SessionDeps) -> None:
+class ThreadSession:
+    def __init__(
+        self,
+        channel_id: str,
+        thread_ts: str,
+        directory: Path,
+        deps: SessionDeps,
+        *,
+        predecessor: asyncio.Event | None = None,
+    ) -> None:
         self.channel_id = channel_id
+        self.thread_ts = thread_ts
         self.directory = directory
         self._deps = deps
         self._client: ClaudeClient | None = None
@@ -286,8 +321,22 @@ class ChannelSession:
         self._connect_lock = asyncio.Lock()
         # Set once close starts: no client starts after it, and no word stores a setting.
         self._closed = False
+        # The predecessor this object replaced at its key (D9: the manager evicts a closed
+        # session as soon as closing starts, not once it finishes). Awaited once, inside the
+        # connect lock, before this session's own first connect: the SDK's transport needs real
+        # time to flush the old CLI process after EOF, and a resume of the same session id must
+        # not start while that is still in flight.
+        self._predecessor = predecessor
+        # Set once close() (or the SessionGone branch) has fully finished: the predecessor signal
+        # above, for whoever replaces this session next, and what `close_all` waits on.
+        self.done_closing: asyncio.Event = asyncio.Event()
+        # Set by the manager that created this session; called once, right when `done_closing`
+        # is set, so a session nobody ever looks up again does not sit in `_sessions` forever.
+        self.on_closed: Callable[[], None] | None = None
         self._notice: str | None = None
         self._background: set[asyncio.Task[None]] = set()
+        # Approval ids open right now, waiting on the owner's decision (`waiting_for_owner`).
+        self._waiting: set[str] = set()
         # Task messages that arrived between turns, shown in the next turn's reply.
         self._held: list[Message] = []
         # Tasks that outlived their turn, and the reply whose line each one keeps up to date,
@@ -312,6 +361,13 @@ class ChannelSession:
         self._settled.set()
         self._injected_expected = False
         self._expiry: asyncio.Task[None] | None = None
+        # D9: armed while idle with nothing pending; any turn, task frame, approval or question
+        # cancels it, and being idle with nothing pending again (re)starts it.
+        self._idle_expiry: asyncio.Task[None] | None = None
+        # D9: a count, not a flag, since two `submit` calls can overlap. Nonzero makes `idle`
+        # false for the span between a `submit` call starting and its turn actually being
+        # queued, so the timer is genuinely cancelled there, not reset to fire again mid-await.
+        self._pending_submits = 0
         self.commands: list[dict[str, Any]] = []
         self.native_mode = "default"
         self.cli_version: str | None = None
@@ -333,8 +389,8 @@ class ChannelSession:
 
     @property
     def bypass(self) -> bool:
-        """`!bypass on` in this channel, as state.json holds it: a restart keeps it."""
-        stored = self._deps.state.get(self.channel_id)
+        """`!bypass on` in this thread, as state.json holds it: a restart keeps it."""
+        stored = self._deps.state.thread(self.channel_id, self.thread_ts)
         return stored is not None and stored.bypass
 
     @property
@@ -342,16 +398,38 @@ class ChannelSession:
         return self._active is not None or bool(self._sent)
 
     @property
+    def waiting_for_owner(self) -> bool:
+        """An approval or a question is open in this thread, waiting on the owner's answer."""
+        return bool(self._waiting)
+
+    @property
+    def running_kinds(self) -> str:
+        """`1 shell · 2 agents`, the tasks that outlived their turn and still run; empty when
+        none does. The channel-level `!status` shows this beside a session's own state."""
+        return self._running_kinds()
+
+    @property
     def idle(self) -> bool:
-        """Nothing running, sent, taken or queued, and no background task still working: the
-        session can be swapped without a loss (closing it ends its Claude Code process)."""
+        """Nothing running, sent, taken or queued, no `submit` call still on its way to queuing
+        one, and no background task still working: the session can be closed without a loss
+        (closing it ends its Claude Code process). `bind` (D5) waits for every thread of a
+        channel to be idle before it stores a new folder."""
         return (
             not self.busy
+            and not self._pending_submits
             and not self._running_counts()
             and self._taken is None
             and self._queue.empty()
             and self._settled.is_set()
         )
+
+    @property
+    def closed(self) -> bool:
+        """Closing has started (`close()`'s first line, a shutdown, D9's idle close, or the
+        SessionGone branch of `ensure_connected`); the teardown itself may still be running.
+        The manager discards this object rather than hand it out again, from its next lookup
+        (`sessions_of` already leaves it out); `done_closing` says when the teardown is over."""
+        return self._closed
 
     @property
     def reporting(self) -> bool:
@@ -360,6 +438,13 @@ class ChannelSession:
         now = asyncio.get_running_loop().time()
         return any(now - ended < INJECTED_TURN_WAIT for ended in self._unreported.values())
 
+    def touch(self) -> None:
+        """Cancel or (re)arm the idle-close timer for the state right now (D9). The manager calls
+        this wherever a session is handed out (`get`/`open`), synchronously, before any await a
+        caller might do on the way to its own `submit`: otherwise the timer could still fire, and
+        close the session, in the gap between the lookup and the turn actually being queued."""
+        self._idle_timer_check()
+
     async def fail_queued(self, line: str) -> None:
         """End every queued turn's reply with `line`, and release whoever waits on them."""
         while not self._queue.empty():
@@ -367,14 +452,41 @@ class ChannelSession:
                 await self._fail(self._queue.get_nowait(), line)
 
     async def submit(self, prompt: Prompt) -> Turn:
-        """Queue a prompt; its reply appears at once, saying Claude is writing or waiting."""
-        waiting = self.busy or not self._queue.empty() or not self._settled.is_set()
-        sink = await self._sink()
-        await sink.open(texts.WAITING if waiting else texts.WRITING)
-        turn = Turn(prompt, sink)
-        self._queue.put_nowait(turn)
+        """Queue a prompt; its reply appears at once, saying Claude is writing or waiting.
+        Raises `SessionClosed` if the session closed (an idle close, most likely) between the
+        caller's lookup and this call; the caller retries once, against a freshly looked-up
+        session (D9)."""
+        if self._closed:
+            raise SessionClosed
+        # Counted, not just checked-and-cancelled: `idle` reads false for as long as this stays
+        # above zero, so the timer is genuinely cancelled here, not reset only to fire again
+        # during the awaits below (D9).
+        self._pending_submits += 1
+        try:
+            self._idle_timer_check()
+            waiting = self.busy or not self._queue.empty() or not self._settled.is_set()
+            sink = await self._sink()
+            await sink.open(texts.WAITING if waiting else texts.WRITING)
+            turn = Turn(prompt, sink)
+            if self._closed:
+                # The session closed (an idle close or a restart, or `ensure_connected`'s
+                # SessionGone branch, which already drained the queue) while `sink.open` was in
+                # flight: no worker will ever take this turn from the queue, so it is resolved
+                # right here instead of left waiting for one that will not come. Only a
+                # SessionGone close also removes the thread's own entry (D7): that alone is what
+                # tells the two apart, since both leave `self._closed` the same.
+                gone = self._deps.state.thread(self.channel_id, self.thread_ts) is None
+                await self._fail(
+                    turn, texts.SESSION_GONE if gone else texts.SESSION_CLOSED, notify=True
+                )
+                return turn
+            self._queue.put_nowait(turn)
+        finally:
+            self._pending_submits -= 1
         if self._worker is None or self._worker.done():
-            self._worker = asyncio.create_task(self._work(), name=f"worker-{self.channel_id}")
+            name = f"worker-{self.channel_id}-{self.thread_ts}"
+            self._worker = asyncio.create_task(self._work(), name=name)
+        self._idle_timer_check()  # a queued turn is not idle (D9)
         return turn
 
     async def ensure_connected(self) -> ClaudeClient:
@@ -383,20 +495,59 @@ class ChannelSession:
                 raise SessionClosed
             if self._client is not None:
                 return self._client
+            if self._predecessor is not None:
+                # The Claude Code process this thread had before may still be exiting: the SDK's
+                # transport notes it needs real time to flush the session file after EOF (up to
+                # ~20 s). Connecting with `resume=<the same id>` before that is done would race it.
+                await self._predecessor.wait()
+                self._predecessor = None
             await check_directory(self.directory, self._deps.workspace_trusted)
-            stored = self._deps.state.get(self.channel_id)
+            stored = self._deps.state.thread(self.channel_id, self.thread_ts)
             session_id = stored.session_id if stored else None
+            effort = stored.effort if stored else None
             try:
-                client = await self._connect(session_id)
+                client = await self._connect(session_id, effort)
             except ResultError as exc:
                 if session_id is None:
                     raise
-                # The stored session is gone (its transcript was deleted): start fresh.
-                logger.warning("could not resume the stored session in %s", self.channel_id)
-                self._deps.state.set_session(self.channel_id, None)
-                reason = exc.errors[0] if exc.errors else (exc.subtype or "unknown error")
-                self._notice = texts.STALE_SESSION.format(error=reason)
-                client = await self._connect(None)
+                # The stored session is gone (its transcript was deleted): the thread cannot
+                # continue (D7). Its entry is dropped and the session ends itself here, so no
+                # later turn (already queued, or the next one taken by the worker) starts a
+                # second, unrecorded session in its place: it fails the same way instead.
+                logger.warning(
+                    "could not resume the stored session in %s/%s", self.channel_id, self.thread_ts
+                )
+                self._deps.state.remove_thread(self.channel_id, self.thread_ts)
+                self._closed = True
+                # No client was ever connected in this branch (`_connect` raised): nothing to
+                # wait on, so the "fully closed" signal fires at once, same as `close()`'s tail.
+                self.done_closing.set()
+                if self.on_closed is not None:
+                    self.on_closed()
+                self._idle_timer_check()  # cancels any armed timer; closed now, so none rearms
+                worker = self._worker
+                if worker is not None and worker is not asyncio.current_task():
+                    # Called directly (`!status`, `!bypass`), not from this session's own
+                    # worker: an idle worker left blocked on the queue (most likely on this very
+                    # `_connect_lock`, still held here) would never learn to stop otherwise. It
+                    # is cancelled and awaited first, and its `_taken` turn (if any) rescued only
+                    # once it is confirmed stopped: cancelling it while it still held a turn,
+                    # with nothing rescuing that turn, left that reply saying "writing" forever
+                    # (a real regression, caught by
+                    # test_a_direct_gone_call_rescues_the_worker_s_taken_turn).
+                    # When `worker` IS the current task (the common case: this branch runs inside
+                    # the worker's own call to `ensure_connected`), its own `except SessionGone`
+                    # clause up the stack already fails `self._taken` itself; failing it again
+                    # here too would double the reply's text.
+                    worker.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await worker
+                    taken, self._taken = self._taken, None
+                    if taken is not None:
+                        with contextlib.suppress(Exception):
+                            await self._fail(taken, texts.SESSION_GONE, notify=True)
+                await self.fail_queued(texts.SESSION_GONE)
+                raise SessionGone from exc
             try:
                 info = await client.get_server_info() or {}
                 self.commands = list(info.get("commands") or [])
@@ -408,11 +559,16 @@ class ChannelSession:
                 await self._disconnect(client)
                 raise
             self._client = client
-            # A resumed session runs at the settings' level (measured), unknown until reported.
-            self.effort, self.effort_reported = None, False
+            # A resumed session runs at the settings' level (measured), unknown until reported,
+            # unless the daemon itself just asked for a stored level: that request is shown at
+            # once, until Claude Code's own report (every turn ends with one) corrects it.
+            requested = effort if effort in VALID_EFFORT_LEVELS else None
+            self.effort, self.effort_reported = requested, requested is not None
             self.working_directory = None  # the new process starts in the bound folder
             self.session_tokens = None  # counted by the client process, which starts at zero
-            self._reader = asyncio.create_task(self._read(client), name=f"reader-{self.channel_id}")
+            name = f"reader-{self.channel_id}-{self.thread_ts}"
+            self._reader = asyncio.create_task(self._read(client), name=name)
+            self._idle_timer_check()  # a daemon word (`!status`, say) connects with no turn (D9)
             return client
 
     async def set_bypass(self, on: bool) -> None:
@@ -428,13 +584,14 @@ class ChannelSession:
             if self._closed:  # the close disconnected the client under the call
                 raise SessionClosed from None
             raise
-        # After a !bind the stored switch belongs to the new folder: never turn it on there.
+        # The session closed while the mode was being set: the thread this would write to may
+        # already be gone, so the switch is never recorded after the fact.
         if self._closed:
             raise SessionClosed
-        self._deps.state.set_bypass(self.channel_id, on)
+        self._deps.state.set_bypass(self.channel_id, self.thread_ts, on)
 
     async def announce_restart(self) -> None:
-        """Say in the channel that bypass outlives the restart, when it is on."""
+        """Say in the thread that bypass outlives the restart, when it is on."""
         if self.bypass:
             await self._post(texts.BYPASS_RESTARTING)
 
@@ -447,7 +604,7 @@ class ChannelSession:
         await self._post(texts.RESTART_WAITS.format(counts=kinds))
 
     async def stop(self) -> bool:
-        """Interrupt the running turn, deny its pending approvals and stop the channel's
+        """Interrupt the running turn, deny its pending approvals and stop this thread's
         background tasks; queued turns stay queued."""
         if self._client is None:
             return False
@@ -455,7 +612,7 @@ class ChannelSession:
         if not self.busy and not tasks:
             return False
         if self.busy:
-            for pending in self._deps.approvals.deny_all(self.channel_id):
+            for pending in self._deps.approvals.deny_all(self.channel_id, self.thread_ts):
                 await self._delete_request(pending.message_ts)
             await self._client.interrupt()
         for task_id in tasks:
@@ -463,7 +620,12 @@ class ChannelSession:
             try:
                 await self._client.stop_task(task_id)
             except Exception as exc:  # it may have ended meanwhile; the others still stop
-                logger.warning("could not stop a task in %s: %s", self.channel_id, describe(exc))
+                logger.warning(
+                    "could not stop a task in %s/%s: %s",
+                    self.channel_id,
+                    self.thread_ts,
+                    describe(exc),
+                )
         return True
 
     async def status(self) -> str:
@@ -474,30 +636,36 @@ class ChannelSession:
         """
         data: FooterData | None = None
         unavailable: list[str] = []
+        gone = False
         try:
             await self.ensure_connected()
             self._refresh_usage()
             data = await self._footer_data(self.session_tokens)
         except DirectoryUnavailable as exc:
             unavailable = [exc.message]
+        except SessionGone as exc:
+            # This call is the one that found it gone: `ensure_connected` already closed the
+            # session over it, which is not the race the check below guards against.
+            unavailable, gone = [exc.message], True
         except Exception as exc:  # the status still answers, with what a prompt would get
             logger.warning(
-                "could not read the footer's values for the status in %s: %s",
+                "could not read the footer's values for the status in %s/%s: %s",
                 self.channel_id,
+                self.thread_ts,
                 describe(exc),
             )
             unavailable = [texts.ERROR_REPLY.format(error=type(exc).__name__)]
-        # A !bind or a Resume meanwhile: this would describe a session the channel no longer has.
-        if self._closed:
+        # The daemon closed the session (shutdown, an idle close) while this call was reading it.
+        if self._closed and not gone:
             raise SessionClosed
         fields = format_status_fields(data, datetime.now().astimezone()) if data else []
         here = self.working_directory
         if data and here and here != self.directory:
-            # The branch and the changes below describe this folder, not the channel's.
+            # The branch and the changes below describe this folder, not the thread's own.
             fields.insert(0, texts.STATUS_WORKING.format(directory=here))
         if running := self._running_kinds():
             fields.append(texts.STATUS_BACKGROUND.format(counts=running))
-        stored = self._deps.state.get(self.channel_id)
+        stored = self._deps.state.thread(self.channel_id, self.thread_ts)
         activity = (
             texts.ACTIVITY_BUSY.format(queued=self._queue.qsize())
             if self.busy
@@ -522,32 +690,56 @@ class ChannelSession:
 
     async def close(self, reason: str = texts.ENDED_SHUTDOWN) -> None:
         """Stop the session. Every reply still waiting (running, sent or queued) ends with a line
-        saying why, so none is left showing that Claude is writing."""
+        saying why, so none is left showing that Claude is writing.
+
+        `done_closing` always fires, from a `finally`: a step below raising must not leave a
+        rebuilt session's `ensure_connected` waiting on it forever, or `close_all` hanging at
+        shutdown, or the manager's map holding a session nothing can ever evict.
+        """
         self._closed = True
-        # The worker may hold the connect lock while the CLI starts: it is cancelled first.
-        await self._cancel_tasks()
-        # A daemon word may be starting the client in its own task. Its connect finishes, then
-        # the reader it started is cancelled and its client closed below: no process outlives
-        # the session, and none resumes the session id the next one will resume.
-        async with self._connect_lock:
+        try:
+            # The worker may hold the connect lock while the CLI starts: cancelled first.
             await self._cancel_tasks()
-        self._deps.approvals.deny_all(self.channel_id)
-        # A turn the worker took but had not sent yet is in no queue.
-        taken, self._taken = self._taken, None
-        line = texts.ENDED.format(reason=reason)
-        await self._abandon(line)
-        if taken is not None:
-            with contextlib.suppress(Exception):
-                await self._fail(taken, line)
-        await self.fail_queued(line)
-        if self._client is not None:
-            client, self._client = self._client, None
-            await self._disconnect(client)
+            # A daemon word may be starting the client in its own task. Its connect finishes,
+            # then the reader it started is cancelled and its client closed below: no process
+            # outlives the session, and none resumes the session id the next one will resume.
+            async with self._connect_lock:
+                await self._cancel_tasks()
+            self._deps.approvals.deny_all(self.channel_id, self.thread_ts)
+            # A turn the worker took but had not sent yet is in no queue.
+            taken, self._taken = self._taken, None
+            line = texts.ENDED.format(reason=reason)
+            await self._abandon(line)
+            if taken is not None:
+                with contextlib.suppress(Exception):
+                    await self._fail(taken, line)
+            await self.fail_queued(line)
+            if self._client is not None:
+                client, self._client = self._client, None
+                await self._disconnect(client)
+        finally:
+            if self._predecessor is not None:
+                # This object's own predecessor may still be mid-teardown: `ensure_connected`
+                # never ran here (this session closed with no turn ever submitted), so nothing
+                # else has waited on it yet. `done_closing` must never fire before it does, or a
+                # session built after this one could resume the same id while an earlier one is
+                # still exiting (the chain, not just the direct predecessor, must be honoured).
+                await self._predecessor.wait()
+                self._predecessor = None
+            # Only now: the CLI process (if any) has had its chance to flush and exit, or closing
+            # failed partway through and there is nothing left worth waiting for either way.
+            self.done_closing.set()
+            if self.on_closed is not None:
+                self.on_closed()
 
     async def _cancel_tasks(self) -> None:
         # Every task is cancelled before any is awaited: a reader left running while the worker
         # stops could still end a turn and record its session after a rebind.
-        tasks = [t for t in (self._worker, self._reader, self._expiry) if t is not None]
+        tasks = [
+            t
+            for t in (self._worker, self._reader, self._expiry, self._idle_expiry)
+            if t is not None
+        ]
         for task in tasks:
             task.cancel()
         for task in tasks:
@@ -558,18 +750,40 @@ class ChannelSession:
         try:
             await client.disconnect()
         except Exception as exc:
-            logger.warning("could not close Claude Code in %s: %s", self.channel_id, describe(exc))
+            logger.warning(
+                "could not close Claude Code in %s/%s: %s",
+                self.channel_id,
+                self.thread_ts,
+                describe(exc),
+            )
 
-    async def _connect(self, session_id: str | None) -> ClaudeClient:
+    async def _connect(self, session_id: str | None, effort: str | None) -> ClaudeClient:
+        valid_effort: EffortLevel | None = None
+        if effort in VALID_EFFORT_LEVELS:
+            valid_effort = cast(EffortLevel, effort)
+        elif effort is not None:
+            logger.warning(
+                "dropped an unrecognized stored effort level in %s/%s",
+                self.channel_id,
+                self.thread_ts,
+            )
         options = client_options(
-            self.directory, session_id, self._can_use_tool, self._on_stop, self._on_tool_done
+            self.directory,
+            session_id,
+            valid_effort,
+            self._can_use_tool,
+            self._on_stop,
+            self._on_tool_done,
         )
         client = self._deps.client_factory(options)
         await client.connect()
         return client
 
     async def _work(self) -> None:
-        while True:
+        # Closed (the SessionGone branch of `ensure_connected`, most likely) ends the loop
+        # instead of looping back to an empty queue nothing will ever fill again: an orphan
+        # worker task, blocked forever, is not what a closed session leaves behind.
+        while not self._closed:
             turn = await self._queue.get()
             self._taken = turn
             try:
@@ -579,26 +793,31 @@ class ChannelSession:
                 if self.draining:
                     self._taken = None
                     await self._fail(turn, texts.ENDED.format(reason=texts.ENDED_RESTARTING))
+                    self._idle_timer_check()  # only cancels: draining itself blocks it from arming
                     continue
                 self._sent.append(turn)
                 self._taken = None
                 prompt = turn.prompt
                 await client.query(prompt if isinstance(prompt, str) else user_message(prompt))
                 await turn.done.wait()
-            except DirectoryUnavailable as exc:
+            except (DirectoryUnavailable, SessionGone, SessionClosed) as exc:
                 self._taken = None
                 await self._fail(turn, exc.message, notify=True)
-            except Exception as exc:  # a failed turn must not stop the channel's queue
+                self._idle_timer_check()  # a no-op if this also closed the session (D9)
+            except Exception as exc:  # a failed turn must not stop this thread's queue
                 self._taken = None
-                logger.error("turn failed in %s: %s", self.channel_id, type(exc).__name__)
+                logger.error(
+                    "turn failed in %s/%s: %s", self.channel_id, self.thread_ts, type(exc).__name__
+                )
                 if turn in self._sent:
                     self._sent.remove(turn)
                 await self._fail(
                     turn, texts.ERROR_REPLY.format(error=type(exc).__name__), notify=True
                 )
+                self._idle_timer_check()  # the session stays alive; may need arming again (D9)
 
     async def _read(self, client: ClaudeClient) -> None:
-        """Follow the client's stream until it ends; whatever ends it, release the channel."""
+        """Follow the client's stream until it ends; whatever ends it, release the thread."""
         reason = "the Claude Code process exited"
         try:
             async for message in client.receive_messages():
@@ -606,13 +825,19 @@ class ChannelSession:
                     await self._dispatch(message)
                 except Exception as exc:  # one message that fails to render must not end it all
                     logger.error(
-                        "could not render a message in %s: %s", self.channel_id, describe(exc)
+                        "could not render a message in %s/%s: %s",
+                        self.channel_id,
+                        self.thread_ts,
+                        describe(exc),
                     )
+                # A task frame or a turn's own end (through `_dispatch`) may leave the session
+                # idle again, or may end it: re-armed or cancelled here either way (D9).
+                self._idle_timer_check()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             reason = type(exc).__name__
-        logger.error("session reader stopped in %s: %s", self.channel_id, reason)
+        logger.error("session reader stopped in %s/%s: %s", self.channel_id, self.thread_ts, reason)
         if self._client is client:
             self._client = None
         try:
@@ -620,6 +845,9 @@ class ChannelSession:
         finally:
             with contextlib.suppress(Exception):
                 await client.disconnect()
+        # The session stays alive (not closed): the next turn reconnects. `_abandon` settles it
+        # from outside this loop's own per-message check above, so it needs its own call (D9).
+        self._idle_timer_check()
 
     async def _dispatch(self, message: Message) -> None:
         if isinstance(message, RateLimitEvent):
@@ -627,6 +855,12 @@ class ChannelSession:
             return
         if isinstance(message, SystemMessage) and message.subtype == "init":
             self.cli_version = message.data.get("claude_code_version")
+            # D6: recorded as soon as Claude Code reports it, not only at the turn's
+            # ResultMessage, so a still-running first turn is already this session id's
+            # `holder()` and `!resume` cannot put a second process on the same transcript.
+            init_session_id = message.data.get("session_id")
+            if isinstance(init_session_id, str):
+                self._deps.state.set_session(self.channel_id, self.thread_ts, init_session_id)
         if isinstance(message, TaskStartedMessage):
             self._tasks[message.task_id] = (message.task_type or "", message.description)
             while len(self._tasks) > TASKS_KEPT:
@@ -701,7 +935,7 @@ class ChannelSession:
         await active.renderer.feed(message)
         if isinstance(message, ResultMessage):
             # The turn stays active until its reply is closed: the footer is read first, and a
-            # drain that saw the channel idle meanwhile would exit before the reply's final
+            # drain that saw this thread idle meanwhile would exit before the reply's final
             # write, leaving it on `Claude is writing…` (#25).
             try:
                 await self._finish(active, message)
@@ -745,7 +979,9 @@ class ChannelSession:
         await asyncio.sleep(INJECTED_TURN_WAIT)
         if not self._injected_expected or self._active is not None:
             return
-        logger.warning("no turn followed a task notification in %s", self.channel_id)
+        logger.warning(
+            "no turn followed a task notification in %s/%s", self.channel_id, self.thread_ts
+        )
         self._injected_expected = False
         held, self._held = self._held, []
         if not held:
@@ -754,10 +990,40 @@ class ChannelSession:
             await self._standalone(held)
         except Exception as exc:
             logger.warning(
-                "could not post a background update in %s: %s", self.channel_id, describe(exc)
+                "could not post a background update in %s/%s: %s",
+                self.channel_id,
+                self.thread_ts,
+                describe(exc),
             )
         finally:
             self._settled.set()
+            # Runs outside `_read`'s loop (its own INJECTED_TURN_WAIT timer), so nothing else
+            # re-checks idleness for this transition: it may need to arm the timer itself (D9).
+            self._idle_timer_check()
+
+    def _idle_timer_check(self) -> None:
+        """(Re)arm the idle-close timer (D9) when the session is now idle with no approval or
+        question pending; cancel it otherwise. Cheap and idempotent, so every place that could
+        change either just calls it again."""
+        if self._idle_expiry is not None:
+            self._idle_expiry.cancel()
+            self._idle_expiry = None
+        if self._closed or self.draining or self.waiting_for_owner or not self.idle:
+            return
+        name = f"idle-close-{self.channel_id}-{self.thread_ts}"
+        self._idle_expiry = asyncio.create_task(self._close_when_idle(), name=name)
+
+    async def _close_when_idle(self) -> None:
+        """Close a Claude Code process nothing has needed for IDLE_CLOSE_SECONDS (D9). Silent:
+        idle means nothing is running, sent or queued for `close()` to end with a line."""
+        await asyncio.sleep(IDLE_CLOSE_SECONDS)
+        if self._closed or self.draining or self.waiting_for_owner or not self.idle:
+            return  # something started again before the hour was up
+        logger.info("closing an idle session in %s/%s", self.channel_id, self.thread_ts)
+        # Cleared first: `close()` cancels this very task through `_cancel_tasks`, and a task
+        # cannot await itself.
+        self._idle_expiry = None
+        await self.close(reason=texts.ENDED_IDLE)
 
     async def _start_turn(self) -> ActiveTurn:
         injected = self._injected_expected or not self._sent
@@ -841,8 +1107,8 @@ class ChannelSession:
             await self._latest.set_running(self._running_counts())
 
     async def _sink(self) -> ReplySink:
-        """A new reply, which becomes the channel's latest and takes over the running list."""
-        sink = ReplySink(self._deps.slack, channel=self.channel_id)
+        """A new reply, which becomes this thread's latest and takes over the running list."""
+        sink = ReplySink(self._deps.slack, channel=self.channel_id, thread_ts=self.thread_ts)
         previous, self._latest = self._latest, sink
         await sink.set_running(self._running_counts())
         if previous is not None:
@@ -853,10 +1119,20 @@ class ChannelSession:
     async def _finish(self, active: ActiveTurn, result: ResultMessage) -> None:
         try:
             if result.session_id:
-                self._deps.state.set_session(self.channel_id, result.session_id)
+                self._deps.state.set_session(self.channel_id, self.thread_ts, result.session_id)
             changed, effort = effort_change(result.result or "")
             if changed:
                 self.effort, self.effort_reported = effort, True
+                # D9: stored so the next connect can pass it back (the model set with `/model`
+                # survives a resume by itself; effort does not). effort_change's own None means
+                # "unknown" (a `/model` change with no effort in its output), not "back to
+                # default": the stored override, if any, is left alone. "auto" is the CLI's own
+                # word for the default (its EffortLevel has no such value): that IS an explicit
+                # reset, stored as None.
+                if effort is not None:
+                    self._deps.state.set_effort(
+                        self.channel_id, self.thread_ts, None if effort == "auto" else effort
+                    )
             # Kept for `!status`, even when this result reports none (`/usage`, `/clear`): the two
             # lines never disagree.
             self.session_tokens = session_tokens(result)
@@ -864,7 +1140,10 @@ class ChannelSession:
                 footer = await self._footer(self.session_tokens)
             except Exception as exc:  # the reply still ends, with no footer
                 logger.warning(
-                    "could not build the footer in %s: %s", self.channel_id, describe(exc)
+                    "could not build the footer in %s/%s: %s",
+                    self.channel_id,
+                    self.thread_ts,
+                    describe(exc),
                 )
                 footer = None
             # The owner's own turn rings once complete; one Claude Code started for a background
@@ -882,12 +1161,20 @@ class ChannelSession:
         be wrong; this puts the queue back in order (that one reply carries the other's text)."""
         injected = injected_turn(result)
         if turn is None and not injected and self._sent:
-            logger.warning("an owner reply in %s went to a background reply", self.channel_id)
+            logger.warning(
+                "an owner reply in %s/%s went to a background reply",
+                self.channel_id,
+                self.thread_ts,
+            )
             owner = self._sent.popleft()
             await self._fail(owner, texts.REPLY_ABOVE, notify=True)
             self._expect_injected_turn()
         elif turn is not None and injected:
-            logger.warning("a background reply in %s went to an owner reply", self.channel_id)
+            logger.warning(
+                "a background reply in %s/%s went to an owner reply",
+                self.channel_id,
+                self.thread_ts,
+            )
             # That reply is spent: the owner's own turn gets a fresh one.
             turn.sink = await self._sink()
             await turn.sink.open(texts.WRITING)
@@ -979,7 +1266,11 @@ class ChannelSession:
     ) -> PermissionResult:
         questions = tool_input.get("questions") if tool_name == QUESTION_TOOL else None
         title = context.title or task_title(tool_name, tool_input)
-        approval_id, pending = self._deps.approvals.open(self.channel_id, title, questions)
+        approval_id, pending = self._deps.approvals.open(
+            self.channel_id, self.thread_ts, title, questions
+        )
+        self._waiting.add(approval_id)
+        self._idle_timer_check()  # an open approval or question holds the session (D9)
         blocks = (
             question_blocks(approval_id, questions)
             if questions
@@ -989,6 +1280,7 @@ class ChannelSession:
             try:
                 posted = await self._deps.slack.chat_postMessage(
                     channel=self.channel_id,
+                    thread_ts=self.thread_ts,
                     text=title,
                     blocks=blocks,
                     unfurl_links=False,
@@ -997,7 +1289,10 @@ class ChannelSession:
             except Exception as exc:
                 # Nobody can answer a request that was never shown: deny it, and say why.
                 logger.error(
-                    "could not post an approval request in %s: %s", self.channel_id, describe(exc)
+                    "could not post an approval request in %s/%s: %s",
+                    self.channel_id,
+                    self.thread_ts,
+                    describe(exc),
                 )
                 return PermissionResultDeny(message=texts.APPROVAL_UNPOSTED)
             if not self._deps.approvals.posted(approval_id, str(posted["ts"])):
@@ -1005,6 +1300,8 @@ class ChannelSession:
             decision = await pending.future
         finally:
             self._deps.approvals.discard(approval_id)
+            self._waiting.discard(approval_id)
+            self._idle_timer_check()  # may (re)start the idle-close timer (D9)
         return to_permission(decision, tool_input, questions)
 
     async def _fail(self, turn: Turn, text: str, *, notify: bool = False) -> None:
@@ -1021,13 +1318,16 @@ class ChannelSession:
         try:
             await self._deps.slack.chat_postMessage(
                 channel=self.channel_id,
+                thread_ts=self.thread_ts,
                 text=text,
                 blocks=[context_block(notice_text(text))],
                 unfurl_links=False,
                 unfurl_media=False,
             )
         except Exception as exc:
-            logger.error("could not post in %s: %s", self.channel_id, describe(exc))
+            logger.error(
+                "could not post in %s/%s: %s", self.channel_id, self.thread_ts, describe(exc)
+            )
 
     async def _delete_request(self, message_ts: str | None) -> None:
         """Remove a decided request: the tool's line in the reply records what happened."""
@@ -1036,65 +1336,102 @@ class ChannelSession:
         try:
             await self._deps.slack.chat_delete(channel=self.channel_id, ts=message_ts)
         except Exception as exc:
-            logger.error("could not remove a request in %s: %s", self.channel_id, describe(exc))
+            logger.error(
+                "could not remove a request in %s/%s: %s",
+                self.channel_id,
+                self.thread_ts,
+                describe(exc),
+            )
 
 
 class SessionManager:
     def __init__(self, deps: SessionDeps) -> None:
         self._deps = deps
-        self._sessions: dict[str, ChannelSession] = {}
+        self._sessions: dict[tuple[str, str], ThreadSession] = {}
         self.draining = False
 
-    def get(self, channel_id: str) -> ChannelSession | None:
-        stored = self._deps.state.get(channel_id)
-        if stored is None:
+    def open(self, channel_id: str, thread_ts: str) -> ThreadSession | None:
+        """A top-level owner message: creates the thread's entry, in the channel's current
+        folder, and its live session. None when the channel is unbound."""
+        if self._deps.state.channel(channel_id) is None:
             return None
-        session = self._sessions.get(channel_id)
-        if session is None or session.directory != stored.directory:
-            session = ChannelSession(channel_id, stored.directory, self._deps)
+        thread = self._deps.state.open_thread(channel_id, thread_ts)
+        return self._session(channel_id, thread_ts, thread.directory)
+
+    def get(self, channel_id: str, thread_ts: str) -> ThreadSession | None:
+        """The live session of a thread, or one rebuilt from its stored entry (after a restart,
+        D9's idle close, or a resume whose session turned out gone); None when the thread is not
+        a session. A closed session (`close()` has started: shutdown, an idle close, or the
+        SessionGone branch of `ensure_connected`) is never handed back here: it is discarded and
+        replaced, so a message never reaches a client that is going, or gone. The session handed
+        back has just been touched (D9): its idle-close timer cannot fire before the caller's own
+        next await, however slow (a download, a slow Slack call)."""
+        thread = self._deps.state.thread(channel_id, thread_ts)
+        if thread is None:
+            return None
+        return self._session(channel_id, thread_ts, thread.directory)
+
+    def _session(self, channel_id: str, thread_ts: str, directory: Path) -> ThreadSession:
+        key = (channel_id, thread_ts)
+        session = self._sessions.get(key)
+        predecessor: asyncio.Event | None = None
+        if session is not None and session.closed:
+            # Discarded as soon as closing has started, not once it finishes: a message must
+            # never reach an object mid-teardown (every operation on it raises SessionClosed).
+            # The replacement waits on the old session's own `done_closing` before it connects,
+            # so a rebuild never resumes the same id while the old process is still exiting.
+            del self._sessions[key]
+            predecessor = session.done_closing
+            session = None
+        if session is None:
+            session = ThreadSession(
+                channel_id, thread_ts, directory, self._deps, predecessor=predecessor
+            )
             session.draining = self.draining
-            self._sessions[channel_id] = session
+            session.on_closed = lambda: self._evict_if_current(key, session)
+            self._sessions[key] = session
+        # About to be handed to a caller: never let the idle timer close it out from under
+        # whatever slow step (a download, a Slack call) the caller does before its own submit.
+        session.touch()
         return session
 
-    async def bind(self, channel_id: str, directory: Path) -> None:
-        """Claude Code keeps sessions per directory, so a new directory means a new session."""
-        old = self._sessions.pop(channel_id, None)
-        # The new directory is stored first: a message that arrives while the old session closes
-        # then opens the new one, never a second session on the old directory.
+    def _evict_if_current(self, key: tuple[str, str], session: ThreadSession) -> None:
+        """Drop a fully-closed session from the live map, but only if nothing has already
+        replaced it at this key (D9: keeps a long-idle thread's dead object from piling up)."""
+        if self._sessions.get(key) is session:
+            del self._sessions[key]
+
+    def sessions_of(self, channel_id: str) -> list[ThreadSession]:
+        """The live sessions of a channel, across its threads; a closed one (D9's idle close, or
+        a gone resume) is left out even before the next lookup evicts it."""
+        return [s for (c, _), s in self._sessions.items() if c == channel_id and not s.closed]
+
+    async def bind(self, channel_id: str, directory: Path) -> bool:
+        """Bind the channel to `directory`, for the next thread it opens; False, and nothing
+        changed, while any live session of the channel is not idle (D5). A thread already open
+        keeps the folder it started in."""
+        if any(not s.idle for s in self.sessions_of(channel_id)):
+            return False
         self._deps.state.bind(channel_id, directory)
-        if old is not None:
-            await old.close(texts.ENDED_REBOUND)
-
-    async def bind_when_idle(self, channel_id: str, directory: Path) -> bool:
-        """`bind`, unless the channel has work in flight: then False, and nothing changed."""
-        session = self._sessions.get(channel_id)
-        if session is not None and not session.idle:
-            return False
-        await self.bind(channel_id, directory)
         return True
 
-    async def resume(self, channel_id: str, session_id: str) -> bool:
-        """Point the channel at another session of its directory, which the next message
-        resumes; False, and nothing changed, while the channel has work in flight."""
-        session = self._sessions.get(channel_id)
-        if session is not None and not session.idle:
-            return False
-        self._sessions.pop(channel_id, None)
-        self._deps.state.set_session(channel_id, session_id)
-        # The stored bypass stays: the terminal's `/resume` continues in the current session's
-        # permission mode (sessions reference, read 2026-09-26).
-        if session is not None:
-            await session.close(texts.ENDED_RESUMED)
-        return True
+    async def stop_channel(self, channel_id: str) -> bool:
+        """`stop()` on every live session of the channel; True if any stopped something."""
+        stopped = False
+        for session in self.sessions_of(channel_id):
+            if await session.stop():
+                stopped = True
+        return stopped
 
-    def bypass_on(self, channel_id: str) -> bool:
-        """Whether `!bypass on` holds in the channel; starts nothing."""
-        stored = self._deps.state.get(channel_id)
-        return stored is not None and stored.bypass
-
-    def current_session(self, channel_id: str) -> str | None:
-        stored = self._deps.state.get(channel_id)
-        return stored.session_id if stored else None
+    async def resume(
+        self, channel_id: str, thread_ts: str, session_id: str
+    ) -> ThreadSession | None:
+        """Phase 1 form of `!resume`: opens a thread at `thread_ts` (the `!resume` message's own
+        ts) in the channel's folder, already on `session_id`. None when the channel is unbound."""
+        if self._deps.state.channel(channel_id) is None:
+            return None
+        thread = self._deps.state.open_thread(channel_id, thread_ts, session_id=session_id)
+        return self._session(channel_id, thread_ts, thread.directory)
 
     async def sessions_in(self, directory: Path, *, dated: bool = False) -> list[SDKSessionInfo]:
         """Every session of `directory`, the one the caller read for its channel; `dated`, by
@@ -1142,6 +1479,22 @@ class SessionManager:
                 await asyncio.wait_for(cut_short.wait(), DRAIN_POLL_SECONDS)
 
     async def close_all(self) -> None:
-        for session in list(self._sessions.values()):
-            await session.close()
+        """Close every session and wait for each to be fully torn down, including one an idle
+        close (D9) already had in flight: `close()` is safe to call again on a session already
+        closing, but returning as soon as this call's own no-op finds the client already gone
+        would not wait for whichever call is actually disconnecting it."""
+        sessions = list(self._sessions.values())
+        for session in sessions:
+            if not session.closed:
+                try:
+                    await session.close()
+                except Exception as exc:  # one session's failure must not skip the rest
+                    logger.error(
+                        "could not close %s/%s: %s",
+                        session.channel_id,
+                        session.thread_ts,
+                        describe(exc),
+                    )
+        for session in sessions:
+            await session.done_closing.wait()
         self._sessions.clear()

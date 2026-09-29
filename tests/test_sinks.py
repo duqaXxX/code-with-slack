@@ -13,7 +13,7 @@ from code_with_slack.render import sinks
 from code_with_slack.render.escape import mrkdwn_escape
 from code_with_slack.render.renderer import STOPPED, TaskUpdate, TurnRenderer
 from code_with_slack.render.sinks import ReplySink
-from tests.fakes import CHANNEL, FakeSlack, rings, sdk_messages
+from tests.fakes import CHANNEL, THREAD, FakeSlack, sdk_messages
 
 
 @pytest.fixture(autouse=True)
@@ -31,7 +31,7 @@ def last_blocks(slack: FakeSlack) -> list[dict[str, Any]]:
 
 
 def reply(slack: FakeSlack) -> ReplySink:
-    return ReplySink(slack, channel=CHANNEL)
+    return ReplySink(slack, channel=CHANNEL, thread_ts=THREAD)
 
 
 async def test_a_reply_s_body_is_one_message_and_the_closing_message_follows(
@@ -44,8 +44,8 @@ async def test_a_reply_s_body_is_one_message_and_the_closing_message_follows(
     await sink.task(TaskUpdate("t1", "Bash: ls", "complete"))
     await sink.finish([], "main · ctx 6%")
     posts = slack.calls_to("chat.postMessage")
-    # the body, then the closing message that carries the footer; neither is in a thread.
-    assert len(posts) == 2 and all(p.get("thread_ts") is None for p in posts)
+    # the body, then the closing message that carries the footer; both post in the thread.
+    assert len(posts) == 2 and all(p.get("thread_ts") == THREAD for p in posts)
     assert all(a["ts"] == slack.posted_ts[0] for a in slack.calls_to("chat.update"))
     assert last_blocks(slack)[-2] == {
         "type": "context",
@@ -761,7 +761,7 @@ def test_a_notice_fits_one_context_element() -> None:
     assert len(cut) == sinks.CONTEXT_LIMIT and cut.endswith("…")
 
 
-async def test_finish_with_reply_to_posts_a_ringing_closing_message_after_the_body(
+async def test_finish_with_reply_to_posts_the_question_as_the_closing_message_s_text(
     slack: FakeSlack,
 ) -> None:
     sink = reply(slack)
@@ -771,19 +771,18 @@ async def test_finish_with_reply_to_posts_a_ringing_closing_message_after_the_bo
     assert len(posts) == 2  # the body, then the closing message
     closing = posts[-1]
     assert closing["text"] == "Reply to: the question?"
-    # No line of its own: the mention ends the footer line.
-    assert sinks.context_block("footer · <!channel>") in closing["blocks"]
-    assert rings(closing)
+    # The blocks show only the footer: notifying rests on posting in the thread, not on a mention.
+    assert sinks.context_block("footer") in closing["blocks"]
 
 
-async def test_finish_without_reply_to_has_no_mention_in_the_closing_text(
+async def test_finish_without_reply_to_shows_the_footer_as_the_closing_text(
     slack: FakeSlack,
 ) -> None:
     sink = reply(slack)
     await sink.text("Done.")
     await sink.finish([], "footer")
     closing = slack.calls_to("chat.postMessage")[-1]
-    assert not rings(closing) and "<!channel>" not in closing["text"]
+    assert closing["text"] == "footer"
 
 
 async def test_after_finish_only_updates_and_deletes_follow_no_new_post(
@@ -801,19 +800,22 @@ async def test_after_finish_only_updates_and_deletes_follow_no_new_post(
     assert slack.calls_to("chat.update") or slack.calls_to("chat.delete")
 
 
-async def test_reply_to_on_a_reply_not_latest_at_finish_pins_the_question(
+async def test_reply_to_on_a_reply_not_latest_at_finish_still_posts_and_notifies(
     slack: FakeSlack,
 ) -> None:
     sink = reply(slack)
     await sink.text("Done.")
     await sink.set_latest(False)  # superseded before it even finishes
     await sink.finish([], "footer", reply_to="the question?")
-    pinned = sinks.context_block(texts.MENTION)
-    assert slack.message_blocks()[-1] == [pinned]  # no footer: it is not the latest reply
+    # No footer to show: a bare line stands in for it, so the notification still posts.
+    closing = slack.calls_to("chat.postMessage")[-1]
+    assert closing["text"] == "Reply to: the question?"
+    bare = sinks.context_block(sinks.ZERO_WIDTH_SPACE)
+    assert slack.message_blocks()[-1] == [bare]
     await sink.set_running("⏳ 1 shell")  # still not latest: no effect
-    assert slack.message_blocks()[-1] == [pinned]
-    await sink.set_latest(True)  # a later change: the mention is kept, now after the footer
-    assert sinks.context_block("footer · ⏳ 1 shell · <!channel>") in slack.message_blocks()[-1]
+    assert slack.message_blocks()[-1] == [bare]
+    await sink.set_latest(True)  # a later change: the footer now has somewhere to show
+    assert sinks.context_block("footer · ⏳ 1 shell") in slack.message_blocks()[-1]
 
 
 async def test_a_failed_closing_post_is_retried_by_the_final_retry(
@@ -840,5 +842,5 @@ async def test_reply_to_with_special_characters_is_escaped(slack: FakeSlack) -> 
     closing = slack.calls_to("chat.postMessage")[-1]
     escaped_prompt = mrkdwn_escape("<a> & <b>")
     assert closing["text"] == texts.REPLY_TO.format(prompt=escaped_prompt)
-    # With no footer, the mention stands alone: the question shows only in the notification.
-    assert slack.message_blocks()[-1] == [sinks.context_block(texts.MENTION)]
+    # With no footer, a bare line stands in for it: the question shows only in the notification.
+    assert slack.message_blocks()[-1] == [sinks.context_block(sinks.ZERO_WIDTH_SPACE)]
