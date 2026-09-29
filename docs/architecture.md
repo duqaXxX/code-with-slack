@@ -97,6 +97,20 @@ Messages with a subtype (edits, deletions, joins) and messages from bots are ign
 the same for every file, or the message is refused. A refusal reaches the owner as an ephemeral
 message; everyone else gets nothing.
 
+Where the daemon's own answers go is decided in `slack_app.handle_word`. A word typed at the top
+level, or in a thread that holds no session, acts as a top-level word: its answer is a normal post
+in the channel (`in_channel`, or `say` with no thread), which is neither ephemeral nor a thread
+reply, so it stays after a reload and never notifies. A word typed inside a session's thread is
+answered by `tell_owner` or an ephemeral `say` under the owner's message (`chat.postEphemeral`
+with `thread_ts`), which Slack drops on reload, or by `acknowledge`, a ✅ reaction on the word
+(`!bypass`); `!stop` posts nothing there, the session reacts on its own root. `word_report`
+chooses the same place for a word's failure, and swallows a failed channel post, since a raise
+there would reach the message handler's own failure path, which posts `ERROR_REPLY` threaded
+under the word. The D5 old-folder notice and `Not sent.` are ephemeral as well. A Resume button
+carries `<session id>@<thread ts>`, the thread of the owner's `!resume` message (`resume.parse_resume_value`);
+the click is checked like any other inbound path, and a value in another shape (a list posted by
+an older version) answers `texts.RESUME_STALE`.
+
 ## Attached files
 
 `code_with_slack.attachments` handles the files of a `file_share` message before anything reaches
@@ -325,7 +339,10 @@ for another reason, it ends with the error line a prompt would get.
 every bound channel. A top-level message opens one in the channel's current folder
 (`SessionManager.open`); a reply inside a thread hands back its existing one, rebuilding it first
 if a restart, an idle close or a gone resume dropped it (`SessionManager.get`); a Resume click or
-`!resume <id or title>` opens one already set to a chosen session id (`SessionManager.resume`).
+`!resume <id or title>` opens one already set to a chosen session id, in the thread of the owner's
+`!resume` message (`SessionManager.resume`); `slack_app.resume_into_thread` edits the list the click
+came from before it posts the confirmation, so a confirmation Slack refuses cannot leave buttons for
+a session already resumed.
 Each thread keeps the folder it was opened in for as long as it exists: `!bind` changes only
 where the *next* thread starts, and refuses while any of the channel's threads is not idle
 (`SessionManager.bind`).
@@ -363,7 +380,8 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   while a reply is written never stops the session or the running turn.
 - Messages are queued and run one at a time; each gets its own reply in the thread.
   `!stop` interrupts the running turn, denies its pending approvals and stops the thread's
-  background tasks (`ClaudeSDKClient.stop_task`).
+  background tasks (`ClaudeSDKClient.stop_task`), then shows `✅` on the root through
+  `ThreadSession._react`, which clears `_error_standing`: a stop the owner gave is not an error.
 - D8: before a message would wake an idle session (`slack_app.submit_to_session`), a live session
   of any other thread, of any channel, whose resolved folder is the same and is not idle
   (`SessionManager.working_in`) makes the daemon ask first: `Another session is working in this
@@ -384,7 +402,7 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   waiting: an approval or a question is open, back to `⏳` once it is answered and the turn
   continues. `✅` ended: the closing message of the latest prompt posts with nothing else of the
   session running, queued or owed (`ThreadSession.idle`); a second prompt queued behind the first
-  keeps it `⏳` until everything has ended. `❌` error: a turn fails, `!stop` stops something, a
+  keeps it `⏳` until everything has ended. `❌` error: a turn fails, a
   restart's drain drops a queued or taken turn, `SessionGone`, or a shutdown's drain cuts short a
   busy session. A `❌` stands until new work starts (a submit or a report turn, both of which
   clear `ThreadSession._error_standing`), never flipped back to `✅` by some unrelated task's own

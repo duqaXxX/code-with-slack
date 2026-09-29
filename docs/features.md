@@ -21,15 +21,17 @@ how a reply looks on desktop and on mobile is checked by hand.
 | Tool lines fold in the terminal's words (`Ran 2 shell commands · Read 1 file`) | `test_sinks`, `test_previews` | P10 | none |
 | Edit and Write previews: sentence, diff or new file's lines | `test_previews`, `test_sinks` | P13 | A diff opens and closes on desktop and mobile; it colours on desktop, the squares on mobile |
 | Notifications: one per complete reply, approval, question or error, none while Claude writes | `test_sinks`, `test_sessions` | none | In a thread you started, away from Slack: a reply rings once, `!stop` does not |
-| Status reaction: one on each session's root message, ⏳ working, ✋ waiting for you, ✅ ended, ❌ error, `!stop` or a restart that cut it short | `test_status`, `test_sessions` | none | The reaction moves ⏳ to ✅ in the channel list |
+| Status reaction: one on each session's root message, ⏳ working, ✋ waiting for you, ✅ ended or stopped with `!stop`, ❌ error or a restart that cut it short | `test_status`, `test_sessions` | none | The reaction moves ⏳ to ✅ in the channel list; after `!stop` it shows ✅, not ❌ |
 | Approvals: Approve and Deny buttons for a tool call, each resolved only in its own thread | `test_approvals`, `test_sessions`, `test_slack_app` | P11 | none |
 | Questions: the Answer form, and the answered record kept in the thread | `test_approvals`, `test_slack_app` | none | Answer a real question; the record stays with each answer |
 | `!bypass`, kept per thread in `state.json` across restarts; refused at the top level | `test_sessions`, `test_state`, `test_slack_app` | P9 | none |
-| `!stop`: at the top level, every session of the channel and its background tasks; inside a thread, that session alone | `test_sessions`, `test_slack_app` | P8, P12 | none |
+| `!stop`: at the top level, every session of the channel and its background tasks, answered by one post in the channel; inside a thread, that session alone, with no message and ✅ on its root | `test_sessions`, `test_slack_app` | P8, P12 | Send `!stop` in a busy thread: the root shows ✅ and nothing is posted |
 | `!status`: at the top level, the channel's folder and every live session, each linked to its thread; inside a thread, that session's directory, mode and the footer's values (branch and changes of the folder the session works in, model, context, tokens, usage limits and their resets) | `test_footer`, `test_sessions`, `test_slack_app` | P2, P14 | none |
-| `!resume`: the session list and resuming one; a session already open in another thread of any channel is listed with a link to that thread instead of a button, and refused with the same link if named or clicked (D6) | `test_resume`, `test_sessions`, `test_slack_app` | P6, P7 | none |
+| `!resume`: the session list, posted in the channel, and resuming one in the thread of the `!resume` message (a click or a name); each button carries the session id and that thread, so a list posted by an older version is refused as out of date; the list is edited to say what was resumed and where; a session already open in another thread of any channel is listed with a link to that thread instead of a button, and refused with the same link if named or clicked (D6); a thread that already holds a session, live or only stored in `state.json`, refuses a resume | `test_resume`, `test_sessions`, `test_slack_app` | P6, P7 | Click Resume on a list: the session continues in the thread of your `!resume` message and the list loses its buttons |
+| Where a word answers: typed in the channel (or in a thread that is not a session), a normal post in the channel, which stays after a reload; typed inside a session's thread, a message only you see under your word (`!help`, `!guide`, `!status`, a refusal), or a ✅ on your word (`!bypass`); a failure that cannot be reported in the channel is logged, never pushed as a thread reply | `test_slack_app` | none | Send `!status` at the top level and inside a thread: the first stays after a reload, the second shows `Only visible to you` and vanishes |
+| The old-folder notice (D5) and `Not sent.` (a D8 hold cancelled by Cancel, `!stop` or a restart) are shown only to you, under your message | `test_slack_app`, `test_sessions` | none | none |
 | D8: two busy sessions in one folder; a message to an idle session holds and asks `Send anyway?` with Continue and Cancel while another live session (any channel) is not idle in the same resolved folder; `!stop` and a restart cancel the wait | `test_sessions`, `test_slack_app` | none | Bind two channels to the same folder, keep one busy, send a message in the other: it holds and asks |
-| Idle close and resume: a thread's Claude Code process closes after an hour with nothing to do and resumes on the next message; top-level `!resume` moves a folder's session into a new thread of its own | `test_sessions`, `test_resume`, `test_slack_app`, `test_state` | none | none |
+| Idle close and resume: a thread's Claude Code process closes after an hour with nothing to do and resumes on the next message; `!resume` moves a folder's session into the thread of the `!resume` message | `test_sessions`, `test_resume`, `test_slack_app`, `test_state` | none | none |
 | Effort kept across a resume: `/effort` set in a thread survives an idle close or a restart | `test_sessions` | P15, P16 | none |
 | `!help` at the top level lists the daemon's words and points to a thread for Claude Code's own; inside a thread it lists both; `!guide` and `!name` sent to Claude Code as `/name` work the same either way | `test_commands`, `test_slack_app` | none | none |
 | Attached images and files | `test_attachments`, `test_slack_app` | P4, P5 | none |
@@ -43,9 +45,14 @@ how a reply looks on desktop and on mobile is checked by hand.
 
 ## Notifications
 
-Every reply, approval request and question is a message inside the session's own thread; the
-answer to `!bind`, `!status` and `!resume`'s own list, and the upgrade notice, are not: they are
-top-level messages of their own.
+Every reply, approval request and question is a message inside the session's own thread. The
+answer to a word typed in the channel (`!help`, `!guide`, `!status`, `!stop`, `!bind` and its list,
+`!resume` and its list, and each refusal), and the upgrade notice, are top-level messages of their
+own. A word typed inside a session's thread is answered by an ephemeral message under it (Slack
+labels it `Only visible to you`), which disappears when Slack reloads, or by a reaction; the
+old-folder notice and `Not sent.` are ephemeral too. Ephemeral messages did not ring an iPhone
+in the two probes of 2026-09-29 that watched for it; one earlier reading did ring and stays
+unexplained.
 
 **Inside a thread**, Slack notifies the owner on a new message in a thread it started, mention or
 none. Measured 2026-09-28 (Slack free plan, Slack iOS app, slack-sdk 3.44.1):
