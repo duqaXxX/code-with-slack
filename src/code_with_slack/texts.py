@@ -127,6 +127,7 @@ RESTART_WAITS = (
     "`!stop` ends them now."
 )
 NOTHING_TO_STOP = "Nothing is running in this channel."
+NOTHING_TO_STOP_THREAD = "Nothing is running in this session."
 # D8: two sessions in one folder at once.
 HOLD_QUESTION = "Another session is working in this folder: {link}. Send anyway?"
 HOLD_CONTINUE_BUTTON = "Continue"

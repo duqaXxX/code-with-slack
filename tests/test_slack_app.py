@@ -529,6 +529,13 @@ async def test_bang_stop_inside_a_thread_stops_only_that_session(world: World) -
     assert world.clients[1].interrupts == 0
 
 
+async def test_bang_stop_inside_an_idle_thread_says_nothing_is_running(world: World) -> None:
+    await _idle_message(world, "hi", ts=THREAD)
+    await world.dispatch(reply("!stop", THREAD))
+    assert world.ephemerals() == [texts.NOTHING_TO_STOP_THREAD]
+    assert texts.NOTHING_TO_STOP_THREAD not in said(world)  # for the owner alone
+
+
 async def test_a_malformed_daemon_word_at_top_level_shows_only_the_daemon_words(
     world: World,
 ) -> None:
@@ -1294,6 +1301,23 @@ async def test_a_failing_confirmation_still_updates_the_list(world: World) -> No
     assert all("accessory" not in b for b in edited["blocks"])
 
 
+async def test_a_failing_list_edit_does_not_block_the_confirmation(world: World) -> None:
+    two_sessions(world)
+    world.slack.responses["chat.update"] = RuntimeError("network down")
+    await world.dispatch(resume_click(SESSION_B, THREAD))
+    assert world.state.thread(CHANNEL, THREAD).session_id == SESSION_B
+    assert "Trust gate" in said(world)[-1]
+
+
+async def test_a_click_failure_whose_report_fails_raises_nothing(world: World) -> None:
+    def broken(directory: Path) -> list[SDKSessionInfo]:
+        raise PermissionError("transcripts unreadable")
+
+    world.sessions._deps.sessions_of = broken
+    world.slack.responses["chat.postMessage"] = RuntimeError("network down")
+    await world.dispatch(resume_click(SESSION_B))  # would raise into Bolt if the report did
+
+
 async def test_a_resumed_session_with_no_title_shows_its_id(world: World) -> None:
     world.stored_sessions = [SDKSessionInfo(SESSION_A, "", 0, 1)]
     await world.dispatch(message(f"!resume {SESSION_A}"))
@@ -1602,7 +1626,9 @@ async def test_bind_stays_plain_with_no_thread_in_another_folder(world: World) -
     assert said(world) == [texts.BIND_OK.format(directory=new)]
 
 
-async def test_a_reply_in_an_old_folder_thread_gets_the_notice_once(world: World) -> None:
+async def test_a_reply_in_an_old_folder_thread_gets_the_notice_on_every_prompt(
+    world: World,
+) -> None:
     await _idle_message(world, "hi", ts=THREAD)  # opens a session in `app`
     (world.root / "docs").mkdir()
     await world.dispatch(message("!bind docs"))
@@ -1613,9 +1639,8 @@ async def test_a_reply_in_an_old_folder_thread_gets_the_notice_once(world: World
     assert world.ephemerals().count(expected) == 1
     assert expected not in said(world)  # for the owner alone: no push
     await world.dispatch(reply("again", THREAD))
-    assert (
-        world.ephemerals().count(expected) == 1
-    )  # a second reply in the same thread says it no more
+    # An ephemeral vanishes on reload, so "once" could mean never: every prompt shows it.
+    assert world.ephemerals().count(expected) == 2
     await world.sessions.close_all()
 
 
@@ -1630,8 +1655,7 @@ async def test_a_failed_old_folder_notice_still_submits_the_prompt(world: World)
     await world.dispatch(reply("go on", THREAD))
     assert world.clients[-1].queries[-1] == "go on"  # never dropped, despite the failed notice
     await world.dispatch(reply("again", THREAD))
-    # Not marked notified on the failed attempt: the next reply tries the notice again (and this
-    # one succeeds), so its text was sent twice in total.
+    # The next reply shows it again (and this one succeeds), so its text was sent twice.
     assert world.ephemerals().count(expected) == 2
     await world.sessions.close_all()
 

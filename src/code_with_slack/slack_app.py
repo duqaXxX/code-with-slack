@@ -183,9 +183,6 @@ def build_app(
     # opening new threads for as long as it runs; a lock kept forever would leak).
     arrival_order: dict[tuple[str, str], asyncio.Lock] = {}
     arrival_waiters: dict[tuple[str, str], int] = {}
-    # D5: threads already told (or opened) since this process started, so the old-folder notice
-    # (plan 7) shows once per thread per process, not on every reply.
-    old_folder_notified: set[tuple[str, str]] = set()
 
     @contextlib.asynccontextmanager
     async def arrival_lock(key: tuple[str, str]) -> AsyncIterator[None]:
@@ -290,13 +287,24 @@ def build_app(
             await notice(channel, thread_ts, text)
 
         report = report or in_thread
+
+        async def guarded(text: str) -> None:
+            # Never raises: this runs inside a handler's own `except`, and a raise would reach
+            # `on_message`'s outer handler, which posts `ERROR_REPLY` threaded under the word.
+            try:
+                await report(text)
+            except Exception as exc:
+                logger.warning(
+                    "could not report a failure in %s/%s: %s", channel, thread_ts, describe(exc)
+                )
+
         try:
             await work
         except (DirectoryUnavailable, SessionClosed, SessionGone) as exc:
-            await report(exc.message)
+            await guarded(exc.message)
         except Exception as exc:
             logger.error("a request failed in %s/%s: %s", channel, thread_ts, type(exc).__name__)
-            await report(texts.ERROR_REPLY.format(error=type(exc).__name__))
+            await guarded(texts.ERROR_REPLY.format(error=type(exc).__name__))
 
     async def admitted(
         user: str | None, team: str | None, channel: str | None, thread_ts: str
@@ -366,27 +374,18 @@ def build_app(
 
         async def report(text: str) -> None:
             if session is None:
-                # Swallowed: this runs inside `reply_on_failure`'s own handler, and a raise here
-                # would reach `on_message`'s outer one, which posts `ERROR_REPLY` threaded under
-                # the word (a push for a word that answers in the channel).
-                try:
-                    await in_channel(channel, text)
-                except Exception as exc:
-                    logger.warning("could not report a word in %s: %s", channel, describe(exc))
+                await in_channel(channel, text)
             else:
                 await tell_owner(channel, thread_ts, text)
 
         return report
 
     async def old_folder_notice(channel: str, thread_ts: str, session: ThreadSession) -> None:
-        """D5: a thread whose folder differs from the channel's current one, told once per
-        process (a thread told before this process started, or opened during it, needs no more).
-        A failed post must not drop the prompt that follows it: logged (ids only) and left
-        unmarked, so the next message in this thread tries the notice again rather than the
-        owner losing it for the rest of the process."""
-        key = (channel, thread_ts)
+        """D5: a prompt sent in a thread whose folder differs from the channel's current one is
+        told so, on every prompt: an ephemeral vanishes on reload, so a once-only notice could
+        mean never. A failed post must not drop the prompt that follows it: logged (ids only)."""
         record = state.channel(channel)
-        if key in old_folder_notified or record is None or session.directory == record.directory:
+        if record is None or session.directory == record.directory:
             return
         try:
             await notice(
@@ -405,8 +404,6 @@ def build_app(
                 thread_ts,
                 describe(exc),
             )
-            return
-        old_folder_notified.add(key)
 
     async def submit_to_session(
         channel: str,
@@ -620,9 +617,11 @@ def build_app(
                             channel, texts.STOPPED_CHANNEL if stopped else texts.NOTHING_TO_STOP
                         )
                 else:
-                    # Nothing is posted: the session reacts on its own root (`ThreadSession.stop`),
-                    # and a D8 hold cancelled here already said `Not sent.` from its own waiter.
-                    await session.stop()
+                    # A stop that stopped something posts nothing: the session reacts on its
+                    # own root (`ThreadSession.stop`). None: only a D8 hold was cancelled, which
+                    # already said `Not sent.` from its own waiter.
+                    if await session.stop() is False:
+                        await tell_owner(channel, thread_ts, texts.NOTHING_TO_STOP_THREAD)
             case Resume(target=target):
                 if session is not None:
                     await tell_owner(
@@ -925,8 +924,8 @@ def build_app(
         other thread (D6: one session lives in one thread), or the channel was bound to another
         folder while `chosen` was read from `directory`. Every check runs with no `await` before
         the `resume` they guard, so nothing can change between the checks and the call they
-        protect. `list_ts`: the picker a click came from, edited before the confirmation posts, so
-        a confirmation that fails cannot leave buttons for a session already resumed."""
+        protect. `list_ts`: the picker a click came from, edited once the confirmation is posted or
+        has failed, so buttons never outlive a resume."""
         if sessions.get(channel, thread_ts) is not None:
             await in_channel(channel, texts.RESUME_HELD)
             return False
@@ -941,10 +940,14 @@ def build_app(
             return False
         session = await sessions.resume(channel, thread_ts, chosen.session_id)
         assert session is not None  # just confirmed the channel is bound to `directory`
-        await show_resumed(channel, thread_ts, list_ts, chosen)
         # A markdown block, not mrkdwn: the title is escaped so it cannot close or open the bold.
         title = markdown_escape(one_line(chosen.summary, TITLE_LIMIT)) or chosen.session_id
-        await say(channel, thread_ts, texts.RESUME_OK.format(title=title))
+        try:
+            await say(channel, thread_ts, texts.RESUME_OK.format(title=title))
+        finally:
+            # Independent of the confirmation: a failing one still leaves a list that says what
+            # was resumed, and a failing edit (swallowed in `show_resumed`) never blocks it.
+            await show_resumed(channel, thread_ts, list_ts, chosen)
         return True
 
     @app.action(RESUME_ACTION)
