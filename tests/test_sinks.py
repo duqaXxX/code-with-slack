@@ -21,6 +21,7 @@ from tests.fakes import (
     FakeClock,
     FakeSlack,
     ResetAfterApply,
+    SlowAfterApply,
     sdk_messages,
 )
 
@@ -1266,14 +1267,15 @@ async def test_settle_during_the_retry_does_not_lose_the_stop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.01)
-    slack = FakeSlack()
+    slack = SlowAfterApply()
     sink = reply(slack)
     await sink.text("Answer.")
     await settled()
-    slack.responses["chat.stopStream"] = [aiohttp.ClientConnectionError("down"), {"ok": True}]
+    slack.responses["chat.stopStream"] = [rejected("ratelimited"), {"ok": True}]
     await sink.finish([])
     assert await sink.close_out("footer") is False
-    slack.delay = 0.05  # the retry's stop is in flight when the shutdown settles the reply
+    # the retry's stop is applied and its answer still on the way when the shutdown settles
+    slack.slow_method, slack.slow_for = "chat.stopStream", 0.1
     await asyncio.sleep(0.03)
     assert await sink.settle() is True
     assert slack.pushes() == 1 and slack.posted_ts == []
@@ -1311,3 +1313,24 @@ async def test_a_reply_whose_body_landed_is_not_tracked_when_only_the_closing_po
     # the answer is whole: a repair must not say it stopped before it
     assert seen[-1] == (slack.stream_ts[0], None)
     await sink.settle()
+
+
+async def test_a_footerless_stop_of_unknown_outcome_does_not_stand_for_the_footer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The 280 s stop lands and its answer is lost. The stream is over, without the footer: the
+    # end must post the closing message, not count the earlier stop as its own.
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.05)
+    slack = ResetAfterApply()
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("Answer.")
+    await settled()
+    slack.reset_next = "chat.stopStream"
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await settled()
+    await sink.finish([])
+    assert await sink.close_out("footer") is True
+    [closing] = slack.calls_to("chat.postMessage")
+    assert closing["blocks"][-1]["elements"][0]["text"] == "footer"
+    assert slack.pushes() == 2  # the 280 s stop, and the end

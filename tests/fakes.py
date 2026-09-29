@@ -451,3 +451,21 @@ class ResetAfterApply(FakeSlack):
             self.reset_next = None
             raise aiohttp.ClientOSError(104, "Connection reset by peer")
         return answer
+
+
+class SlowAfterApply(FakeSlack):
+    """Slack applies the call, and its answer takes `slow_for` seconds more to come back: a
+    task cancelled in that wait loses what the call did."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.slow_method: str | None = None
+        self.slow_for = 0.0
+
+    async def api_call(  # type: ignore[override]
+        self, api_method: str, **kwargs: Any
+    ) -> AsyncSlackResponse:
+        answer = await super().api_call(api_method, **kwargs)
+        if api_method == self.slow_method:
+            await asyncio.sleep(self.slow_for)
+        return answer

@@ -153,6 +153,8 @@ def _say_stopped_in_the_footer(blocks: list[dict[str, Any]]) -> None:
     if last is None or not last.get("elements"):
         return
     first = last["elements"][0]
+    if first.get("type") not in ("mrkdwn", "plain_text"):
+        return
     joined = f"{first.get('text', '')} · {texts.STOPPED_BEFORE_ANSWER}".lstrip(" ·")
     last["elements"] = [{**first, "text": joined}, *last["elements"][1:]]
 

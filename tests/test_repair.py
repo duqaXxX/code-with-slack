@@ -1,3 +1,4 @@
+import copy
 from pathlib import Path
 
 import pytest
@@ -281,3 +282,14 @@ async def test_a_failed_state_write_is_logged_and_swallowed(
 
     monkeypatch.setattr(state, "replace_open_reply", boom)
     await repair_crash(slack, state, UpdateLimiter())  # must not raise
+
+
+async def test_a_context_block_that_leads_with_an_image_is_left_as_it_is(
+    tmp_path: Path, slack: FakeSlack
+) -> None:
+    image = {"type": "image", "image_url": "https://example.com/a.png", "alt_text": "a"}
+    footer = {"type": "context", "elements": [image]}
+    body = [*content(49), footer]
+    before = copy.deepcopy(body)
+    blocks = await repaired_blocks(tmp_path, slack, body)
+    assert blocks == before  # only text is joined to; the edit's `text` still says it stopped

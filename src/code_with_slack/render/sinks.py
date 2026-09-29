@@ -428,8 +428,8 @@ class _Message:
     # An append whose outcome is unknown: the stream is no longer told anything, it is stopped
     # and the message goes on by update, from the model.
     blind: bool = False
-    # The blocks a stop of unknown outcome carried: if the next stop finds the stream over, that
-    # stop is the one that landed.
+    # The footer a stop of unknown outcome carried (a footerless stop records nothing): if the
+    # next stop finds the stream over, that stop is the one that landed.
     stop_unknown: list[dict[str, Any]] | None = None
 
 
@@ -1099,14 +1099,15 @@ class ReplySink:
         except Exception as exc:
             if describe(exc) != NOT_STREAMING:
                 logger.warning("could not stop a reply's stream: %s", describe(exc))
-                if unknown_outcome(exc) and message.stop_unknown is None:
-                    message.stop_unknown = list(blocks or [])
+                if unknown_outcome(exc) and blocks and message.stop_unknown is None:
+                    message.stop_unknown = list(blocks)
                 return "failed"
             if message.stop_unknown is not None:
                 # The stop that failed on the connection is the one that landed, footer and all.
                 blocks, result = message.stop_unknown, "stopped"
             else:
-                result = "gone"
+                result = "gone"  # over without a footer of ours: the end posts one
+            message.stop_unknown = None
         self._gone(message)
         message.exact = self._stream_shows(message, end)
         message.footer = list(blocks or []) if result == "stopped" else []
