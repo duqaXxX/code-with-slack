@@ -2628,8 +2628,8 @@ async def test_a_gone_session_is_left_out_of_sessions_of(
     assert h.manager.sessions_of(CHANNEL) == []
 
 
-# D9: the resume race, the routing race, the two missed re-arm points, the effort
-# edge cases and the eviction leak.
+# D9 races: the resume race, the routing race, the re-arm points after a word's connect and an
+# expired report wait, the effort edge cases and the eviction of a closed session.
 
 
 async def test_ensure_connected_waits_for_the_predecessor_s_disconnect_before_resuming(
@@ -2826,7 +2826,7 @@ async def test_drain_suppresses_the_idle_close(
     assert not session.closed
 
 
-# D9: close() must signal done_closing even when a step inside it raises, the
+# D9 close ordering: close() must signal done_closing even when a step inside it raises, the
 # predecessor chain must hold past an unconnected middle generation, submit's own awaits must
 # not be closeable under it, and a few more missed re-arm points.
 
