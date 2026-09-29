@@ -2,7 +2,7 @@
 
 Claude Code is real (the SDK's bundled CLI, the owner's login, Haiku); Slack is the test suite's
 FakeSlack, since an SDK release changes nothing on the Slack side. What a claim checks is what the
-owner would see: the text of the replies, the running line, the approvals asked.
+owner would see: the text of the replies, the task cards, the footer, the approvals asked.
 """
 
 import asyncio
@@ -42,7 +42,7 @@ from code_with_slack.sessions import (
 )
 from code_with_slack.state import StateStore
 from probe.claims import Observation
-from tests.fakes import FakeSlack
+from tests.fakes import FakeSlack, card_of
 
 # The model the fixture recorder uses: the cheapest that runs every scene.
 PROBE_MODEL = "claude-haiku-4-5-20251001"
@@ -54,14 +54,8 @@ MODEL_RESUME_THREAD = "1700000000.000301"  # its first resume, no effort stored:
 MODEL_RESUME_THREAD2 = "1700000000.000302"  # its second resume, effort stored: the restoring half
 TURN_LIMIT = 180.0
 COUNT_TO = 2000
-# The running line of a background command (`texts.RUNNING`), unlike `Ran 1 shell command`.
-RUNNING_SHELL = "⏳ 1 shell"
-
-
-def bash_line(lines: str) -> bool:
-    """A Bash call on a reply's tool lines: whole it names Bash, folded it reads as the
-    terminal's `Ran N shell command(s)`."""
-    return "Bash" in lines or "shell command" in lines
+# What a background command's task card says while it runs (`renderer.BACKGROUND`).
+RUNNING_CARD = "Running in background"
 
 
 # Failures of the machine the probe runs on, not of the SDK: a turn past TURN_LIMIT, the network.
@@ -105,7 +99,7 @@ def one_pixel_png() -> bytes:
 class Mark(NamedTuple):
     """Where the channel stands before a scene: what came after it is the scene's."""
 
-    posted: int  # messages posted
+    streams: int  # replies started
     calls: int  # Slack calls made
     asked: int  # permission requests received
 
@@ -182,39 +176,45 @@ class Stage:
         return session
 
     def mark(self) -> Mark:
-        return Mark(len(self.slack.posted_ts), len(self.slack.calls), len(self.asked))
+        return Mark(len(self.slack.stream_ts), len(self.slack.calls), len(self.asked))
 
     def replies_since(self, mark: Mark) -> str:
-        """The text of every message posted since `mark`: the turn's reply, wherever an approval
+        """The text of every reply started since `mark`: the turn's own, wherever an approval
         request or a notice came in between."""
-        return "\n".join(self.slack.message_texts()[mark.posted :])
+        return "\n".join(self.slack.stream_texts()[mark.streams :])
 
-    def tool_lines_since(self, mark: Mark) -> str:
-        """Every tool line a reply showed since `mark`, even one folded when its turn ended."""
-        return "\n".join(
-            json.dumps(b, ensure_ascii=False)
-            for method, args in self.slack.calls[mark.calls :]
-            if method in ("chat.postMessage", "chat.update")
-            for b in args.get("blocks") or []
-            if str(b.get("block_id", "")).startswith("tools-")
-        )
+    def cards_since(self, mark: Mark) -> str:
+        """Every task card a reply showed since `mark`, as `status title output` a line each,
+        in whatever state each had then."""
+        seen: dict[str, str] = {}
+        for method, args in self.slack.calls[mark.calls :]:
+            for chunk in args.get("chunks") or []:
+                if chunk["type"] == "task_update":
+                    seen[chunk["id"]] = self.card_line(chunk)
+            for block in args.get("blocks") or []:
+                if method in ("chat.postMessage", "chat.update") and block["type"] == "task_card":
+                    seen[block["task_id"]] = self.card_line(card_of(block))
+        return "\n".join(seen.values())
+
+    @staticmethod
+    def card_line(card: dict[str, Any]) -> str:
+        return f"{card['status']} {card['title']} {card.get('output', '')}".strip()
 
     def asked_since(self, mark: Mark) -> list[str]:
         return self.asked[mark.asked :]
 
     def shown_now(self) -> str:
-        """What the channel shows now: each message's last blocks, footer and running line
-        included, deleted messages left out."""
-        posted = iter(self.slack.posted_ts)
-        shown: dict[str, str] = {}
-        for method, args in self.slack.calls:
-            if method == "chat.postMessage":
-                shown[next(posted)] = json.dumps(args.get("blocks") or [], ensure_ascii=False)
-            elif method == "chat.update":
-                shown[args["ts"]] = json.dumps(args.get("blocks") or [], ensure_ascii=False)
-            elif method == "chat.delete":
-                shown.pop(args["ts"], None)
-        return "\n".join(shown.values())
+        """What the channel shows now: each message's last blocks (the footer among them), deleted
+        messages left out."""
+        return "\n".join(
+            json.dumps(m.blocks, ensure_ascii=False)
+            for m in self.slack.messages.values()
+            if not m.deleted
+        )
+
+    def cards_now(self) -> list[dict[str, Any]]:
+        """The task cards of every message, as they show now."""
+        return [card for cards in self.slack.message_cards() for card in cards]
 
     async def turn_on(self, session: ThreadSession, prompt: Any) -> Turn:
         turn = await session.submit(prompt)
@@ -300,13 +300,12 @@ async def bash_turn(s: Stage) -> dict[str, Observation]:
     await s.turn(
         "Use the Bash tool to run exactly this command: echo ok > probe-ran.txt\nThen reply: done"
     )
-    # A Bash call is known by the permission request the CLI sends for it, whatever its title.
-    # The reply's tool line may show the command only while it runs, depending on update
-    # timing; once folded it still names the tool (`✓ Bash`).
+    # A Bash call is known by the permission request the CLI sends for it, whatever its title;
+    # its card names the tool.
     called = "Bash" in s.asked_since(mark)
     detail = "" if called else f"permission requests: {s.asked_since(mark) or 'none'}"
     return {
-        "P10": Observation(called, bash_line(s.tool_lines_since(mark)), detail),
+        "P10": Observation(called, "Bash" in s.cards_since(mark), detail),
         "P11": Observation(called, marker.exists(), detail),
     }
 
@@ -320,15 +319,15 @@ async def previews(s: Stage) -> dict[str, Observation]:
     )
     asked = s.asked_since(mark)
     called = "Write" in asked and "Edit" in asked
-    lines = s.tool_lines_since(mark)
+    lines = s.cards_since(mark)
     # Both previews built: the shapes they read are still the measured ones.
     shown = "Write(preview.txt)" in lines and "Update(preview.txt)" in lines
     shown = shown and "Wrote 3 lines" in lines and "Added 1 line, removed 1 line" in lines
     if not called:
         detail = f"permission requests: {asked}"
     elif not shown:
-        # What the lines showed instead: a changed wording or shape is visible at once.
-        detail = f"tool lines showed: {' '.join(lines.split())[:160]!r}"
+        # What the cards showed instead: a changed wording or shape is visible at once.
+        detail = f"cards showed: {' '.join(lines.split())[:160]!r}"
     else:
         detail = ""
     return {"P13": Observation(called, shown, detail)}
@@ -339,12 +338,16 @@ async def background_stop(s: Stage) -> dict[str, Observation]:
         "Use the Bash tool with run_in_background set to true to run: tail -f /dev/null\n"
         "Do not wait for it. Reply: started"
     )
-    if not await until(lambda: RUNNING_SHELL in s.shown_now(), 20):
+
+    def running() -> bool:
+        return any(c.get("details") == RUNNING_CARD for c in s.cards_now())
+
+    if not await until(running, 20):
         return {"P12": Observation(False, False, "no background command started")}
     stopped = await s.session.stop()
-    gone = await until(lambda: RUNNING_SHELL not in s.shown_now(), 30)
+    gone = await until(lambda: not running(), 30)
     detail = "" if stopped else "!stop found nothing to stop"
-    detail = detail or ("" if gone else "the running line still shows the command after 30 s")
+    detail = detail or ("" if gone else "the card still shows the command running after 30 s")
     return {"P12": Observation(True, stopped and gone, detail)}
 
 
@@ -476,7 +479,7 @@ async def bypass(s: Stage) -> dict[str, Observation]:
         )
     finally:
         await s.session.set_bypass(False)
-    called = bash_line(s.tool_lines_since(mark)) and marker.exists()
+    called = "Bash" in s.cards_since(mark) and marker.exists()
     asked = s.asked_since(mark)
     return {
         "P9": Observation(
@@ -496,8 +499,8 @@ async def working_folder(s: Stage) -> dict[str, Observation]:
     mark = s.mark()
     await s.turn("Use the Bash tool to run exactly this command: cd app\nThen reply: done")
     # A `cd` inside the working folder asks for no approval (measured 2026-09-27, 2.1.283):
-    # the call shows on the tool lines only.
-    called = bash_line(s.tool_lines_since(mark))
+    # the call shows on its card only.
+    called = "Bash" in s.cards_since(mark)
     moved = s.session.working_directory == app
     shown = branch in s.shown_now()
     detail = f"working directory {s.session.working_directory}, branch shown: {shown}"
