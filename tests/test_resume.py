@@ -8,10 +8,18 @@ import pytest
 from claude_agent_sdk import SDKSessionInfo
 
 from code_with_slack import resume, texts
-from code_with_slack.resume import RESUME_ROWS, by_last_activity, matching, resume_blocks
+from code_with_slack.resume import (
+    RESUME_ROWS,
+    by_last_activity,
+    matching,
+    parse_resume_value,
+    resume_blocks,
+    resume_value,
+)
 from code_with_slack.sessions import directory_sessions
 
 NOW = datetime(2026, 9, 25, 12, 0).astimezone()
+THREAD = "1780000000.000001"  # the thread of the owner's `!resume` message
 
 
 def info(sid: str, summary: str, hours_ago: float, **fields: Any) -> SDKSessionInfo:
@@ -37,7 +45,7 @@ def test_each_session_is_a_row_with_the_picker_s_columns_and_a_button() -> None:
         info("68da9311-0000-4000-8000-000000000002", "Add trust gate", 26,
              git_branch="security-fixes", file_size=1_100_000),
     ]  # fmt: skip
-    blocks = resume_blocks(Path("/srv/dev/app"), sessions, nothing_held, NOW)
+    blocks = resume_blocks(Path("/srv/dev/app"), sessions, nothing_held, NOW, THREAD)
     assert "/srv/dev/app" in blocks[0]["elements"][0]["text"]
     first, second = rows(blocks)
     # The id's first characters close the row, in plain text like the rest of it.
@@ -47,7 +55,8 @@ def test_each_session_is_a_row_with_the_picker_s_columns_and_a_button() -> None:
     )
     button = first["accessory"]
     assert button["action_id"] == "session_resume"
-    assert button["value"] == "68da9311-0000-4000-8000-000000000001"
+    # The list is a top-level post: the button names the thread the session is resumed into.
+    assert button["value"] == f"68da9311-0000-4000-8000-000000000001@{THREAD}"
     assert button["text"]["text"] == texts.RESUME_BUTTON
 
 
@@ -56,7 +65,7 @@ def test_a_session_held_elsewhere_is_marked_with_a_link_and_has_no_button() -> N
     held_id = sessions[0].session_id
     link = "<https://example.slack.com/archives/C000CHAN/p1|open elsewhere>"
     blocks = resume_blocks(
-        Path("/srv/dev/app"), sessions, lambda sid: link if sid == held_id else None, NOW
+        Path("/srv/dev/app"), sessions, lambda sid: link if sid == held_id else None, NOW, THREAD
     )
     (row,) = rows(blocks)
     assert "accessory" not in row
@@ -65,7 +74,7 @@ def test_a_session_held_elsewhere_is_marked_with_a_link_and_has_no_button() -> N
 
 def test_a_free_row_carries_no_link() -> None:
     sessions = [info("68da9311-0000-4000-8000-000000000001", "Now", 0.1)]
-    (row,) = rows(resume_blocks(Path("/srv/dev/app"), sessions, nothing_held, NOW))
+    (row,) = rows(resume_blocks(Path("/srv/dev/app"), sessions, nothing_held, NOW, THREAD))
     assert "accessory" in row
     assert row["text"]["text"] == "Now · 6 minutes ago · 68da9311"
 
@@ -76,16 +85,17 @@ def test_the_branch_reads_as_the_terminal_shows_it() -> None:
         info("68da9311-0000-4000-8000-000000000001", "Notes", 50, git_branch="HEAD",
              file_size=976_000),
     ]  # fmt: skip
-    (row,) = rows(resume_blocks(Path("/srv/dev/notes"), sessions, nothing_held, NOW))
+    (row,) = rows(resume_blocks(Path("/srv/dev/notes"), sessions, nothing_held, NOW, THREAD))
     assert row["text"]["text"] == "Notes · 2 days ago · HEAD · 953.1KB · 68da9311"
 
 
 def test_only_the_newest_sessions_are_listed() -> None:
     sessions = [info(f"68da9311-0000-4000-8000-{i:012d}", f"s{i}", i) for i in range(25)]
-    blocks = resume_blocks(Path("/srv/dev/app"), sessions, nothing_held, NOW)
+    blocks = resume_blocks(Path("/srv/dev/app"), sessions, nothing_held, NOW, THREAD)
     listed = rows(blocks)
     assert len(listed) == RESUME_ROWS == 20  # the maintainer, 2026-09-25: ten were too few
-    assert listed[0]["accessory"]["value"].endswith("000000000000")
+    first = parse_resume_value(listed[0]["accessory"]["value"])
+    assert first is not None and first[0].endswith("000000000000")
     assert blocks[-1]["elements"][0]["text"] == texts.RESUME_MORE.format(rows=RESUME_ROWS)
     # An untitled session has no title to type: `!resume <id>` reaches it when its id is known.
     assert "!resume <id>" in texts.RESUME_MORE and "<title>" in texts.RESUME_MORE
@@ -93,18 +103,18 @@ def test_only_the_newest_sessions_are_listed() -> None:
 
 def test_no_more_line_when_every_session_fits() -> None:
     sessions = [info(f"68da9311-0000-4000-8000-{i:012d}", f"s{i}", i) for i in range(RESUME_ROWS)]
-    blocks = resume_blocks(Path("/srv/dev/app"), sessions, nothing_held, NOW)
+    blocks = resume_blocks(Path("/srv/dev/app"), sessions, nothing_held, NOW, THREAD)
     assert len(rows(blocks)) == RESUME_ROWS and "accessory" in blocks[-1]
 
 
 def test_a_title_is_shown_as_written() -> None:
     sessions = [info("68da9311-0000-4000-8000-000000000001", "see <http://x|ok> ```", 1)]
-    (row,) = rows(resume_blocks(Path("/srv/dev/app"), sessions, nothing_held, NOW))
+    (row,) = rows(resume_blocks(Path("/srv/dev/app"), sessions, nothing_held, NOW, THREAD))
     assert "&lt;http://x|ok&gt;" in row["text"]["text"] and "```" not in row["text"]["text"]
 
 
 def test_no_session_yet_says_so() -> None:
-    blocks = resume_blocks(Path("/srv/dev/app"), [], nothing_held, NOW)
+    blocks = resume_blocks(Path("/srv/dev/app"), [], nothing_held, NOW, THREAD)
     assert blocks[0]["elements"][0]["text"] == texts.RESUME_EMPTY.format(directory="/srv/dev/app")
     assert rows(blocks) == []
 
@@ -203,7 +213,7 @@ def test_dating_stops_once_the_rest_cannot_enter_the_list(monkeypatch: pytest.Mo
 def test_the_branch_and_the_folder_are_shown_as_written() -> None:
     # git accepts `<`, `>` and `&` in a branch name; unescaped, `<!here>` would notify the channel.
     sessions = [info("68da9311-0000-4000-8000-000000000001", "t", 1, git_branch="fix/<!here>")]
-    blocks = resume_blocks(Path("/srv/R&D"), sessions, nothing_held, NOW)
+    blocks = resume_blocks(Path("/srv/R&D"), sessions, nothing_held, NOW, THREAD)
     assert "R&amp;D" in blocks[0]["elements"][0]["text"]
     assert "fix/&lt;!here&gt;" in rows(blocks)[0]["text"]["text"]
 
@@ -217,3 +227,24 @@ def test_dates_falling_back_to_file_times_are_logged(
     with caplog.at_level("WARNING"):
         assert by_last_activity(Path("/srv/dev/app"), sessions) == sessions
     assert "file times" in caplog.text
+
+
+def test_a_resume_value_round_trips() -> None:
+    sid = "68da9311-0000-4000-8000-000000000001"
+    assert parse_resume_value(resume_value(sid, THREAD)) == (sid, THREAD)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "68da9311",
+        "68da9311@",
+        "@" + THREAD,
+        "68da9311@thread",
+        "68da9311@1780000000",
+        "68da9311@1.2.3",
+    ],
+)
+def test_a_resume_value_of_another_shape_is_refused(value: str) -> None:
+    assert parse_resume_value(value) is None

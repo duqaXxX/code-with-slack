@@ -20,7 +20,8 @@ All notable changes to this project are documented here. The format follows
   also deletes any request it denies (as `!stop` already did) and clears these fields itself, so
   a second start repairs nothing.
 - A status reaction on each session's root message: ⏳ working, ✋ waiting for the owner, ✅ once
-  everything has ended, ❌ on an error, `!stop` or a restart that cut a busy session short (D10).
+  everything has ended or `!stop` stopped it, ❌ on an error or a restart that cut a busy session
+  short (D10).
   `reactions:write` is added to the bot's Slack scopes.
 - One `chat.update` limiter shared by every reply: a token bucket paced at 40 writes per 60
   seconds plus a burst of 5, worst case 45 in one window, still under Slack's documented floor,
@@ -48,7 +49,7 @@ All notable changes to this project are documented here. The format follows
   nothing rings while Claude writes, nor for `!stop`, a restart or an idle close. `docs/setup.md`
   gains the notification section and `docs/features.md` the measurements behind it.
 - D5/D6: a bind's answer names each existing thread's own folder when it differs from the new
-  one, and that thread's first reply after the bind repeats the notice once per process; the
+  one, and every prompt sent in that thread after the bind repeats the notice, as an ephemeral message; the
   resume picker's row for a session already held by another thread, and the refusal when that
   session is named or clicked, both carry a permalink to the holding thread instead of a plain
   marker.
@@ -61,6 +62,21 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Where the daemon's own answers go. A word typed in the channel, or in a thread that holds no
+  session, is answered by a normal post in the channel (never a thread reply, never ephemeral,
+  so it stays after a reload): `!help`, `!guide`, `!status`, `!stop`, `!bind` with its list and
+  each answer, the `!bypass` refusal, `!resume` with its list and each refusal. A word typed
+  inside a session's thread is answered by an ephemeral message under it (Slack shows `Only
+  visible to you`, and it disappears on reload), or by a ✅ on the word for `!bypass`; the D5
+  old-folder notice and `Not sent.` are ephemeral too. None of these rings a phone.
+- `!resume`: the Resume button carries the session id and the thread of the owner's `!resume`
+  message. A click, or a name, resumes the session in that thread and edits the list to say what
+  was resumed and where, instead of opening a new thread. A list posted by an earlier version
+  (a button holding a bare session id) answers that it is out of date.
+- `!stop` shows ✅ on the stopped session's root, for a thread stop and for each session a channel
+  `!stop` stops, instead of ❌: a stop the owner gave is not an error. ❌ stays for errors and for
+  a restart that cuts work short. `!stop` inside a thread with nothing running answers `Nothing
+  is running in this session.` as an ephemeral message.
 - `!bypass`, `!stop`, `!status`, `!bind` and `!help` answer differently at the top level than
   inside a session's thread: `!bypass on`/`off` is per thread and refused at the top level;
   `!stop` and `!status` act on every session of the channel at the top level and on one session
@@ -93,6 +109,11 @@ All notable changes to this project are documented here. The format follows
   first owner reply it ends.
 
 ### Fixed
+
+- A top-level word whose failure report itself fails no longer pushes `ERROR_REPLY` as a reply
+  under the word; the failure is logged. A Resume click edits its list before it posts the
+  confirmation, so a failing confirmation no longer leaves buttons for a session already
+  resumed, and the list's line no longer italicises a title containing `_`.
 
 - The footer's branch read the channel's folder, not the folder the session works in: a channel
   bound to a folder holding its repo one level down showed no branch, and a session that moved

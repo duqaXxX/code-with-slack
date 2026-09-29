@@ -68,7 +68,7 @@ BIND_OK_ELSEWHERE = (
 BIND_UNAVAILABLE = (
     "Bound this channel to `{directory}`, but no session can start there yet. {reason}"
 )
-# D5: the first reply in a thread whose folder differs from the channel's, once per process.
+# D5: shown, ephemeral, before every prompt in a thread whose folder differs from the channel's.
 OLD_THREAD_FOLDER = (
     "This session works in `{old}`, the folder it was created in: Claude Code resumes a session "
     "only there. New messages in the channel use `{new}`."
@@ -114,12 +114,7 @@ BIND_BUSY = (
     "Sessions are running in this channel: binding another folder now would cut their work. "
     "Let them finish or send `!stop`, then bind again."
 )
-BYPASS_ON = (
-    "Bypass is on in this session: Claude Code runs every tool without asking, until "
-    "`!bypass off`. It stays on when code-with-slack restarts."
-)
 BYPASS_RESTARTING = "code-with-slack is restarting: bypass stays on in this session."
-BYPASS_OFF = "Bypass is off. Claude Code is back in its `{mode}` mode."
 BYPASS_TOP_LEVEL = "Bypass belongs to one session: send `!bypass on` inside its thread."
 STOPPED = "Stopped the current turn."
 # An answered question, as the terminal keeps it in the transcript.
@@ -127,7 +122,6 @@ ANSWERED = "User answered Claude's questions:"
 # Slack drops plain spaces at the start of a line; no-break spaces stay and make the indent.
 NESTED = "\u00a0" * 4 + "⎿ "
 STOPPED_CHANNEL = "Stopped what was running in this channel."
-STOPPED_THREAD = "Stopped what was running in this session."
 RESTART_WAITS = (
     "code-with-slack is restarting once these background tasks end: {counts}. "
     "`!stop` ends them now."
@@ -180,8 +174,8 @@ HELP_WORDS = (
     "relative to the allowed root; in the channel, refused inside a thread",
     "`!bypass on|off` run every tool without asking, until `!bypass off`; it survives a "
     "restart; inside a thread, refused in the channel",
-    "`!resume [session]` this directory's sessions, or resume one by id or name into a new "
-    "thread; in the channel, refused inside a thread",
+    "`!resume [session]` this directory's sessions, or resume one by id or name in the "
+    "thread of your `!resume` message; in the channel, refused inside a thread",
 )
 HELP_NO_MATCH = "No command matches `{query}`."
 HELP_CLAUDE = (
@@ -222,8 +216,12 @@ RESUME_AMBIGUOUS = (
     "More than one session in `{directory}` is named or starts with `{target}`: pick one from "
     "`!resume`."
 )
+RESUME_STALE = "This list is out of date: send `!resume` again for a current one."
 RESUME_GONE = "That session is not in this channel's directory any more: `!resume` lists them."
-RESUME_HELD = "This thread already holds a session: `!resume` from the channel opens a new thread."
+RESUME_HELD = (
+    "This thread already holds a session: send `!resume` again in the channel to pick another."
+)
+RESUME_LISTED = "Resumed {title} in {link}."
 # D6: a session held by any thread of any channel is never resumed a second time; `{link}` is the
 # holding thread's permalink (a plain fallback when Slack would not give one).
 RESUME_ELSEWHERE = "This session is already open in another thread: {link}."
@@ -264,9 +262,9 @@ its thread; inside a thread it shows that session's directory, mode and the foot
 `!stop` typed in the channel stops every running session and its background tasks; inside a \
 thread it stops only that one. `!resume`, typed in the channel only, lists this folder's twenty \
 newest sessions, from the terminal too, each with the start of its id and a **Resume** button; \
-`!resume <id>` (that start is enough), or `!resume <title>` for a session that has one, opens it \
-in a new thread of its own. To continue a session in the terminal, run `claude --resume <id>` \
-there with the full id `!status` shows.
+`!resume <id>` (that start is enough), or `!resume <title>` for a session that has one, resumes \
+it in the thread of your `!resume` message. To continue a session in the terminal, run \
+`claude --resume <id>` there with the full id `!status` shows.
 
 **Bypass**
 `!bypass on`, sent inside a session's thread, lets Claude Code run every tool without asking in \

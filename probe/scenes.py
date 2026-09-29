@@ -389,7 +389,11 @@ async def resume(s: Stage, word: str) -> dict[str, Observation]:
     # no Resume button, but the session is still listed.
     picker = json.dumps(
         resume_blocks(
-            s.workdir, listed, lambda sid: s.state.holder(sid) is not None, datetime.now(UTC)
+            s.workdir,
+            listed,
+            lambda sid: s.state.holder(sid) is not None,
+            datetime.now(UTC),
+            RESUME_THREAD,
         )
     )
     in_list = any(i.session_id == session_id for i in listed) and session_id[:8] in picker

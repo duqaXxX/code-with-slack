@@ -797,6 +797,8 @@ async def test_stop_channel_stops_every_busy_session_of_the_channel(
     assert await h.manager.stop_channel(CHANNEL) is True
     await asyncio.wait_for(asyncio.gather(a.done.wait(), b.done.wait()), 2)
     assert h.clients[0].interrupts == 1 and h.clients[1].interrupts == 1
+    assert h.reactions(THREAD)[-1] == Status.DONE.value  # a stop is not an error
+    assert h.reactions(OTHER_THREAD)[-1] == Status.DONE.value
     assert await h.manager.stop_channel(CHANNEL) is False
 
 
@@ -3009,7 +3011,7 @@ async def test_a_failed_turn_shows_error(
     assert h.reactions() == [Status.WORKING.value, Status.ERROR.value]
 
 
-async def test_stop_shows_error(harness_for: Callable[..., Harness]) -> None:
+async def test_stop_shows_done(harness_for: Callable[..., Harness]) -> None:
     h = harness_for(
         {
             "turns": [
@@ -3022,7 +3024,10 @@ async def test_stop_shows_error(harness_for: Callable[..., Harness]) -> None:
     await until(lambda: bool(h.approvals._pending))
     assert await session.stop() is True
     await asyncio.wait_for(turn.done.wait(), 2)
-    assert h.reactions()[-1] == Status.ERROR.value
+    # A stop the owner gave is not an error: ✅, and it stands through the turn's own tail.
+    assert h.reactions()[-1] == Status.DONE.value
+    assert session._error_standing is False
+    assert h.state.thread(CHANNEL, THREAD).status is None
 
 
 async def test_quick_turn_after_stop_ends_on_working(
@@ -3045,7 +3050,7 @@ async def test_quick_turn_after_stop_ends_on_working(
     await until(lambda: bool(h.approvals._pending))
     assert await session.stop() is True
     await asyncio.wait_for(turn.done.wait(), 2)
-    await until(lambda: session._status._current is Status.ERROR)
+    await until(lambda: session._status._current is Status.DONE)
     real_add = h.slack.reactions_add
 
     async def slow_add(**kw: Any) -> Any:
@@ -3296,18 +3301,11 @@ async def test_hold_keeps_a_standing_error_and_cancel_restores_it(
 ) -> None:
     # `hold_start`'s own WAITING reaction must not reset `_error_standing` (it did, through
     # `_react`), or Cancel right after turns a standing ❌ back into ✅: a hold is not new work.
-    h = harness_for(
-        {
-            "turns": [
-                [CanUseToolCall("Bash", {"command": "rm -rf build"}), *sdk_messages("interrupt")]
-            ]
-        }
-    )
+    h = harness_for({"turns": [sdk_messages("tools")]})
     session = h.session()
-    turn = await session.submit("clean")
-    await until(lambda: bool(h.approvals._pending))
-    assert await session.stop() is True
-    await asyncio.wait_for(turn.done.wait(), 2)
+    await asyncio.wait_for((await session.submit("go")).done.wait(), 2)
+    h.clients[0].inject([EndOfStream()])  # the CLI process is gone: `_abandon(error=True)`
+    await until(lambda: session._client is None)
     assert h.reactions()[-1] == Status.ERROR.value
     session.hold_start()
     assert session._error_standing is True  # not reset by the WAITING reaction

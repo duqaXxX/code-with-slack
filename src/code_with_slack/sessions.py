@@ -337,7 +337,7 @@ class ThreadSession:
         # top-level owner message, or the root of a `!resume` thread, the owner's own message).
         self._status = StatusReaction(deps.slack, channel=channel_id, root_ts=thread_ts)
         # D10: set by `stop()` while it denies pending approvals, so `_can_use_tool`'s own
-        # finally does not race its closing ❌ back to working; `_finish` and `_abandon`
+        # finally does not race its closing ✅ back to working; `_finish` and `_abandon`
         # clear it, once that turn's own tail ends, whichever way.
         self._interrupting = False
         # D10: true from `_react_error` until new work starts (`submit`, `_start_turn`), so a
@@ -754,7 +754,7 @@ class ThreadSession:
             return None if held else False
         if self.busy:
             # D10: a denial `deny_all` triggers below resolves `_can_use_tool`'s own future, whose
-            # `finally` would otherwise race this method's own closing ❌ back to working; this
+            # `finally` would otherwise race this method's own closing ✅ back to working; this
             # flag makes it skip that instead. `_finish` or `_abandon` clears it once this
             # turn's own tail ends.
             self._interrupting = True
@@ -772,7 +772,9 @@ class ThreadSession:
                     self.thread_ts,
                     describe(exc),
                 )
-        self._react_error()  # D10: `!stop` stopped something
+        # D10: a stop the owner gave is not an error. `_react` clears `_error_standing`, so a
+        # later idle sweep shows the same ✅ and `_note_status` drops the persisted ⏳.
+        self._react(Status.DONE)
         return True
 
     async def status(self) -> str:
@@ -1126,7 +1128,8 @@ class ThreadSession:
                 # `stopped`: an owner `!stop` ended this task; its closing follows at once, but
                 # silently, as `!stop` never rings.
                 await holder.close_out(silent=stopped)
-                # D10: `!stop` already reacted itself; its ❌ must stand, not this closing's ✅.
+                # D10: `!stop` already reacted ✅ itself; skipped so a stopped task's closing
+                # does not show it a second time.
                 if not stopped:
                     await self._react_done_if_idle()
             return
@@ -1287,7 +1290,7 @@ class ThreadSession:
         """✅, once the closing message just posted turns out to have been the last thing the
         session owed (D10): awaited, unlike `_react`, so the checkmark never shows before that
         message does. A no-op while another prompt, a running task or an unreported one still
-        keeps the session going, or while `_error_standing` says a ❌ from `!stop` or
+        keeps the session going, or while `_error_standing` says a ❌ from
         `_abandon(error=True)` already stands: that lasts until new work starts (a submit or a
         report turn shows ⏳ again, both clearing it), not until some unrelated task's own sweep
         decides the session reads idle again. Gated on `_error_standing`, not
@@ -1324,7 +1327,7 @@ class ThreadSession:
     async def _start_turn(self) -> ActiveTurn:
         # D10: skipped while `stop()` is still winding an interrupt down (`_finish` clears the
         # flag once that very turn's own terminal result says so): this can be that turn's own
-        # trailing messages, not a new one, and its ❌ must stand.
+        # trailing messages, not a new one, and `stop()`'s own ✅ must stand.
         if not self._interrupting:
             self._error_standing = False  # a turn is sent, or a report turn starts: new work
             # D8: a background task's own report turn can start while a hold waits on this very
@@ -1511,7 +1514,7 @@ class ThreadSession:
     async def _finish(self, active: ActiveTurn, result: ResultMessage) -> bool:
         """Close the turn's reply and release it; True when `!stop` cut it short, which the
         caller reads once `_active` (still this turn, for `_close_reply`'s own checks) is clear,
-        to skip D10's ✅ and leave `stop()`'s own ❌ standing."""
+        to skip D10's ✅, since `stop()` already showed its own."""
         # Default until the try below settles them; read in the `finally` even if something
         # above raises first.
         stopped = False
