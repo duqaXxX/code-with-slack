@@ -1,0 +1,204 @@
+{
+  "ok": true,
+  "messages": [
+    {
+      "user": "U000BOT",
+      "type": "message",
+      "ts": "1790000000.000101",
+      "bot_id": "B000BOT",
+      "app_id": "A000APP",
+      "text": "Let me look at the repository.\n\n Bash: git status The tree is clean. Now the tests.\n\n Bash: pytest -q Why it fails Read: a.py Done., with interactive elements",
+      "team": "T000TEAM",
+      "thread_ts": "1780000000.000001",
+      "parent_user_id": "U000ALICE",
+      "blocks": [
+        {
+          "type": "rich_text",
+          "block_id": "SogTvB",
+          "elements": [
+            {
+              "type": "rich_text_section",
+              "elements": [
+                {
+                  "type": "text",
+                  "text": "Let me look at the repository."
+                },
+                {
+                  "type": "text",
+                  "text": "\n\n"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "task_card",
+          "block_id": "task-t1",
+          "task_id": "t1",
+          "title": "Bash: git status",
+          "status": "complete",
+          "output": {
+            "type": "rich_text",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "On branch main"
+                  }
+                ]
+              }
+            ],
+            "block_id": "AxqMFJ"
+          }
+        },
+        {
+          "type": "rich_text",
+          "block_id": "6Z42t1",
+          "elements": [
+            {
+              "type": "rich_text_section",
+              "elements": [
+                {
+                  "type": "text",
+                  "text": "The tree is clean. Now the tests."
+                },
+                {
+                  "type": "text",
+                  "text": "\n\n"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "task_card",
+          "block_id": "task-t2",
+          "task_id": "t2",
+          "title": "Bash: pytest -q",
+          "status": "in_progress",
+          "details": {
+            "type": "rich_text",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "collecting"
+                  }
+                ]
+              }
+            ],
+            "block_id": "Lj8fGI"
+          }
+        },
+        {
+          "type": "header",
+          "block_id": "yVmKiR",
+          "text": {
+            "type": "plain_text",
+            "text": "Why it fails",
+            "emoji": true
+          },
+          "level": 2
+        },
+        {
+          "type": "table",
+          "block_id": "/0VG5c",
+          "rows": [
+            [
+              {
+                "type": "rich_text",
+                "block_id": "IwkL1Q",
+                "elements": [
+                  {
+                    "type": "rich_text_section",
+                    "elements": [
+                      {
+                        "type": "text",
+                        "text": "Test"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "rich_text",
+                "block_id": "IplY1f",
+                "elements": [
+                  {
+                    "type": "rich_text_section",
+                    "elements": [
+                      {
+                        "type": "text",
+                        "text": "Result"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ],
+            [
+              {
+                "type": "rich_text",
+                "block_id": "8xSY8l",
+                "elements": [
+                  {
+                    "type": "rich_text_section",
+                    "elements": [
+                      {
+                        "type": "text",
+                        "text": "test_a"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "rich_text",
+                "block_id": "vktGsO",
+                "elements": [
+                  {
+                    "type": "rich_text_section",
+                    "elements": [
+                      {
+                        "type": "text",
+                        "text": "failed"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        {
+          "type": "task_card",
+          "block_id": "task-t3",
+          "task_id": "t3",
+          "title": "Read: a.py",
+          "status": "complete"
+        },
+        {
+          "type": "rich_text",
+          "block_id": "6k7YRQ",
+          "elements": [
+            {
+              "type": "rich_text_section",
+              "elements": [
+                {
+                  "type": "text",
+                  "text": "Done."
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "streaming_state": "completed"
+    }
+  ],
+  "has_more": false
+}

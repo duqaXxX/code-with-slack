@@ -43,17 +43,22 @@ UPGRADE_NOTICE = (
     "session: send !bypass on inside a thread."
 )
 ERROR_REPLY = "Claude Code reported an error: `{error}`"
-WRITING = "_Claude is writing…_"
-WAITING = "_Waiting for the previous reply…_"
 ENDED = "_This reply ended before an answer: {reason}._"
 ENDED_SHUTDOWN = "code-with-slack stopped"
+# Crash repair (issue #19): what a reply the daemon died in the middle of ends with.
+STOPPED_BEFORE_ANSWER = "code-with-slack stopped before this answer."
+# Messages a restart or a failure dropped from the queue (S3): they get no reply of their own,
+# one note names them. `{because}` is one of the two phrases below.
+NOT_SENT_ONE = "1 message was not sent because {because}: send it again."
+NOT_SENT_MANY = "{count} messages were not sent because {because}: send them again."
+BECAUSE_RESTARTED = "code-with-slack restarted"
+BECAUSE_SHUTDOWN = "code-with-slack stopped"
+BECAUSE_STOPPED = "Claude Code stopped"
 ENDED_RESTARTING = "code-with-slack is restarting; send your message again in a moment"
 # Never shown: an idle close (D9) always finds nothing running, sent or queued to end with it.
 ENDED_IDLE = "code-with-slack closed this idle session"
 RESTARTING = "code-with-slack is restarting; send this again in a moment."
-REPLY_ABOVE = "_This reply appeared in the background update above._"
 BACKGROUND_NOTICE = "_Background task update_"
-REPLY_TO = "Reply to: {prompt}"
 PROMPT_IMAGE = "an image"
 COMPACTED = "Compacted the conversation: {before} → {after} tokens."
 COMPACTED_PLAIN = "Compacted the conversation."

@@ -18,10 +18,12 @@ root message is more than a day old, are dropped; only then opens the Socket Mod
 once connected, posts the v1-to-v2 upgrade notice to each channel that still owes one
 (`__main__._post_upgrade_notices`), as a message of its own, not a reply. On `SIGTERM`, which
 `launchctl kill TERM` and `launchctl bootout` send, `SessionManager.drain` lets the turns already
-sent finish, each up to its reply's final write (footer included), and the background tasks with the turns that report them (a task whose end came without
+sent finish, each up to its reply's end (the stream's stop, footer included), and the background tasks with the turns that report them (a task whose end came without
 its notification is waited for `sessions.INJECTED_TURN_WAIT`, since the CLI can suppress it), and
-sends no other: a new prompt gets `texts.RESTARTING`, a queued or taken turn ends with
-`texts.ENDED_RESTARTING`. Approvals and questions stay open: the Socket Mode connection closes only
+sends no other: a new prompt gets `texts.RESTARTING`, a queued turn is dropped without a reply of its own (`ThreadSession.drop_queued`): one note
+(`sessions.not_sent`, `N messages were not sent because code-with-slack restarted: send them
+again.`, with the start of each) is added to the end of the thread's running reply, or posted as a
+message of its own when nothing runs. Approvals and questions stay open: the Socket Mode connection closes only
 after the drain. A thread left with only background tasks gets `texts.RESTART_WAITS` once, naming
 them by the footer's counts, since the daemon cannot tell whether a task (a dev server, a watcher)
 ever ends; `!stop` ends them with `ClaudeSDKClient.stop_task`. Claude Code starts no turn to report a
@@ -52,10 +54,11 @@ on load: each channel keeps its directory, gets an empty thread map and a pendin
 the old session id and bypass switch, which belonged to the channel itself, are dropped.
 
 Each thread also carries three fields for crash repair (issue #19), ids only, never message
-content: `open_replies`, the ts of every open reply's last message (more than one can be open at
-once, since a background task's own reply can outlive the turn that started it; each `ReplySink`
-owns exactly one entry, added on its first message, replaced on a continuation, removed once its
-final write is known to have landed or it has given up retrying for good); `requests`, the ts of
+content: `open_replies`, the ts of every open reply's last message, a stream or a stopped message (more
+than one can be open at once, since a background task's own reply can outlive the turn that
+started it; each `ReplySink` owns exactly one entry, added when its stream starts, replaced on a
+continuation, removed once the reply's end is known to have landed or it has given up retrying
+for good); `requests`, the ts of
 every approval, question and D8 hold message still carrying buttons (added on post, removed on
 delete or answer); `status`, the root's reaction name while it is ⏳ or ✋ (cleared once ✅ or ❌ is
 requested). All three default to absent ("nothing open") for a v2 file written before they
@@ -65,13 +68,16 @@ the fields looked like partway through (`StateStore.clear_repair`), so only a cr
 them set.
 
 On start, before the Socket Mode connection opens, `code_with_slack.repair.repair_crash` repairs
-every thread `state.json` still shows as left open: for each open reply it reads the message back
-by its own ts (`conversations.replies` with `ts` and `limit=1`) and rewrites it, its body blocks
-minus the daemon's own transient status line (identified by its fixed block_id,
-`render.sinks.STATUS_BLOCK_ID`, never by matching rendered text) plus the line a graceful shutdown
-appends, kept within Slack's block-count limit; it deletes each stale request
-(`message_not_found` counts as done); and it sets ❌ on a root left ⏳ or ✋, through the same
-`StatusReaction` a live session uses. Each field is cleared once its own repair has been
+every thread `state.json` still shows as left open. For each open reply it stops the message's
+stream (`chat.stopStream`; `message_not_in_streaming_state` means Slack closed it already, at 5
+minutes, and is fine), reads the message back by its own ts (`conversations.replies` with `ts`
+and `limit=1`) and edits it with `chat.update`: its blocks as Slack keeps them, every card left
+`in_progress` closed as an error (a stopped stream stores it as one anyway), and
+`texts.STOPPED_BEFORE_ANSWER` appended as a context block, or, at Slack's 50-block cap, added to
+the last context block. The stream's own stop is the one notification the reply owes, and the
+edit never notifies; nothing is posted. It deletes each stale request (`message_not_found` counts
+as done) and sets ❌ on a root left ⏳ or ✋, through the same `StatusReaction` a live session
+uses. Each field is cleared once its own repair has been
 attempted, successfully or not (a failed `state.json` write here is logged and swallowed, never
 left to break startup), so a second start never retries what an earlier one gave up on; one
 thread's failure is logged and does not stop the others.
@@ -139,7 +145,8 @@ looked-up session for the same thread.
 ## Rendering
 
 `code_with_slack.render.renderer.TurnRenderer` reads SDK message types only, never tool names, so
-a tool Claude Code adds later gets its line in the reply with no code change.
+a tool Claude Code adds later gets its card in the reply with no code change. The table says
+"line" for what the model holds per tool (`renderer.TaskUpdate`); the sink writes each as a card.
 
 | SDK input | What the owner sees |
 |---|---|
@@ -166,100 +173,100 @@ second `TaskStartedMessage`.
 
 ## Writing to Slack
 
-`code_with_slack.render.sinks.ReplySink` writes each reply as one message inside the session's
-own Slack thread, below the message that asked for it. The message is rewritten with `chat.update`
-at most once a second per reply (Slack allows `chat.update` 50 or more times a minute, per app,
-not per reply). Every `chat.update` in the process also draws from one shared `UpdateLimiter`
-(`sinks.UpdateLimiter`, injected through `SessionDeps`): a token bucket that paces writes evenly
-at 40 per 60 seconds plus a burst of 5, worst case 45 in one window, still a real margin under
-the documented floor, so several busy threads together stay under the app's own budget instead
-of racing through it and then freezing until it resets. Within a reply, writes
-happen in the order things happen: text as Claude writes it, and the tool calls where they
-happen. Claude's text is a `markdown`
-block; each run of tool calls between two pieces of text is a `context` block (small, grey text,
-as the terminal dims them), escaped for mrkdwn and marked with a `tools-` block id.
-`sinks.tool_lines` shows such a run the same way while the turn runs and once it ends: the calls
-that ended fold into one first line of tool names and counts, succeeded ones after `✓` and
-failed ones after `✗`, in the terminal's words where the terminal has words
-(`render.previews.folded`: `✓ Ran 3 shell commands · Read 1 file · WebFetch · ✗ Ran 1 shell
-command`) and by the tool's name for any other tool. A finished `Edit` or `Write` does not fold:
-it shows as the terminal shows it (`render.previews.preview`). A diff is a collapsible,
-full-width `container` block (`sinks.diff_containers`), closed until the owner opens it: its
-title is the call's line (`✓ Update(notes.txt)`, the name in code style), its subtitle the
-sentence (`Added 1 line, removed 1 line`), and inside is the whole numbered diff as the terminal
-shows it, in a rich text preformatted element with the language `diff`, which Slack desktop
-colours. Each changed line also carries a red or green square after its sign, since Slack mobile
-colours nothing and wraps each long line into several. A diff longer than `sinks.MESSAGE_LIMIT`
-continues in a second container with the same title, in the next message. A new file shows its
-line and sentence (`⎿ Wrote 15 lines to new.txt`), then a `markdown` code block with its first
-10 lines and `… +N lines`. The calls before and after it fold on their own,
-as in the terminal. The preview reads `UserMessage.tool_use_result`, which the SDK does not
-document; any shape other than the one measured falls back to the generic line, and the release
-probe's claim P13 checks the shape on each new SDK. Below
-it, a line of its own for a call still running (`⏳` and its title), a task
-(`TaskUpdate.task`: a subagent, a background command, with its own `✓` or `✗` and summary once
-it ends) and a stopped call (`Stopped`). While the reply is written, the last call of the last
-run also keeps its line, running (`⏳`) or ended, with no icon once ended unless it failed (`✗`
-and the output's first line), until another call or Claude's text follows it: a
-call that ends within the one-second rewrite would otherwise never show. Then it moves into
-the counts.
-The reply is posted as soon as the owner's message is queued, showing only a status line:
-`Claude is writing…`, or `Waiting for the previous reply…` behind another turn. While the turn
-runs the status stays last; when it ends, the status goes and `ReplySink.finish` writes the
-body's final form, with no closing message yet (D1): a task the turn started can still outlive
-it, and Claude Code can still start a turn of its own to report on it. Once the reply's turn has
-ended and none of its tasks still runs or still waits on such a report, less than
-`sessions.INJECTED_TURN_WAIT` old (`ThreadSession._still_owed`; the CLI can suppress the
-notification altogether, so past that wait `ThreadSession._expire_unreported` gives up on it),
-`ReplySink.close_out` posts the closing message below the reply, in the same thread, holding a
-divider and the footer (`ReplySink._write_closing`). A report turn can name only the reply of
-the first task it covers when several end together; `ThreadSession._sweep_closed_out`, run after
-every turn and after `ThreadSession._expire_injected_turn`, closes out every other reply left
-eligible. A `!stop`, a restart, an idle close or `SessionGone` closes a reply at once instead of
-waiting further, with no message of its own either (`TurnRenderer.close_out(silent=True)`): even
-a footer with no notification to carry would still be a new message, and a new message in a
-thread the owner started rings whatever it says. The footer, if the reply is still latest, joins
-the body's own last message instead (`ReplySink._render`), written through the ordinary flush,
-since an edit never rings. A Claude Code process that exits is the one exception: it still rings
-once, on the first owner reply it ends, with a new closing message carrying `texts.REPLY_TO`
-(`ThreadSession._abandon`, `error=True`). Only the thread's latest reply shows the footer: a new
-reply takes it over (`ReplySink.set_latest`), so it stays at the bottom of the thread as the
-terminal's status line, and a closing message left with nothing to show (no footer, and no
-notification owed) is deleted. A reply longer than about 11,000 characters continues in a new
-message.
+`code_with_slack.render.sinks.ReplySink` writes each reply as a native Slack stream inside the
+session's own thread, below the message that asked for it (`chat.startStream` in chunks mode,
+addressed to the owner's user and team). The stream starts with Claude's first content, its first
+text or the card of the first tool when a turn opens with one, and never with a placeholder. It
+grows with `chat.appendStream` at most once a second per reply, and each append draws from one
+shared `UpdateLimiter` (`sinks.UpdateLimiter`, injected through `SessionDeps`), as does every
+`chat.update`: a token bucket that paces writes evenly at 40 per 60 seconds plus a burst of 5,
+worst case 45 in one window, under the documented floor of `chat.update` (Tier 3, 50 or more a
+minute, per app), so several busy threads together stay under the app's own budget instead of
+racing through it and then freezing until it resets. The retry of a call that failed on the
+connection is switched off for the three stream calls (`sinks.ConnectionRetryUnlessStream`): a
+start, an append and a stop are not idempotent, and a reset can come after Slack applied the
+call.
 
-The closing message is also the reply's notification: Slack notifies the owner on any new message
-in a thread it started, mention or none, and a `chat.update` rewrite never notifies (measured on
-iOS, 2026-09-28, Slack free plan, slack-sdk 3.44.1; Slack's reference is silent on both). So every
-write while Claude works is silent, and the closing message's `text` reads `texts.REPLY_TO` when
-`ReplySink.close_out` gets `reply_to`, which makes it post even with no footer to show, as a bare
-line holding a zero-width space: `ThreadSession._finish` passes the owner's message
-(`sessions.asked`) for an owner turn that ended without `!stop`; `ThreadSession._fail` does the
-same for a turn that fails outright (a directory gone missing, untrusted or unreadable, a
-session Claude Code no longer has, or any other exception), and once for the first owner reply
-still open when the whole process exits (`ThreadSession._abandon`, `error=True`). It stays unset
-for a stop, a restart, an idle close or a session's own graceful close. A turn Claude Code starts
-on its own to report a background task carries none either: it renders into the reply that
-started the task (`ThreadSession._opening_target`), so the closing message that eventually
-follows is still the one the original prompt is owed; writes into that already-finished reply
-debounce exactly like any other change (`ReplySink._changed` never special-cases a finished
-reply). Once that reply's own closing message has already posted (a notification arriving later
-than `INJECTED_TURN_WAIT`), `_opening_target` treats it as untracked instead, so the report gets
-a fresh reply of its own, which notifies once, rather than a silent edit of a reply that can no
-longer carry one. A reply that already owes this notification when a newer reply in the same
-thread supersedes it keeps owing it, even once the newer reply takes the footer over.
+Within a reply, writes happen in the order things happen. Claude's text goes as `markdown_text`
+chunks. Each tool is a `task_update` chunk keyed by its `tool_use_id`, updated in place as the
+call progresses: `in_progress` with what it is doing now (`details`), then `complete`, or `error`
+with the output's first line. Its title is the terminal's words where the terminal has words
+(`render.previews.folded`'s wording: `Ran 1 shell command`, `Read notes.txt`) and the tool's name
+with its first argument for any other tool; a subagent's title counts its calls, and a task keeps
+its card, `in_progress`, for as long as it runs. A finished `Edit` or `Write` shows its preview
+as a `blocks` chunk under the card (`render.previews.preview`): a diff is a collapsible,
+full-width `container` block (`sinks.diff_containers`), closed until the owner opens it, whose
+title is the call's line (`✓ Update(notes.txt)`), its subtitle the sentence (`Added 1 line,
+removed 1 line`), and inside is the whole numbered diff in a rich text preformatted element with
+the language `diff`, which Slack desktop colours; each changed line also carries a red or green
+square after its sign, since Slack mobile colours nothing. A diff longer than
+`sinks.MESSAGE_LIMIT` continues in a second container with the same title, in the next message. A
+new file shows its sentence and a `markdown` code block with its first 10 lines and `… +N lines`.
+The preview reads `UserMessage.tool_use_result`, which the SDK does not document; any shape other
+than the one measured falls back to the generic card, and the release probe's claim P13 checks the
+shape on each new SDK.
 
-Slack's native streaming API (`chat.startStream`) is not used: in an ordinary channel it works
-only inside a thread, `chat.startStream` without `thread_ts` answering `invalid_thread_ts`
-(measured 2026-09-23). A write Slack refuses, or cannot receive because the network is down, is retried with the whole reply at the next rewrite; it never
-stops the Claude Code session. Every message the daemon posts turns link and media previews off
-(`unfurl_links`, `unfurl_media`), so a link in Claude's text is never fetched by Slack on its
-own. The final rewrite has no next one: when Slack refuses its content
-(`invalid_blocks`, `msg_too_long` and the like, not a rate limit), that message is written once
-more as plain text, its text with no blocks, and the rewrite goes on to the next
-messages, so none keeps saying `Claude is writing…`. A final rewrite that fails for any other
-reason (the network, or a rate limit slack-sdk has already retried) is tried once more after
-`FINAL_RETRY_SECONDS`.
+The stream stays open until the reply ends, or until `sinks.STREAM_SECONDS` (280 seconds) after
+it started, whichever comes first. Slack closes a stream 5 minutes after `chat.startStream`
+(measured 2026-09-28: `chat.appendStream` refused at 300.3 seconds), and the daemon stops it a
+little earlier itself.
+
+- **The reply ends first.** `ReplySink.close_out` stops the stream with `chat.stopStream`,
+  passing the footer, a divider and a context block, as `blocks` at the message's bottom (Slack
+  renders them below the stream, buttons included). The stop is the one notification.
+- **280 seconds pass first.** `ReplySink._expire` stops the stream (Slack pushes on the stop, the
+  first notification) and the same message keeps growing with `chat.update`, which never
+  notifies (measured 2026-09-29: stop at 4 minutes 51 seconds, ten updates, silent). Each update
+  writes the whole message from the renderer's model as `markdown` blocks and `task_card` blocks,
+  with a short `text`, since a `chat.update` whose `text` is long fails `msg_too_long`. The end
+  posts a closing message in the thread with the footer (`ReplySink._write_closing`), the second
+  notification. Its `text`, the banner, is the start of Claude's answer as plain text
+  (`sinks.banner_text`), never a line of the daemon's.
+
+A message holds 12,000 characters and 50 blocks or task cards (measured 2026-09-28); a reply past
+`sinks.MESSAGE_LIMIT` or `sinks.BLOCKS_LIMIT` continues in a new message, a new stream while the
+first one still streams, else a post. Every message a reply adds notifies once.
+
+The reply ends once its turn has ended and none of its tasks still runs or still waits on a turn
+Claude Code starts to report it (D1): a task the turn started keeps its card open and updating
+in place, `ReplySink.finish` ends only the body, and `ThreadSession._still_owed` decides when
+`ReplySink.close_out` runs (the CLI can suppress the report's notification, so past
+`sessions.INJECTED_TURN_WAIT` `ThreadSession._expire_unreported` gives up on it). A report turn
+can name only the reply of the first task it covers when several end together;
+`ThreadSession._sweep_closed_out`, run after every turn and after
+`ThreadSession._expire_injected_turn`, ends every other reply left eligible. A turn Claude Code
+starts on its own to report a background task renders into the reply that started the task
+(`ThreadSession._opening_target`); when that reply has already ended, the report gets a reply of
+its own.
+
+`!stop`, a restart, an error that cuts a turn, an idle close and `SessionGone` end the reply
+through the same path, at once: the stream stops with the footer and, for `!stop`, the stopped
+command's card, and that stop is the notification (`ThreadSession._stop_task_replies` for the
+tasks' replies). A stream whose last append has an unknown outcome (a reset, a timeout) is told
+nothing more: it is stopped and the message goes on by `chat.update` from the model. Only the
+thread's latest reply shows the footer (`ReplySink.set_latest`), so it stays at the bottom of the
+thread as the terminal's status line. A card left `in_progress` in a stopped message is stored
+as an error until it is updated (measured 2026-09-28), so every end closes its cards first.
+
+Slack's push behaviour is what makes this shape: a stream in a thread the owner started notifies
+once, when it stops, with its first text as the banner, and never when it starts (measured
+2026-09-29, iPhone locked, Slack open in a browser, channel on Just mentions; Slack's reference
+says nothing on it). Every write while Claude works is silent. An open stream cannot be deleted
+(measured 2026-09-28), which is why a reply never starts as a placeholder that a later write
+replaces.
+
+`chat.startStream` works only inside a thread and answers `invalid_thread_ts` without
+`thread_ts` (measured 2026-09-23), which the thread model satisfies. A write Slack refuses, or
+cannot receive because the network is down, is sent again with the whole reply at the next write;
+it never stops the Claude Code session. Every message the daemon posts turns link and media
+previews off (`unfurl_links`, `unfurl_media`), so a link in Claude's text is never fetched by
+Slack on its own. The end has no next write to fix it: when Slack refuses the content of an
+edited message (`invalid_blocks`, `msg_too_long` and the like, not a rate limit), that message is
+written once more as plain text, and the reply goes on to the next messages. An end that fails
+for any other reason (the network, or a rate limit slack-sdk has already retried) is tried once
+more after `FINAL_RETRY_SECONDS`; until it lands, `ThreadSession` shows no ✅ (`_track_landing`),
+shows ❌ if the retry fails too, and keeps the persisted status so the next start's repair still
+finds the reply.
 
 ## Approvals
 

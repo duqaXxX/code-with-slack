@@ -24,7 +24,12 @@ from code_with_slack.footer import UsageCache, UsageProbe
 from code_with_slack.guards import ChannelGuard, Identity
 from code_with_slack.hold import Holds
 from code_with_slack.lock import AlreadyRunning, single_instance
-from code_with_slack.render.sinks import context_block, describe, notice_text
+from code_with_slack.render.sinks import (
+    ConnectionRetryUnlessCreating,
+    context_block,
+    describe,
+    notice_text,
+)
 from code_with_slack.repair import repair_crash
 from code_with_slack.sessions import (
     SessionDeps,
@@ -96,14 +101,32 @@ async def _post_upgrade_notices(slack: AsyncWebClient, state: StateStore) -> Non
         state.clear_notice(channel_id)
 
 
+def make_clients(bot_token: str) -> tuple[AsyncWebClient, AsyncWebClient]:
+    """The daemon's two Slack clients on one token. The shared one keeps slack-sdk's default
+    retry after a connection reset, which is safe for a post that is an approval, a question or a
+    notice, plus a rate limit retry. The one replies are written with skips that retry for the
+    calls that create or grow a message (a post, a stream's start, append and stop: not
+    idempotent, see `ConnectionRetryUnlessCreating`): the reply sink reads the thread back and
+    adopts what landed. A rate limit retry is safe for both, the call never ran."""
+    shared = AsyncWebClient(token=bot_token)
+    shared.retry_handlers.append(AsyncRateLimitErrorRetryHandler(max_retry_count=3))
+    replies = AsyncWebClient(
+        token=bot_token,
+        retry_handlers=[
+            ConnectionRetryUnlessCreating(),
+            AsyncRateLimitErrorRetryHandler(max_retry_count=3),
+        ],
+    )
+    return shared, replies
+
+
 async def run(config_dir: Path = CONFIG_DIR) -> None:
     config = load_config(config_dir)
     with single_instance(config_dir):
         state = StateStore(config_dir / "state.json")
         uploads = uploads_dir()
         prepare_uploads(uploads)
-        slack = AsyncWebClient(token=config.bot_token)
-        slack.retry_handlers.append(AsyncRateLimitErrorRetryHandler(max_retry_count=3))
+        slack, reply_slack = make_clients(config.bot_token)
         auth = await slack.auth_test()
         identity = Identity(config.owner_user_id, str(auth["team_id"]), str(auth["user_id"]))
         probe = UsageProbe(Path.home(), default_client_factory)
@@ -112,6 +135,7 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
         sessions = SessionManager(
             SessionDeps(
                 slack=slack,
+                reply_slack=reply_slack,
                 identity=identity,
                 state=state,
                 approvals=approvals,

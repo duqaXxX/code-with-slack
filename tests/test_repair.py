@@ -1,3 +1,4 @@
+import copy
 from pathlib import Path
 
 import pytest
@@ -5,14 +6,16 @@ from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_slack_response import AsyncSlackResponse
 
 from code_with_slack import texts
-from code_with_slack.render.sinks import BLOCKS_LIMIT, UpdateLimiter
+from code_with_slack.render.sinks import UpdateLimiter
 from code_with_slack.render.status import Status
 from code_with_slack.repair import repair_crash
 from code_with_slack.state import StateStore
 from tests.fakes import CHANNEL, OTHER_THREAD, THREAD, FakeSlack, slack_payload
 
-STOPPED_LINE = texts.ENDED.format(reason=texts.ENDED_SHUTDOWN)
-STOPPED_BLOCK = {"type": "markdown", "text": STOPPED_LINE}
+STOPPED_BLOCK = {
+    "type": "context",
+    "elements": [{"type": "mrkdwn", "text": texts.STOPPED_BEFORE_ANSWER}],
+}
 
 
 def make_state(tmp_path: Path) -> StateStore:
@@ -41,40 +44,52 @@ async def test_a_second_start_repairs_nothing(tmp_path: Path, slack: FakeSlack) 
     assert slack.calls == []
 
 
-async def test_an_open_reply_is_read_by_its_own_ts_and_rewritten_dropping_only_the_status_block(
+async def test_an_open_reply_is_stopped_then_rewritten_closing_its_running_cards(
     tmp_path: Path, slack: FakeSlack
 ) -> None:
-    # Recorded from a real `conversations.replies` response on 2026-09-28 (slack-sdk 3.44.1),
-    # scrubbed, as other fixtures are. A posted `markdown` block reads back as `rich_text`; a
-    # block posted with an explicit block_id keeps it; one without gets a Slack-assigned id,
-    # which is why the status line's own fixed block_id (`sinks.STATUS_BLOCK_ID`) is what repair
-    # looks for, not "no block_id".
+    # Recorded from a real `conversations.replies` response on 2026-09-29 (slack-sdk 3.44.1) of
+    # a stopped stream, scrubbed as other fixtures are, one card set back to `in_progress` as
+    # an update-phase message a crash cut off would still show it. A card left running in a
+    # stopped stream is stored as an error (M33); a card in a message that was updated is not.
     state = make_state(tmp_path)
-    fixture = slack_payload("api-conversations-replies-by-ts")
+    fixture = slack_payload("api-conversations-replies-stream")
     message_ts = fixture["messages"][0]["ts"]
     slack.responses["conversations.replies"] = fixture
     state.replace_open_reply(CHANNEL, THREAD, None, message_ts)
     await repair_crash(slack, state, UpdateLimiter())
+    assert [m for m, _ in slack.calls if m.startswith("chat.")] == [
+        "chat.stopStream",
+        "chat.update",
+    ]
+    [stop] = slack.calls_to("chat.stopStream")
+    assert stop["channel"] == CHANNEL and stop["ts"] == message_ts and "blocks" not in stop
     [call] = slack.calls_to("conversations.replies")
-    assert call["channel"] == CHANNEL
-    assert call["ts"] == message_ts
-    assert call["limit"] == 1
+    assert call["channel"] == CHANNEL and call["ts"] == message_ts and call["limit"] == 1
     assert call["oldest"] is None and call["latest"] is None and call["inclusive"] is None
     [update] = slack.calls_to("chat.update")
-    assert update["ts"] == message_ts
+    assert update["ts"] == message_ts and update["text"] == texts.STOPPED_BEFORE_ANSWER
     original = fixture["messages"][0]["blocks"]
-    assert update["blocks"] == [*original[:-1], STOPPED_BLOCK]  # only the "status" block dropped
-    assert any(b["block_id"] == "Pq6Je" for b in update["blocks"])  # an unrelated context block
+    assert [b["status"] for b in update["blocks"] if b["type"] == "task_card"] == [
+        "complete",
+        "error",
+        "complete",
+    ]
+    # everything else as Slack read it back, and the line that says it stopped, last
+    assert update["blocks"][:-1] == [
+        {**b, "status": "error"} if b.get("task_id") == "t2" else b for b in original
+    ]
+    assert update["blocks"][-1] == STOPPED_BLOCK
+    assert slack.calls_to("chat.postMessage") == []  # nothing is posted: the stop is the push
     assert state.thread(CHANNEL, THREAD).open_replies == ()
 
 
-async def test_a_reply_with_no_status_block_still_gets_the_stopped_line_appended(
+async def test_a_stream_that_slack_already_closed_is_rewritten_all_the_same(
     tmp_path: Path, slack: FakeSlack
 ) -> None:
-    # Already in its final form (past `finish`, not yet `close_out`): nothing to drop, since the
-    # last block's id is not the status line's.
+    # Slack ends a stream 5 minutes after it started: the stop then answers that it is over.
     state = make_state(tmp_path)
-    body_blocks = [{"type": "markdown", "block_id": "auto1", "text": "Done."}]
+    body_blocks = [{"type": "rich_text", "block_id": "auto1", "elements": []}]
+    slack.responses["chat.stopStream"] = slack_error("message_not_in_streaming_state")
     slack.responses["conversations.replies"] = {
         "ok": True,
         "messages": [{"ts": "1790000000.000001", "blocks": body_blocks}],
@@ -85,13 +100,26 @@ async def test_a_reply_with_no_status_block_still_gets_the_stopped_line_appended
     assert update["blocks"] == [*body_blocks, STOPPED_BLOCK]
 
 
-async def test_a_full_reply_replaces_its_last_block_instead_of_exceeding_the_limit(
-    tmp_path: Path, slack: FakeSlack
+async def test_a_stop_that_fails_is_logged_and_the_rewrite_is_still_tried(
+    tmp_path: Path, slack: FakeSlack, caplog: pytest.LogCaptureFixture
 ) -> None:
     state = make_state(tmp_path)
-    body_blocks = [
-        {"type": "markdown", "block_id": f"b{i}", "text": f"x{i}"} for i in range(BLOCKS_LIMIT)
-    ]
+    slack.responses["chat.stopStream"] = RuntimeError("network down")
+    slack.responses["conversations.replies"] = {
+        "ok": True,
+        "messages": [{"ts": "1790000000.000001", "blocks": []}],
+    }
+    state.replace_open_reply(CHANNEL, THREAD, None, "1790000000.000001")
+    with caplog.at_level("WARNING"):
+        await repair_crash(slack, state, UpdateLimiter())
+    assert "could not stop" in caplog.text
+    assert len(slack.calls_to("chat.update")) == 1
+
+
+async def repaired_blocks(
+    tmp_path: Path, slack: FakeSlack, body_blocks: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    state = make_state(tmp_path)
     slack.responses["conversations.replies"] = {
         "ok": True,
         "messages": [{"ts": "1790000000.000001", "blocks": body_blocks}],
@@ -99,9 +127,42 @@ async def test_a_full_reply_replaces_its_last_block_instead_of_exceeding_the_lim
     state.replace_open_reply(CHANNEL, THREAD, None, "1790000000.000001")
     await repair_crash(slack, state, UpdateLimiter())
     [update] = slack.calls_to("chat.update")
-    assert len(update["blocks"]) == BLOCKS_LIMIT
-    assert update["blocks"][:-1] == body_blocks[:-1]
-    assert update["blocks"][-1] == STOPPED_BLOCK
+    blocks: list[dict[str, object]] = update["blocks"]
+    return blocks
+
+
+def content(n: int) -> list[dict[str, object]]:
+    return [{"type": "rich_text", "block_id": f"b{i}", "elements": []} for i in range(n)]
+
+
+async def test_a_message_up_to_slacks_cap_less_one_still_gets_the_stopped_line(
+    tmp_path: Path, slack: FakeSlack
+) -> None:
+    # Slack's cap is 50 blocks, not the sink's 45: a read-back message (streamed markdown reads
+    # back as several blocks) at 49 has room for the line.
+    body = content(49)
+    blocks = await repaired_blocks(tmp_path, slack, body)
+    assert blocks == [*body, STOPPED_BLOCK]
+
+
+async def test_a_message_at_the_cap_puts_the_line_in_its_last_context_block(
+    tmp_path: Path, slack: FakeSlack
+) -> None:
+    footer = {"type": "context", "elements": [{"type": "mrkdwn", "text": "main · 12% ctx"}]}
+    body = [*content(49), footer]
+    blocks = await repaired_blocks(tmp_path, slack, body)
+    assert blocks[:49] == body[:49] and len(blocks) == 50  # no content block lost
+    assert blocks[-1]["elements"][0]["text"] == f"main · 12% ctx · {texts.STOPPED_BEFORE_ANSWER}"
+
+
+async def test_a_message_at_the_cap_with_no_context_block_loses_no_content(
+    tmp_path: Path, slack: FakeSlack
+) -> None:
+    body = content(50)
+    blocks = await repaired_blocks(tmp_path, slack, body)
+    assert blocks == body  # the line is dropped: the edit's `text` still says it stopped
+    [update] = slack.calls_to("chat.update")
+    assert update["text"] == texts.STOPPED_BEFORE_ANSWER
 
 
 async def test_a_deleted_reply_message_is_left_alone_and_the_field_still_clears(
@@ -221,3 +282,14 @@ async def test_a_failed_state_write_is_logged_and_swallowed(
 
     monkeypatch.setattr(state, "replace_open_reply", boom)
     await repair_crash(slack, state, UpdateLimiter())  # must not raise
+
+
+async def test_a_context_block_that_leads_with_an_image_is_left_as_it_is(
+    tmp_path: Path, slack: FakeSlack
+) -> None:
+    image = {"type": "image", "image_url": "https://example.com/a.png", "alt_text": "a"}
+    footer = {"type": "context", "elements": [image]}
+    body = [*content(49), footer]
+    before = copy.deepcopy(body)
+    blocks = await repaired_blocks(tmp_path, slack, body)
+    assert blocks == before  # only text is joined to; the edit's `text` still says it stopped

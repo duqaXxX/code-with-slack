@@ -46,26 +46,26 @@ class TaskUpdate:
     status: TaskStatus
     details: str | None = None
     output: str | None = None
-    name: str = ""  # the tool's name, for a line folded into a summary
-    task: bool = False  # a subagent's or a background command's line: never folded
-    calls: int = 0  # calls made inside it (a subagent's), counted on its line
-    preview: Preview | None = None  # the terminal's own view of a finished call: never folded
+    name: str = ""  # the tool's name, which chooses its preview
+    task: bool = False  # a subagent's or a background command's card
+    calls: int = 0  # calls made inside it (a subagent's), counted in its title
+    preview: Preview | None = None  # the terminal's own view of a finished call
 
     @property
     def shown_preview(self) -> Preview | None:
         """The preview, on a call that finished well and only there: a failed, running or task
-        line keeps its own view whatever it carries, so no path can show a preview over an
+        card keeps its own view whatever it carries, so no path can show a preview over an
         error."""
         return self.preview if self.status == "complete" and not self.task else None
 
 
 class Sink(Protocol):
-    async def text(self, markdown: str) -> None: ...
+    async def text(self, markdown: str, *, notice: bool = False) -> None: ...
     async def task(self, update: TaskUpdate) -> None: ...
     async def finish(self, closing: list[TaskUpdate]) -> None: ...
-    async def close_out(
-        self, footer: str | None, reply_to: str | None = None, *, silent: bool = False
-    ) -> None: ...
+    async def close_out(self, footer: str | None) -> bool: ...
+    async def wait_landed(self) -> bool: ...
+    async def settle(self) -> bool: ...
 
 
 def one_line(value: str, limit: int) -> str:
@@ -134,10 +134,9 @@ class TurnRenderer:
         self._wrote_text = False
         self.result: ResultMessage | None = None
         self.auth_failed = False
-        # The reply's closing message, as decided by the turn(s) that have closed it so far
-        # (a report turn can close it again): `close_out` posts them once nothing is owed.
+        # The reply's footer, as decided by the turn(s) that have closed it so far (a report
+        # turn can close it again): `close_out` ends the reply with it once nothing is owed.
         self._footer: str | None = None
-        self._reply_to: str | None = None
         self._closed_out = False
 
     async def feed(self, message: Message) -> None:
@@ -189,18 +188,16 @@ class TurnRenderer:
         """Whether this reply holds the line of that tool call, or of the subagent it runs in."""
         return tool_use_id in self._lines or tool_use_id in self._root_of
 
-    async def close(self, footer: str | None, *, reply_to: str | None = None) -> None:
-        """End the turn's own part of the reply: every open tool line is closed, except a task
-        still running, whose line stays open until its own end arrives through `feed` or
-        `stop_running`. Does not post the closing message (`ReplySink.finish`); the caller
-        follows with `close_out` once it knows nothing more is coming, which can be after more
-        than one call here (a background task's own report turn closes the same reply again).
-        `reply_to` only ever moves forward: a report turn passes none, and must not erase the
-        owner's question a still-deferred closing already carries."""
+    async def close(self, footer: str | None) -> None:
+        """End the turn's own part of the reply: every open tool card is closed, except a task
+        still running, whose card stays open until its own end arrives through `feed` or
+        `stop_running`. Does not end the reply (`ReplySink.finish`); the caller follows with
+        `close_out` once it knows nothing more is coming, which can be after more than one call
+        here (a background task's own report turn closes the same reply again)."""
         interrupted = self.result is not None and self.result.terminal_reason in INTERRUPTED
         if not self._wrote_text and not self._lines:
             # A command that prints nothing (a local one, say) still gets a visible answer.
-            await self._text(texts.STOPPED if interrupted else texts.NO_OUTPUT)
+            await self._text(texts.STOPPED if interrupted else texts.NO_OUTPUT, notice=True)
         running = set(self._running.values())
         closing = [
             replace(entry, status="in_progress", details=BACKGROUND, task=True)
@@ -210,26 +207,25 @@ class TurnRenderer:
             if entry.id in running or entry.status in ("pending", "in_progress")
         ]
         self._lines.update((entry.id, entry) for entry in closing)
-        # Both only ever move forward: a report turn passes neither, and must not erase what an
-        # earlier close already decided for a still-deferred closing.
+        # Only ever moves forward: a report turn passes none, and must not erase what an earlier
+        # close already decided for a still-deferred end.
         self._footer = footer or self._footer
-        self._reply_to = reply_to or self._reply_to
         await self._sink.finish(closing)
 
     @property
     def closed_out(self) -> bool:
-        """Whether this reply's closing message has already posted (or been decided moot)."""
+        """Whether this reply has already ended."""
         return self._closed_out
 
-    async def close_out(self, *, silent: bool = False) -> None:
-        """Post the reply's closing message, with the footer `close` last decided; call after
-        `close`. With `silent` the closing never becomes a message of its own either, even to
-        carry the footer alone (a stop, an error handled elsewhere, a restart or an idle close
-        never rings, and a new message rings whatever it says): the footer, if any, joins the
-        body's own last message instead (D1). A second call, silent or not, is
-        a no-op."""
+    async def close_out(self) -> bool:
+        """End the reply, with the footer `close` last decided; call after `close`. True when it
+        ended on Slack (see `ReplySink.close_out`). A second call is a no-op."""
         self._closed_out = True
-        await self._sink.close_out(self._footer, self._reply_to, silent=silent)
+        return await self._sink.close_out(self._footer)
+
+    @property
+    def sink(self) -> Sink:
+        return self._sink
 
     async def stop_running(self) -> None:
         """The Claude Code process is gone and its tasks with it: close their lines as stopped."""
@@ -243,11 +239,11 @@ class TurnRenderer:
         that started the task it reports): a blank line still separates it from what is there,
         as a paragraph break would."""
         prefix = "\n\n" if self._wrote_text or self._lines else ""
-        await self._sink.text(prefix + text + "\n\n")
+        await self._sink.text(prefix + text + "\n\n", notice=True)
 
     async def feed_error(self, text: str) -> None:
         """A failure outside the SDK stream (the client died): say so in the reply."""
-        await self._text("\n\n" + text)
+        await self._text("\n\n" + text, notice=True)
 
     async def _compacted(self, metadata: dict[str, Any]) -> None:
         """Claude Code compacted the conversation, on request or on its own: say by how much."""
@@ -256,15 +252,15 @@ class TurnRenderer:
             line = texts.COMPACTED.format(before=format_tokens(before), after=format_tokens(after))
         else:
             line = texts.COMPACTED_PLAIN
-        await self._text(("\n\n" if self._wrote_text else "") + line + "\n\n")
+        await self._text(("\n\n" if self._wrote_text else "") + line + "\n\n", notice=True)
 
     async def _assistant(self, message: AssistantMessage) -> None:
         if message.error == "authentication_failed":
             self.auth_failed = True
-            await self._text(texts.AUTH_FAILED)
+            await self._text(texts.AUTH_FAILED, notice=True)
             return
         if message.error is not None:
-            await self._text(texts.ERROR_REPLY.format(error=message.error))
+            await self._text(texts.ERROR_REPLY.format(error=message.error), notice=True)
             return
         for block in message.content:
             await self._block(block, message.parent_tool_use_id)
@@ -370,7 +366,7 @@ class TurnRenderer:
         self._lines[update.id] = update
         await self._sink.task(update)
 
-    async def _text(self, markdown: str) -> None:
+    async def _text(self, markdown: str, *, notice: bool = False) -> None:
         if markdown:
             self._wrote_text = True
-            await self._sink.text(markdown)
+            await self._sink.text(markdown, notice=notice)

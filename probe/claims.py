@@ -112,7 +112,7 @@ CLAIMS = [
     Claim(
         "P8",
         "gesture",
-        "`!stop` interrupts a running turn and its reply closes",
+        "`!stop` interrupts a running turn and its reply ends",
         "code_with_slack.sessions.ThreadSession.stop",
         "ask for a long answer and send `!stop` while it writes",
     ),
@@ -126,7 +126,7 @@ CLAIMS = [
     Claim(
         "P10",
         "model",
-        "a Bash call shows its tool line in the reply",
+        "a Bash call shows its task card in the reply",
         "code_with_slack.render.renderer.TurnRenderer",
         "ask Claude to run `echo hello` with Bash",
     ),
@@ -149,7 +149,7 @@ CLAIMS = [
         "model",
         "a Write and an Edit show the terminal's preview (undocumented tool_use_result)",
         "code_with_slack.render.previews.preview",
-        "ask Claude to create a file and then edit it; each call shows its lines under it",
+        "ask Claude to create a file and then edit it; each call shows its preview under its card",
     ),
     Claim(
         "P14",

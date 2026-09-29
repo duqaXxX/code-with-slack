@@ -35,7 +35,7 @@ from code_with_slack import sessions, texts
 from code_with_slack.approvals import Answer, Approvals, Approve
 from code_with_slack.footer import UsageCache
 from code_with_slack.guards import Identity
-from code_with_slack.render.sinks import NESTED, ZERO_WIDTH_SPACE, UpdateLimiter, context_block
+from code_with_slack.render.sinks import UpdateLimiter
 from code_with_slack.render.status import Status
 from code_with_slack.sessions import SessionDeps, SessionManager, resolve_directory
 from code_with_slack.state import StateStore
@@ -55,6 +55,17 @@ from tests.fakes import (
     sdk_json,
     sdk_messages,
     split_turns,
+)
+
+NESTED = texts.NESTED
+
+
+WRITES = (
+    "chat.postMessage",
+    "chat.startStream",
+    "chat.appendStream",
+    "chat.stopStream",
+    "chat.update",
 )
 
 
@@ -129,13 +140,26 @@ class Harness:
         ]
 
     def written_text(self) -> str:
-        return "\n".join(
+        """Every markdown a write carried: blocks of a post or an update, chunks of a stream."""
+        blocks = "\n".join(
             b["text"]
             for m in ("chat.postMessage", "chat.update")
             for a in self.slack.calls_to(m)
             for b in a.get("blocks") or []
             if b.get("type") == "markdown"
         )
+        chunks = "\n".join(
+            c["text"]
+            for m in ("chat.startStream", "chat.appendStream", "chat.stopStream")
+            for a in self.slack.calls_to(m)
+            for c in a.get("chunks") or []
+            if c.get("type") == "markdown_text"
+        )
+        return f"{blocks}\n{chunks}"
+
+    def cards(self) -> list[dict[str, Any]]:
+        """The task cards of the first reply's message, as it shows them now."""
+        return self.slack.message_cards()[0] if self.slack.created_ts else []
 
 
 @pytest.fixture
@@ -163,8 +187,8 @@ async def test_a_turn_replies_in_the_thread_and_records_the_session(
     result = turn_messages[-1]
     assert isinstance(result, ResultMessage)
     assert h.state.thread(CHANNEL, THREAD).session_id == result.session_id
-    last = [a for m, a in h.slack.calls if m in ("chat.postMessage", "chat.update")][-1]
-    assert last["blocks"][-1]["type"] == "context"  # the footer closes the reply
+    [stop] = h.slack.calls_to("chat.stopStream")
+    assert stop["blocks"][-1]["type"] == "context"  # the footer closes the reply
 
 
 async def test_the_client_is_launched_as_the_design_says(
@@ -219,10 +243,7 @@ async def test_a_gone_session_is_removed_and_says_so(harness_for: Callable[..., 
     assert h.bodies() == [texts.SESSION_GONE]
     assert h.state.thread(CHANNEL, THREAD) is None
     assert h.manager.get(CHANNEL, THREAD) is None
-    # The body, then a closing message: posting in the thread is what notifies here.
-    posts = h.slack.calls_to("chat.postMessage")
-    assert len(posts) == 2
-    assert posts[-1]["text"] == texts.REPLY_TO.format(prompt="hello")
+    assert h.slack.pushes() == 1  # the reply's stream stops once
 
 
 async def test_a_gone_session_fails_a_queued_turn_and_leaks_no_process(
@@ -256,10 +277,10 @@ async def test_a_gone_session_fails_a_queued_turn_and_leaks_no_process(
     assert all(not c.connected for c in h.clients)
 
 
-async def test_a_turn_that_races_sessiongone_during_its_own_open_gets_session_gone(
+async def test_a_turn_that_races_sessiongone_while_its_sink_is_made_gets_session_gone(
     harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A second `submit` can be suspended inside its own `sink.open` while the first turn's
+    # A second `submit` can be suspended while its reply's sink is made, while the first turn's
     # `ensure_connected` finds the stored session gone, closes the session and drains the queue
     # (empty at that point). The second turn is queued only after that: nothing will ever take
     # it from an ended worker, so it must be resolved right there, as gone too.
@@ -274,23 +295,22 @@ async def test_a_turn_that_races_sessiongone_during_its_own_open_gets_session_go
     h = harness_for({"connect_error": gone})
     session = h.session()
     h.state.set_session(CHANNEL, THREAD, "gone")
-
+    real = sessions.ThreadSession._sink
     gates = [asyncio.Event(), asyncio.Event()]
-    opened: list[str] = []
-    real_open = sessions.ReplySink.open
+    entered: list[int] = []
 
-    async def gated_open(self: Any, status: str) -> None:
-        gate = gates[len(opened)]
-        opened.append(status)
+    async def gated(self: Any) -> Any:
+        sink = await real(self)
+        gate = gates[len(entered)]
+        entered.append(1)
         await gate.wait()
-        await real_open(self, status)
+        return sink
 
-    monkeypatch.setattr(sessions.ReplySink, "open", gated_open)
-
+    monkeypatch.setattr(sessions.ThreadSession, "_sink", gated)
     first_task = asyncio.create_task(session.submit("hello"))
-    await until(lambda: len(opened) == 1)  # "hello" is paused inside its own `sink.open`
+    await until(lambda: len(entered) == 1)  # "hello" is paused while its sink is made
     second_task = asyncio.create_task(session.submit("again"))
-    await until(lambda: len(opened) == 2)  # "again" is paused inside its own `sink.open` too
+    await until(lambda: len(entered) == 2)  # "again" is paused there too
     gates[0].set()  # let "hello" queue itself and start its worker
     first_turn = await first_task
     await asyncio.wait_for(first_turn.done.wait(), 2)
@@ -305,29 +325,28 @@ async def test_a_turn_that_races_sessiongone_during_its_own_open_gets_session_go
     await h.manager.close_all()
 
 
-async def test_a_turn_that_races_a_plain_close_during_its_own_open_gets_session_closed(
+async def test_a_turn_that_races_a_plain_close_while_its_sink_is_made_gets_session_closed(
     harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Whatever closed the session during `sink.open` (item 2's fix), it must not always be
-    # answered as SessionGone: a plain close (an idle close, a restart) leaves the thread's own
-    # entry in state.json, unlike SessionGone's close (D7), and that is the only thing telling
-    # the two apart once `self._closed` is true either way.
+    # Whatever closed the session while the sink was made, it must not always be answered as
+    # SessionGone: a plain close (an idle close, a restart) leaves the thread's own entry in
+    # state.json, unlike SessionGone's close (D7), and that is the only thing telling the two
+    # apart once `self._closed` is true either way.
     h = harness_for({})
     session = h.session()
-    real_open = sessions.ReplySink.open
-    opened: list[str] = []
+    real = sessions.ThreadSession._sink
     gate = asyncio.Event()
+    entered: list[int] = []
 
-    async def gated_open(self: Any, status: str) -> None:
-        opened.append(status)
-        if len(opened) == 1:
-            await gate.wait()
-        await real_open(self, status)
+    async def gated(self: Any) -> Any:
+        sink = await real(self)
+        entered.append(1)
+        await gate.wait()
+        return sink
 
-    monkeypatch.setattr(sessions.ReplySink, "open", gated_open)
-
+    monkeypatch.setattr(sessions.ThreadSession, "_sink", gated)
     submit_task = asyncio.create_task(session.submit("hello"))
-    await until(lambda: len(opened) == 1)  # paused inside its own `sink.open`
+    await until(lambda: len(entered) == 1)  # paused while its sink is made
     await session.close()  # a plain close: the thread's entry stays in state.json
     assert h.state.thread(CHANNEL, THREAD) is not None
     gate.set()
@@ -480,18 +499,6 @@ async def test_an_approval_request_is_tracked_in_state_while_it_is_open(
     assert h.state.thread(CHANNEL, THREAD).requests == (h.slack.posted_ts[-1],)
 
 
-async def test_the_open_reply_ts_is_tracked_while_writing_and_cleared_once_finished(
-    harness_for: Callable[..., Harness],
-) -> None:
-    h = harness_for({"turns": [sdk_messages("tools")]})
-    session = h.session()
-    turn = await session.submit("list the files")
-    await until(lambda: bool(h.slack.posted_ts))
-    assert h.state.thread(CHANNEL, THREAD).open_replies == (h.slack.posted_ts[0],)
-    await asyncio.wait_for(turn.done.wait(), 2)
-    assert h.state.thread(CHANNEL, THREAD).open_replies == ()
-
-
 async def test_the_status_field_tracks_working_then_clears_once_done(
     harness_for: Callable[..., Harness],
 ) -> None:
@@ -567,12 +574,12 @@ async def test_no_reply_ever_carries_a_channel_mention(harness_for: Callable[...
         assert "<!channel>" not in json.dumps(args)
 
 
-async def test_exactly_one_new_message_per_turn_background_task_approval_and_question(
+async def test_a_turn_with_a_task_an_approval_and_a_question_is_one_stream_and_two_posts(
     harness_for: Callable[..., Harness],
 ) -> None:
-    # D1: a turn that starts a background task, asks for an
-    # approval and a question, then the report turn for that task, posts exactly the first
-    # reply, the approval request, the question request, and one closing message. Nothing else.
+    # D1: a turn that starts a background task, asks for an approval and a question, then the
+    # report turn for that task, writes exactly the approval request, the question request, and
+    # one stream for the reply, which stops once, when the task's report is in. Nothing else.
     first, notice, injected = split_background()
     recorded = sdk_json("ask-can-use-tool")
     ask = CanUseToolCall("Bash", {"command": "ls"})
@@ -589,94 +596,13 @@ async def test_exactly_one_new_message_per_turn_background_task_approval_and_que
     assert h.approvals.resolve(question_id, CHANNEL, THREAD, Answer(answers)) is not None
     await asyncio.wait_for(turn.done.wait(), 2)
     h.clients[0].inject(notice + injected)
-    await until(lambda: is_report(h.bodies()[0]))
+    await until(lambda: bool(h.slack.calls_to("chat.stopStream")))
     await asyncio.sleep(0.05)
     posts = h.slack.calls_to("chat.postMessage")
-    # D1: exactly these four, in this order, nothing else.
-    assert [p["text"] for p in posts] == [
-        texts.WRITING,
-        "Bash: ls",
-        "AskUserQuestion",
-        texts.REPLY_TO.format(prompt="do it and start something"),
-    ]
-
-
-async def test_an_owner_turn_that_completes_closes_with_its_prompt_as_the_notification(
-    harness_for: Callable[..., Harness],
-) -> None:
-    h = harness_for({"turns": [sdk_messages("tools")]})
-    turn = await h.session().submit("list the files")
-    await asyncio.wait_for(turn.done.wait(), 2)
-    closing = h.slack.calls_to("chat.postMessage")[-1]
-    assert closing["text"] == texts.REPLY_TO.format(prompt="list the files")
-
-
-async def test_a_turn_stopped_by_the_owner_has_no_reply_to_notification(
-    harness_for: Callable[..., Harness],
-) -> None:
-    h = harness_for(
-        {
-            "turns": [
-                [CanUseToolCall("Bash", {"command": "rm -rf build"}), *sdk_messages("interrupt")]
-            ]
-        }
-    )
-    session = h.session()
-    turn = await session.submit("clean")
-    await until(lambda: bool(h.approvals._pending))
-    posts_before = len(h.slack.calls_to("chat.postMessage"))
-    assert await session.stop() is True
-    await asyncio.wait_for(turn.done.wait(), 2)
-    # D1: a stopped turn closes silently regardless of its own footer: no new message at all,
-    # not merely one without "Reply to:" in it.
-    assert h.slack.calls_to("chat.postMessage")[posts_before:] == []
-
-
-async def test_a_background_turn_s_report_keeps_the_original_reply_s_notification(
-    harness_for: Callable[..., Harness],
-) -> None:
-    # D1: the report renders into the reply that asked the question; once its closing message
-    # finally posts (everything of that prompt has now ended), it still carries that question.
-    turns = split_turns(sdk_messages("background"))
-    h = harness_for({"turns": [turns[0]]})
-    session = h.session()
-    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    for later in turns[1:]:
-        h.clients[0].inject(later)
-    await until(lambda: is_report(h.bodies()[0]))
-    await asyncio.sleep(0.05)
-    closing = h.slack.calls_to("chat.postMessage")[-1]
-    assert closing["text"] == texts.REPLY_TO.format(prompt="start it")
-
-
-async def test_a_failed_directory_closes_with_the_prompt_as_the_notification(
-    harness_for: Callable[..., Harness], tmp_path: Path
-) -> None:
-    gone = tmp_path / "gone"
-    gone.mkdir()
-    h = harness_for({})
-    h.state.bind(CHANNEL, gone)
-    gone.rmdir()
-    failed = await h.session().submit("hello")
-    await asyncio.wait_for(failed.done.wait(), 2)
-    # An error the owner must act on: its notification carries the prompt.
-    failure_closing = h.slack.calls_to("chat.postMessage")[-1]
-    assert failure_closing["text"] == texts.REPLY_TO.format(prompt="hello")
-
-
-async def test_a_turn_ended_by_close_does_not_notify(
-    harness_for: Callable[..., Harness],
-) -> None:
-    h = harness_for({})  # no scripted turn: it never answers on its own
-    session = h.session()
-    waiting = await session.submit("world")
-    await until(lambda: h.clients and h.clients[-1].queries == ["world"])
-    await session.close()
-    await asyncio.wait_for(waiting.done.wait(), 2)
-    # No urgent attention was needed here: the close ends it silently, with no new post.
-    posts = h.slack.calls_to("chat.postMessage")
-    assert len(posts) == 1  # only the placeholder the submit already opened
-    assert "Reply to:" not in posts[0]["text"]
+    # D1: exactly these, in this order, nothing else.
+    assert [p["text"] for p in posts] == ["Bash: ls", "AskUserQuestion"]
+    assert len(h.slack.stream_ts) == 1 and len(h.slack.calls_to("chat.stopStream")) == 1
+    assert h.slack.pushes() == 3
 
 
 def test_asked_cuts_a_long_prompt_and_names_an_image_only_prompt() -> None:
@@ -702,9 +628,8 @@ async def test_an_injected_turn_edits_the_reply_that_started_the_task(
         h.clients[0].inject(later)
     await until(lambda: is_report(h.bodies()[0]))
     await asyncio.sleep(0.05)
-    # D1: the report is appended to the one reply there is (its body, then its closing message
-    # once the task has fully ended): no separate message carries it.
-    assert len(h.slack.posted_ts) == 2
+    # D1: the report is appended to the one reply there is: no separate message carries it.
+    assert len(h.slack.stream_ts) == 1 and h.slack.posted_ts == []
 
 
 async def test_rate_limit_event_invalidates_usage(harness_for: Callable[..., Harness]) -> None:
@@ -780,8 +705,8 @@ async def test_two_threads_of_one_channel_are_two_sessions_with_separate_clients
     assert len(h.clients) == 2
     assert h.clients[0].queries == ["a"] and h.clients[1].queries == ["b"]
     assert set(h.manager.sessions_of(CHANNEL)) == {first, second}
-    posts = h.slack.calls_to("chat.postMessage")
-    assert {p.get("thread_ts") for p in posts} == {THREAD, OTHER_THREAD}
+    starts = h.slack.calls_to("chat.startStream")
+    assert {p.get("thread_ts") for p in starts} == {THREAD, OTHER_THREAD}
 
 
 async def test_stop_channel_stops_every_busy_session_of_the_channel(
@@ -879,9 +804,9 @@ async def test_an_owner_answer_behind_a_wrong_guess_keeps_its_footer(
     h.clients[0].inject(notice)  # the session now expects Claude Code's own turn
     await asyncio.sleep(0.05)
     h.clients[0].inject(sdk_messages("tools"))  # but the result says a person asked for it
-    await until(lambda: len(h.slack.message_blocks()) == 2)
-    await asyncio.sleep(0.1)
-    assert {"type": "divider"} in h.slack.message_blocks()[1]
+    await until(lambda: bool(h.slack.calls_to("chat.stopStream")))
+    # the answer joins the reply that waited for the task, which ends with the footer
+    assert {"type": "divider"} in h.slack.calls_to("chat.stopStream")[-1]["blocks"]
 
 
 async def test_a_task_type_is_forgotten_when_the_task_ends(
@@ -1124,53 +1049,50 @@ async def test_running_counts_follow_the_latest_reply(
     h = harness_for({"turns": [first, sdk_messages("tools")]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    # D1: the running count lives in the closing message, and that one waits for the task; the
-    # body never carries it either, so nothing shows it yet.
+    # D1: the running count lives in the footer, and that one waits for the task; the body never
+    # carries it either, so nothing shows it yet.
     assert all(running_block(blocks) is None for blocks in h.slack.message_blocks())
     await asyncio.wait_for((await session.submit("next")).done.wait(), 2)
-    # the first reply's own closing never posted (still deferred: nothing to delete); the new,
-    # unrelated reply closes at once and carries the count in its own closing message.
+    # the first reply's own stop is still deferred; the new, unrelated reply stops at once and
+    # carries the count in its own footer.
     assert h.slack.calls_to("chat.delete") == []
     assert running_block(h.slack.message_blocks()[-1]) == "⏳ 1 shell"
     h.clients[0].inject(notice + injected)
     await until(lambda: is_report(h.bodies()[0]))
-    # the task has ended: no reply's closing message shows a running count any more. The
-    # second reply's own closing already finished, so this update of it debounces like any
-    # other change to a finished reply (D1): `until` gives it the room to land.
+    # the task has ended: no reply's footer shows a running count any more. The second reply
+    # already stopped, so this update of it debounces like any other change to a finished reply
+    # (D1): `until` gives it the room to land.
     await until(lambda: all(running_block(blocks) is None for blocks in h.slack.message_blocks()))
 
 
-async def test_two_prompts_in_a_row_each_get_their_own_closing_message(
+async def test_two_prompts_in_a_row_each_reply_ends_with_its_own_stop(
     harness_for: Callable[..., Harness],
 ) -> None:
     first, notice, injected = split_background()
     h = harness_for({"turns": [first, sdk_messages("tools")]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    # D1: the first reply's own closing waits for its background task: the body is the only post.
-    assert len(h.slack.calls_to("chat.postMessage")) == 1
+    # D1: the first reply's stream stays open for its background task: nothing has stopped yet.
+    assert len(h.slack.stream_ts) == 1 and h.slack.calls_to("chat.stopStream") == []
     await asyncio.wait_for((await session.submit("next")).done.wait(), 2)
-    # the second reply has nothing of its own pending: its closing posts right away.
-    after_second = len(h.slack.calls_to("chat.postMessage"))
-    assert after_second == 3  # first's body, second's body, second's own closing
+    # the second reply has nothing of its own pending: its stream stops right away, the footer
+    # on the stop.
+    assert len(h.slack.stream_ts) == 2 and len(h.slack.calls_to("chat.stopStream")) == 1
     assert {"type": "divider"} in h.slack.message_blocks()[-1]
     h.clients[0].inject(notice + injected)
-    await until(lambda: is_report(h.bodies()[0]))
-    await asyncio.sleep(0.05)
-    # the first reply's own closing follows now, once its task has fully ended: posted last,
-    # since the second's already went (and, no longer latest, shows no footer of its own). The
-    # second's own closing is untouched.
-    assert len(h.slack.calls_to("chat.postMessage")) == after_second + 1
-    assert h.slack.message_blocks()[-1] == [context_block(ZERO_WIDTH_SPACE)]
+    await until(lambda: len(h.slack.calls_to("chat.stopStream")) == 2)
+    # the first reply stops now, once its task has fully ended: no longer the latest, it shows no
+    # footer of its own. The second's stop is untouched.
+    assert "blocks" not in h.slack.calls_to("chat.stopStream")[-1]
+    assert h.slack.pushes() == 2
 
 
-async def test_two_prompts_tasks_ending_together_each_get_their_own_closing_message(
+async def test_two_prompts_tasks_ending_together_each_reply_ends(
     harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # D1: the CLI's one report turn opens with the end of every task
     # that finished together but renders into only the first one's reply; the second must still
-    # get its own closing message, not wait forever for a report turn that was never coming for
-    # it specifically.
+    # end, not wait forever for a report turn that was never coming for it specifically.
     monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.2)
     first, notice, injected = split_background()
     first_b, notice_b, _ = renamed_background()
@@ -1186,8 +1108,8 @@ async def test_two_prompts_tasks_ending_together_each_get_their_own_closing_mess
     h.clients[0].inject(notice + notice_b + injected)
     await until(lambda: a.closed_out)
     await until(lambda: b.closed_out)
-    closing = h.slack.calls_to("chat.postMessage")[-1]
-    assert closing["text"] == texts.REPLY_TO.format(prompt="start B")
+    await until(lambda: not any(m.streaming for m in h.slack.messages.values()))
+    assert len(h.slack.calls_to("chat.stopStream")) == 2
 
 
 async def test_a_background_task_frame_stays_out_of_other_replies(
@@ -1204,7 +1126,7 @@ async def test_a_background_task_frame_stays_out_of_other_replies(
     assert task_id not in report
 
 
-async def test_a_background_agent_s_calls_update_its_line_and_open_no_reply(
+async def test_a_background_agent_s_calls_update_its_card_and_open_no_reply(
     harness_for: Callable[..., Harness],
 ) -> None:
     recorded = sdk_messages("subagent")
@@ -1214,12 +1136,12 @@ async def test_a_background_agent_s_calls_update_its_line_and_open_no_reply(
     await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
     posted = len(h.slack.posted_ts)
     h.clients[0].inject(children)
-    # A task that outlived its own turn updating its line afterward debounces like any other
-    # change to a finished reply (D1): `until` gives it the room to land.
-    await until(lambda: "Bash" in h.replies()[0])
-    assert len(h.slack.posted_ts) == posted
-    parent, nested = h.replies()[0].splitlines()[:2]
-    assert "Agent" in parent and nested.startswith(NESTED) and "Bash" in nested
+    # A task that outlived its own turn updating its card afterward debounces like any other
+    # change (D1): `until` gives it the room to land.
+    await until(lambda: any("Bash" in c.get("details", "") for c in h.cards()))
+    assert len(h.slack.posted_ts) == posted and len(h.slack.stream_ts) == 1
+    [agent] = [c for c in h.cards() if c["title"].startswith("Agent")]
+    assert "Bash" in agent["details"] and " call" in agent["title"]
 
 
 async def test_ended_tasks_are_forgotten_past_the_limit(
@@ -1262,7 +1184,7 @@ async def test_a_failed_background_task_shows_why_in_the_reply_that_started_it(
     assert "✗" in started and " ".join(summary.split())[:40] in started
 
 
-async def test_closing_the_session_stops_the_lines_of_running_tasks(
+async def test_closing_the_session_stops_the_cards_of_running_tasks(
     harness_for: Callable[..., Harness],
 ) -> None:
     first, _, _ = split_background()
@@ -1270,46 +1192,43 @@ async def test_closing_the_session_stops_the_lines_of_running_tasks(
     await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
     await h.manager.close_all()
     assert running_block(h.slack.message_blocks()[0]) is None
-    assert "Stopped" in h.replies()[0]
+    assert [(c["status"], c.get("output")) for c in h.cards()] == [("complete", "Stopped")]
+    assert not any(m.streaming for m in h.slack.messages.values())
 
 
-async def test_a_shutdown_during_an_active_turn_with_a_background_task_closes_silently(
+async def test_a_shutdown_during_an_active_turn_with_a_background_task_ends_both_replies(
     harness_for: Callable[..., Harness],
 ) -> None:
-    # D1: a restart or shutdown while a turn is active, with an
-    # earlier background task still running, must not post a new (still-ringing) message for
-    # that active turn's own closing: `_close_reply(force=True)` runs before
-    # `_stop_task_replies` has actually stopped the task, so its non-silent form would still
-    # show a stale running count in a brand-new message.
+    # D1: a restart or shutdown while a turn is active, with an earlier background task still
+    # running: `_close_reply(force=True)` runs before `_stop_task_replies` has actually stopped
+    # the task, and both replies still end with their streams stopped, nothing posted.
     first, _, _ = split_background()
-    partial = [m for m in sdk_messages("tools") if type(m).__name__ != "ResultMessage"][:4]
+    partial = [m for m in sdk_messages("tools") if type(m).__name__ != "ResultMessage"][:22]
     h = harness_for({"turns": [first, partial]})  # the second query gets no scripted result
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
     await session.submit("second")
     await until(lambda: session._active is not None)
-    posts_before = len(h.slack.calls_to("chat.postMessage"))
-    await session.close()  # a restart or a shutdown: closes everything silently
-    new = h.slack.calls_to("chat.postMessage")[posts_before:]
-    assert not new
+    await session.close()  # a restart or a shutdown: ends everything
+    assert h.slack.posted_ts == []
+    assert not any(m.streaming for m in h.slack.messages.values())
+    assert len(h.slack.stream_ts) == 2
 
 
-async def test_shutdown_with_a_deferred_closing_closes_silently(
+async def test_an_idle_close_ends_a_reply_that_still_waited_for_its_task(
     harness_for: Callable[..., Harness],
 ) -> None:
-    # D1: an idle close (like a restart or SessionGone) forces the
-    # still-deferred closing message out at once, but it must never ring: no new message at
-    # all, not even a footer-only one, and the footer shows in the body's own last update.
+    # D1: an idle close (like a restart or SessionGone) stops the still-open stream at once, with
+    # its footer.
     first, _, _ = split_background()
     h = harness_for({"turns": [first]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    posts_before = len(h.slack.calls_to("chat.postMessage"))
+    assert h.slack.calls_to("chat.stopStream") == []
     await session.close(reason=texts.ENDED_IDLE)
-    assert len(h.slack.calls_to("chat.postMessage")) == posts_before
-    assert {"type": "divider"} in h.slack.message_blocks()[-1]
-    for _, args in h.slack.calls:
-        assert "Reply to:" not in json.dumps(args)
+    [stop] = h.slack.calls_to("chat.stopStream")
+    assert {"type": "divider"} in stop["blocks"]
+    assert h.slack.posted_ts == []
 
 
 async def test_a_notification_with_no_turn_updates_its_line_and_releases_the_queue(
@@ -1328,7 +1247,7 @@ async def test_a_notification_with_no_turn_updates_its_line_and_releases_the_que
     # The task is known: its end shows on the line where it started, not in a post of its own.
     # That line updates a reply whose own turn has already finished, which debounces like any
     # other change to a finished reply (D1): `until` gives it the room to land.
-    await until(lambda: h.replies()[0].startswith("✓"))
+    await until(lambda: [c["status"] for c in h.cards()] == ["complete"])
     assert not any(is_report(r) for r in h.replies())
     assert h.clients[0].queries == ["start it", "next"]
 
@@ -1364,9 +1283,7 @@ async def test_a_notification_after_the_owner_query_was_sent_leaves_the_turn_to_
     await asyncio.sleep(0.05)
     h.clients[0].inject(sdk_messages("tools"))
     await asyncio.wait_for(second.done.wait(), 2)
-    replies = h.replies()
-    assert texts.REPLY_ABOVE not in replies[1]
-    assert not any(is_report(r) for r in replies)
+    assert not any(is_report(r) for r in h.replies())
 
 
 async def test_a_slack_network_error_does_not_stop_the_session(
@@ -1376,7 +1293,7 @@ async def test_a_slack_network_error_does_not_stop_the_session(
 
     h = harness_for({"turns": [sdk_messages("tools"), sdk_messages("tools")]})
     down = aiohttp.ClientConnectionError("network down")
-    for method in ("chat.postMessage", "chat.update"):
+    for method in WRITES:
         h.slack.responses[method] = down
     session = h.session()
     await asyncio.wait_for((await session.submit("while offline")).done.wait(), 2)
@@ -1398,16 +1315,14 @@ async def test_a_cli_that_exits_ends_the_turn_and_the_next_message_reconnects(
     assert [c.queries for c in h.clients] == [["first"], ["second"]]
 
 
-async def test_a_cli_that_exits_mid_turn_notifies_once(
+async def test_a_cli_that_exits_mid_turn_ends_its_reply_once(
     harness_for: Callable[..., Harness],
 ) -> None:
     h = harness_for({"turns": [[*sdk_messages("tools")[:3], EndOfStream()]]})
     session = h.session()
     await asyncio.wait_for((await session.submit("first")).done.wait(), 2)
-    notifying = [
-        p for p in h.slack.calls_to("chat.postMessage") if p["text"].startswith("Reply to:")
-    ]
-    assert [p["text"] for p in notifying] == [texts.REPLY_TO.format(prompt="first")]
+    assert len(h.slack.stream_ts) == 1 and h.slack.pushes() == 1
+    assert not any(m.streaming for m in h.slack.messages.values())
 
 
 async def test_a_failed_background_post_still_releases_the_queue(
@@ -1421,7 +1336,8 @@ async def test_a_failed_background_post_still_releases_the_queue(
     h = harness_for({"turns": [first, sdk_messages("tools")]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    h.slack.responses["chat.postMessage"] = aiohttp.ClientConnectionError("network down")
+    for method in WRITES:
+        h.slack.responses[method] = aiohttp.ClientConnectionError("network down")
     h.clients[0].inject(notice)
     await asyncio.sleep(0.02)
     second = await session.submit("next")
@@ -1441,8 +1357,7 @@ async def test_a_missing_directory_asks_to_bind_again(
     await asyncio.wait_for(turn.done.wait(), 2)
     assert h.clients == []
     assert h.bodies() == [texts.DIRECTORY_MISSING.format(directory=gone)]
-    closing = h.slack.calls_to("chat.postMessage")[-1]  # its notification carries the prompt
-    assert closing["text"] == texts.REPLY_TO.format(prompt="hello")
+    assert h.slack.pushes() == 1  # the reply's one stop: an error the owner has to act on
 
 
 async def test_an_unreadable_directory_says_how_to_grant_access(
@@ -1460,43 +1375,21 @@ async def test_an_unreadable_directory_says_how_to_grant_access(
         locked.chmod(0o755)
     assert h.clients == []
     assert h.bodies() == [texts.DIRECTORY_UNREADABLE.format(directory=locked)]
-    closing = h.slack.calls_to("chat.postMessage")[-1]  # its notification carries the prompt
-    assert closing["text"] == texts.REPLY_TO.format(prompt="hello")
+    assert h.slack.pushes() == 1
 
 
 def statuses(h: Harness) -> list[str]:
-    """The status line or footer (last context block but the spacer) of every write, in order."""
+    """The footer (the last context block) of every write that carried one, in order."""
     lasts = []
     for m, a in h.slack.calls:
-        blocks = [
-            b for b in a.get("blocks") or [] if not str(b.get("block_id", "")).startswith("spacer")
-        ]
-        if m in ("chat.postMessage", "chat.update") and blocks and blocks[-1]["type"] == "context":
+        blocks = a.get("blocks") or []
+        if (
+            m in ("chat.postMessage", "chat.update", "chat.stopStream")
+            and blocks
+            and blocks[-1]["type"] == "context"
+        ):
             lasts.append(blocks[-1]["elements"][0]["text"])
     return lasts
-
-
-async def test_a_reply_shows_that_claude_is_writing_right_away(
-    harness_for: Callable[..., Harness],
-) -> None:
-    ask = CanUseToolCall("Bash", {"command": "ls"})
-    h = harness_for({"turns": [[ask, *sdk_messages("tools")], sdk_messages("tools")]})
-    session = h.session()
-    first = await session.submit("first")
-    second = await session.submit("second")
-    await until(lambda: bool(h.approvals._pending))
-    assert statuses(h)[:2] == [texts.WRITING, texts.WAITING]
-    h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, THREAD, Approve())
-    await asyncio.wait_for(second.done.wait(), 2)
-    assert first.done.is_set()
-    replies = [
-        a
-        for a in h.slack.calls_to("chat.postMessage")
-        if not any(b["type"] == "actions" for b in a.get("blocks", []))  # not the request
-    ]
-    # one message per reply's body (the placeholder becomes it), and one closing message once
-    # each reply ends, ringing for the owner's own prompt.
-    assert len(replies) == 4
 
 
 async def test_the_footer_follows_an_effort_set_from_slack(
@@ -1587,15 +1480,11 @@ async def test_an_approval_slack_refuses_to_show_is_denied_and_logged(
     from slack_sdk.errors import SlackApiError
 
     refused = SlackApiError("ratelimited", {"ok": False, "error": "ratelimited"})
-    # The reply's message posts, the approval request does not, later messages do.
+    # The approval request is the only post: Slack refuses it; the reply's stream is unaffected.
     h = harness_for(
         {"turns": [[CanUseToolCall("Bash", {"command": "ls"}), *sdk_messages("tools")]]}
     )
-    h.slack.responses["chat.postMessage"] = [
-        {"ok": True, "ts": "1790000000.000001"},
-        refused,
-        {"ok": True, "ts": "1790000000.000003"},
-    ]
+    h.slack.responses["chat.postMessage"] = refused
     turn = await h.session().submit("list the files")
     await asyncio.wait_for(turn.done.wait(), 2)
     result = h.clients[0].permission_results[0]
@@ -1614,8 +1503,9 @@ async def test_a_footer_that_fails_to_build_still_ends_the_reply(
     h = harness_for({"turns": [sdk_messages("tools")]})
     turn = await h.session().submit("list the files")
     await asyncio.wait_for(turn.done.wait(), 2)
-    last = [a for m, a in h.slack.calls if m in ("chat.postMessage", "chat.update")][-1]
-    assert texts.WRITING not in json.dumps(last, ensure_ascii=False)
+    [stop] = h.slack.calls_to("chat.stopStream")
+    assert "blocks" not in stop  # no footer to show, and the stream still stopped
+    assert not any(m.streaming for m in h.slack.messages.values())
 
 
 async def test_a_usage_entry_without_a_token_count_still_gets_a_footer(
@@ -1662,7 +1552,9 @@ async def test_a_turn_taken_while_claude_code_starts_is_ended_on_close(
     await asyncio.sleep(0.05)  # the worker has taken the turn and waits for the CLI
     await session.close()
     assert turn.done.is_set()
-    assert texts.ENDED.format(reason=texts.ENDED_SHUTDOWN) in h.written_text()
+    # no reply had started: the taken message is named in one message of its own
+    [note] = h.slack.calls_to("chat.postMessage")
+    assert texts.NOT_SENT_ONE.format(because=texts.BECAUSE_SHUTDOWN) in note["text"]
 
 
 async def test_a_setup_failure_after_connect_closes_the_client(
@@ -1739,7 +1631,7 @@ async def test_every_message_is_posted_without_link_previews(
     h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, THREAD, Approve())
     await asyncio.wait_for(turn.done.wait(), 2)
     posts = h.slack.calls_to("chat.postMessage")
-    assert len(posts) >= 2
+    assert posts  # the approval request
     assert all(p.get("unfurl_links") is False and p.get("unfurl_media") is False for p in posts)
 
 
@@ -2012,12 +1904,12 @@ async def test_a_skill_typed_as_a_command_shows_its_task_while_it_runs(
     started = next(i for i, m in enumerate(messages) if isinstance(m, TaskStartedMessage))
     h = harness_for({"turns": [messages[: started + 1]]})
     turn = await h.session().submit("/list-files")
-    # before the skill has ended: only the body exists yet, so replies() is safe here.
-    await until(lambda: "⏳ `/list-files`" in h.replies()[-1])
+    await until(lambda: [c["status"] for c in h.cards()] == ["in_progress"])
+    assert h.cards()[0]["title"] == "/list-files"
     h.clients[0].inject(messages[started + 1 :])
     await asyncio.wait_for(turn.done.wait(), 2)
-    assert "✓ `/list-files`" in h.bodies()[-1]
-    assert len(h.bodies()) == 1  # one reply body: the task's line is the owner's turn's
+    assert [(c["title"], c["status"]) for c in h.cards()] == [("/list-files", "complete")]
+    assert len(h.slack.stream_ts) == 1  # one reply: the task's card is the owner's turn's
 
 
 def started_of(name: str) -> TaskStartedMessage:
@@ -2034,7 +1926,8 @@ async def test_a_task_started_by_a_call_does_not_start_the_owner_s_turn(
     await until(lambda: bool(h.clients) and h.clients[0].queries == ["run it"])
     await asyncio.sleep(0.05)
     assert session._active is None and len(session._held) == 1
-    assert h.replies() == [""]  # the status line alone: no task line in the reply
+    # nothing is written: no task card in a reply, and no reply
+    assert [m for m, _ in h.slack.calls if m.startswith("chat.")] == []
 
 
 async def test_a_command_s_task_waits_while_a_report_turn_is_expected(
@@ -2072,8 +1965,8 @@ async def test_a_task_started_under_a_background_agent_goes_to_the_agent_s_reply
     posted = len(h.slack.posted_ts)
     children = [m for m in recorded if getattr(m, "parent_tool_use_id", None) is not None]
     h.clients[0].inject([*children, nested])
-    await until(lambda: "nested" in h.replies()[0])
-    assert len(h.slack.posted_ts) == posted  # no reply of its own
+    await until(lambda: any(c["title"] == "nested" for c in h.cards()))
+    assert len(h.slack.posted_ts) == posted and len(h.slack.stream_ts) == 1  # no reply of its own
     assert "nested" in session._task_replies
 
 
@@ -2093,7 +1986,9 @@ async def test_a_stop_lets_the_running_turn_finish_and_ends_the_queued_one(
     await asyncio.wait_for(drained, 2)
     assert first.done.is_set()
     assert h.clients[0].queries == ["first"]
-    assert texts.ENDED.format(reason=texts.ENDED_RESTARTING) in h.replies()[1]
+    # the queued message gets no reply of its own: the running one's end names it
+    assert len(h.slack.stream_ts) == 1
+    assert texts.NOT_SENT_ONE.format(because=texts.BECAUSE_RESTARTED) in h.slack.stream_texts()[0]
     assert h.state.thread(CHANNEL, THREAD).session_id == result.session_id
 
 
@@ -2120,7 +2015,7 @@ async def test_a_stop_waits_for_the_reply_s_final_write(
     footer_read.set()
     await asyncio.wait_for(drained, 2)
     assert turn.done.is_set()
-    assert texts.WRITING not in h.replies()[-1]
+    assert len(h.slack.calls_to("chat.stopStream")) == 1  # the reply has ended, footer and all
 
 
 @pytest.mark.parametrize("bypass", [True, False])
@@ -2165,7 +2060,8 @@ async def test_a_turn_taken_before_a_stop_is_never_sent(
     gate.set()
     await asyncio.wait_for(drained, 2)
     assert turn.done.is_set() and h.clients[0].queries == []
-    assert texts.ENDED_RESTARTING in h.written_text()
+    [note] = h.slack.calls_to("chat.postMessage")  # nothing ran: the note is a message of its own
+    assert texts.NOT_SENT_ONE.format(because=texts.BECAUSE_RESTARTED) in note["text"]
 
 
 async def test_a_second_signal_cuts_the_stop_short(harness_for: Callable[..., Harness]) -> None:
@@ -2261,31 +2157,30 @@ async def test_a_stop_held_by_a_background_task_says_so_and_bang_stop_ends_it(
     await asyncio.wait_for(drained, 1)
 
 
-async def test_a_stop_of_a_background_task_posts_no_new_message_until_it_ends(
+async def test_a_stop_of_a_background_task_ends_the_reply_like_any_other_end(
     harness_for: Callable[..., Harness],
 ) -> None:
-    # D1: stopping the task never posts a new message either, even once its
-    # own end finally lets the closing through: its footer joins the body's own last message
-    # with chat.update instead, since any new message in the thread would still ring.
+    # `!stop` (S2): the task's own end lets the reply's stream stop, with the footer, as a
+    # normal end does. Nothing is posted, and the ✅ is the stop's own.
     first, notice, _ = split_background()
     h = harness_for({"turns": [first]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    posts_before = len(h.slack.calls_to("chat.postMessage"))
     assert await session.stop()
     await asyncio.sleep(0.05)
-    assert len(h.slack.calls_to("chat.postMessage")) == posts_before
+    assert h.slack.calls_to("chat.stopStream") == []  # the task has not ended yet
     h.clients[0].inject(stopped_end(notice))
-    await until(lambda: {"type": "divider"} in h.slack.message_blocks()[-1])
-    assert len(h.slack.calls_to("chat.postMessage")) == posts_before
+    await until(lambda: bool(h.slack.calls_to("chat.stopStream")))
+    assert {"type": "divider"} in h.slack.calls_to("chat.stopStream")[-1]["blocks"]
+    assert h.slack.posted_ts == [] and h.slack.pushes() == 1
+    assert h.reactions()[-1] == Status.DONE.value
 
 
-async def test_a_stopped_report_turn_closes_silently(
+async def test_a_stopped_report_turn_ends_like_any_other_end(
     harness_for: Callable[..., Harness],
 ) -> None:
-    # D1: `TurnRenderer.close` only ever extends `_reply_to` forward, so the report turn's own
-    # renderer still carries "start it" from the turn that started the task. A report turn
-    # `!stop` cuts short must close silently regardless, exactly as a stopped owner turn does.
+    # A report turn `!stop` cuts short ends like a stopped owner turn does: its reply's stream
+    # stops with the footer, once.
     first, notice, injected = split_background()
     partial = [m for m in injected if not isinstance(m, ResultMessage)]
     result = next(m for m in injected if isinstance(m, ResultMessage))
@@ -2297,31 +2192,11 @@ async def test_a_stopped_report_turn_closes_silently(
     await until(lambda: session._injected_expected)
     h.clients[0].inject(partial)
     await until(lambda: session._active is not None)
-    posts_before = len(h.slack.calls_to("chat.postMessage"))
     assert await session.stop() is True
     h.clients[0].inject([interrupted])
-    await asyncio.sleep(0.05)
-    assert len(h.slack.calls_to("chat.postMessage")) == posts_before  # no new, ringing message
-    for _, args in h.slack.calls:
-        assert "Reply to:" not in json.dumps(args)
-
-
-async def test_bang_stop_of_a_background_task_closes_silently(
-    harness_for: Callable[..., Harness],
-) -> None:
-    # D1: `!stop` closed at once and silently: no new message at
-    # all, and nothing anywhere carries "Reply to:" once the stopped task's own end closes it.
-    first, notice, _ = split_background()
-    h = harness_for({"turns": [first]})
-    session = h.session()
-    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    posts_before = len(h.slack.calls_to("chat.postMessage"))
-    assert await session.stop()
-    h.clients[0].inject(stopped_end(notice))
-    await until(lambda: {"type": "divider"} in h.slack.message_blocks()[-1])
-    assert len(h.slack.calls_to("chat.postMessage")) == posts_before
-    for _, args in h.slack.calls:
-        assert "Reply to:" not in json.dumps(args)
+    await until(lambda: bool(h.slack.calls_to("chat.stopStream")))
+    assert h.slack.posted_ts == [] and h.slack.pushes() == 1
+    assert not any(m.streaming for m in h.slack.messages.values())
 
 
 async def test_the_next_prompt_after_bang_stop_does_not_wait_for_a_report(
@@ -3154,31 +3029,24 @@ async def test_a_top_level_status_word_gets_no_reaction(
     assert h.reactions() == []
 
 
-async def test_owner_query_crossing_a_task_notification_rings_once_with_no_error(
+async def test_owner_query_crossing_a_task_notification_is_answered_once_with_no_error(
     harness_for: Callable[..., Harness],
 ) -> None:
     # `_settle`: the turn's start guessed Claude Code's own report (`_injected_expected`), but
     # the result says a person asked it after all, with the owner's own turn still in `_sent`
-    # to redirect it to. The turn itself succeeded: no ❌, and only the redirected reply's own
-    # closing rings (never the wrongly-guessed reply's own, which must close silently).
+    # to redirect it to. The turn itself succeeded: no ❌, and its answer, already in the
+    # misrouted reply, is that reply's own: the owner turn's own reply is never written.
     h = harness_for({"turns": []})
     session = h.session()
     owner = await session.submit("what happened")
     await until(lambda: bool(h.clients) and h.clients[0].queries == ["what happened"])
     session._injected_expected = True  # Claude Code's own report was also expected right now
-    before = len(h.slack.calls_to("chat.postMessage"))
     h.clients[0].inject(sdk_messages("tools"))  # the result: a genuine human turn after all
     await asyncio.wait_for(owner.done.wait(), 2)
     await asyncio.sleep(0.1)
     assert h.reactions() == [Status.WORKING.value]  # no ❌: this turn actually succeeded
-    posts = h.slack.calls_to("chat.postMessage")[before:]
-    # Exactly two new messages: the wrongly-guessed reply's own body (it already streamed
-    # content, which has to land somewhere, silently closed) and the owner's real reply's
-    # own closing, which rings once. Never a second ring, and never anything else new.
-    rings = [p["text"] for p in posts if "Reply to:" in p["text"]]
-    assert rings == [texts.REPLY_TO.format(prompt="what happened")]
-    assert len(posts) == 2
-    assert texts.REPLY_ABOVE in h.bodies()[0]
+    assert len(h.slack.stream_ts) == 1 and h.slack.posted_ts == []
+    assert h.slack.pushes() == 1
 
 
 async def test_an_abandon_s_error_stands_through_a_later_unreported_expiry(
@@ -3203,23 +3071,21 @@ async def test_an_abandon_s_error_stands_through_a_later_unreported_expiry(
     assert h.reactions()[-1] == Status.ERROR.value
 
 
-async def test_a_silently_failed_queued_turn_with_a_running_task_posts_no_new_message(
+async def test_a_dropped_queued_turn_with_a_running_task_gets_a_note_and_no_reply(
     harness_for: Callable[..., Harness],
 ) -> None:
-    # `_fail`'s own `close_out` used to default to non-silent: with a background task still
-    # running (drain lets it keep running), its running count alone (no footer, no reply_to)
-    # still made a brand-new message, which rings whatever it says (D1), even though
-    # `notify=False` (a restart drain's own `fail_queued`) meant this should stay silent.
+    # A restart drain drops the queued turn while a background task still runs (drain lets it
+    # keep running): the message gets no reply of its own; no turn runs, so one note names it.
     first, _, _ = split_background()
     h = harness_for({"turns": [first]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
     second = await session.submit("next")  # queued: the worker has not taken it yet
-    posts_before = len(h.slack.calls_to("chat.postMessage"))
-    await session.fail_queued(texts.ENDED.format(reason=texts.ENDED_RESTARTING))
+    await session.drop_queued(error=True)
     await asyncio.wait_for(second.done.wait(), 2)
-    new = h.slack.calls_to("chat.postMessage")[posts_before:]
-    assert not new
+    assert len(h.slack.stream_ts) == 1  # the running reply's stream is the only one
+    [note] = h.slack.calls_to("chat.postMessage")
+    assert texts.NOT_SENT_ONE.format(because=texts.BECAUSE_RESTARTED) in note["text"]
 
 
 async def test_closing_a_session_with_only_a_running_task_left_shows_error(
