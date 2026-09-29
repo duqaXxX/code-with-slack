@@ -124,9 +124,15 @@ second `TaskStartedMessage`.
 ## Writing to Slack
 
 `code_with_slack.render.sinks.ReplySink` writes each reply as one message inside the session's
-own Slack thread, below the message that asked for it. The message is rewritten with `chat.update` at most
-once a second (Slack allows `chat.update` 50 or more times a minute), in the order things happen:
-text as Claude writes it, and the tool calls where they happen. Claude's text is a `markdown`
+own Slack thread, below the message that asked for it. The message is rewritten with `chat.update`
+at most once a second per reply (Slack allows `chat.update` 50 or more times a minute, per app,
+not per reply). Every `chat.update` in the process also draws from one shared `UpdateLimiter`
+(`sinks.UpdateLimiter`, injected through `SessionDeps`): a token bucket that paces writes evenly
+at 40 per 60 seconds plus a burst of 5, worst case 45 in one window, still a real margin under
+the documented floor, so several busy threads together stay under the app's own budget instead
+of racing through it and then freezing until it resets. Within a reply, writes
+happen in the order things happen: text as Claude writes it, and the tool calls where they
+happen. Claude's text is a `markdown`
 block; each run of tool calls between two pieces of text is a `context` block (small, grey text,
 as the terminal dims them), escaped for mrkdwn and marked with a `tools-` block id.
 `sinks.tool_lines` shows such a run the same way while the turn runs and once it ends: the calls
@@ -156,24 +162,49 @@ call that ends within the one-second rewrite would otherwise never show. Then it
 the counts.
 The reply is posted as soon as the owner's message is queued, showing only a status line:
 `Claude is writing…`, or `Waiting for the previous reply…` behind another turn. While the turn
-runs the status stays last; when it ends, the status goes and a closing message is posted below
-the reply, in the same thread, holding a divider and the footer (`ReplySink._write_closing`). Only
-the thread's latest reply shows the footer: a new reply takes it over (`ReplySink.set_latest`), so
-it stays at the bottom of the thread as the terminal's status line, and a closing message left
-with nothing to show (no footer, and no notification owed) is deleted. A reply longer than about
-11,000 characters continues in a new message.
+runs the status stays last; when it ends, the status goes and `ReplySink.finish` writes the
+body's final form, with no closing message yet (D1): a task the turn started can still outlive
+it, and Claude Code can still start a turn of its own to report on it. Once the reply's turn has
+ended and none of its tasks still runs or still waits on such a report, less than
+`sessions.INJECTED_TURN_WAIT` old (`ThreadSession._still_owed`; the CLI can suppress the
+notification altogether, so past that wait `ThreadSession._expire_unreported` gives up on it),
+`ReplySink.close_out` posts the closing message below the reply, in the same thread, holding a
+divider and the footer (`ReplySink._write_closing`). A report turn can name only the reply of
+the first task it covers when several end together; `ThreadSession._sweep_closed_out`, run after
+every turn and after `ThreadSession._expire_injected_turn`, closes out every other reply left
+eligible. A `!stop`, a restart, an idle close or `SessionGone` closes a reply at once instead of
+waiting further, with no message of its own either (`TurnRenderer.close_out(silent=True)`): even
+a footer with no notification to carry would still be a new message, and a new message in a
+thread the owner started rings whatever it says. The footer, if the reply is still latest, joins
+the body's own last message instead (`ReplySink._render`), written through the ordinary flush,
+since an edit never rings. A Claude Code process that exits is the one exception: it still rings
+once, on the first owner reply it ends, with a new closing message carrying `texts.REPLY_TO`
+(`ThreadSession._abandon`, `error=True`). Only the thread's latest reply shows the footer: a new
+reply takes it over (`ReplySink.set_latest`), so it stays at the bottom of the thread as the
+terminal's status line, and a closing message left with nothing to show (no footer, and no
+notification owed) is deleted. A reply longer than about 11,000 characters continues in a new
+message.
 
 The closing message is also the reply's notification: Slack notifies the owner on any new message
 in a thread it started, mention or none, and a `chat.update` rewrite never notifies (measured on
 iOS, 2026-09-28, Slack free plan, slack-sdk 3.44.1; Slack's reference is silent on both). So every
 write while Claude works is silent, and the closing message's `text` reads `texts.REPLY_TO` when
-`ReplySink.finish` gets `reply_to`, which makes it post even with no footer to show, as a bare
+`ReplySink.close_out` gets `reply_to`, which makes it post even with no footer to show, as a bare
 line holding a zero-width space: `ThreadSession._finish` passes the owner's message
-(`sessions.asked`) for an owner turn that was not interrupted, `ThreadSession._fail` for an error
-(a Claude Code process that exits rings once, on the first reply it ends, `ThreadSession._abandon`),
-never for a stop, a restart, an idle close or a turn Claude Code started for a background task. A
-reply that already owes this notification when a newer reply in the same thread supersedes it
-keeps owing it, even once the newer reply takes the footer over.
+(`sessions.asked`) for an owner turn that ended without `!stop`; `ThreadSession._fail` does the
+same for a turn that fails outright (a directory gone missing, untrusted or unreadable, a
+session Claude Code no longer has, or any other exception), and once for the first owner reply
+still open when the whole process exits (`ThreadSession._abandon`, `error=True`). It stays unset
+for a stop, a restart, an idle close or a session's own graceful close. A turn Claude Code starts
+on its own to report a background task carries none either: it renders into the reply that
+started the task (`ThreadSession._opening_target`), so the closing message that eventually
+follows is still the one the original prompt is owed; writes into that already-finished reply
+debounce exactly like any other change (`ReplySink._changed` never special-cases a finished
+reply). Once that reply's own closing message has already posted (a notification arriving later
+than `INJECTED_TURN_WAIT`), `_opening_target` treats it as untracked instead, so the report gets
+a fresh reply of its own, which notifies once, rather than a silent edit of a reply that can no
+longer carry one. A reply that already owes this notification when a newer reply in the same
+thread supersedes it keeps owing it, even once the newer reply takes the footer over.
 
 Slack's native streaming API (`chat.startStream`) is not used: in an ordinary channel it works
 only inside a thread, `chat.startStream` without `thread_ts` answering `invalid_thread_ts`
@@ -305,6 +336,28 @@ where the *next* thread starts, and refuses while any of the channel's threads i
 - Messages are queued and run one at a time; each gets its own reply in the thread.
   `!stop` interrupts the running turn, denies its pending approvals and stops the thread's
   background tasks (`ClaudeSDKClient.stop_task`).
+- Each `ThreadSession` keeps one `render.status.StatusReaction` on its own root message (D10),
+  which `thread_ts` always is: a top-level owner message, or the owner's own `!resume` message.
+  `ThreadSession._react` shows it as a tracked background task, since a reaction must never delay
+  a turn; the one exception is `✅`, awaited right after the closing message it follows, so it
+  never shows first. `⏳` working: a turn is submitted or sent, or a report turn starts. `✋`
+  waiting: an approval or a question is open, back to `⏳` once it is answered and the turn
+  continues. `✅` ended: the closing message of the latest prompt posts with nothing else of the
+  session running, queued or owed (`ThreadSession.idle`); a second prompt queued behind the first
+  keeps it `⏳` until everything has ended. `❌` error: a turn fails, `!stop` stops something, a
+  restart's drain drops a queued or taken turn, `SessionGone`, or a shutdown's drain cuts short a
+  busy session. A `❌` stands until new work starts (a submit or a report turn, both of which
+  clear `ThreadSession._error_standing`), never flipped back to `✅` by some unrelated task's own
+  idle sweep in between (`ThreadSession._react_done_if_idle` reads that flag, not
+  `StatusReaction.current`, which only updates once its own `reactions.add` call returns and can
+  lag a quick turn); D9's own idle close never touches the reaction at all, whatever it reads. A
+  session rebuilt on the same root (a restart, a resumed thread) starts a fresh
+  `StatusReaction`, whose first successful `show` strips every other reaction name already on
+  the root, so an earlier session's leftover `✅` or `❌` never sits next to the new one. A
+  `missing_scope` failure (the workspace has not reinstalled the app for `reactions:write`) is
+  logged once for the whole process; every `StatusReaction` instance stops calling Slack for
+  reactions for the rest of the run. A top-level word (`!status`, `!stop`, `!bind`) is not a
+  session and gets no reaction of its own.
 - One reader task follows the SDK's message stream for the life of the client. A turn starts
   at its first text or tool message, or earlier at a `TaskStartedMessage` with no
   `tool_use_id` that comes while a message is sent and no report turn is expected: a skill with
@@ -315,19 +368,25 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   (so `/clear`, which starts a new session, is recorded), the footer is built and the reply
   closed. The turn stays active until the reply is closed.
 - A background task that finishes between turns sends its notification while the session is
-  idle, then Claude Code starts a turn of its own to report it. That turn gets a reply of its own
-  that opens with one line per task it reports, as the terminal prints it
-  (`ThreadSession._ended_line`): a command's notification `summary`, which already reads
-  `Background command "..." completed (exit code 0)`, or `Agent "<description>" finished` built
-  from the task's `TaskStartedMessage`, since an agent's `summary` is its result; plus
-  `usage.duration_ms` when the task reports it (`sessions.TASK_KINDS`, `SUMMARY_IS_END_LINE`).
-  The next queued message waits for it to finish. `Background task update` opens it only when no task end was seen.
+  idle, then Claude Code starts a turn of its own to report it. That turn renders into the reply
+  that started the task (D1: `ThreadSession._opening_target`, keyed by the task id through
+  `ThreadSession._task_replies`), appended after that reply's own body with one line per task it
+  reports, as the terminal prints it (`ThreadSession._ended_line`): a command's notification
+  `summary`, which already reads `Background command "..." completed (exit code 0)`, or `Agent
+  "<description>" finished` built from the task's `TaskStartedMessage`, since an agent's
+  `summary` is its result; plus `usage.duration_ms` when the task reports it
+  (`sessions.TASK_KINDS`, `SUMMARY_IS_END_LINE`). No new message follows for it; only when the
+  reply it would render into is no longer tracked (a restart or an idle close dropped it) does
+  the report get a reply of its own, as it always did. The next queued message waits for it to
+  finish. `texts.BACKGROUND_NOTICE` opens it only when no task end was seen.
   When a message was already sent and waits for its turn, that turn comes first and Claude Code
   reports the task inside it, with no turn of its own (measured on Claude Code 2.1.280), so
   nothing waits.
   If no turn follows within 30 seconds, the queue moves on; a notification for a task no reply
-  tracks is then posted on its own. When a queued message and a notification cross, the result's `origin` tells whose turn it
-  was, and the queue is put back in order; that one reply can carry the other's label.
+  tracks is then posted on its own, and one for a task a reply still tracks closes that reply's
+  own closing message instead, since nothing more is coming for it either. When a queued
+  message and a notification cross, the result's `origin` tells whose turn it was, and the
+  queue is put back in order; that one reply can carry the other's label.
 - A task that outlives its turn keeps its line in the reply that started it: the session maps
   the task id to that reply, and every later task message for it updates that line only, never
   another reply. A background subagent's own calls (`parent_tool_use_id` pointing at a line of

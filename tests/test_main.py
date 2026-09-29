@@ -95,6 +95,7 @@ def test_the_manifest_asks_for_the_minimum() -> None:
         "files:read",  # downloading the files attached to a message (the maintainer, 2026-09-25)
         "groups:history",
         "groups:read",
+        "reactions:write",  # the status reaction on a session's root message (D10)
     ]
     assert manifest["settings"]["event_subscriptions"]["bot_events"] == ["message.groups"]
     assert manifest["settings"]["is_mcp_enabled"] is False

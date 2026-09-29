@@ -21,6 +21,7 @@ how a reply looks on desktop and on mobile is checked by hand.
 | Tool lines fold in the terminal's words (`Ran 2 shell commands · Read 1 file`) | `test_sinks`, `test_previews` | P10 | none |
 | Edit and Write previews: sentence, diff or new file's lines | `test_previews`, `test_sinks` | P13 | A diff opens and closes on desktop and mobile; it colours on desktop, the squares on mobile |
 | Notifications: one per complete reply, approval, question or error, none while Claude writes | `test_sinks`, `test_sessions` | none | In a thread you started, away from Slack: a reply rings once, `!stop` does not |
+| Status reaction: one on each session's root message, ⏳ working, ✋ waiting for you, ✅ ended, ❌ error, `!stop` or a restart that cut it short | `test_status`, `test_sessions` | none | The reaction moves ⏳ to ✅ in the channel list |
 | Approvals: Approve and Deny buttons for a tool call, each resolved only in its own thread | `test_approvals`, `test_sessions`, `test_slack_app` | P11 | none |
 | Questions: the Answer form, and the answered record kept in the thread | `test_approvals`, `test_slack_app` | none | Answer a real question; the record stays with each answer |
 | `!bypass`, kept per thread in `state.json` across restarts; refused at the top level | `test_sessions`, `test_state`, `test_slack_app` | P9 | none |
@@ -56,13 +57,21 @@ none. Measured 2026-09-28 (Slack free plan, Slack iOS app, slack-sdk 3.44.1):
 
 So, inside a thread:
 
-- A complete reply rings once, in the closing message posted when the turn ends.
+- A complete reply rings once, in its closing message. It posts once the turn has ended and none
+  of its tasks still runs or still waits on a turn Claude Code starts to report it (D1): a reply
+  that starts a background command or an agent still rings for the question it answered, just
+  once that task, and its report if one comes, are both done.
 - An approval request and a question (`AskUserQuestion`) ring.
-- A reply that ends in an error rings, once per failure.
-- Nothing else rings: not `Claude is writing…`, not a rewrite, not the continuation of a reply
-  longer than one message, not a reply ended by `!stop`, a restart or an idle close, and not a
-  reply Claude Code starts on its own to report a background task (the prompt that started the
-  task already rang).
+- A reply that fails outright (a directory gone missing, untrusted or unreadable, a session
+  Claude Code no longer has, or any other exception) rings once, in a new closing message; when
+  the whole process exits instead, only the first owner reply still open rings the same way.
+- Nothing else rings: not `Claude is writing…`, not a rewrite (a turn Claude Code starts on its
+  own to report a background task edits the reply that started it, never a message of its own),
+  not the continuation of a reply longer than one message, and not a reply ended by `!stop`, a
+  restart, an idle close or a lost session: these close at once instead of waiting further, with
+  no message of their own either, since any new message would still ring whatever it said. The
+  footer, if the reply is still the thread's latest, joins the body's own last message with an
+  edit instead, which never rings.
 
 The notification text reads `Reply to: ` and the start of the owner's message.
 

@@ -73,7 +73,14 @@ from code_with_slack.render.renderer import (
     one_line,
     task_title,
 )
-from code_with_slack.render.sinks import ReplySink, context_block, describe, notice_text
+from code_with_slack.render.sinks import (
+    ReplySink,
+    UpdateLimiter,
+    context_block,
+    describe,
+    notice_text,
+)
+from code_with_slack.render.status import Status, StatusReaction
 from code_with_slack.resume import by_last_activity
 from code_with_slack.state import StateStore
 from code_with_slack.trust import workspace_trusted
@@ -267,6 +274,9 @@ class SessionDeps:
     client_factory: ClientFactory = default_client_factory
     workspace_trusted: Callable[[Path], Awaitable[bool]] = workspace_trusted
     sessions_of: Callable[[Path], list[SDKSessionInfo]] = directory_sessions
+    # Shared by every ReplySink in the process, so their chat.update writes stay under one
+    # app-wide budget together; a fresh default here gives each test its own.
+    update_limiter: UpdateLimiter = field(default_factory=UpdateLimiter)
 
 
 @dataclass
@@ -311,6 +321,18 @@ class ThreadSession:
         self.thread_ts = thread_ts
         self.directory = directory
         self._deps = deps
+        # D10: one reaction on the session's root message, which `thread_ts` always is (a
+        # top-level owner message, or the root of a `!resume` thread, the owner's own message).
+        self._status = StatusReaction(deps.slack, channel=channel_id, root_ts=thread_ts)
+        # D10: set by `stop()` while it denies pending approvals, so `_can_use_tool`'s own
+        # finally does not race its closing ❌ back to working; `_finish` and `_abandon`
+        # clear it, once that turn's own tail ends, whichever way.
+        self._interrupting = False
+        # D10: true from `_react_error` until new work starts (`submit`, `_start_turn`), so a
+        # standing ❌ is never mistaken for idle-and-done. `StatusReaction.current` cannot serve
+        # this alone: it only updates once its own `reactions.add` returns, which a quick turn
+        # can easily outrun.
+        self._error_standing = False
         self._client: ClaudeClient | None = None
         self._reader: asyncio.Task[None] | None = None
         self._worker: asyncio.Task[None] | None = None
@@ -334,7 +356,14 @@ class ThreadSession:
         # is set, so a session nobody ever looks up again does not sit in `_sessions` forever.
         self.on_closed: Callable[[], None] | None = None
         self._notice: str | None = None
+        # Fire-and-forget tasks this session never waits on, chiefly a usage refresh: never
+        # cancelled by `close`, since a usage refresh shares one `UsageProbe` (and its one
+        # client) across every session, and cancelling it mid-query would leave that client
+        # answering the next lookup, of any session, late.
         self._background: set[asyncio.Task[None]] = set()
+        # `_expire_unreported`'s own timers only: this session's alone, so `close` can cancel
+        # them without touching `_background`'s shared-client tasks.
+        self._expiring: set[asyncio.Task[None]] = set()
         # Approval ids open right now, waiting on the owner's decision (`waiting_for_owner`).
         self._waiting: set[str] = set()
         # Task messages that arrived between turns, shown in the next turn's reply.
@@ -347,7 +376,9 @@ class ThreadSession:
         # Each task's type and description, for the footer's counts and its end line, and the
         # end lines that open Claude Code's next turn of its own, the one that reports them.
         self._tasks: dict[str, tuple[str, str]] = {}
-        self._ended: list[str] = []
+        # Ended tasks not yet opened into a report turn's reply: (task_id, its formatted end
+        # line). The task_id finds the reply that started it (D1: the report renders there).
+        self._ended: list[tuple[str, str]] = []
         # Tasks whose end arrived without their notification yet, by the loop time it arrived:
         # the notification starts the turn that reports them. The CLI can suppress it (SDK
         # TaskUpdatedMessage docstring), so a stop waits for it only INJECTED_TURN_WAIT.
@@ -445,11 +476,14 @@ class ThreadSession:
         close the session, in the gap between the lookup and the turn actually being queued."""
         self._idle_timer_check()
 
-    async def fail_queued(self, line: str) -> None:
-        """End every queued turn's reply with `line`, and release whoever waits on them."""
+    async def fail_queued(self, line: str, *, error: bool = False) -> None:
+        """End every queued turn's reply with `line`, and release whoever waits on them.
+        `error` reacts D10's ❌ (a restart drain dropping a queued turn): a plain `close()`
+        never needs it here, since its own `cut_short` already reacts once for the whole
+        close."""
         while not self._queue.empty():
             with contextlib.suppress(Exception):
-                await self._fail(self._queue.get_nowait(), line)
+                await self._fail(self._queue.get_nowait(), line, error=error)
 
     async def submit(self, prompt: Prompt) -> Turn:
         """Queue a prompt; its reply appears at once, saying Claude is writing or waiting.
@@ -477,10 +511,19 @@ class ThreadSession:
                 # tells the two apart, since both leave `self._closed` the same.
                 gone = self._deps.state.thread(self.channel_id, self.thread_ts) is None
                 await self._fail(
-                    turn, texts.SESSION_GONE if gone else texts.SESSION_CLOSED, notify=True
+                    turn,
+                    texts.SESSION_GONE if gone else texts.SESSION_CLOSED,
+                    notify=True,
+                    error=True,
                 )
                 return turn
             self._queue.put_nowait(turn)
+            # D10: a submitted turn is working, unless an approval or question already open in
+            # this thread still holds it (that state stands until it is answered). New work,
+            # so any standing ❌ ends here.
+            if not self.waiting_for_owner:
+                self._error_standing = False
+                self._react(Status.WORKING)
         finally:
             self._pending_submits -= 1
         if self._worker is None or self._worker.done():
@@ -545,7 +588,7 @@ class ThreadSession:
                     taken, self._taken = self._taken, None
                     if taken is not None:
                         with contextlib.suppress(Exception):
-                            await self._fail(taken, texts.SESSION_GONE, notify=True)
+                            await self._fail(taken, texts.SESSION_GONE, notify=True, error=True)
                 await self.fail_queued(texts.SESSION_GONE)
                 raise SessionGone from exc
             try:
@@ -612,6 +655,11 @@ class ThreadSession:
         if not self.busy and not tasks:
             return False
         if self.busy:
+            # D10: a denial `deny_all` triggers below resolves `_can_use_tool`'s own future, whose
+            # `finally` would otherwise race this method's own closing ❌ back to working; this
+            # flag makes it skip that instead. `_finish` or `_abandon` clears it once this
+            # turn's own tail ends.
+            self._interrupting = True
             for pending in self._deps.approvals.deny_all(self.channel_id, self.thread_ts):
                 await self._delete_request(pending.message_ts)
             await self._client.interrupt()
@@ -626,6 +674,7 @@ class ThreadSession:
                     self.thread_ts,
                     describe(exc),
                 )
+        self._react_error()  # D10: `!stop` stopped something
         return True
 
     async def status(self) -> str:
@@ -696,6 +745,12 @@ class ThreadSession:
         rebuilt session's `ensure_connected` waiting on it forever, or `close_all` hanging at
         shutdown, or the manager's map holding a session nothing can ever evict.
         """
+        # D10: read before anything below settles it back to idle. A close that cuts anything
+        # short (a shutdown or a restart's drain, most likely: `busy` alone misses a queued or
+        # taken turn and a task that outlived its own turn, which `idle` already accounts for)
+        # gets ❌; D9's idle close, always called on an idle session, never does, and leaves the
+        # reaction exactly as it reads.
+        cut_short = not self.idle
         self._closed = True
         try:
             # The worker may hold the connect lock while the CLI starts: cancelled first.
@@ -726,6 +781,19 @@ class ThreadSession:
                 # still exiting (the chain, not just the direct predecessor, must be honoured).
                 await self._predecessor.wait()
                 self._predecessor = None
+            if cut_short:
+                # Awaited, not `_react`: `_cancel_tasks` above has already run, so a task added
+                # to `_background` now would never be cancelled or awaited by anything again.
+                # Before `done_closing`/`on_closed`, not after: those let the manager evict this
+                # session and hand the same root to a freshly built one right away, whose own
+                # `StatusReaction` strips every other name on its own first `show` (D10) — this
+                # ❌ must already be on the root before that race can even start.
+                await self._status.show(Status.ERROR)
+            if self._latest is not None:
+                # The last chance a change still only debounced (item 7) gets: `asyncio.run`'s
+                # own exit never lets a `_later` still waiting on its own timer run.
+                with contextlib.suppress(Exception):
+                    await self._latest.settle()
             # Only now: the CLI process (if any) has had its chance to flush and exit, or closing
             # failed partway through and there is nothing left worth waiting for either way.
             self.done_closing.set()
@@ -734,10 +802,22 @@ class ThreadSession:
 
     async def _cancel_tasks(self) -> None:
         # Every task is cancelled before any is awaited: a reader left running while the worker
-        # stops could still end a turn and record its session after a rebind.
+        # stops could still end a turn and record its session after a rebind. `_expiring`'s own
+        # timers go too: none should outlive the session, and a stray one firing
+        # after would try to post a closing through one that is already gone. `_background`'s
+        # tasks are not cancelled here: a usage refresh shares one
+        # `UsageProbe` client across every session, and cancelling it mid-query (`UsageProbe`
+        # does not catch `CancelledError`) would leave that client answering the next lookup,
+        # of any session, late.
         tasks = [
             t
-            for t in (self._worker, self._reader, self._expiry, self._idle_expiry)
+            for t in (
+                self._worker,
+                self._reader,
+                self._expiry,
+                self._idle_expiry,
+                *self._expiring,
+            )
             if t is not None
         ]
         for task in tasks:
@@ -792,7 +872,11 @@ class ThreadSession:
                 await self._settled.wait()
                 if self.draining:
                     self._taken = None
-                    await self._fail(turn, texts.ENDED.format(reason=texts.ENDED_RESTARTING))
+                    # D10: a prompt genuinely dropped by the drain, never ringing (it is not
+                    # the owner's own error to see, but a restart she already knows about).
+                    await self._fail(
+                        turn, texts.ENDED.format(reason=texts.ENDED_RESTARTING), error=True
+                    )
                     self._idle_timer_check()  # only cancels: draining itself blocks it from arming
                     continue
                 self._sent.append(turn)
@@ -802,7 +886,7 @@ class ThreadSession:
                 await turn.done.wait()
             except (DirectoryUnavailable, SessionGone, SessionClosed) as exc:
                 self._taken = None
-                await self._fail(turn, exc.message, notify=True)
+                await self._fail(turn, exc.message, notify=True, error=True)
                 self._idle_timer_check()  # a no-op if this also closed the session (D9)
             except Exception as exc:  # a failed turn must not stop this thread's queue
                 self._taken = None
@@ -812,7 +896,10 @@ class ThreadSession:
                 if turn in self._sent:
                     self._sent.remove(turn)
                 await self._fail(
-                    turn, texts.ERROR_REPLY.format(error=type(exc).__name__), notify=True
+                    turn,
+                    texts.ERROR_REPLY.format(error=type(exc).__name__),
+                    notify=True,
+                    error=True,
                 )
                 self._idle_timer_check()  # the session stays alive; may need arming again (D9)
 
@@ -872,7 +959,7 @@ class ThreadSession:
             and not self._sent
             and not stopped
         ):
-            self._ended.append(self._ended_line(message))
+            self._ended.append((message.task_id, self._ended_line(message)))
         if (
             isinstance(message, TaskUpdatedMessage)
             and message.status in TERMINAL_TASK_STATUSES
@@ -880,6 +967,12 @@ class ThreadSession:
             and not stopped
         ):
             self._unreported[message.task_id] = asyncio.get_running_loop().time()
+            # D1: the CLI can suppress the notification altogether (SDK
+            # TaskUpdatedMessage docstring); nothing else rechecks this reply once the wait
+            # that holds it passes, so this schedules that recheck itself.
+            expiry = asyncio.create_task(self._expire_unreported(message.task_id))
+            self._expiring.add(expiry)
+            expiry.add_done_callback(self._expiring.discard)
         if isinstance(message, TaskNotificationMessage):
             self._unreported.pop(message.task_id, None)
             self._stopped.discard(message.task_id)
@@ -888,7 +981,8 @@ class ThreadSession:
             self._tasks.pop(message.task_id, None)
         if isinstance(message, TASK_MESSAGES) and message.task_id in self._task_replies:
             # A task that outlived its turn shows only on its own line, wherever it started.
-            await self._task_replies[message.task_id].feed(message)
+            holder = self._task_replies[message.task_id]
+            await holder.feed(message)
             await self._show_running()
             if (
                 self._active is None
@@ -896,6 +990,16 @@ class ThreadSession:
                 and not stopped
             ):
                 self._notified()
+            # D1: the task that just ended may have been the last thing keeping this reply's
+            # closing message waiting; `_notified` above, if it fired, already re-armed the wait.
+            owed = self._still_owed(holder) or self._injected_expected or not self._settled.is_set()
+            if not owed:
+                # `stopped`: an owner `!stop` ended this task; its closing follows at once, but
+                # silently, as `!stop` never rings.
+                await holder.close_out(silent=stopped)
+                # D10: `!stop` already reacted itself; its ❌ must stand, not this closing's ✅.
+                if not stopped:
+                    await self._react_done_if_idle()
             return
         # A stream message names the call it runs under (`parent_tool_use_id`), a task frame
         # the call that started it (`tool_use_id`): either leads to the reply holding that call
@@ -938,9 +1042,12 @@ class ThreadSession:
             # drain that saw this thread idle meanwhile would exit before the reply's final
             # write, leaving it on `Claude is writing…` (#25).
             try:
-                await self._finish(active, message)
+                stopped = await self._finish(active, message)
             finally:
                 self._active = None
+            # D10: checked only now, with `_active` cleared: `_finish` alone still reads busy.
+            if not stopped:
+                await self._react_done_if_idle()
 
     def _ended_line(self, message: TaskNotificationMessage) -> str:
         """The terminal's line for a task's end: a command's own summary, or `Agent "..."
@@ -957,10 +1064,20 @@ class ThreadSession:
         duration = message.usage["duration_ms"] if message.usage else None
         return ended_line(text, message.status, duration)
 
-    def _opening(self) -> str:
-        """What opens a reply of Claude Code's own turn: the end of each task it reports."""
+    def _opening_target(self) -> tuple[str, TurnRenderer | None]:
+        """What opens a report of Claude Code's own turn (the end of each task it reports), and
+        the reply that started the first of those tasks (D1: the report renders there), if it is
+        still tracked. `None` when it is not (a restart or an idle close dropped it, or its own
+        closing message already posted: a notification later than INJECTED_TURN_WAIT let
+        `_expire_unreported` close it out first): the report then gets a reply of its own, as it
+        always has, which notifies once, rather than an edit of a closed reply that never would,
+        with any overflow posting below a closing message it can no longer touch."""
         lines, self._ended = self._ended, []
-        return "\n".join(lines) or texts.BACKGROUND_NOTICE
+        target = self._task_replies.get(lines[0][0]) if lines else None
+        if target is not None and target.closed_out:
+            target = None
+        text = "\n".join(line for _, line in lines) or texts.BACKGROUND_NOTICE
+        return text, target
 
     def _notified(self) -> None:
         """A task ended while no turn runs. Claude Code starts a turn to report it, unless an
@@ -984,10 +1101,11 @@ class ThreadSession:
         )
         self._injected_expected = False
         held, self._held = self._held, []
-        if not held:
-            self._ended.clear()  # those tasks already show their end on their own lines
+        text, target = self._opening_target()
         try:
-            await self._standalone(held)
+            if held:
+                renderer = target or TurnRenderer(await self._sink(), str(self.directory))
+                await self._standalone(held, text, renderer)
         except Exception as exc:
             logger.warning(
                 "could not post a background update in %s/%s: %s",
@@ -997,9 +1115,49 @@ class ThreadSession:
             )
         finally:
             self._settled.set()
+            # D1: catches `target` (nothing more coming for it either,
+            # when `held` was empty) and any other reply a joint report turn left stranded, since
+            # a report only ever renders into the first of the tasks it covers.
+            await self._sweep_closed_out()
+            await self._react_done_if_idle()
             # Runs outside `_read`'s loop (its own INJECTED_TURN_WAIT timer), so nothing else
             # re-checks idleness for this transition: it may need to arm the timer itself (D9).
             self._idle_timer_check()
+
+    def _react(self, state: Status) -> None:
+        """Show `state` on the root message reaction as a task this session tracks (D10): a
+        reaction must never delay a turn, and `StatusReaction.show` already serializes its own
+        calls and swallows their errors, so nothing here waits on it. `_error_standing` follows
+        the state asked for last, set here synchronously, since `StatusReaction.current` changes
+        only once Slack has answered."""
+        self._error_standing = state is Status.ERROR
+        task = asyncio.create_task(self._status.show(state))
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
+    def _react_error(self) -> None:
+        """❌ (D10). It stands until another state is asked for: `_react` records it in
+        `_error_standing` at once, before Slack answers, so a quick turn's own idle sweep cannot
+        mistake this session for done."""
+        self._react(Status.ERROR)
+
+    def _react_waiting_or_working(self) -> None:
+        """Back to waiting, or working, right after an approval or question settles (D10):
+        whichever the thread still holds, since a parallel tool call can leave another one open."""
+        self._react(Status.WAITING if self.waiting_for_owner else Status.WORKING)
+
+    async def _react_done_if_idle(self) -> None:
+        """✅, once the closing message just posted turns out to have been the last thing the
+        session owed (D10): awaited, unlike `_react`, so the checkmark never shows before that
+        message does. A no-op while another prompt, a running task or an unreported one still
+        keeps the session going, or while `_error_standing` says a ❌ from `!stop` or
+        `_abandon(error=True)` already stands: that lasts until new work starts (a submit or a
+        report turn shows ⏳ again, both clearing it), not until some unrelated task's own sweep
+        decides the session reads idle again. Gated on `_error_standing`, not
+        `StatusReaction.current`: the reaction only updates once its own `reactions.add`
+        returns, which a quick turn can easily outrun."""
+        if not self.waiting_for_owner and self.idle and not self._error_standing:
+            await self._status.show(Status.DONE)
 
     def _idle_timer_check(self) -> None:
         """(Re)arm the idle-close timer (D9) when the session is now idle with no approval or
@@ -1026,14 +1184,24 @@ class ThreadSession:
         await self.close(reason=texts.ENDED_IDLE)
 
     async def _start_turn(self) -> ActiveTurn:
+        # D10: skipped while `stop()` is still winding an interrupt down (`_finish` clears the
+        # flag once that very turn's own terminal result says so): this can be that turn's own
+        # trailing messages, not a new one, and its ❌ must stand.
+        if not self._interrupting:
+            self._error_standing = False  # a turn is sent, or a report turn starts: new work
+            self._react(Status.WORKING)
         injected = self._injected_expected or not self._sent
         self._injected_expected = False
         if self._expiry is not None:
             self._expiry.cancel()
         turn = None if injected else self._sent.popleft()
         if turn is None:
-            renderer = TurnRenderer(await self._sink(), str(self.directory))
-            await renderer.feed_notice(self._opening())
+            # D1: a report turn renders into the reply that started the task it reports, so no
+            # new message follows for it; only when that reply is no longer tracked does it get
+            # one of its own, as every reply always has.
+            text, target = self._opening_target()
+            renderer = target or TurnRenderer(await self._sink(), str(self.directory))
+            await renderer.feed_notice(text)
         else:
             renderer = TurnRenderer(turn.sink, str(self.directory))
             await turn.sink.announce(texts.WRITING)
@@ -1045,29 +1213,52 @@ class ThreadSession:
             await renderer.feed(message)
         return ActiveTurn(turn, renderer)
 
-    async def _standalone(self, messages: list[Message]) -> None:
-        if not messages:
-            return
-        renderer = TurnRenderer(await self._sink(), str(self.directory))
-        await renderer.feed_notice(self._opening())
+    async def _standalone(self, messages: list[Message], text: str, renderer: TurnRenderer) -> None:
+        """The turn the CLI never started to report an ended task, on its own reply (D1: usually
+        the one that started the task, `renderer`; `_expire_injected_turn` resolves it)."""
+        await renderer.feed_notice(text)
         for message in messages:
             await renderer.feed(message)
         await self._close_reply(renderer, None)
 
     async def _close_reply(
-        self, renderer: TurnRenderer, footer: str | None, reply_to: str | None = None
+        self,
+        renderer: TurnRenderer,
+        footer: str | None,
+        reply_to: str | None = None,
+        *,
+        force: bool = False,
+        silent: bool = False,
     ) -> None:
         for task_id in renderer.running_tasks:
             self._task_replies[task_id] = renderer
-        ended = [t for t, r in self._task_replies.items() if t not in r.running_tasks]
+        # Forgetting one whose reply has not closed out yet (D1) would
+        # strand it exactly as a joint report turn can: `_still_owed`, and the sweep that acts
+        # on it, both read this map.
+        ended = [
+            t for t, r in self._task_replies.items() if t not in r.running_tasks and r.closed_out
+        ]
         for task_id in ended[: max(0, len(self._task_replies) - TASK_REPLIES_KEPT)]:
             del self._task_replies[task_id]
         # Before the close, so the reply's last write already carries the list.
         await self._show_running()
         await renderer.close(footer, reply_to=reply_to)
+        # D1: the closing message follows at once unless a task this renderer started outlives
+        # this very turn; `force` is a stop, an error or a restart, which never waits for one.
+        # `silent`: `_abandon` passes it for a `force` close with no
+        # `reply_to`, since a background task can still be running here (`_stop_task_replies`
+        # stops it only after this call returns) and a non-silent close_out would still post a
+        # brand-new, still-ringing message for its stale running count.
+        if force or not self._still_owed(renderer):
+            await renderer.close_out(silent=silent)
 
     async def _stop_task_replies(self) -> None:
-        """The Claude Code process is going away with its tasks: no reply keeps showing one."""
+        """The Claude Code process is going away with its tasks: no reply keeps showing one, and
+        none is left waiting on a closing message that will now never come. D1: closed at once
+        and silently, with whatever footer its own turn already
+        decided but never its notification, since a stop, a restart, an idle close or
+        `SessionGone` never rings; `_abandon` rings, at most once, for a genuine error on its
+        own, ahead of this."""
         renderers = set(self._task_replies.values())
         self._task_replies.clear()
         self._tasks.clear()
@@ -1077,10 +1268,62 @@ class ThreadSession:
         for renderer in renderers:
             with contextlib.suppress(Exception):
                 await renderer.stop_running()
+        # Before close_out (D1): the latest reply's own `_running` must already
+        # read empty, or its closing (silent or not) would still show a stale `⏳ 1 shell`.
         await self._show_running()
+        for renderer in renderers:
+            with contextlib.suppress(Exception):
+                await renderer.close_out(silent=True)
+        if self._latest is not None:
+            # `set_running` above only debounces (item 7): the latest reply may not itself be
+            # one of `renderers` (its own turn need not have started any task), so nothing else
+            # here forces its write. A caller closing everything down cannot wait a whole
+            # `DEBOUNCE_SECONDS` for `_later` to get around to it on its own.
+            with contextlib.suppress(Exception):
+                await self._latest.settle()
 
     def _origin_of(self, tool_use_id: str) -> TurnRenderer | None:
         return next((r for r in self._task_replies.values() if r.owns(tool_use_id)), None)
+
+    def _still_owed(self, renderer: TurnRenderer) -> bool:
+        """D1: whether one of `renderer`'s own tasks still keeps its closing message waiting:
+        one still runs, or ended less than INJECTED_TURN_WAIT ago with no notification yet (its
+        report, if any, not in yet). The CLI can suppress the notification altogether (SDK
+        TaskUpdatedMessage docstring), so past that wait this stops counting it:
+        `_expire_unreported` rechecks then, since nothing else would."""
+        if renderer.running_tasks:
+            return True
+        now = asyncio.get_running_loop().time()
+        return any(
+            now - ended < INJECTED_TURN_WAIT
+            for task_id, ended in self._unreported.items()
+            if self._task_replies.get(task_id) is renderer
+        )
+
+    async def _sweep_closed_out(self, *, silent: bool = False) -> None:
+        """D1: a report turn's opening names only the reply of the
+        first task it covers when several end together, so every other reply whose own tasks
+        also finished is checked here instead, since nothing else rechecks it once the wait
+        that deferred it lifts. Only while nothing is still expected or running session-wide:
+        `_close_reply` already handles the renderer whose own turn or report just ended, and a
+        currently active one is skipped outright, whatever it reads:
+        its own turn has not closed it yet, so nothing here is its call to make. `silent`: the
+        turn in the same `finally` as this call closed its own reply silently (a `!stop` or a
+        wrongly-guessed report), so whatever this frees closes the same way."""
+        if self._injected_expected or not self._settled.is_set():
+            return
+        active = self._active.renderer if self._active is not None else None
+        for renderer in set(self._task_replies.values()):
+            if renderer is not active and not self._still_owed(renderer):
+                await renderer.close_out(silent=silent)
+
+    async def _expire_unreported(self, task_id: str) -> None:
+        """D1: give up waiting on a task's notification after
+        INJECTED_TURN_WAIT (the CLI can suppress it) and sweep for whatever that frees."""
+        await asyncio.sleep(INJECTED_TURN_WAIT)
+        self._unreported.pop(task_id, None)
+        await self._sweep_closed_out()
+        await self._react_done_if_idle()
 
     def _running_counts(self) -> str:
         """`⏳ 1 shell · 2 agents`: the tasks that outlived their turn and still run."""
@@ -1108,7 +1351,12 @@ class ThreadSession:
 
     async def _sink(self) -> ReplySink:
         """A new reply, which becomes this thread's latest and takes over the running list."""
-        sink = ReplySink(self._deps.slack, channel=self.channel_id, thread_ts=self.thread_ts)
+        sink = ReplySink(
+            self._deps.slack,
+            channel=self.channel_id,
+            thread_ts=self.thread_ts,
+            limiter=self._deps.update_limiter,
+        )
         previous, self._latest = self._latest, sink
         await sink.set_running(self._running_counts())
         if previous is not None:
@@ -1116,7 +1364,14 @@ class ThreadSession:
             await previous.set_latest(False)
         return sink
 
-    async def _finish(self, active: ActiveTurn, result: ResultMessage) -> None:
+    async def _finish(self, active: ActiveTurn, result: ResultMessage) -> bool:
+        """Close the turn's reply and release it; True when `!stop` cut it short, which the
+        caller reads once `_active` (still this turn, for `_close_reply`'s own checks) is clear,
+        to skip D10's ✅ and leave `stop()`'s own ❌ standing."""
+        # Default until the try below settles them; read in the `finally` even if something
+        # above raises first.
+        stopped = False
+        silent_own_closing = False
         try:
             if result.session_id:
                 self._deps.state.set_session(self.channel_id, self.thread_ts, result.session_id)
@@ -1148,12 +1403,39 @@ class ThreadSession:
                 footer = None
             # The owner's own turn rings once complete; one Claude Code started for a background
             # task does not (the prompt that started the task rang), nor one `!stop` cut short.
-            turn, stopped = active.turn, result.terminal_reason in INTERRUPTED
-            owner = turn is not None and not injected_turn(result)
+            turn = active.turn
+            stopped = result.terminal_reason in INTERRUPTED
+            self._interrupting = False  # D10: this turn's own tail, whichever way it ended
+            injected = injected_turn(result)
+            owner = turn is not None and not injected
             reply_to = asked(turn.prompt) if turn is not None and owner and not stopped else None
-            await self._close_reply(active.renderer, footer, reply_to)
+            crossing = turn is None and not injected and bool(self._sent)
+            if stopped:
+                # D1: `!stop` cut this turn short, the owner's own or a report's: this reply
+                # gets no closing message and no ring, whatever `reply_to` an earlier turn
+                # already left on it (`TurnRenderer.close` only ever extends it forward), and
+                # never waits on a task it may still owe (`force`: `!stop` never does).
+                silent_own_closing = True
+                await self._close_reply(active.renderer, footer, force=True, silent=True)
+            elif crossing:
+                # D1/D10: guessed to be Claude Code's own report, but the result says it was
+                # the owner's turn after all (`_settle`, below, redirects it, still in `_sent`
+                # here, before it pops it): closes silently too, but never forced, since one of
+                # its own tasks (if this renderer is a reused one) may still legitimately owe
+                # its own closing.
+                silent_own_closing = True
+                await self._close_reply(active.renderer, footer, silent=True)
+            else:
+                silent_own_closing = False
+                await self._close_reply(active.renderer, footer, reply_to)
         finally:
             await self._settle(active.turn, result)
+            # D1: a report turn's own reply is `_close_reply`'s
+            # concern above; this catches every other reply a joint one left stranded. Whatever
+            # this turn's own closing decided above, `_sweep_closed_out` frees the rest the same
+            # way, since they are the same event.
+            await self._sweep_closed_out(silent=silent_own_closing)
+        return stopped
 
     async def _settle(self, turn: Turn | None, result: ResultMessage) -> None:
         """Release whoever waits on this turn. The result's origin says whose turn it really was:
@@ -1167,7 +1449,9 @@ class ThreadSession:
                 self.thread_ts,
             )
             owner = self._sent.popleft()
-            await self._fail(owner, texts.REPLY_ABOVE, notify=True)
+            # D10: only misrouted, not failed; this rings once (the owner still has to be
+            # told where their answer went), but the turn itself succeeded, so no ❌.
+            await self._fail(owner, texts.REPLY_ABOVE, notify=True, error=False)
             self._expect_injected_turn()
         elif turn is not None and injected:
             logger.warning(
@@ -1193,16 +1477,23 @@ class ThreadSession:
         sent, self._sent = list(self._sent), deque()
         waiting = ([active.turn] if active and active.turn else []) + sent
         self._injected_expected = False
+        self._interrupting = False  # D10: whatever it was waiting on, this ends it
         ring = error
+        if error:
+            self._react_error()  # D10: independent of `ring`, which only gates a notify
         try:
             if active is not None:
                 reply_to = asked(active.turn.prompt) if ring and active.turn else None
                 ring = ring and reply_to is None
                 with contextlib.suppress(Exception):
                     await active.renderer.feed_error(line)
-                    await self._close_reply(active.renderer, None, reply_to)
+                    await self._close_reply(
+                        active.renderer, None, reply_to, force=True, silent=reply_to is None
+                    )
             await self._stop_task_replies()
             for turn in sent:
+                # `error`'s own react above already covers this abandon: these per-turn
+                # `_fail` calls only ever ring, never react again on their own.
                 await self._fail(turn, line, notify=ring)
                 ring = False
         finally:
@@ -1271,6 +1562,7 @@ class ThreadSession:
         )
         self._waiting.add(approval_id)
         self._idle_timer_check()  # an open approval or question holds the session (D9)
+        self._react(Status.WAITING)
         blocks = (
             question_blocks(approval_id, questions)
             if questions
@@ -1302,14 +1594,28 @@ class ThreadSession:
             self._deps.approvals.discard(approval_id)
             self._waiting.discard(approval_id)
             self._idle_timer_check()  # may (re)start the idle-close timer (D9)
+            if not self._interrupting:
+                self._react_waiting_or_working()
         return to_permission(decision, tool_input, questions)
 
-    async def _fail(self, turn: Turn, text: str, *, notify: bool = False) -> None:
+    async def _fail(
+        self, turn: Turn, text: str, *, notify: bool = False, error: bool = False
+    ) -> None:
         """End a turn's reply with a line saying why, and release whoever waits on it. With
-        `notify` the end rings: an error the owner has to see, not a stop or a restart."""
+        `notify` the end rings: an error the owner has to see, not a stop or a restart; without
+        it, `silent=True` (D1) so a running count alone does not still make a brand-new message
+        that would ring anyway. `error` reacts D10's ❌, independently of `notify`: a turn
+        dropped by a restart drain reacts but never rings; a turn that only got misrouted
+        (`_settle`, the owner's query crossing a task notification) rings but did not itself
+        fail, so it never reacts."""
         try:
             await turn.sink.text(text)
-            await turn.sink.finish([], None, reply_to=asked(turn.prompt) if notify else None)
+            await turn.sink.finish([])
+            await turn.sink.close_out(
+                None, asked(turn.prompt) if notify else None, silent=not notify
+            )
+            if error:
+                self._react_error()
         finally:
             turn.done.set()
 
@@ -1349,6 +1655,12 @@ class SessionManager:
         self._deps = deps
         self._sessions: dict[tuple[str, str], ThreadSession] = {}
         self.draining = False
+
+    @property
+    def update_limiter(self) -> UpdateLimiter:
+        """The chat.update budget every ReplySink in the process draws from, so a chat.update
+        made outside a reply (e.g. slack_app.py's `show_answered`) can share the same one."""
+        return self._deps.update_limiter
 
     def open(self, channel_id: str, thread_ts: str) -> ThreadSession | None:
         """A top-level owner message: creates the thread's entry, in the channel's current
@@ -1466,7 +1778,9 @@ class SessionManager:
         for session in sessions:
             session.draining = True
         for session in sessions:
-            await session.fail_queued(texts.ENDED.format(reason=texts.ENDED_RESTARTING))
+            # D10: a queued turn genuinely dropped by the drain reacts ❌, though it never
+            # rings (the restart itself is announced separately, right below).
+            await session.fail_queued(texts.ENDED.format(reason=texts.ENDED_RESTARTING), error=True)
             await session.announce_restart()
         while not cut_short.is_set():
             if all(s.idle and not s.reporting for s in self._sessions.values()):

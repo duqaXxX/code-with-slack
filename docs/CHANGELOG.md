@@ -7,6 +7,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- A status reaction on each session's root message: ⏳ working, ✋ waiting for the owner, ✅ once
+  everything has ended, ❌ on an error, `!stop` or a restart that cut a busy session short (D10).
+  `reactions:write` is added to the bot's Slack scopes.
+- One `chat.update` limiter shared by every reply: a token bucket paced at 40 writes per 60
+  seconds plus a burst of 5, worst case 45 in one window, still under Slack's documented floor,
+  so several busy threads stay under the app-wide `chat.update` budget together instead of each
+  keeping its own. The per-reply once-a-second rewrite is
+  unchanged.
 - The footer and `!status` show the lines changed since the last commit next to the branch,
   `(+42,-10)`, counted as the terminal's ccstatusline counts them (#39), and the time to the
   weekly limit's reset, `7d 45% ↻ 3d 4h`, as they already did for the 5-hour one (#42).
@@ -52,6 +60,14 @@ All notable changes to this project are documented here. The format follows
   and limits; `!status` lists its values in the same order. The folder shows by its name alone,
   its whole path staying on `!status`, and the labels (`effort`, `tok`, `ctx`, `5h`, `7d`) are
   bold.
+- A reply's closing message, and the notification it carries, now wait for every task it started
+  and for the turn Claude Code starts to report one, instead of posting the moment the turn ends;
+  that report turn renders into the same reply, appended after its body, rather than opening one
+  of its own. `!stop`, a restart, an idle close and a lost session close a reply at once instead
+  of waiting further, with no message of its own: its footer, if any, joins the body's own last
+  message with an edit instead, since a new message would still ring whatever it said and an
+  edit never does. A process that exits still rings once, with a new closing message, on the
+  first owner reply it ends.
 
 ### Fixed
 

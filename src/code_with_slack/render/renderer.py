@@ -62,8 +62,9 @@ class TaskUpdate:
 class Sink(Protocol):
     async def text(self, markdown: str) -> None: ...
     async def task(self, update: TaskUpdate) -> None: ...
-    async def finish(
-        self, closing: list[TaskUpdate], footer: str | None, *, reply_to: str | None = None
+    async def finish(self, closing: list[TaskUpdate]) -> None: ...
+    async def close_out(
+        self, footer: str | None, reply_to: str | None = None, *, silent: bool = False
     ) -> None: ...
 
 
@@ -133,6 +134,11 @@ class TurnRenderer:
         self._wrote_text = False
         self.result: ResultMessage | None = None
         self.auth_failed = False
+        # The reply's closing message, as decided by the turn(s) that have closed it so far
+        # (a report turn can close it again): `close_out` posts them once nothing is owed.
+        self._footer: str | None = None
+        self._reply_to: str | None = None
+        self._closed_out = False
 
     async def feed(self, message: Message) -> None:
         match message:
@@ -184,9 +190,13 @@ class TurnRenderer:
         return tool_use_id in self._lines or tool_use_id in self._root_of
 
     async def close(self, footer: str | None, *, reply_to: str | None = None) -> None:
-        """End the reply: every open tool line is closed, except a task still running, whose line
-        stays open until its own end arrives through `feed` or `stop_running`. `reply_to` makes
-        the end notify the owner (`ReplySink.finish`)."""
+        """End the turn's own part of the reply: every open tool line is closed, except a task
+        still running, whose line stays open until its own end arrives through `feed` or
+        `stop_running`. Does not post the closing message (`ReplySink.finish`); the caller
+        follows with `close_out` once it knows nothing more is coming, which can be after more
+        than one call here (a background task's own report turn closes the same reply again).
+        `reply_to` only ever moves forward: a report turn passes none, and must not erase the
+        owner's question a still-deferred closing already carries."""
         interrupted = self.result is not None and self.result.terminal_reason in INTERRUPTED
         if not self._wrote_text and not self._lines:
             # A command that prints nothing (a local one, say) still gets a visible answer.
@@ -200,7 +210,26 @@ class TurnRenderer:
             if entry.id in running or entry.status in ("pending", "in_progress")
         ]
         self._lines.update((entry.id, entry) for entry in closing)
-        await self._sink.finish(closing, footer, reply_to=reply_to)
+        # Both only ever move forward: a report turn passes neither, and must not erase what an
+        # earlier close already decided for a still-deferred closing.
+        self._footer = footer or self._footer
+        self._reply_to = reply_to or self._reply_to
+        await self._sink.finish(closing)
+
+    @property
+    def closed_out(self) -> bool:
+        """Whether this reply's closing message has already posted (or been decided moot)."""
+        return self._closed_out
+
+    async def close_out(self, *, silent: bool = False) -> None:
+        """Post the reply's closing message, with the footer `close` last decided; call after
+        `close`. With `silent` the closing never becomes a message of its own either, even to
+        carry the footer alone (a stop, an error handled elsewhere, a restart or an idle close
+        never rings, and a new message rings whatever it says): the footer, if any, joins the
+        body's own last message instead (D1). A second call, silent or not, is
+        a no-op."""
+        self._closed_out = True
+        await self._sink.close_out(self._footer, self._reply_to, silent=silent)
 
     async def stop_running(self) -> None:
         """The Claude Code process is gone and its tasks with it: close their lines as stopped."""
@@ -208,9 +237,13 @@ class TurnRenderer:
             await self._task_ended(task_id, "stopped", None)
 
     async def feed_notice(self, text: str) -> None:
-        """A note from the daemon itself, written before Claude Code's reply. It is not Claude's
-        text, so a local command's result still shows after it."""
-        await self._sink.text(text + "\n\n")
+        """A note before what follows it: usually the daemon's own line, before Claude Code's
+        reply even starts. It is not Claude's text, so a local command's result still shows
+        after it. D1's report turn feeds one into an already-written reply instead (the one
+        that started the task it reports): a blank line still separates it from what is there,
+        as a paragraph break would."""
+        prefix = "\n\n" if self._wrote_text or self._lines else ""
+        await self._sink.text(prefix + text + "\n\n")
 
     async def feed_error(self, text: str) -> None:
         """A failure outside the SDK stream (the client died): say so in the reply."""
