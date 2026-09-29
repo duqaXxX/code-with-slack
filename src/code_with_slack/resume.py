@@ -12,6 +12,7 @@ import dataclasses
 import heapq
 import json
 import logging
+import re
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -34,6 +35,22 @@ RESUME_ROWS = 20
 RESUME_ACTION = "session_resume"
 TITLE_LIMIT = 80
 ID_SHOWN = 8  # the first characters of a session id the list shows, and `!resume` takes
+SLACK_TS = re.compile(r"\d+\.\d+")
+
+
+def resume_value(session_id: str, thread_ts: str) -> str:
+    """The Resume button's value: the session, and the thread of the owner's `!resume` message
+    it is resumed into (the list is a top-level post, not that thread)."""
+    return f"{session_id}@{thread_ts}"
+
+
+def parse_resume_value(value: str) -> tuple[str, str] | None:
+    """The session id and thread ts a Resume button carries; None for any other shape. The value
+    is untrusted like every click's: only its form is checked here."""
+    session_id, at, thread_ts = value.partition("@")
+    if not (session_id and at and SLACK_TS.fullmatch(thread_ts)):
+        return None
+    return session_id, thread_ts
 
 
 def matching(sessions: list[SDKSessionInfo], target: str) -> list[SDKSessionInfo]:
@@ -124,7 +141,9 @@ def _size(size: int | None) -> str | None:
     return f"{size / (1024 * 1024):.1f}MB"
 
 
-def _row(session: SDKSessionInfo, held: str | None, now: datetime) -> dict[str, Any]:
+def _row(
+    session: SDKSessionInfo, held: str | None, now: datetime, thread_ts: str
+) -> dict[str, Any]:
     # Shown as the terminal's picker shows it, HEAD outside a repository included.
     branch = shown_as_written(session.git_branch) if session.git_branch else None
     title = shown_as_written(one_line(session.summary, TITLE_LIMIT))
@@ -148,7 +167,7 @@ def _row(session: SDKSessionInfo, held: str | None, now: datetime) -> dict[str, 
         block["accessory"] = {
             "type": "button",
             "action_id": RESUME_ACTION,
-            "value": session.session_id,
+            "value": resume_value(session.session_id, thread_ts),
             "text": {"type": "plain_text", "text": texts.RESUME_BUTTON},
         }
     return block
@@ -159,11 +178,13 @@ def resume_blocks(
     sessions: list[SDKSessionInfo],
     held: Callable[[str], str | None],
     now: datetime,
+    thread_ts: str,
 ) -> list[dict[str, Any]]:
     """The picker: the newest RESUME_ROWS sessions of `directory`. `held` gives the mrkdwn link
     to the thread already holding a session id (D6: one session lives in one thread), or None for
     a session no thread of any channel holds; a held row shows that link and no Resume button,
-    since resuming it there is refused anyway."""
+    since resuming it there is refused anyway. Each Resume button carries `thread_ts`, the thread
+    of the owner's `!resume` message, where the session is resumed."""
     # The list's own lines are the daemon's notices, small and grey; the rows keep their button.
     shown = shown_as_written(str(directory))
     if not sessions:
@@ -171,7 +192,7 @@ def resume_blocks(
     header = texts.RESUME_LIST.format(directory=shown)
     blocks = [
         context_block(header),
-        *(_row(s, held(s.session_id), now) for s in sessions[:RESUME_ROWS]),
+        *(_row(s, held(s.session_id), now, thread_ts) for s in sessions[:RESUME_ROWS]),
     ]
     if len(sessions) > RESUME_ROWS:
         more = texts.RESUME_MORE.format(rows=RESUME_ROWS)
