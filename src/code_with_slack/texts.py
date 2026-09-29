@@ -52,6 +52,7 @@ STOPPED_BEFORE_ANSWER = "code-with-slack stopped before this answer."
 NOT_SENT_ONE = "1 message was not sent because {because}: send it again."
 NOT_SENT_MANY = "{count} messages were not sent because {because}: send them again."
 BECAUSE_RESTARTED = "code-with-slack restarted"
+BECAUSE_SHUTDOWN = "code-with-slack stopped"
 BECAUSE_STOPPED = "Claude Code stopped"
 ENDED_RESTARTING = "code-with-slack is restarting; send your message again in a moment"
 # Never shown: an idle close (D9) always finds nothing running, sent or queued to end with it.

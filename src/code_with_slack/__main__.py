@@ -25,7 +25,7 @@ from code_with_slack.guards import ChannelGuard, Identity
 from code_with_slack.hold import Holds
 from code_with_slack.lock import AlreadyRunning, single_instance
 from code_with_slack.render.sinks import (
-    ConnectionRetryUnlessStream,
+    ConnectionRetryUnlessCreating,
     context_block,
     describe,
     notice_text,
@@ -107,12 +107,13 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
         state = StateStore(config_dir / "state.json")
         uploads = uploads_dir()
         prepare_uploads(uploads)
-        # A retry after a reset is safe for every call but a stream's (not idempotent): see
-        # `ConnectionRetryUnlessStream`. A rate limit retry is safe for all, the call never ran.
+        # A retry after a reset is safe for every call but those that create or grow a message (a
+        # post, a stream's start, append and stop: not idempotent): see
+        # `ConnectionRetryUnlessCreating`. A rate limit retry is safe for all, the call never ran.
         slack = AsyncWebClient(
             token=config.bot_token,
             retry_handlers=[
-                ConnectionRetryUnlessStream(),
+                ConnectionRetryUnlessCreating(),
                 AsyncRateLimitErrorRetryHandler(max_retry_count=3),
             ],
         )

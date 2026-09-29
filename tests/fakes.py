@@ -327,6 +327,8 @@ class FakeSlack(AsyncWebClient):
         ):
             # Measured 2026-09-29: both answer the channel and the message's ts.
             answer = {"ok": True, "channel": args.get("channel"), "ts": args.get("ts")}
+        if api_method == "conversations.replies" and api_method not in self.responses:
+            answer = self._thread(args)
         if isinstance(answer, list):  # a scripted sequence: one answer per call, the last repeats
             answer = answer.pop(0) if len(answer) > 1 else answer[0]
         if isinstance(answer, BaseException):
@@ -349,6 +351,33 @@ class FakeSlack(AsyncWebClient):
             headers={},
             status_code=200,
         ).validate()
+
+    def _stream_text(self, ts: str) -> str:
+        """A stream's `text` as it reads back: its markdown and its cards' titles."""
+        text, cards = self._shown(ts)
+        return " ".join([text, *(c["title"] for c in cards)]).strip()
+
+    def _thread(self, args: dict[str, Any]) -> dict[str, Any]:
+        """What `conversations.replies` reads back of the messages this fake holds: the daemon's
+        own, as its bot wrote them (a stream carries `streaming_state`), newer than `oldest`."""
+        oldest = float(args.get("oldest") or 0)
+        found = [
+            {
+                "ts": m.ts,
+                "user": BOT,
+                "type": "message",
+                "text": m.text or self._stream_text(m.ts),
+                "blocks": m.blocks,
+                **(
+                    {"streaming_state": "in_progress" if m.streaming else "completed"}
+                    if m.ts in self.stream_ts
+                    else {}
+                ),
+            }
+            for m in self.messages.values()
+            if float(m.ts) > oldest and not m.deleted
+        ]
+        return {"ok": True, "messages": found, "has_more": False}
 
     def _shown(self, ts: str) -> tuple[str, list[dict[str, Any]]]:
         """What a message shows now: its body text and its cards. A stream shows what its chunks
@@ -424,6 +453,9 @@ class FakeClock:
         wake = asyncio.get_running_loop().create_future()
         self._sleepers.append((self.now + seconds, wake))
         await wake
+
+    def time(self) -> float:
+        return self.now
 
     async def advance(self, seconds: float) -> None:
         self.now += seconds

@@ -14,6 +14,7 @@ from code_with_slack.render.previews import Preview
 from code_with_slack.render.renderer import STOPPED, TaskUpdate, TurnRenderer
 from code_with_slack.render.sinks import ReplySink, UpdateLimiter
 from tests.fakes import (
+    BOT,
     CHANNEL,
     OWNER,
     TEAM,
@@ -52,6 +53,7 @@ def reply(
         thread_ts=THREAD,
         team_id=TEAM,
         user_id=OWNER,
+        bot_user_id=BOT,
         limiter=limiter or UpdateLimiter(),
         clock=clock or FakeClock(),
         on_open_reply=on_open_reply,
@@ -1239,13 +1241,13 @@ async def test_a_start_of_unknown_outcome_says_so_in_the_log(
     assert "outcome unknown" in caplog.text
 
 
-def test_the_connection_retry_skips_stream_calls_and_keeps_the_rest() -> None:
+def test_the_connection_retry_skips_the_calls_that_create_a_message() -> None:
     import asyncio as aio
 
     from slack_sdk.http_retry.request import HttpRequest
     from slack_sdk.http_retry.state import RetryState
 
-    handler = sinks.ConnectionRetryUnlessStream()
+    handler = sinks.ConnectionRetryUnlessCreating()
     error = aiohttp.ClientOSError(104, "Connection reset by peer")
 
     async def can(method: str) -> bool:
@@ -1258,9 +1260,14 @@ def test_the_connection_retry_skips_stream_calls_and_keeps_the_rest() -> None:
         )
         return await handler.can_retry_async(state=RetryState(), request=request, error=error)
 
-    assert aio.run(can("chat.postMessage")) is True
-    for stream in ("chat.startStream", "chat.appendStream", "chat.stopStream"):
-        assert aio.run(can(stream)) is False
+    assert aio.run(can("chat.update")) is True and aio.run(can("reactions.add")) is True
+    for creating in (
+        "chat.startStream",
+        "chat.appendStream",
+        "chat.stopStream",
+        "chat.postMessage",
+    ):
+        assert aio.run(can(creating)) is False
 
 
 async def test_settle_during_the_retry_does_not_lose_the_stop(
@@ -1334,3 +1341,146 @@ async def test_a_footerless_stop_of_unknown_outcome_does_not_stand_for_the_foote
     [closing] = slack.calls_to("chat.postMessage")
     assert closing["blocks"][-1]["elements"][0]["text"] == "footer"
     assert slack.pushes() == 2  # the 280 s stop, and the end
+
+
+# Adopting what a create of unknown outcome made, before writing again.
+
+
+async def test_a_start_of_unknown_outcome_is_adopted_not_started_again() -> None:
+    slack = ResetAfterApply()
+    seen: list[tuple[str | None, str | None]] = []
+    slack.reset_next = "chat.startStream"
+    sink = reply(slack, on_open_reply=lambda old, new: seen.append((old, new)))
+    await sink.text("one")
+    await settled()
+    await sink.text(" two")
+    await settled()
+    assert len(slack.calls_to("chat.startStream")) == 1  # never started again
+    assert slack.stream_texts() == ["one two"]  # the adopted stream took the rest
+    assert seen == [(None, slack.stream_ts[0])]  # and a repair can find it
+    await sink.finish([])
+    await sink.close_out("footer")
+    assert slack.pushes() == 1
+
+
+async def test_a_start_that_never_landed_is_started_again() -> None:
+    slack = FakeSlack()
+    slack.responses["chat.startStream"] = [
+        aiohttp.ClientConnectionError("down"),
+        slack.responses["chat.startStream"],
+    ]
+    sink = reply(slack)
+    await sink.text("one")
+    await settled()
+    await sink.text(" two")
+    await settled()
+    assert slack.stream_texts() == ["one two"] and len(slack.calls_to("chat.startStream")) == 2
+
+
+async def test_a_continuation_post_of_unknown_outcome_is_adopted() -> None:
+    slack = ResetAfterApply()
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("start\n")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    slack.reset_next = "chat.postMessage"
+    await sink.text("a line of text\n" * 1_000)
+    await settled()
+    await sink.finish([])
+    await sink.close_out("footer")
+    posts = slack.calls_to("chat.postMessage")
+    assert len(posts) == 2  # the continuation once, then the closing message
+    assert len(slack.posted_ts) == 2
+
+
+async def test_a_closing_post_of_unknown_outcome_is_adopted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.02)
+    slack = ResetAfterApply()
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("A complete answer.")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    slack.reset_next = "chat.postMessage"
+    await sink.finish([])
+    assert await sink.close_out("footer") is True  # read back, found: nothing to retry
+    assert len(slack.posted_ts) == 1 and slack.pushes() == 2  # one closing message, not two
+
+
+# A stop that failed on the connection: landed, or expired at Slack's 5 minutes?
+
+
+async def test_a_stop_of_unknown_outcome_past_the_streams_life_is_taken_as_expired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 60.0)
+    slack = ResetAfterApply()
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("Answer.")
+    await settled()
+    slack.reset_next = "chat.stopStream"
+    await sink.finish([])
+    assert await sink.close_out("footer") is False  # the stop landed, its answer was lost
+    clock.now += sinks.STREAM_LIFE + 10  # what the retry finds is Slack's own end, or ours
+    assert await sink.settle() is True
+    # past the stream's life it cannot be told from an expiry: the footer gets its own message
+    assert len(slack.posted_ts) == 1
+
+
+# What a message holds: a preview that arrives late never passes the limit.
+
+
+async def test_a_late_preview_that_does_not_fit_its_message_is_cut_with_a_pointer(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.task(tool("t0", "Write", "in_progress"))
+    for i in range(1, 60):
+        await sink.task(tool(f"t{i}", "Read"))
+    await settled()
+    first = slack.stream_ts[0]
+    body = "\n".join(f"{i:>4} {'x' * 90}" for i in range(100))  # about 9,000 characters
+    view = Preview("Write(big.txt)", "Wrote 100 lines to big.txt", body)
+    await sink.task(tool("t0", "Write", preview=view))
+    await settled()
+    updates = [u for u in slack.calls_to("chat.update") if u["ts"] == first]
+    assert updates
+    for update in slack.calls_to("chat.update"):
+        assert len(update["blocks"]) <= 50
+        assert sum(len(sinks.block_text(b)) for b in update["blocks"]) <= 12_000
+    blocks = updates[-1]["blocks"]
+    assert next(b for b in blocks if b["type"] == "task_card")["status"] == "complete"
+    assert sinks.context_block(sinks.PREVIEW_CUT) in blocks
+
+
+# The sink's own cost: a message whose span did not change is not rendered again.
+
+
+async def test_a_message_whose_span_did_not_change_is_not_rendered_again(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sink = reply(slack)
+    view = Preview("Write(a.txt)", "Wrote 1 line to a.txt", "1 hi")
+    await sink.task(tool("w", "Write", preview=view))
+    for i in range(60):
+        await sink.task(tool(f"t{i}", "Read"))
+    await settled()
+    await sink.text("warm")  # the first pass over a message that just froze
+    await settled()
+    calls: list[int] = []
+    real = sinks.piece_blocks
+    monkeypatch.setattr(sinks, "piece_blocks", lambda t, i: calls.append(i) or real(t, i))
+    for i in range(5):
+        await sink.text(f"more {i}")
+        await settled()
+    assert calls == []  # the first message, frozen with its preview, was left alone
+
+
+def test_a_banner_is_cut_before_it_is_escaped() -> None:
+    sink_text = "&" * 400
+    assert len(sinks.banner_text(sink_text, limit=sinks.BANNER_LIMIT)) <= sinks.BANNER_LIMIT
+    assert sinks.banner_text(sink_text, limit=10) == "&amp;" * 2  # never half an entity

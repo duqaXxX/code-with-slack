@@ -630,6 +630,10 @@ class ThreadSession:
     async def _feed_end_notes(self, renderer: TurnRenderer) -> None:
         """Say, at the end of the reply that just ran, what a restart dropped meanwhile."""
         notes, self._end_notes = self._end_notes, []
+        if notes:
+            # The dropped turns' replies are never written, and the newest was the latest: the
+            # reply that says so is the one that has the footer.
+            await self._hand_latest_to(renderer.sink)
         for note in notes:
             await renderer.feed_error(note)
 
@@ -932,7 +936,7 @@ class ThreadSession:
             while not self._queue.empty():
                 unsent.append(self._queue.get_nowait())
             await self._abandon(
-                texts.ENDED.format(reason=reason), more=unsent, because=texts.BECAUSE_RESTARTED
+                texts.ENDED.format(reason=reason), more=unsent, because=texts.BECAUSE_SHUTDOWN
             )
             if self._client is not None:
                 client, self._client = self._client, None
@@ -1367,6 +1371,8 @@ class ThreadSession:
         if landed:
             return
         self._unlanded.add(reply)
+        if self._closed:
+            return  # `close` settles every unlanded reply itself: nobody would await a task
         task = asyncio.create_task(self._await_landing(reply))
         self._background.add(task)
         task.add_done_callback(self._background.discard)
@@ -1578,6 +1584,7 @@ class ThreadSession:
             thread_ts=self.thread_ts,
             team_id=self._deps.identity.team_id,
             user_id=self._deps.identity.owner_user_id,
+            bot_user_id=self._deps.identity.bot_user_id,
             limiter=self._deps.update_limiter,
             clock=self._deps.stream_clock,
             on_open_reply=lambda old, new: self._deps.state.replace_open_reply(
@@ -1596,9 +1603,12 @@ class ThreadSession:
         list, when the reply that was the latest will never be written."""
         if self._latest is sink or not isinstance(sink, ReplySink):
             return
-        self._latest = sink
+        previous, self._latest = self._latest, sink
         await sink.set_running(self._running_counts())
         await sink.set_latest(True)
+        if previous is not None:
+            await previous.set_running("")
+            await previous.set_latest(False)
 
     async def _finish(self, active: ActiveTurn, result: ResultMessage) -> bool:
         """Close the turn's reply and release it; True when `!stop` cut it short, which the
@@ -1710,6 +1720,7 @@ class ThreadSession:
                 with contextlib.suppress(Exception):
                     await active.renderer.feed_error(line)
                     if dropped:
+                        await self._hand_latest_to(active.renderer.sink)
                         await active.renderer.feed_error(not_sent(dropped, because))
                     await self._feed_end_notes(active.renderer)
                     await self._close_reply(active.renderer, None, force=True)

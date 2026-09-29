@@ -1554,7 +1554,7 @@ async def test_a_turn_taken_while_claude_code_starts_is_ended_on_close(
     assert turn.done.is_set()
     # no reply had started: the taken message is named in one message of its own
     [note] = h.slack.calls_to("chat.postMessage")
-    assert texts.NOT_SENT_ONE.format(because=texts.BECAUSE_RESTARTED) in note["text"]
+    assert texts.NOT_SENT_ONE.format(because=texts.BECAUSE_SHUTDOWN) in note["text"]
 
 
 async def test_a_setup_failure_after_connect_closes_the_client(

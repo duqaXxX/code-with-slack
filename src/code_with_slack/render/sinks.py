@@ -36,6 +36,10 @@ FINAL_RETRY_SECONDS = 10.0
 # A stream is closed by Slack 5 minutes after `chat.startStream` (measured 2026-09-28: refused at
 # 300.3 s and 305 s); stopped by the daemon at this age, it leaves a margin for the round trip.
 STREAM_SECONDS = 280.0
+# A stream past this age is over, whatever the daemon did (M15, M32: refused at 300.3 s).
+STREAM_LIFE = 300.0
+# How far back a create of unknown outcome is looked for: the attempt's own clock, less this.
+ADOPT_SKEW_SECONDS = 2.0
 # chat.update is Tier 3, "50+ per minute" per app (chat.update reference, read 2026-09-28): 40
 # per 60 s plus a burst of 5, worst case 45 in one window, a real margin under the documented
 # floor. Paced evenly (a token bucket, not a sliding window) past the burst, so a busy minute is
@@ -64,6 +68,8 @@ REFUSED_CONTENT = {"invalid_blocks", "invalid_blocks_format", "msg_too_long", "i
 # Slack's answers about a stream's state (measured 2026-09-28): it is over, or still open.
 NOT_STREAMING = "message_not_in_streaming_state"
 STILL_STREAMING = "streaming_state_conflict"
+# What stands where a preview arrived too late for its message.
+PREVIEW_CUT = "Preview left out: it did not fit this message."
 # The icon of a diff container's title.
 ICONS = {"pending": "⏳", "in_progress": "⏳", "complete": "✓", "error": "✗"}
 TERMINAL = ("complete", "error")
@@ -76,13 +82,20 @@ def describe(exc: Exception) -> str:
     return type(exc).__name__
 
 
-STREAM_METHODS = ("chat.startStream", "chat.appendStream", "chat.stopStream")
+CREATING_METHODS = (
+    "chat.startStream",
+    "chat.appendStream",
+    "chat.stopStream",
+    "chat.postMessage",
+)
 
 
-class ConnectionRetryUnlessStream(AsyncConnectionErrorRetryHandler):
-    """slack-sdk's retry of a call that failed on the connection, except for the stream calls:
-    a start, an append and a stop are not idempotent, and a reset can come after Slack applied
-    the call, so a retry would duplicate text, or stop a stream twice."""
+class ConnectionRetryUnlessCreating(AsyncConnectionErrorRetryHandler):
+    """slack-sdk's retry of a call that failed on the connection, except for the calls that
+    create or grow a message: a start, an append, a stop and a post are not idempotent, and a
+    reset can come after Slack applied the call, so a retry would duplicate a message or its
+    text, or stop a stream twice. The sink reads the thread back instead, and adopts what
+    landed."""
 
     async def _can_retry_async(
         self,
@@ -92,7 +105,7 @@ class ConnectionRetryUnlessStream(AsyncConnectionErrorRetryHandler):
         response: Any = None,
         error: Exception | None = None,
     ) -> bool:
-        if request.url.rstrip("/").endswith(STREAM_METHODS):
+        if request.url.rstrip("/").endswith(CREATING_METHODS):
             return False
         return await super()._can_retry_async(
             state=state, request=request, response=response, error=error
@@ -111,6 +124,10 @@ class Clock:
 
     async def sleep(self, seconds: float) -> None:
         await asyncio.sleep(seconds)
+
+    def time(self) -> float:
+        """Wall-clock seconds, as a Slack ts counts them."""
+        return time.time()
 
 
 async def delete_request(slack: AsyncWebClient, *, channel: str, ts: str) -> None:
@@ -220,11 +237,23 @@ def plain_text(blocks: list[dict[str, Any]]) -> str:
     return body or "…"
 
 
-def banner_text(paragraph: str) -> str:
+def banner_text(paragraph: str, *, limit: int | None = None) -> str:
     """A paragraph of Claude's markdown as the plain `text` of a notification: the markers gone
     (headings, quotes, list bullets, emphasis, code ticks, link targets) and `&`, `<`, `>`
-    escaped, since Slack reads them as markup there too."""
-    return mrkdwn_escape(strip_markdown(paragraph))
+    escaped, since Slack reads them as markup there too. With `limit` it is cut before it is
+    escaped, so the result holds at most that many characters and no half an entity."""
+    plain = strip_markdown(paragraph)
+    if limit is None:
+        return mrkdwn_escape(plain)
+    out: list[str] = []
+    size = 0
+    for char in plain:
+        piece = mrkdwn_escape(char)
+        if size + len(piece) > limit:
+            break
+        out.append(piece)
+        size += len(piece)
+    return "".join(out)
 
 
 def strip_markdown(text: str) -> str:
@@ -305,17 +334,28 @@ Cursor = tuple[int, int]  # (part, offset): characters into a text part, element
 class _Text:
     text: str
     notice: bool = False  # a line of the daemon's own: never the banner while Claude has words
+    rev: int = 0  # bumped when it changes: a message whose parts kept theirs is not rendered again
 
 
 @dataclass
 class _Tool:
     update: TaskUpdate
+    rev: int = 0
+    _pieces: list[str] = field(default_factory=list, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.set(self.update)
+
+    def set(self, update: TaskUpdate) -> None:
+        """A new state of the call. What follows its card is worked out once, here."""
+        self.update = update
+        view = update.shown_preview
+        self._pieces = [c for c in split(view.body) if c] if view and view.body else []
 
     def pieces(self) -> list[str]:
         """What follows the tool's card: the terminal's preview of a call that ended well, cut
         into pieces that fit a message each. None until the call ends, and for any other call."""
-        view = self.update.shown_preview
-        return [c for c in split(view.body) if c] if view and view.body else []
+        return self._pieces
 
     @property
     def extent(self) -> int:
@@ -428,6 +468,10 @@ class _Message:
     # An append whose outcome is unknown: the stream is no longer told anything, it is stopped
     # and the message goes on by update, from the model.
     blind: bool = False
+    started: float = 0.0  # when its stream started, by the clock: a stream is over at 5 minutes
+    # (span revision, end) of the last write of a stopped message that has a successor: while it
+    # holds, nothing in the message changed and it is not rendered again.
+    checked: tuple[int, Cursor | None] | None = None
     # The footer a stop of unknown outcome carried (a footerless stop records nothing): if the
     # next stop finds the stream over, that stop is the one that landed.
     stop_unknown: list[dict[str, Any]] | None = None
@@ -452,6 +496,7 @@ class ReplySink:
         thread_ts: str,
         team_id: str,
         user_id: str,
+        bot_user_id: str,
         limiter: UpdateLimiter,
         clock: Clock | None = None,
         on_open_reply: Callable[[str | None, str | None], None] | None = None,
@@ -462,6 +507,8 @@ class ReplySink:
         # A stream is addressed to a user of a workspace (as the recordings passed them).
         self._team_id = team_id
         self._user_id = user_id
+        # The daemon's own bot: whose messages are read back to find one a create left unknown.
+        self._bot_user_id = bot_user_id
         self._limiter = limiter
         self._clock = clock or Clock()
         # Crash repair (issue #19): `(old_ts, new_ts)`, this sink's own transition in the
@@ -497,6 +544,7 @@ class ReplySink:
         # Bumped by `_changed`: `_later` compares it before and after a pass to notice a change
         # that arrived while the pass wrote or waited its turn, and runs another pass for it.
         self._version = 0
+        self._rev = 0
 
     def _track(self, old: str | None, new: str | None) -> bool:
         """One transition of this sink's own entries in the thread's open-replies list: add
@@ -564,8 +612,9 @@ class ReplySink:
         last = self._parts[-1] if self._parts else None
         if isinstance(last, _Text) and last.notice == notice:
             last.text += markdown
+            last.rev = self._next_rev()
         else:
-            self._parts.append(_Text(markdown, notice))
+            self._parts.append(_Text(markdown, notice, self._next_rev()))
         await self._changed()
 
     async def task(self, update: TaskUpdate) -> None:
@@ -574,8 +623,13 @@ class ReplySink:
             tool = self._tools[update.id] = _Tool(update)
             self._parts.append(tool)
         else:
-            tool.update = update
+            tool.set(update)
+        tool.rev = self._next_rev()
         await self._changed()
+
+    def _next_rev(self) -> int:
+        self._rev += 1
+        return self._rev
 
     async def set_running(self, counts: str) -> None:
         """Show what still runs in this thread (`⏳ 1 shell · 1 agent`) after the footer, or on a
@@ -690,6 +744,9 @@ class ReplySink:
 
     # The reply's model: the parts in order, cut into messages at cursors.
 
+    def _span_rev(self, message: _Message, end: Cursor | None) -> int:
+        return max((part.rev for _, part, _, _ in self._span(message.start, end)), default=0)
+
     def _has_content(self) -> bool:
         return any(isinstance(p, _Tool) or p.text.strip() for p in self._parts)
 
@@ -742,12 +799,12 @@ class ReplySink:
             if isinstance(part, _Text):
                 words = part.text[floor:ceil].strip()
                 if words and not part.notice:
-                    return banner_text(words.split("\n\n", 1)[0])[:BANNER_LIMIT] or "…"
+                    return banner_text(words.split("\n\n", 1)[0], limit=BANNER_LIMIT) or "…"
                 notice = notice or words
         for _, part, _, _ in span:
             if isinstance(part, _Tool):
-                return banner_text(card_fields(part.update)["title"])[:BANNER_LIMIT] or "…"
-        return banner_text(notice.split("\n\n", 1)[0])[:BANNER_LIMIT] or "…"
+                return banner_text(card_fields(part.update)["title"], limit=BANNER_LIMIT) or "…"
+        return banner_text(notice.split("\n\n", 1)[0], limit=BANNER_LIMIT) or "…"
 
     # What a stream is told.
 
@@ -873,6 +930,9 @@ class ReplySink:
         MESSAGE_LIMIT and BLOCKS_LIMIT, and where the reply goes on if it does not all fit."""
         blocks: list[dict[str, Any]] = []
         size = 0
+        # A message whose span is fixed: what its cards and text take, and what previews took.
+        base_blocks, base_size = self._base(message, end) if end is not None else (0, 0)
+        extra_blocks = extra_size = 0
         for index, part, floor, ceil in self._span(message.start, end):
             if isinstance(part, _Text):
                 raw = part.text[floor:ceil]
@@ -899,15 +959,41 @@ class ReplySink:
                         return blocks, (index, 0)
                     blocks.append(card_block(part.update))
                 for piece in pieces:
-                    shown = piece_blocks(part, piece)
                     length = len(part.pieces()[piece - 1])
-                    if end is None and (
-                        len(blocks) + len(shown) > BLOCKS_LIMIT or size + length > MESSAGE_LIMIT
+                    if end is None:
+                        if len(blocks) + 1 > BLOCKS_LIMIT or size + length > MESSAGE_LIMIT:
+                            return blocks, (index, piece)
+                    elif (
+                        base_blocks + extra_blocks + 1 > BLOCKS_LIMIT
+                        or base_size + extra_size + length > MESSAGE_LIMIT
                     ):
+                        # A preview that arrives after its card, in a message whose span is
+                        # fixed and full: it is cut, and says so, rather than pass the limit
+                        # (Slack would refuse the whole update, the card with it).
+                        blocks.append(context_block(PREVIEW_CUT))
+                        extra_blocks += 1
+                        continue
+                    shown = piece_blocks(part, piece)
+                    if end is None and len(blocks) + len(shown) > BLOCKS_LIMIT:
                         return blocks, (index, piece)
                     blocks += shown
                     size += length
+                    extra_blocks += len(shown)
+                    extra_size += length
         return blocks, None
+
+    def _base(self, message: _Message, end: Cursor) -> tuple[int, int]:
+        """The blocks and characters the text and the cards of a fixed span take: what is left of
+        the limits is what its previews may."""
+        blocks = size = 0
+        for _, part, floor, ceil in self._span(message.start, end):
+            if isinstance(part, _Text):
+                words = part.text[floor:ceil].strip("\n")
+                if words:
+                    blocks, size = blocks + 1, size + len(words)
+            elif self._tool_elements(part, floor, ceil)[0]:
+                blocks += 1
+        return blocks, size
 
     async def _update_step(
         self, message: _Message, end: Cursor | None
@@ -993,19 +1079,27 @@ class ReplySink:
         blocks += footer
         if not blocks:
             return True, overflow
+        attempted = self._clock.time()
+        banner = self._banner(self._span(message.start, None))
         try:
             # Claude's text can carry a link built to leak data when Slack fetches it for a
             # preview: no previews for anything the daemon posts.
             posted = await self._slack.chat_postMessage(
                 channel=self._channel,
                 thread_ts=self._thread_ts,
-                text=self._banner(self._span(message.start, None)),
+                text=banner,
                 blocks=blocks,
                 unfurl_links=False,
                 unfurl_media=False,
             )
         except Exception as exc:
             logger.warning("could not write a reply to Slack: %s", describe(exc))
+            if unknown_outcome(exc):
+                ts = await self._adopt(attempted, stream=False, probe=banner)
+                if ts is not None:
+                    message.ts, message.shown, message.footer = ts, blocks, footer
+                    self._retrack()
+                    return True, overflow
             if (
                 self._closed_out
                 and describe(exc) in REFUSED_CONTENT
@@ -1018,6 +1112,39 @@ class ReplySink:
         self._retrack()
         return True, overflow
 
+    @staticmethod
+    def _first_words(plan: _Plan) -> str:
+        """The start of what a stream's first chunks say, as its message's `text` reads back."""
+        first = plan.chunks[0]
+        words = str(first.get("text") or first.get("title") or "")
+        return " ".join(words.split())[:30]
+
+    async def _adopt(self, attempted: float, *, stream: bool, probe: str) -> str | None:
+        """A create that failed on the connection may have landed. Read the thread back, and
+        return the ts of the daemon's own message newer than the attempt that carries `probe`
+        (a stream: `streaming_state`, and the start of its text), or None. Writing again first
+        would make it twice."""
+        try:
+            read = await self._slack.conversations_replies(
+                channel=self._channel,
+                ts=self._thread_ts,
+                oldest=f"{attempted - ADOPT_SKEW_SECONDS:.6f}",
+                limit=200,
+            )
+        except Exception as exc:
+            logger.warning("could not read the thread back for a lost write: %s", describe(exc))
+            return None
+        known = {m.ts for m in self._messages if m.ts} | {self._closing}
+        for found in read.get("messages") or []:
+            ts = str(found.get("ts"))
+            if ts == self._thread_ts or ts in known or found.get("user") != self._bot_user_id:
+                continue
+            if stream and "streaming_state" not in found:
+                continue
+            if probe in str(found.get("text", "")):
+                return ts
+        return None
+
     async def _stream_step(self, message: _Message) -> tuple[bool, Cursor | None]:
         """Tell the message's stream what it lacks, starting it with the first content: (written,
         where the reply goes on past the message)."""
@@ -1025,6 +1152,7 @@ class ReplySink:
         if not plan.chunks:
             return True, plan.overflow
         if message.ts is None:
+            attempted = self._clock.time()
             try:
                 started = await self._slack.chat_startStream(
                     channel=self._channel,
@@ -1038,12 +1166,20 @@ class ReplySink:
                 logger.warning(
                     "could not start a reply's stream: %s%s",
                     describe(exc),
-                    " (outcome unknown: a stream may be open that this reply never learned of)"
+                    " (outcome unknown: the thread is read back for a stream it may have made)"
                     if unknown_outcome(exc)
                     else "",
                 )
-                return False, None
-            message.ts, message.streaming = str(started["ts"]), True
+                ts = None
+                if unknown_outcome(exc):
+                    ts = await self._adopt(attempted, stream=True, probe=self._first_words(plan))
+                if ts is None:
+                    return False, None
+                stream_ts = ts  # it landed: this is that stream
+            else:
+                stream_ts = str(started["ts"])
+            message.ts, message.streaming = stream_ts, True
+            message.started = attempted
             self._sent(message, plan)
             self._retrack()
             message.deadline = asyncio.create_task(self._expire(message))
@@ -1102,16 +1238,22 @@ class ReplySink:
                 if unknown_outcome(exc) and blocks and message.stop_unknown is None:
                     message.stop_unknown = list(blocks)
                 return "failed"
-            if message.stop_unknown is not None:
+            if message.stop_unknown is not None and not self._past_life(message):
                 # The stop that failed on the connection is the one that landed, footer and all.
                 blocks, result = message.stop_unknown, "stopped"
             else:
-                result = "gone"  # over without a footer of ours: the end posts one
+                # Over without a footer of ours, or past the stream's life, when Slack's own end
+                # cannot be told from our stop landing: the end posts a footer of its own.
+                result = "gone"
             message.stop_unknown = None
         self._gone(message)
+        message.stop_unknown = None
         message.exact = self._stream_shows(message, end)
         message.footer = list(blocks or []) if result == "stopped" else []
         return result
+
+    def _past_life(self, message: _Message) -> bool:
+        return self._clock.time() - message.started >= STREAM_LIFE
 
     async def _expire(self, message: _Message) -> None:
         """STREAM_SECONDS after the stream started: stop it before Slack does, and go on by
@@ -1152,11 +1294,14 @@ class ReplySink:
                 return await self._end() if self._closed_out else True
             self._messages.append(_Message((0, 0), "stream"))
         for message, following in itertools.pairwise(self._messages):
-            if (
-                message.ts is not None
-                and not (await self._update_step(message, following.start))[0]
-            ):
+            if message.ts is None:
+                continue
+            stamp = (self._span_rev(message, following.start), following.start)
+            if message.checked == stamp:
+                continue  # nothing in it changed since it was last brought to the model
+            if not (await self._update_step(message, following.start))[0]:
                 return False
+            message.checked = stamp
         while True:
             message = self._messages[-1]
             if message.streaming and message.blind:
@@ -1213,6 +1358,7 @@ class ReplySink:
         footer as it stands: it stays once posted, since it is what notified. Its text is
         Claude's own words, as a banner: never a line of the daemon's."""
         blocks = self._closing_blocks() or [context_block(ZERO_WIDTH_SPACE)]
+        attempted = self._clock.time()
         try:
             if self._closing is None:
                 posted = await self._slack.chat_postMessage(
@@ -1232,6 +1378,11 @@ class ReplySink:
                 )
         except Exception as exc:
             logger.warning("could not write a reply's closing message: %s", describe(exc))
+            if self._closing is None and unknown_outcome(exc):
+                self._closing = await self._adopt(attempted, stream=False, probe=self._banner())
+                if self._closing is not None:
+                    self._closing_shown = blocks
+                    return True
             return False
         self._closing_shown = blocks
         return True

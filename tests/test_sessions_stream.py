@@ -182,6 +182,8 @@ async def test_a_restart_with_queued_messages_ends_the_running_reply_with_one_no
     assert '"second question"' in reply and '"third question"' in reply
     assert len(h.slack.stream_ts) == 1  # the dropped messages get no reply of their own
     assert h.slack.pushes() == 2  # the approval request, and this one end
+    # the reply that says it is the thread's latest: the footer is under it
+    assert {"type": "divider"} in h.slack.calls_to("chat.stopStream")[-1]["blocks"]
     assert Status.ERROR.value in h.reactions()  # D10: a dropped message reacts ❌
 
 
@@ -410,8 +412,37 @@ async def test_a_crossed_owner_query_hands_latest_to_the_reply_that_carried_its_
     h.clients[0].inject(split_turns(sdk_messages("tools"))[0])
     await asyncio.wait_for(owner.done.wait(), 2)
     assert session._latest is carrier
+    assert owner.sink._latest is False  # the discarded reply is no longer the latest
 
 
 def test_the_report_helper_still_reads_a_report() -> None:
     assert is_report(texts.BACKGROUND_NOTICE)
     assert sessions.asked("hello") == "hello"
+
+
+async def test_a_close_leaves_no_task_waiting_on_a_reply_it_could_not_end(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h = harness_for({"turns": [with_ask(CanUseToolCall("Bash", {"command": "ls"}))]})
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 60.0)
+    h.slack.responses["chat.stopStream"] = aiohttp.ClientConnectionError("down")
+    session = h.session()
+    await session.submit("hello")
+    await until(lambda: bool(h.approvals._pending) and bool(h.slack.stream_ts))
+    await session.close()
+    waiting = [t for t in asyncio.all_tasks() if "_await_landing" in repr(t)]
+    assert waiting == []  # `close` settles the reply itself: nobody would await these
+
+
+async def test_a_plain_shutdown_does_not_say_the_daemon_restarted(
+    harness_for: Callable[..., Harness],
+) -> None:
+    gate = asyncio.Event()
+    h = harness_for({"connect_gate": gate})
+    session = h.session()
+    await session.submit("hello")
+    await asyncio.sleep(0.05)
+    await session.close()  # SIGINT: no drain ran, nothing says a restart
+    [note] = h.slack.calls_to("chat.postMessage")
+    assert "restarted" not in note["text"]
+    assert texts.NOT_SENT_ONE.format(because=texts.BECAUSE_SHUTDOWN) in note["text"]
