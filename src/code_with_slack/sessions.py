@@ -293,6 +293,10 @@ class SessionDeps:
     # The clock of each reply's stream deadline (280 s): a test replaces it to cross the deadline
     # without waiting for it.
     stream_clock: Clock = field(default_factory=Clock)
+    # The client replies are written with: one that does not retry a create or a stream call after
+    # a reset (`ConnectionRetryUnlessCreating`), which every other caller of `slack` still gets.
+    # None: `slack` itself.
+    reply_slack: AsyncWebClient | None = None
 
 
 @dataclass
@@ -1579,7 +1583,7 @@ class ThreadSession:
         """A new reply, which becomes this thread's latest and takes over the running list. It
         writes nothing until Claude has something to show."""
         sink = ReplySink(
-            self._deps.slack,
+            self._deps.reply_slack or self._deps.slack,
             channel=self.channel_id,
             thread_ts=self.thread_ts,
             team_id=self._deps.identity.team_id,

@@ -8,6 +8,7 @@ shape the SDK would not produce. If a SDK release moves the parser, this import 
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -353,8 +354,14 @@ class FakeSlack(AsyncWebClient):
         ).validate()
 
     def _stream_text(self, ts: str) -> str:
-        """A stream's `text` as it reads back: its markdown and its cards' titles."""
+        """A stream's `text` as Slack reads it back (recorded 2026-09-28, `message-mixed-*` and
+        `message-markdown-*`): the blank lines kept, `**b**` as `*b*`, a heading without its
+        `## `, a list bullet as `•`, a link as `<url|label>`; then its cards' titles."""
         text, cards = self._shown(ts)
+        text = re.sub(r"\[([^\]]*)\]\(([^)]*)\)", r"<\2|\1>", text)
+        text = re.sub(r"\*\*(.+?)\*\*", r"*\1*", text)
+        text = re.sub(r"^#+ ", "", text, flags=re.M)
+        text = re.sub(r"^[-*] ", "• ", text, flags=re.M)
         return " ".join([text, *(c["title"] for c in cards)]).strip()
 
     def _thread(self, args: dict[str, Any]) -> dict[str, Any]:

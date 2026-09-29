@@ -446,3 +446,16 @@ async def test_a_plain_shutdown_does_not_say_the_daemon_restarted(
     [note] = h.slack.calls_to("chat.postMessage")
     assert "restarted" not in note["text"]
     assert texts.NOT_SENT_ONE.format(because=texts.BECAUSE_SHUTDOWN) in note["text"]
+
+
+async def test_a_reply_is_written_through_the_client_made_for_replies(
+    harness_for: Callable[..., Harness], slack: Any
+) -> None:
+    from tests.fakes import FakeSlack
+
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    replies = FakeSlack()
+    h.deps.reply_slack = replies
+    turn = await h.session().submit("list the files")
+    await asyncio.wait_for(turn.done.wait(), 2)
+    assert replies.stream_ts and not h.slack.stream_ts  # the reply, not the approvals, uses it

@@ -1484,3 +1484,50 @@ def test_a_banner_is_cut_before_it_is_escaped() -> None:
     sink_text = "&" * 400
     assert len(sinks.banner_text(sink_text, limit=sinks.BANNER_LIMIT)) <= sinks.BANNER_LIMIT
     assert sinks.banner_text(sink_text, limit=10) == "&amp;" * 2  # never half an entity
+
+
+async def test_many_late_previews_in_a_full_message_get_one_note_and_stay_in_the_limit(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    for w in range(10):
+        await sink.task(tool(f"w{w}", "Write", "in_progress"))
+    for i in range(60):
+        await sink.task(tool(f"t{i}", "Read"))
+    await settled()
+    first = slack.stream_ts[0]
+    body = "\n".join(f"{i:>4} {'x' * 90}" for i in range(100))
+    for w in range(10):
+        view = Preview("Write(big.txt)", "Wrote 100 lines to big.txt", body)
+        await sink.task(tool(f"w{w}", "Write", preview=view))
+    await settled()
+    updates = [u for u in slack.calls_to("chat.update") if u["ts"] == first]
+    assert updates
+    for update in updates:
+        assert len(update["blocks"]) <= 50
+    notes = [b for b in updates[-1]["blocks"] if b == sinks.context_block(sinks.PREVIEW_CUT)]
+    assert len(notes) == 1  # one note for the message, however many previews it left out
+
+
+async def test_a_stream_is_adopted_from_slack_s_converted_read_back() -> None:
+    # Slack reads markdown back converted (`**b**` as `*b*`, a heading without its `## `, a link
+    # as `<url|label>`, the blank lines kept): the words are compared, not the markup.
+    slack = ResetAfterApply()
+    slack.reset_next = "chat.startStream"
+    sink = reply(slack)
+    await sink.text("## Title\n\n**bold** and [a link](https://example.com) follow.")
+    await settled()
+    await sink.text(" More.")
+    await settled()
+    assert len(slack.calls_to("chat.startStream")) == 1
+
+
+async def test_a_start_with_nothing_to_compare_is_not_adopted() -> None:
+    slack = ResetAfterApply()
+    slack.reset_next = "chat.startStream"
+    sink = reply(slack)
+    await sink.text("…")
+    await settled()
+    await sink.text(" and then more words")
+    await settled()
+    assert len(slack.calls_to("chat.startStream")) == 2  # tried again, not guessed at

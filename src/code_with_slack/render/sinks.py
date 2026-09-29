@@ -40,6 +40,8 @@ STREAM_SECONDS = 280.0
 STREAM_LIFE = 300.0
 # How far back a create of unknown outcome is looked for: the attempt's own clock, less this.
 ADOPT_SKEW_SECONDS = 2.0
+# How much of a message's first words is compared to know it is the one that was lost.
+ADOPT_WORDS = 40
 # chat.update is Tier 3, "50+ per minute" per app (chat.update reference, read 2026-09-28): 40
 # per 60 s plus a burst of 5, worst case 45 in one window, a real margin under the documented
 # floor. Paced evenly (a token bucket, not a sliding window) past the burst, so a busy minute is
@@ -254,6 +256,14 @@ def banner_text(paragraph: str, *, limit: int | None = None) -> str:
         out.append(piece)
         size += len(piece)
     return "".join(out)
+
+
+def plain_words(text: str) -> str:
+    """The words of a text with the markup, the punctuation and the spacing gone: what two
+    renderings of one text (Claude's markdown and Slack's converted read-back of it, with `*b*`
+    for `**b**`, `<url|label>` for a link, `•` for a bullet) have in common."""
+    text = re.sub(r"<[^|>]*\|([^>]*)>", r"\1", text)
+    return " ".join(re.findall(r"\w+", strip_markdown(text))).lower()
 
 
 def strip_markdown(text: str) -> str:
@@ -932,7 +942,10 @@ class ReplySink:
         size = 0
         # A message whose span is fixed: what its cards and text take, and what previews took.
         base_blocks, base_size = self._base(message, end) if end is not None else (0, 0)
-        extra_blocks = extra_size = 0
+        left_out = (
+            self._cut_pieces(message, end, base_blocks, base_size) if end is not None else set()
+        )
+        noted = False
         for index, part, floor, ceil in self._span(message.start, end):
             if isinstance(part, _Text):
                 raw = part.text[floor:ceil]
@@ -963,24 +976,44 @@ class ReplySink:
                     if end is None:
                         if len(blocks) + 1 > BLOCKS_LIMIT or size + length > MESSAGE_LIMIT:
                             return blocks, (index, piece)
-                    elif (
-                        base_blocks + extra_blocks + 1 > BLOCKS_LIMIT
-                        or base_size + extra_size + length > MESSAGE_LIMIT
-                    ):
+                    elif (index, piece) in left_out:
                         # A preview that arrives after its card, in a message whose span is
-                        # fixed and full: it is cut, and says so, rather than pass the limit
-                        # (Slack would refuse the whole update, the card with it).
-                        blocks.append(context_block(PREVIEW_CUT))
-                        extra_blocks += 1
+                        # fixed and full: it is cut, and says so once, rather than pass the
+                        # limit (Slack would refuse the whole update, the card with it).
+                        if not noted:
+                            blocks.append(context_block(PREVIEW_CUT))
+                            noted = True
                         continue
                     shown = piece_blocks(part, piece)
                     if end is None and len(blocks) + len(shown) > BLOCKS_LIMIT:
                         return blocks, (index, piece)
                     blocks += shown
                     size += length
-                    extra_blocks += len(shown)
-                    extra_size += length
         return blocks, None
+
+    def _cut_pieces(
+        self, message: _Message, end: Cursor, base_blocks: int, base_size: int
+    ) -> set[tuple[int, int]]:
+        """The preview pieces a fixed span has no room for, once the text and the cards, and the
+        one note that says pieces were left out, have theirs. Pieces are taken in order."""
+        cut: set[tuple[int, int]] = set()
+        for reserved in (0, 1):  # a note is owed as soon as one piece is cut
+            cut, used_blocks, used_size = set(), 0, 0
+            for index, part, floor, ceil in self._span(message.start, end):
+                if not isinstance(part, _Tool):
+                    continue
+                for piece in self._tool_elements(part, floor, ceil)[1]:
+                    length = len(part.pieces()[piece - 1])
+                    if (
+                        base_blocks + used_blocks + 1 + reserved > BLOCKS_LIMIT
+                        or base_size + used_size + length > MESSAGE_LIMIT
+                    ):
+                        cut.add((index, piece))
+                    else:
+                        used_blocks, used_size = used_blocks + 1, used_size + length
+            if not cut:
+                break
+        return cut
 
     def _base(self, message: _Message, end: Cursor) -> tuple[int, int]:
         """The blocks and characters the text and the cards of a fixed span take: what is left of
@@ -1095,7 +1128,9 @@ class ReplySink:
         except Exception as exc:
             logger.warning("could not write a reply to Slack: %s", describe(exc))
             if unknown_outcome(exc):
-                ts = await self._adopt(attempted, stream=False, probe=banner)
+                ts = await self._adopt(
+                    attempted, stream=False, probe=plain_words(banner)[:ADOPT_WORDS]
+                )
                 if ts is not None:
                     message.ts, message.shown, message.footer = ts, blocks, footer
                     self._retrack()
@@ -1114,10 +1149,10 @@ class ReplySink:
 
     @staticmethod
     def _first_words(plan: _Plan) -> str:
-        """The start of what a stream's first chunks say, as its message's `text` reads back."""
+        """The start of what a stream's first chunks say, as plain words: empty when there are
+        none to compare (then nothing is adopted)."""
         first = plan.chunks[0]
-        words = str(first.get("text") or first.get("title") or "")
-        return " ".join(words.split())[:30]
+        return plain_words(str(first.get("text") or first.get("title") or ""))[:ADOPT_WORDS]
 
     async def _adopt(self, attempted: float, *, stream: bool, probe: str) -> str | None:
         """A create that failed on the connection may have landed. Read the thread back, and
@@ -1141,7 +1176,7 @@ class ReplySink:
                 continue
             if stream and "streaming_state" not in found:
                 continue
-            if probe in str(found.get("text", "")):
+            if probe and probe in plain_words(str(found.get("text", ""))):
                 return ts
         return None
 
@@ -1379,7 +1414,9 @@ class ReplySink:
         except Exception as exc:
             logger.warning("could not write a reply's closing message: %s", describe(exc))
             if self._closing is None and unknown_outcome(exc):
-                self._closing = await self._adopt(attempted, stream=False, probe=self._banner())
+                self._closing = await self._adopt(
+                    attempted, stream=False, probe=plain_words(self._banner())[:ADOPT_WORDS]
+                )
                 if self._closing is not None:
                     self._closing_shown = blocks
                     return True

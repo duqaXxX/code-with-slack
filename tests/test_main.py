@@ -298,3 +298,34 @@ def test_alive_sessions_decides_a_short_folder_it_does_not_find(
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setattr("code_with_slack.sessions.list_sessions", lambda **_: [])
     assert entry._alive_sessions(tmp_path / "project") == set()
+
+
+def test_only_the_reply_client_skips_the_connection_retry_of_a_post() -> None:
+    import asyncio as aio
+
+    import aiohttp
+    from slack_sdk.http_retry.request import HttpRequest
+    from slack_sdk.http_retry.state import RetryState
+
+    shared, replies = entry.make_clients("xoxb-" + "fake")
+    error = aiohttp.ClientOSError(104, "Connection reset by peer")
+    post = HttpRequest(
+        method="POST",
+        url="https://slack.com/api/chat.postMessage",
+        headers={},
+        body_params={},
+        data={},
+    )
+
+    async def retried(client: object) -> bool:
+        handlers = client.retry_handlers  # type: ignore[attr-defined]
+        return any(
+            [
+                await h.can_retry_async(state=RetryState(), request=post, error=error)
+                for h in handlers
+            ]
+        )
+
+    # an approval or a question posted through the shared client is still retried after a reset
+    assert aio.run(retried(shared)) is True
+    assert aio.run(retried(replies)) is False
