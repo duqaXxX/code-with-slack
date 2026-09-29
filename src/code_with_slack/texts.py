@@ -68,7 +68,7 @@ BIND_OK_ELSEWHERE = (
 BIND_UNAVAILABLE = (
     "Bound this channel to `{directory}`, but no session can start there yet. {reason}"
 )
-# D5: the first reply in a thread whose folder differs from the channel's, once per process.
+# D5: shown, ephemeral, before every prompt in a thread whose folder differs from the channel's.
 OLD_THREAD_FOLDER = (
     "This session works in `{old}`, the folder it was created in: Claude Code resumes a session "
     "only there. New messages in the channel use `{new}`."

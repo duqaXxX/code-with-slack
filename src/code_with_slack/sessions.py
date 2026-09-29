@@ -754,7 +754,7 @@ class ThreadSession:
             return None if held else False
         if self.busy:
             # D10: a denial `deny_all` triggers below resolves `_can_use_tool`'s own future, whose
-            # `finally` would otherwise race this method's own closing ❌ back to working; this
+            # `finally` would otherwise race this method's own closing ✅ back to working; this
             # flag makes it skip that instead. `_finish` or `_abandon` clears it once this
             # turn's own tail ends.
             self._interrupting = True
