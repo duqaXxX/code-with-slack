@@ -779,7 +779,13 @@ class ThreadSession:
             try:
                 info = await client.get_server_info() or {}
                 self.commands = list(info.get("commands") or [])
-                self.models = list(info.get("models") or [])
+                # The setup keys every option on `value`: an entry without one is left out here,
+                # so a CLI that lists one cannot stop every first prompt.
+                self.models = [
+                    m
+                    for m in info.get("models") or []
+                    if isinstance(m, dict) and isinstance(m.get("value"), str) and m["value"]
+                ]
                 self.native_mode = str(info.get("current_permission_mode") or "default")
                 # Read once: a Start writing the switch meanwhile must not make the client's
                 # mode and what is recorded for it disagree.

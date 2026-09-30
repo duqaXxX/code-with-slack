@@ -1621,6 +1621,28 @@ async def test_bypass_from_the_folder_s_own_settings_shows_and_turns_off(
     assert not statuses(h)[-1].startswith("⚡ bypass")
 
 
+async def test_a_listed_model_without_a_value_is_left_out(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # The setup builds one option per entry from `value`: an entry a future CLI lists without
+    # one must not break every first prompt, so it is dropped where the list is read.
+    info = {
+        "commands": [],
+        "current_permission_mode": "default",
+        "models": [
+            {"value": "default", "displayName": "Default (recommended)"},
+            {"displayName": "No value"},
+            {"value": ""},
+            "not an entry",
+            {"value": "haiku", "displayName": "Haiku 4.5"},
+        ],
+    }
+    h = harness_for({"server_info": info})
+    session = h.session()
+    await session.ensure_connected()
+    assert [m["value"] for m in session.models] == ["default", "haiku"]
+
+
 async def test_every_message_is_posted_without_link_previews(
     harness_for: Callable[..., Harness],
 ) -> None:
