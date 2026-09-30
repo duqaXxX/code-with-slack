@@ -28,7 +28,13 @@ after the drain. A thread left with only background tasks gets `texts.RESTART_WA
 them by the footer's counts, since the daemon cannot tell whether a task (a dev server, a watcher)
 ever ends; `!stop` ends them with `ClaudeSDKClient.stop_task`. Claude Code starts no turn to report a
 task stopped this way (measured on 2.1.283), so neither the drain nor the thread's next prompt waits
-`sessions.INJECTED_TURN_WAIT` for one. When no session is working, after `__main__.DRAIN_LIMIT_SECONDS`, or on a second
+`sessions.INJECTED_TURN_WAIT` for one. The signal names no sender, and the session that sent it
+has a turn running when it arrives: every session with a turn running then gets
+`ThreadSession.may_have_ordered_restart`, and a background task it starts after the signal (most
+likely its own wait for the new process, which could only end once this one has exited, issue
+#87) is left out of `ThreadSession.restart_ready`, the idle test the drain uses, and of
+`texts.RESTART_WAITS`. The drain still waits for that session's turn and for every other task.
+When no session is working, after `__main__.DRAIN_LIMIT_SECONDS`, or on a second
 signal, the daemon closes the connection, then every session. After `bootout` launchd kills the
 daemon once the LaunchAgent's `ExitTimeOut` passes (60 seconds at most), whatever the drain is
 doing. `SIGINT` skips the drain: from a terminal it also reaches the Claude Code processes, which
@@ -455,7 +461,8 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   session running, queued or owed (`ThreadSession.idle`); a second prompt queued behind the first
   keeps it `⏳` until everything has ended. `❌` error: a turn fails, a
   restart's drain drops a queued or taken turn, `SessionGone`, or a shutdown's drain cuts short a
-  busy session. A `❌` stands until new work starts (a submit or a report turn, both of which
+  busy session. A session whose only unfinished work at the shutdown is a task the drain left out
+  (`ThreadSession.may_have_ordered_restart`) gets `✅` instead. A `❌` stands until new work starts (a submit or a report turn, both of which
   clear `ThreadSession._error_standing`), never flipped back to `✅` by some unrelated task's own
   idle sweep in between (`ThreadSession._react_done_if_idle` reads that flag, not
   `StatusReaction.current`, which only updates once its own `reactions.add` call returns and can
