@@ -73,6 +73,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `claude-agent-sdk` 0.2.163, which bundles Claude Code 2.1.286 (was 0.2.162 with 2.1.285); its
+  Python source differs from 0.2.162 only in the version strings. The SDK streams in
+  `tests/fixtures/sdk/` are recorded again on 2.1.286. A `thinking_delta` now carries
+  `estimated_tokens`, which the daemon does not read. The rate-limit event can now come before
+  the reply's `message_start`, so the test that cuts a turn mid-reply cuts after that event
+  instead of at a fixed index.
 - `claude-agent-sdk` 0.2.162, which bundles Claude Code 2.1.285 (was 0.2.160 with 2.1.283); its
   Python source differs from 0.2.160 only in the version strings. The SDK streams in
   `tests/fixtures/sdk/` are recorded again on 2.1.285. The background stream's report turn now
