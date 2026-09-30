@@ -36,7 +36,8 @@ In a private channel with only you and the bot, `!guide` explains how the channe
 `!bind <path>` binds it to a directory.
 From then on:
 
-- A top-level message opens a new thread and starts a session there; the reply appears in that
+- A top-level message opens a new thread, which first asks for the model, the effort and bypass;
+  **Start** starts the session with them and sends the message. The reply appears in that
   thread and grows as Claude works: Claude's text, a line per tool call, subagent and background
   task, and a footer with the branch and the lines changed since the last commit, the model, the
   effort level, the context used, the usage limits with their resets, and the folder. A reply
@@ -57,7 +58,7 @@ From then on:
 - `!bind`, typed in the channel, lists the folders under `ALLOWED_ROOT` that Claude Code trusts,
   with a Bind button each; `!bind <folder>` binds one directly.
 - `!bypass on`, sent inside a session's thread, switches that session to `bypassPermissions`
-  until `!bypass off`; a restart of code-with-slack keeps it.
+  until `!bypass off`, as ticking Bypass at Start does; a restart of code-with-slack keeps it.
 
 The full list is in [docs/setup.md](docs/setup.md#using-it).
 
