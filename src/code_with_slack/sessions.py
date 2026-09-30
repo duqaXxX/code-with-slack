@@ -1055,6 +1055,10 @@ class ThreadSession:
         # gets ❌; D9's idle close, always called on an idle session, never does, and leaves the
         # reaction exactly as it reads.
         cut_short = not self.idle
+        # Issue #87: at the end of a stop, a session whose only unfinished work is a background
+        # task the stop does not wait for (`may_have_ordered_restart`) ended its turn well; the
+        # task is most likely its own wait for the new process. ✅, as `!stop` would show.
+        only_skipped = cut_short and self.draining and self.restart_ready
         self._closed = True
         try:
             # Issue #19 fix round item 8: a snapshot taken before any cancellation below, not
@@ -1111,7 +1115,10 @@ class ThreadSession:
                     lost = not await reply.settle() or lost
                 except Exception:
                     lost = True
-            if cut_short or lost:
+            if only_skipped and not lost:
+                self._note_status(Status.DONE)
+                await self._status.show(Status.DONE)
+            elif cut_short or lost:
                 # Awaited, not `_react`: `_cancel_tasks` above has already run, so a task added
                 # to `_background` now would never be cancelled or awaited by anything again.
                 # Before `done_closing`/`on_closed`, not after: those let the manager evict this

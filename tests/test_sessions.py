@@ -2185,6 +2185,10 @@ async def test_a_stop_does_not_wait_for_a_task_its_running_turn_starts_afterward
     await asyncio.wait_for(h.manager.close_all(), 2)  # the shutdown that follows
     stored = h.state.thread(CHANNEL, THREAD)
     assert stored is not None and not stored.open_replies and stored.status is None
+    # Its turn ended well: the task the shutdown ends is its own wait, not work cut short (decided
+    # 2026-10-01: ✅, as `!stop` showed before this change).
+    assert h.reactions()[-1] == Status.DONE.value
+    assert Status.ERROR.value not in h.reactions()
 
 
 async def test_a_stop_still_waits_for_a_task_the_running_turn_started_before_it(
