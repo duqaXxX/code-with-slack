@@ -477,7 +477,10 @@ class ThreadSession:
         # sender, and the session that sent it has its turn running then; a background task it
         # starts from that point is often its own wait for the new process, which cannot end
         # before this one exits (issue #87). Those tasks are not waited for: the shutdown ends
-        # them with the Claude Code process.
+        # them with the Claude Code process. "After" means read after: a task the turn started
+        # just before the signal, whose start message the reader had not reached yet, counts as
+        # started after it. A single background command that sends the signal and then waits
+        # started before it, and is still waited for.
         self.may_have_ordered_restart = False
         self._after_restart: set[str] = set()
 

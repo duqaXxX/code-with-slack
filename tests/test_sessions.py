@@ -2182,6 +2182,9 @@ async def test_a_stop_does_not_wait_for_a_task_its_running_turn_starts_afterward
     assert session._running_task_ids()  # still running: the shutdown ends it
     posted = [p["text"] for p in h.slack.calls_to("chat.postMessage")]
     assert not any(t.startswith(texts.RESTART_WAITS.split("{")[0]) for t in posted)
+    await asyncio.wait_for(h.manager.close_all(), 2)  # the shutdown that follows
+    stored = h.state.thread(CHANNEL, THREAD)
+    assert stored is not None and not stored.open_replies and stored.status is None
 
 
 async def test_a_stop_still_waits_for_a_task_the_running_turn_started_before_it(
