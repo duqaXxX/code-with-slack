@@ -536,6 +536,9 @@ def build_app(
         first: the CLI's own model list is what the message offers, and a folder that cannot
         start fails here, before the owner picks anything."""
         try:
+            # First what an earlier, unsent Start left: the client it changed is dropped, so the
+            # connect below reads the folder's own mode again.
+            await session.forget_setup()
             await session.ensure_connected()
         except SessionClosed:
             # Closed during the downloads before this: the retry of the submit below never
@@ -545,8 +548,10 @@ def build_app(
                 raise SessionGone from None
             session = fresh
             await session.ensure_connected()
-        await session.forget_setup()  # what an earlier, unsent Start left: start from defaults
         models = session.models
+        # A folder whose own settings start Claude Code in bypass shows the box ticked: it is
+        # what would run, and unticking is the explicit off.
+        ticked = session.native_mode == "bypassPermissions"
 
         async def settle(choice: Choice, message_ts: str, pending: Pending) -> None:
             """Apply the choice, then turn the message into its summary line: all of it while
@@ -581,7 +586,7 @@ def build_app(
             thread_ts,
             session,
             text=texts.SETUP_FALLBACK,
-            blocks=lambda setup_id: setup_blocks(setup_id, models, Choice()),
+            blocks=lambda setup_id: setup_blocks(setup_id, models, Choice(bypass=ticked)),
             settle=settle,
             context=models,
         )

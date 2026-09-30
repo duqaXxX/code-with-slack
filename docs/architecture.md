@@ -410,7 +410,8 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   with the CLI's own list (`get_server_info()["models"]`, kept as `ThreadSession.models` and
   stored with the pending setup, so a click reads its choice against the list the message was
   built from), an Effort select with the chosen model's `supportedEffortLevels` (and `Default`,
-  which passes nothing), a Bypass checkbox and Start. Changing the model rewrites the message
+  which passes nothing), a Bypass checkbox (ticked when the folder's own Claude Code settings start the process in
+  bypassPermissions, so unticking is an explicit off, with `!bypass off`'s semantics) and Start. Changing the model rewrites the message
   (`chat.update`, which never notifies, and is skipped once the setup is decided) with the new
   model's levels. Start reads every control from the click's `state.values`
   (`setup.read_choice`), and `ThreadSession.apply_setup` applies it, and Start is authoritative: effort and bypass are written
@@ -419,7 +420,8 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   built with is stored and the client reconnected (the SDK has no runtime effort setter and no query has been
   sent, so no session is lost), a non-default model is `set_model()` on the live client (not
   stored: it survives a resume and leaves the owner's default alone, measured 2026-09-30, CLI
-  2.1.285), and bypass goes through `set_bypass` when the live client's mode differs. The message then
+  2.1.285), and bypass goes through `set_bypass` when the choice differs from what the live client
+  effectively runs (`_client_bypass`: the switch, or the folder's own bypass). The message then
   becomes one summary line, written inside the same wait (the cancel window covers the limiter
   wait; a cancel that already deleted the message skips the edit), and stays; the held message goes on unchanged. The wait shares `slack_app.ask_owner` and
   `hold.Holds` with D8. The entry stays in `Holds` while the answer is applied, so `!stop`, a

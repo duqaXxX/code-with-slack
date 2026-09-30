@@ -2024,6 +2024,9 @@ async def test_a_stop_says_bypass_ends_only_where_it_is_on(
 ) -> None:
     h = harness_for({})
     await h.session().set_bypass(bypass)
+    h.state.set_session(
+        CHANNEL, THREAD, "sess-ran"
+    )  # a thread that ran: bypass outlives the restart
     await asyncio.wait_for(h.manager.drain(asyncio.Event()), 2)
     posted = h.slack.calls_to("chat.postMessage")
     assert [p["text"] for p in posted] == ([texts.BYPASS_RESTARTING] if bypass else [])

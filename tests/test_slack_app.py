@@ -2671,3 +2671,128 @@ async def test_a_failing_forget_setup_does_not_hide_the_original_error(
     await manual.settle(0.3)
     assert manual.queries() == []
     assert any("RuntimeError" in t for t in said(manual) + manual.ephemerals())
+
+
+def native_bypass_folder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A folder whose own Claude Code settings start the process in bypassPermissions."""
+    original = FakeClaudeClient.__init__
+
+    def init(self: FakeClaudeClient, options: Any, **kw: Any) -> None:
+        original(self, options, **kw)
+        self._server_info = dict(self._server_info, current_permission_mode="bypassPermissions")
+
+    monkeypatch.setattr(FakeClaudeClient, "__init__", init)
+
+
+def bypass_box(world: World) -> dict[str, Any]:
+    ((_, _, _, ts),) = world.waiting_setups()
+    block = next(b for b in world.slack.messages[ts].blocks if b.get("block_id") == SETUP_BYPASS)
+    return block["elements"][0]
+
+
+async def test_a_native_bypass_folder_starts_the_box_ticked(
+    manual: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native_bypass_folder(monkeypatch)
+    await manual.dispatch(message("hello", ts=THREAD))
+    assert [o["value"] for o in bypass_box(manual)["initial_options"]] == ["on"]
+    await manual.dispatch(setup_click(manual, bypass=True))  # the ticked default
+    await manual.settle(0.3)
+    client = manual.clients[-1]
+    session = manual.sessions.get(CHANNEL, THREAD)
+    assert session is not None and session.native_mode == "bypassPermissions"
+    assert client.queries == ["hello"] and client.modes[-1:] in ([], ["bypassPermissions"])
+    assert manual.slack.calls_to("chat.update")[-1]["text"].endswith("Bypass: on")
+
+
+async def test_unticking_in_a_native_bypass_folder_turns_bypass_off(
+    manual: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native_bypass_folder(monkeypatch)
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(setup_click(manual))  # unticked: an explicit off, as `!bypass off`
+    await manual.settle(0.3)
+    client = manual.clients[-1]
+    session = manual.sessions.get(CHANNEL, THREAD)
+    assert session is not None and session.native_mode == "default"
+    assert client.modes[-1] == "default" and client.queries == ["hello"]
+    assert manual.slack.calls_to("chat.update")[-1]["text"].endswith("Bypass: off")
+
+
+async def test_a_typed_bypass_does_not_change_what_the_summary_says(
+    manual: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native_bypass_folder(monkeypatch)
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(reply("!bypass on", THREAD))
+    await manual.dispatch(setup_click(manual))  # unticked
+    await manual.settle(0.3)
+    client = manual.clients[-1]
+    assert client.modes[-1] == "default"
+    assert manual.slack.calls_to("chat.update")[-1]["text"].endswith("Bypass: off")
+
+
+async def test_a_model_change_keeps_the_bypass_tick(
+    manual: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native_bypass_folder(monkeypatch)
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(setup_click(manual, SETUP_MODEL, model="haiku"))  # unticked by the owner
+    assert "initial_options" not in bypass_box(manual)
+    await manual.dispatch(setup_click(manual, SETUP_MODEL, model="haiku", bypass=True))
+    assert bypass_box(manual)["initial_options"]
+
+
+async def test_a_connect_racing_start_does_not_record_bypass_as_off(
+    manual: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await manual.dispatch(message("hello", ts=THREAD))
+    session = manual.sessions.get(CHANNEL, THREAD)
+    assert session is not None
+    await session._drop_client()  # the client is gone while the setup waits
+    manual.state.set_bypass(CHANNEL, THREAD, True)  # what a restart left
+    gate = asyncio.Event()
+    original = FakeClaudeClient.set_permission_mode
+
+    async def gated(self: FakeClaudeClient, mode: str) -> None:
+        await original(self, mode)
+        await gate.wait()
+
+    monkeypatch.setattr(FakeClaudeClient, "set_permission_mode", gated)
+    status = asyncio.create_task(manual.dispatch(reply("!status", THREAD)))
+    await asyncio.sleep(0.1)
+    assert manual.clients[-1].modes == ["bypassPermissions"]  # connect blocked mid-switch
+    click = asyncio.create_task(manual.dispatch(setup_click(manual)))  # bypass off
+    await asyncio.sleep(0.1)
+    gate.set()
+    await status
+    await click
+    await manual.settle(0.3)
+    client = manual.clients[-1]
+    assert client.queries == ["hello"]
+    assert client.modes[-1] == "default"  # what Start said, not the client's first mode
+
+
+async def test_a_thread_that_never_ran_does_not_announce_bypass_at_restart(manual: World) -> None:
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(reply("!bypass on", THREAD))  # typed while the setup waits
+    session = manual.sessions.get(CHANNEL, THREAD)
+    assert session is not None
+    await session.announce_restart()
+    await asyncio.sleep(0.05)
+    assert texts.BYPASS_RESTARTING not in said(manual)
+
+
+async def test_a_native_bypass_folder_asks_again_with_the_box_ticked_after_a_stop(
+    manual: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native_bypass_folder(monkeypatch)
+    await manual.dispatch(message("hello", ts=THREAD))
+    gate = gate_limiter(manual)
+    await manual.dispatch(setup_click(manual))  # unticked: native mode moves to default
+    await asyncio.sleep(0.1)
+    await manual.dispatch(reply("!stop", THREAD))
+    gate.set()
+    await manual.settle(0.3)
+    await manual.dispatch(reply("again", THREAD))
+    assert [o["value"] for o in bypass_box(manual)["initial_options"]] == ["on"]

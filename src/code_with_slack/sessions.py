@@ -451,8 +451,9 @@ class ThreadSession:
         # `apply_setup` changed something that `forget_setup` has not undone.
         self._setup_applied = False
         # What the live client was built with or switched to: the effort option (no runtime
-        # setter exists) and whether it runs in bypass. `apply_setup` compares the owner's choice
-        # with these, not with what was stored, which a restart or a `!bypass on` can have moved.
+        # setter exists) and whether it effectively runs in bypass (the switch, or the folder's own
+        # settings starting it so). `apply_setup` compares the owner's choice with these, not with
+        # what was stored, which a restart or a `!bypass on` can have moved.
         self._client_effort: str | None = None
         self._client_bypass = False
         self.native_mode = "default"
@@ -761,14 +762,18 @@ class ThreadSession:
                 self.commands = list(info.get("commands") or [])
                 self.models = list(info.get("models") or [])
                 self.native_mode = str(info.get("current_permission_mode") or "default")
-                if self.bypass:
+                # Read once: a Start writing the switch meanwhile must not make the client's
+                # mode and what is recorded for it disagree.
+                switched = self.bypass
+                if switched:
                     await client.set_permission_mode("bypassPermissions")
             except BaseException:
                 # A client nobody holds would leave its Claude Code process running.
                 await self._disconnect(client)
                 raise
             self._client = client
-            self._client_effort, self._client_bypass = effort, self.bypass
+            self._client_effort = effort
+            self._client_bypass = switched or self.native_mode == "bypassPermissions"
             # A resumed session runs at the settings' level (measured), unknown until reported,
             # unless the daemon itself just asked for a stored level: that request is shown at
             # once, until Claude Code's own report (every turn ends with one) corrects it.
@@ -794,7 +799,7 @@ class ThreadSession:
             if self._closed:  # the close disconnected the client under the call
                 raise SessionClosed from None
             raise
-        self._client_bypass = on
+        self._client_bypass = on or self.native_mode == "bypassPermissions"
         # The session closed while the mode was being set: the thread this would write to may
         # already be gone, so the switch is never recorded after the fact.
         if self._closed:
@@ -814,7 +819,10 @@ class ThreadSession:
         (a restart or a `!bypass on` typed while the setup waited can have left either), so what
         runs is what the summary line says. An effort the live client was not built with goes
         through a fresh client (the SDK has no runtime effort setter; no query has been sent, so
-        no session is lost), then the model on the live client, then the permission mode.
+        no session is lost), then the model on the live client, then the permission mode: when
+        the choice differs from what the client effectively runs (the switch, or a folder whose
+        own settings start it in bypass), `set_bypass` moves it. Unticking in such a folder is an
+        explicit off with the semantics of `!bypass off`: the mode it returns to is `default`.
         Measured 2026-09-30 (CLI 2.1.285): `set_model` survives a resume and leaves the owner's
         own default alone, so the daemon does not store the model. A failure undoes what was
         applied (`forget_setup`) and goes on."""
@@ -874,8 +882,9 @@ class ThreadSession:
                 await self._disconnect(client)
 
     async def announce_restart(self) -> None:
-        """Say in the thread that bypass outlives the restart, when it is on."""
-        if self.bypass:
+        """Say in the thread that bypass outlives the restart, when it is on. Not for a thread that
+        never ran: its next message asks the setup again, and Start decides."""
+        if self.bypass and not self.never_ran:
             await self._post(texts.BYPASS_RESTARTING)
 
     async def announce_waiting(self) -> None:
