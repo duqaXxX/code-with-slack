@@ -65,7 +65,7 @@ from code_with_slack.guards import (
     is_prompt_message,
     message_actor,
 )
-from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, hold_blocks
+from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, Pending, hold_blocks
 from code_with_slack.prompt import Prompt
 from code_with_slack.render.escape import markdown_escape, mrkdwn_escape
 from code_with_slack.render.renderer import one_line
@@ -547,12 +547,34 @@ def build_app(
             await session.ensure_connected()
         await session.forget_setup()  # what an earlier, unsent Start left: start from defaults
         models = session.models
-        shown_ts = ""
 
-        async def settle(choice: Choice, message_ts: str) -> None:
-            nonlocal shown_ts
-            shown_ts = message_ts
+        async def settle(choice: Choice, message_ts: str, pending: Pending) -> None:
+            """Apply the choice, then turn the message into its summary line: all of it while
+            the hold is still open, so a stop that lands anywhere in here still cancels."""
             await session.apply_setup(choice)
+            # The message stays as a record of what was set: no longer a request, not deleted.
+            try:
+                state.remove_request(channel, thread_ts, message_ts)
+            except Exception as exc:
+                logger.warning(
+                    "could not clear a setup message from state.json in %s/%s: %s",
+                    channel,
+                    thread_ts,
+                    describe(exc),
+                )
+            line = setup_summary(models, choice)
+            try:
+                await sessions.update_limiter.acquire()
+                if pending.cancelled:
+                    return  # the cancel deleted the message during the wait: nothing to edit
+                await slack.chat_update(
+                    channel=channel,
+                    ts=message_ts,
+                    text=line,
+                    blocks=[context_block(notice_text(line))],
+                )
+            except Exception as exc:
+                logger.warning("could not update a setup message in %s: %s", channel, describe(exc))
 
         answer = await ask_owner(
             channel,
@@ -566,27 +588,6 @@ def build_app(
         if answer is None:
             await session.forget_setup()  # a stop or drain that came while Start was applied
             return None
-        # The message stays as a record of what was set: no longer a request, not deleted.
-        try:
-            state.remove_request(channel, thread_ts, shown_ts)
-        except Exception as exc:
-            logger.warning(
-                "could not clear a setup message from state.json in %s/%s: %s",
-                channel,
-                thread_ts,
-                describe(exc),
-            )
-        line = setup_summary(models, answer)
-        try:
-            await sessions.update_limiter.acquire()
-            await slack.chat_update(
-                channel=channel,
-                ts=shown_ts,
-                text=line,
-                blocks=[context_block(notice_text(line))],
-            )
-        except Exception as exc:
-            logger.warning("could not update a setup message in %s: %s", channel, describe(exc))
         return session
 
     async def ask_owner(
@@ -596,17 +597,17 @@ def build_app(
         *,
         text: str,
         blocks: Callable[[str], list[dict[str, Any]]],
-        settle: Callable[[Any, str], Awaitable[None]] | None = None,
+        settle: Callable[[Any, str, Pending], Awaitable[None]] | None = None,
         context: Any = None,
     ) -> Any:
         """Post a question that holds the owner's message and wait for the answer: whatever its
         buttons resolved it with, or None when it was cancelled (`!stop`, a drain) or never shown
         (`Not sent.` or the unposted notice, told already). `blocks` gets the id only its buttons
         carry; `context` comes back with a click that carries only that id. `settle(answer,
-        message_ts)` applies an answer while the thread still shows ✋ and the hold is still
-        open, so a `!stop` or drain meanwhile cancels (`Pending.cancelled`: nothing is sent, the
-        message is removed, `Not sent.`). When it raises, the message is removed, the hold ends
-        as a cancel would and the error goes on."""
+        message_ts, pending)` applies an answer and writes its summary while the thread still
+        shows ✋ and the hold is still open, so a `!stop` or drain meanwhile cancels
+        (`Pending.cancelled`: nothing is sent, the message is removed, `Not sent.`). When it
+        raises, the message is removed, the hold ends as a cancel would and the error goes on."""
         if sessions.draining:  # a restart could have started during an await before this
             await tell_owner(channel, thread_ts, texts.RESTARTING)
             return None
@@ -657,7 +658,7 @@ def build_app(
                     await remove_request(channel, thread_ts, message_ts)
             elif settle is not None:
                 try:
-                    await settle(answer, message_ts)
+                    await settle(answer, message_ts, pending)
                 except Exception as exc:
                     if not pending.cancelled:
                         await remove_request(channel, thread_ts, message_ts)

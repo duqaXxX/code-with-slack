@@ -413,12 +413,15 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   which passes nothing), a Bypass checkbox and Start. Changing the model rewrites the message
   (`chat.update`, which never notifies, and is skipped once the setup is decided) with the new
   model's levels. Start reads every control from the click's `state.values`
-  (`setup.read_choice`), and `ThreadSession.apply_setup` applies it: a non-default effort is
-  stored and the client reconnected (the SDK has no runtime effort setter and no query has been
+  (`setup.read_choice`), and `ThreadSession.apply_setup` applies it, and Start is authoritative: effort and bypass are written
+  from the choice whatever `state.json` held (a restart or a `!bypass on` typed meanwhile can
+  have left either), so what runs is what the summary says. An effort the live client was not
+  built with is stored and the client reconnected (the SDK has no runtime effort setter and no query has been
   sent, so no session is lost), a non-default model is `set_model()` on the live client (not
   stored: it survives a resume and leaves the owner's default alone, measured 2026-09-30, CLI
-  2.1.285), and bypass goes through `set_bypass`. The message then becomes one summary line and
-  stays; the held message goes on unchanged. The wait shares `slack_app.ask_owner` and
+  2.1.285), and bypass goes through `set_bypass` when the live client's mode differs. The message then
+  becomes one summary line, written inside the same wait (the cancel window covers the limiter
+  wait; a cancel that already deleted the message skips the edit), and stays; the held message goes on unchanged. The wait shares `slack_app.ask_owner` and
   `hold.Holds` with D8. The entry stays in `Holds` while the answer is applied, so `!stop`, a
   top-level `!stop` and a drain cancel it then too (`Pending.cancelled`): nothing is sent, the
   message is deleted, the owner gets `Not sent.` and `!stop` does not say nothing is running. An

@@ -2577,3 +2577,97 @@ async def test_a_model_change_cannot_overwrite_the_summary(manual: World) -> Non
     await manual.settle(0.2)
     last = manual.slack.calls_to("chat.update")[-1]
     assert last["text"].startswith("Model:")
+
+
+def gate_limiter(world: World) -> asyncio.Event:
+    """Hold every `chat.update` behind the process-wide limiter until the event is set."""
+    gate = asyncio.Event()
+    acquire = world.sessions.update_limiter.acquire
+
+    async def gated() -> None:
+        await gate.wait()
+        await acquire()
+
+    world.sessions.update_limiter.acquire = gated  # type: ignore[method-assign]
+    return gate
+
+
+async def test_stop_while_the_summary_waits_on_the_limiter_cancels(manual: World) -> None:
+    await manual.dispatch(message("hello", ts=THREAD))
+    gate = gate_limiter(manual)
+    await manual.dispatch(setup_click(manual))
+    await asyncio.sleep(0.1)
+    assert manual.queries() == []  # Start is still being settled: the summary waits
+    await manual.dispatch(reply("!stop", THREAD))
+    await asyncio.sleep(0.1)
+    assert texts.NOTHING_TO_STOP not in said(manual) + manual.ephemerals()
+    gate.set()
+    await manual.settle(0.3)
+    assert manual.queries() == []
+    assert texts.NOT_SENT in manual.ephemerals()
+    # The cancel deleted the message; the summary edit is skipped rather than sent to it.
+    assert len(manual.slack.calls_to("chat.delete")) == 1
+    assert manual.slack.calls_to("chat.update") == []
+    assert manual.state.thread(CHANNEL, THREAD).requests == ()
+
+
+async def test_a_restart_during_start_leaves_nothing_for_the_next_start(manual: World) -> None:
+    await manual.dispatch(message("hello", ts=THREAD))
+    gate = gate_limiter(manual)
+    await manual.dispatch(setup_click(manual, effort="high", bypass=True))
+    await asyncio.sleep(0.1)
+    manual.sessions.draining = True  # a restart begins before the prompt is sent
+    gate.set()
+    await manual.settle(0.2)
+    assert manual.queries() == [] and texts.RESTARTING in manual.ephemerals()
+    stored = manual.state.thread(CHANNEL, THREAD)
+    assert stored.bypass is True and stored.effort == "high"  # what the new process finds
+    # The restart: a new ThreadSession rebuilt from state.json.
+    manual.sessions.draining = False
+    old = manual.sessions.get(CHANNEL, THREAD)
+    assert old is not None
+    await old.close()
+    await manual.dispatch(reply("again", THREAD))
+    await asyncio.sleep(0.1)
+    assert len(manual.waiting_setups()) == 1  # asked the setup again
+    await manual.dispatch(setup_click(manual))  # defaults: effort Default, bypass off
+    await manual.settle(0.3)
+    client = manual.clients[-1]
+    assert client.queries == ["again"]
+    assert client.options.effort is None and client.modes in ([], ["default"])
+    stored = manual.state.thread(CHANNEL, THREAD)
+    assert stored.bypass is False and stored.effort is None
+    assert manual.slack.calls_to("chat.update")[-1]["text"].endswith(
+        "Effort: Default · Bypass: off"
+    )
+
+
+async def test_bypass_typed_while_the_setup_waits_is_overridden_by_start(manual: World) -> None:
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(reply("!bypass on", THREAD))
+    assert manual.clients[-1].modes == ["bypassPermissions"]
+    await manual.dispatch(setup_click(manual))  # bypass unticked
+    await manual.settle(0.3)
+    client = manual.clients[-1]
+    assert client.modes[-1] == "default"  # the live client is back to asking
+    assert manual.state.thread(CHANNEL, THREAD).bypass is False
+    assert client.queries == ["hello"]
+    assert manual.slack.calls_to("chat.update")[-1]["text"].endswith("Bypass: off")
+
+
+async def test_a_failing_forget_setup_does_not_hide_the_original_error(
+    manual: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def boom(self: FakeClaudeClient, model: str | None = None) -> None:
+        raise RuntimeError("bad model")
+
+    async def worse(self: Any) -> None:
+        raise OSError("cannot drop")
+
+    monkeypatch.setattr(FakeClaudeClient, "set_model", boom)
+    monkeypatch.setattr("code_with_slack.sessions.ThreadSession._drop_client", worse)
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(setup_click(manual, model="opus"))
+    await manual.settle(0.3)
+    assert manual.queries() == []
+    assert any("RuntimeError" in t for t in said(manual) + manual.ephemerals())
