@@ -87,6 +87,7 @@ from code_with_slack.render.sinks import (
 )
 from code_with_slack.render.status import Status, StatusReaction
 from code_with_slack.resume import by_last_activity
+from code_with_slack.setup import DEFAULT, Choice
 from code_with_slack.state import StateStore
 from code_with_slack.trust import workspace_trusted
 
@@ -195,6 +196,7 @@ class ClaudeClient(Protocol):
     async def query(self, prompt: str | AsyncIterable[dict[str, Any]]) -> None: ...
     def receive_messages(self) -> AsyncIterator[Message]: ...
     async def set_permission_mode(self, mode: PermissionMode) -> None: ...
+    async def set_model(self, model: str | None = None) -> None: ...
     async def interrupt(self) -> None: ...
     async def stop_task(self, task_id: str) -> None: ...
     async def get_server_info(self) -> dict[str, Any] | None: ...
@@ -441,6 +443,8 @@ class ThreadSession:
         # queued, so the timer is genuinely cancelled there, not reset to fire again mid-await.
         self._pending_submits = 0
         self.commands: list[dict[str, Any]] = []
+        # The CLI's own model list (value, displayName, supportedEffortLevels), for the setup.
+        self.models: list[dict[str, Any]] = []
         self.native_mode = "default"
         self.cli_version: str | None = None
         # The effort level Claude Code last reported: its Stop hook, or the output of `/effort`
@@ -744,6 +748,7 @@ class ThreadSession:
             try:
                 info = await client.get_server_info() or {}
                 self.commands = list(info.get("commands") or [])
+                self.models = list(info.get("models") or [])
                 self.native_mode = str(info.get("current_permission_mode") or "default")
                 if self.bypass:
                     await client.set_permission_mode("bypassPermissions")
@@ -782,6 +787,38 @@ class ThreadSession:
         if self._closed:
             raise SessionClosed
         self._deps.state.set_bypass(self.channel_id, self.thread_ts, on)
+
+    async def apply_setup(self, choice: Choice) -> None:
+        """Apply the owner's session setup before the first prompt: an effort goes through
+        state and a fresh client (the SDK has no runtime effort setter; no query has been sent,
+        so no session is lost), then the model on the live client, then bypass. Measured
+        2026-09-30 (CLI 2.1.285): `set_model` survives a resume and leaves the owner's own
+        default alone, so the daemon does not store the model."""
+        client = await self.ensure_connected()
+        if choice.effort != DEFAULT:
+            self._deps.state.set_effort(self.channel_id, self.thread_ts, choice.effort)
+            client = await self._reconnect()
+        if choice.model != DEFAULT:
+            await client.set_model(choice.model)
+        if choice.bypass:
+            await self.set_bypass(True)
+
+    async def _reconnect(self) -> ClaudeClient:
+        """Close the live client and connect again, so `ensure_connected` builds the options
+        from state as they are now."""
+        await self._drop_client()
+        return await self.ensure_connected()
+
+    async def _drop_client(self) -> None:
+        async with self._connect_lock:
+            reader, self._reader = self._reader, None
+            client, self._client = self._client, None
+            if reader is not None:
+                reader.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await reader
+            if client is not None:
+                await self._disconnect(client)
 
     async def announce_restart(self) -> None:
         """Say in the thread that bypass outlives the restart, when it is on."""

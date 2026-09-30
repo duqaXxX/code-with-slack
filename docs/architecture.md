@@ -402,6 +402,22 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   itself, since the drain never revisits it). Either way the owner gets `Not sent.`; a hold a
   message could not post is cancelled and told `HOLD_UNPOSTED`, failing closed rather than
   sending into a folder another session is using.
+- Session setup (issue #74): a top-level message that opens a session (a prompt, files, or a
+  `!name` passthrough) is held before D8 and before anything is sent. `slack_app.setup_before_sending`
+  connects the client, then posts one message in the thread (`setup.setup_blocks`): a Model select
+  with the CLI's own list (`get_server_info()["models"]`, kept as `ThreadSession.models`), an
+  Effort select with the chosen model's `supportedEffortLevels` (and `Default`, which passes
+  nothing), a Bypass checkbox and Start. Changing the model rewrites the message (`chat.update`,
+  which never notifies) with the new model's levels. Start reads every control from the click's
+  `state.values` (`setup.read_choice`), and `ThreadSession.apply_setup` applies it: a non-default
+  effort is stored and the client reconnected (the SDK has no runtime effort setter and no query
+  has been sent, so no session is lost), a non-default model is `set_model()` on the live client
+  (not stored: it survives a resume and leaves the owner's default alone, measured 2026-09-30,
+  CLI 2.1.285), and bypass goes through `set_bypass`. The message then becomes one summary line and
+  stays; the held message goes on unchanged. The wait shares `slack_app.ask_owner` and `hold.Holds`
+  with D8, so `!stop`, a top-level `!stop` and a drain cancel it the same way (message deleted,
+  `Not sent.`), it shows ✋ and pauses the idle timer, and crash repair deletes a setup message
+  left standing.
 - Each `ThreadSession` keeps one `render.status.StatusReaction` on its own root message (D10),
   which `thread_ts` always is: a top-level owner message, or the owner's own `!resume` message.
   `ThreadSession._react` shows it as a tracked background task, since a reaction must never delay
@@ -504,7 +520,7 @@ Claude Code session id, and `!resume` never touches or waits on any other thread
 ## Slack handlers
 
 `code_with_slack.slack_app.build_app` registers one listener per inbound path: `message`
-events, the Approve, Deny, Answer and Skip buttons, and the question form's Next and Submit. The app registers no slash command. Each
+events, the Approve, Deny, Answer and Skip buttons, the setup's Model select and Start, and the question form's Next and Submit. The app registers no slash command. Each
 acknowledges Slack first, then checks the owner, the workspace and the channel itself. A
 failure after the checks reaches the owner as an ephemeral error line.
 A link Slack made from a typed address (`<url|label>`, `<url>`) reaches Claude Code as typed; a

@@ -145,6 +145,15 @@ HOLD_GONE = (
     "This question is no longer open: it was already answered, or code-with-slack restarted."
 )
 NOT_SENT = "Not sent."
+# Session setup: asked once per top-level message, before the first prompt of a new session.
+SETUP_FALLBACK = "Set up this session"
+SETUP_MODEL_LABEL = "*Model*"
+SETUP_EFFORT_LABEL = "*Effort*"
+SETUP_EFFORT_DEFAULT = "Default"
+SETUP_BYPASS_OPTION = "Bypass permissions"
+SETUP_BYPASS_DESCRIPTION = "Run every tool without asking, until `!bypass off`."
+SETUP_START_BUTTON = "Start"
+SETUP_SUMMARY = "Model: {model} · Effort: {effort} · Bypass: {bypass}"
 STATUS = (
     "Directory: `{directory}`\nSession: `{session}`\nMode: `{mode}`\n"
     "Claude Code: `{version}`\nNow: {activity}"
@@ -248,6 +257,9 @@ own, growing as Claude works, with a line for each tool it uses. Reply inside th
 continue the same session. Attach images or files to a message: Claude sees a JPEG, PNG, GIF or \
 WebP image directly (other image types are refused) and reads a text, code, PDF, JSON, XML, YAML \
 or notebook file from a copy saved on this Mac; other files are refused.
+3. Before that first message is sent, the thread asks for the **Model**, the **Effort** \
+(`Default` leaves Claude Code's own choice) and **Bypass permissions**; **Start** sends your \
+message with those choices, and `!stop` cancels it instead.
 
 **Commands**
 Claude Code's commands start with `!` instead of `/`: `!compact`, `!model opus`. They run inside \

@@ -7,6 +7,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Session setup before the first prompt (issue #74): a top-level message that opens a session
+  first gets a message in its thread with a Model select (the CLI's own list), an Effort select
+  (`Default` or the chosen model's levels), a Bypass checkbox and Start. Start applies the choice
+  and sends the held message; `!stop` or a restart cancels it with `Not sent.`. Probe claims P17
+  (the server info's model fields) and P18 (a model set with `set_model()` survives a resume).
 - Crash repair (issue #19): `state.json` now tracks, per thread, the ts of every open reply's
   last message (`open_replies`, a list: a background task's own reply can outlive the turn that
   started it, so more than one can be open at once), the ts of every approval, question and D8

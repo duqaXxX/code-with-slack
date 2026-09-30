@@ -1,10 +1,11 @@
-"""D8: two busy sessions in one folder. Before a message wakes an idle session while a live
-session of another thread (any channel) is busy in the same resolved folder, the daemon asks
-`Another session is working in this folder: <link>. Send anyway?`, with Continue and Cancel.
+"""Questions that hold a message before it is sent. D8: before a message wakes an idle session
+while a live session of another thread (any channel) is busy in the same resolved folder, the
+daemon asks `Another session is working in this folder: <link>. Send anyway?`, with Continue and
+Cancel. The session setup (`setup.py`) is the other one: model, effort and bypass, then Start.
 
 Kept in memory only, like `approvals.Approvals`: a hold never outlives the process (`!stop`, a
 top-level `!stop` of its channel, and a drain all cancel one exactly as Cancel does), so nothing
-here needs to survive a restart.
+here needs to survive a restart. A thread has at most one open at a time, whichever kind.
 """
 
 import asyncio
@@ -22,7 +23,9 @@ HOLD_CANCEL = "hold_cancel"
 class Pending:
     channel_id: str
     thread_ts: str
-    future: asyncio.Future[bool]  # True: Continue was chosen; False: cancelled
+    # What the owner chose (D8: True for Continue; the setup: its `Choice`), or None when the
+    # question was cancelled (Cancel, `!stop`, a drain).
+    future: asyncio.Future[Any]
     message_ts: str | None = field(default=None)
 
 
@@ -42,10 +45,9 @@ class Holds:
     def get(self, hold_id: str) -> Pending | None:
         return self._pending.get(hold_id)
 
-    def resolve(
-        self, hold_id: str, channel_id: str, thread_ts: str, *, continue_: bool
-    ) -> Pending | None:
-        """Resolve once, and only from the channel and thread the request was posted in."""
+    def resolve(self, hold_id: str, channel_id: str, thread_ts: str, value: Any) -> Pending | None:
+        """Resolve once with `value` (None cancels), and only from the channel and thread the
+        request was posted in."""
         pending = self._pending.get(hold_id)
         if (
             pending is None
@@ -54,7 +56,7 @@ class Holds:
             or pending.future.done()
         ):
             return None
-        pending.future.set_result(continue_)
+        pending.future.set_result(value)
         del self._pending[hold_id]
         return pending
 
@@ -76,9 +78,22 @@ class Holds:
                 and pending.thread_ts == thread_ts
                 and not pending.future.done()
             ):
-                pending.future.set_result(False)
+                pending.future.set_result(None)
                 del self._pending[hold_id]
                 return pending
+        return None
+
+    def at_message(self, channel_id: str, thread_ts: str, message_ts: str) -> str | None:
+        """The id of the open hold shown by this message, for a control that carries no id of its
+        own (a select): None when it is decided, gone, or shown elsewhere."""
+        for hold_id, pending in self._pending.items():
+            if (
+                pending.channel_id == channel_id
+                and pending.thread_ts == thread_ts
+                and pending.message_ts == message_ts
+                and not pending.future.done()
+            ):
+                return hold_id
         return None
 
     def discard(self, hold_id: str) -> None:

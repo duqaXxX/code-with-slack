@@ -21,6 +21,7 @@ from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds
 from code_with_slack.render.sinks import UpdateLimiter
 from code_with_slack.render.status import Status
 from code_with_slack.sessions import SessionDeps, SessionManager
+from code_with_slack.setup import SETUP_BYPASS, SETUP_EFFORT, SETUP_MODEL, SETUP_START
 from code_with_slack.slack_app import build_app, slack_unescape
 from code_with_slack.state import StateStore
 from tests.fakes import (
@@ -41,6 +42,7 @@ from tests.fakes import (
     slack_payload,
     split_turns,
 )
+from tests.test_setup import state as setup_state
 
 # The click fixtures (000-005-block_actions.json) sit at their message's own ts, no thread_ts:
 # `click_thread` reads it from `container.thread_ts`.
@@ -88,6 +90,10 @@ class World:
         # Every client factored from here on fails to connect with this, as a session whose
         # stored id no longer resumes (D7).
         self.connect_error: Exception | None = None
+        # Presses Start on every session setup that a dispatch leaves waiting, so the tests of
+        # everything after the setup keep reading as they did; the setup's own tests turn it off.
+        self.auto_start = True
+        self._started: set[str] = set()
         identity = Identity(OWNER, TEAM, BOT)
 
         async def no_usage() -> str:
@@ -145,7 +151,50 @@ class World:
     async def dispatch(self, body: dict[str, Any]) -> Any:
         response = await self.app.async_dispatch(AsyncBoltRequest(body=body, mode="socket_mode"))
         await asyncio.sleep(0.05)  # let the listener tasks run
+        if self.auto_start:
+            await self.start_waiting_setups()
         return response
+
+    def waiting_setups(self) -> list[tuple[str, str, str, str]]:
+        """(setup id, channel, thread, message ts) of every setup message that was posted."""
+        shown = {
+            element["value"]: ts
+            for ts, message in self.slack.messages.items()
+            for block in message.blocks
+            for element in block.get("elements") or []
+            if element.get("action_id") == SETUP_START
+        }
+        found = []
+        for post in self.slack.calls_to("chat.postMessage"):
+            for block in post.get("blocks") or []:
+                for element in block.get("elements") or []:
+                    if element.get("action_id") == SETUP_START and element["value"] in shown:
+                        found.append(
+                            (
+                                element["value"],
+                                post["channel"],
+                                post["thread_ts"],
+                                shown[element["value"]],
+                            )
+                        )
+        return found
+
+    async def settle(self, seconds: float) -> None:
+        """Wait `seconds`, pressing Start on every setup that shows up meanwhile (a message whose
+        download is slow posts its setup late)."""
+        loop = asyncio.get_running_loop()
+        end = loop.time() + seconds
+        while loop.time() < end:
+            await self.start_waiting_setups()
+            await asyncio.sleep(0.02)
+
+    async def start_waiting_setups(self) -> None:
+        for setup_id, channel, thread_ts, ts in self.waiting_setups():
+            if setup_id not in self._started:
+                self._started.add(setup_id)
+                await self.dispatch(
+                    click_in(SETUP_START, setup_id, channel, thread_ts, message_ts=ts)
+                )
 
     def queries(self) -> list[str]:
         return [q for c in self.clients for q in c.queries]
@@ -269,8 +318,10 @@ def reactions_on(world: World, ts: str) -> list[str]:
 
 
 def said(world: World) -> list[str]:
-    """What the bot posted in a thread (not ephemeral), in order."""
-    return [a["text"] for a in world.slack.calls_to("chat.postMessage")]
+    """What the bot posted in a thread (not ephemeral), in order; a session's setup message
+    apart, which the setup's own tests read."""
+    posts = world.slack.calls_to("chat.postMessage")
+    return [a["text"] for a in posts if a["text"] != texts.SETUP_FALLBACK]
 
 
 async def test_bang_bind_inside_and_outside_the_root(world: World) -> None:
@@ -1425,7 +1476,7 @@ async def test_a_message_with_files_keeps_its_place_in_the_queue(
     await asyncio.sleep(0.05)
     await world.dispatch(reply("focus on the errors", file_thread))
     await first
-    await asyncio.sleep(0.3)
+    await world.settle(0.3)
     assert [str(p).startswith(body["event"]["text"]) for p in queued] == [True, False]
 
 
@@ -1460,7 +1511,7 @@ async def test_a_bind_during_the_downloads_never_moves_the_thread_already_opened
     await asyncio.sleep(0.05)
     await world.dispatch(message("!bind docs"))
     await first
-    await asyncio.sleep(0.3)
+    await world.settle(0.3)
     assert world.queries() != []
     assert world.state.channel(CHANNEL).directory == (world.root / "docs").resolve()
 
@@ -1489,7 +1540,7 @@ async def test_a_command_after_a_message_with_files_waits_its_turn(
     await asyncio.sleep(0.05)
     await world.dispatch(reply("!compact", file_thread))
     await first
-    await asyncio.sleep(0.3)
+    await world.settle(0.3)
     assert [str(p).startswith(body["event"]["text"]) for p in queued] == [True, False]
 
 
@@ -1511,7 +1562,7 @@ async def test_a_session_closed_during_a_slow_download_is_retried_on_a_fresh_one
             await asyncio.sleep(0.01)
     await session.close()  # something else closes it while the download is still running
     await dispatching
-    await asyncio.sleep(0.3)  # let the slow download finish and the retried submit run
+    await world.settle(0.3)  # let the slow download finish and the retried submit run
     queries = world.queries()
     assert len(queries) == 1  # the retry queues the prompt once, never twice
     assert str(queries[0]).startswith(body["event"]["text"])
@@ -1536,7 +1587,7 @@ async def test_a_retry_that_finds_the_thread_gone_answers_session_gone(world: Wo
     await session.close()  # closed, and its thread's entry gone, as SessionGone leaves it
     world.state.remove_thread(CHANNEL, file_thread)
     await dispatching
-    await asyncio.sleep(0.3)
+    await world.settle(0.3)
     assert world.queries() == []
     assert texts.SESSION_GONE in said(world)  # in the prompt's thread: the turn's one push
 
@@ -1560,7 +1611,7 @@ async def test_a_stop_during_the_downloads_sends_the_prompt_nowhere(world: World
     await asyncio.sleep(0.05)
     await world.sessions.drain(asyncio.Event())
     await first
-    await asyncio.sleep(0.3)
+    await world.settle(0.3)
     assert world.queries() == [] and world.clients == []
     assert world.ephemerals()[-1] == texts.RESTARTING
 
@@ -1699,6 +1750,12 @@ def posted_blocks(world: World, index: int = -1) -> list[dict[str, Any]]:
     return world.slack.calls_to("chat.postMessage")[index]["blocks"]
 
 
+def assert_held_unsent(world: World) -> None:
+    """The held thread's client is connected (its setup needed the CLI's model list) but nothing
+    was sent on it: only the other session, at `clients[0]`, ever got a prompt."""
+    assert len(world.clients) == 2 and world.clients[-1].queries == []
+
+
 async def start_a_hold(world: World, *, other_channel: str = CHANNEL) -> None:
     """`other_channel`'s thread at `OTHER_THREAD` never ends; a top-level message at THREAD,
     in the same folder, then holds and asks."""
@@ -1710,7 +1767,7 @@ async def start_a_hold(world: World, *, other_channel: str = CHANNEL) -> None:
 
 async def test_a_busy_session_in_the_same_folder_holds_the_message(world: World) -> None:
     await start_a_hold(world)
-    assert len(world.clients) == 1  # held, not sent
+    assert_held_unsent(world)  # held, not sent
     # mrkdwn's own `<url|label>` form (a `section` block, like approvals and the resume picker
     # use for their own buttons), not `thread_link`'s standard-Markdown form.
     link = "<https://example.slack.com/archives/C000CHAN/p1780000000000001|Session>"
@@ -1752,7 +1809,7 @@ async def test_cancel_drops_the_message_and_says_so(world: World) -> None:
     question_ts = world.slack.posted_ts[-1]
     hold_id = button_value(posted_blocks(world), HOLD_CANCEL)
     await world.dispatch(click_in(HOLD_CANCEL, hold_id, CHANNEL, THREAD, message_ts=question_ts))
-    assert len(world.clients) == 1  # never sent
+    assert_held_unsent(world)  # never sent
     assert world.ephemerals()[-1] == texts.NOT_SENT
     deleted = [a["ts"] for a in world.slack.calls_to("chat.delete")]
     assert deleted == [question_ts]  # the question, not the `Not sent.` notice
@@ -1796,7 +1853,7 @@ async def test_no_hold_when_the_target_itself_is_busy(world: World) -> None:
 
 async def test_another_channel_bound_to_the_same_folder_also_holds(world: World) -> None:
     await start_a_hold(world, other_channel=OTHER_CHANNEL)
-    assert len(world.clients) == 1
+    assert_held_unsent(world)
     hold_id = button_value(posted_blocks(world), HOLD_CONTINUE)
     await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, THREAD))
     assert world.clients[-1].queries == ["hello"]
@@ -1812,7 +1869,7 @@ async def test_a_background_only_session_counts_as_working(world: World) -> None
         while session.busy or not session.running_kinds:  # noqa: ASYNC110
             await asyncio.sleep(0.01)
     await world.dispatch(message("hello", ts=THREAD))
-    assert len(world.clients) == 1  # held: the background task still counts as working
+    assert_held_unsent(world)  # held: the background task still counts as working
 
 
 async def test_a_double_click_finds_no_hold(world: World) -> None:
@@ -1829,7 +1886,7 @@ async def test_a_click_from_someone_else_is_ignored(world: World, user: dict[str
     await start_a_hold(world)
     hold_id = button_value(posted_blocks(world), HOLD_CONTINUE)
     await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, THREAD, **user))
-    assert len(world.clients) == 1
+    assert_held_unsent(world)
     assert not world.ephemerals()
 
 
@@ -1837,7 +1894,7 @@ async def test_a_click_for_another_thread_is_refused(world: World) -> None:
     await start_a_hold(world)
     hold_id = button_value(posted_blocks(world), HOLD_CONTINUE)
     await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, OTHER_THREAD))
-    assert len(world.clients) == 1  # never sent: the click did not match the hold
+    assert_held_unsent(world)  # never sent: the click did not match the hold
     assert world.ephemerals()[-1] == texts.HOLD_GONE
 
 
@@ -1845,7 +1902,7 @@ async def test_a_click_for_another_channel_is_refused(world: World) -> None:
     await start_a_hold(world)
     hold_id = button_value(posted_blocks(world), HOLD_CONTINUE)
     await world.dispatch(click_in(HOLD_CONTINUE, hold_id, OTHER_CHANNEL, THREAD))
-    assert len(world.clients) == 1  # never sent: the click did not match the hold
+    assert_held_unsent(world)  # never sent: the click did not match the hold
     assert world.ephemerals()[-1] == texts.HOLD_GONE
 
 
@@ -1856,7 +1913,7 @@ async def test_a_drain_starting_right_after_continue_does_not_leave_a_stale_rais
     hold_id = button_value(posted_blocks(world), HOLD_CONTINUE)
     world.sessions.draining = True  # as if a drain's own cancellation pass had just run
     await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, THREAD))
-    assert world.clients[-1].queries == ["busy elsewhere"]  # never sent: no second client
+    assert_held_unsent(world)
     session = world.sessions.get(CHANNEL, THREAD)
     assert session is not None
     assert session._status.current is None  # restored, not left on ✋: this thread never ran
@@ -1868,15 +1925,17 @@ async def test_a_directory_gone_unavailable_after_continue_reacts_error_not_a_ra
     await world.dispatch(message("busy elsewhere", ts=OTHER_THREAD))
     await world.dispatch(message("!compact", ts=THREAD))  # a Passthrough: held, `ensure_connected`
     hold_id = button_value(posted_blocks(world), HOLD_CONTINUE)
+    session = world.sessions.get(CHANNEL, THREAD)
+    assert session is not None
+    # The setup connected it already; a client the CLI lost since makes Continue connect again.
+    await session._drop_client()
 
     async def untrusted(directory: Path) -> bool:
         return False
 
     world.sessions._deps.workspace_trusted = untrusted
     await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, THREAD))
-    assert world.clients[-1].queries == ["busy elsewhere"]  # never sent: no second client
-    session = world.sessions.get(CHANNEL, THREAD)
-    assert session is not None
+    assert world.clients[-1].queries == []  # never sent: its own connect failed
     assert session._status.current is Status.ERROR
 
 
@@ -1889,12 +1948,13 @@ async def test_a_generic_connect_error_after_continue_reacts_error_not_a_raised_
     await world.dispatch(message("busy elsewhere", ts=OTHER_THREAD))
     await world.dispatch(message("!compact", ts=THREAD))  # a Passthrough: held, `ensure_connected`
     hold_id = button_value(posted_blocks(world), HOLD_CONTINUE)
+    session = world.sessions.get(CHANNEL, THREAD)
+    assert session is not None
+    await session._drop_client()  # the setup connected it; a lost client makes Continue reconnect
     world.connect_error = RuntimeError("logged out")
     await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, THREAD))
     assert world.clients[-1].queries == []  # its own connect failed: nothing was ever sent
     assert world.clients[0].queries == ["busy elsewhere"]  # the other session, unaffected
-    session = world.sessions.get(CHANNEL, THREAD)
-    assert session is not None
     assert session._status.current is Status.ERROR
 
 
@@ -1910,14 +1970,17 @@ async def test_a_session_gone_at_continue_time_reacts_error_not_a_raised_hand(
     assert session is not None
     session._closed = True  # as if something else had closed it while the hold was open
     world.state.remove_thread(CHANNEL, THREAD)
-    await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, THREAD))
-    assert world.clients[-1].queries == ["busy elsewhere"]  # never sent: no second client
-    assert session._status.current is Status.ERROR
-    assert texts.SESSION_GONE in said(world)
-    # `_closed` was set directly above, bypassing the real teardown (`cancel_hold` would answer
-    # Cancel, not Continue, for a session real `close()` reaches): finished properly here, or
-    # the fixture's own `close_all` hangs behind this object's never-fired `done_closing`.
-    await session.close()
+    try:
+        await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, THREAD))
+        assert world.clients[-1].queries == []  # never sent
+        assert session._status.current is Status.ERROR
+        assert texts.SESSION_GONE in said(world)
+    finally:
+        # `_closed` was set directly above, bypassing the real teardown (`cancel_hold` would
+        # answer Cancel, not Continue, for a session real `close()` reaches): finished properly
+        # here even when an assertion fails, or the fixture's own `close_all` hangs forever
+        # behind this object's never-fired `done_closing` and the failure is never reported.
+        await session.close()
 
 
 async def test_a_session_closed_at_continue_time_retries_and_sends_without_reacting_error(
@@ -1932,21 +1995,24 @@ async def test_a_session_closed_at_continue_time_retries_and_sends_without_react
     assert session is not None
     session._closed = True  # a D9 idle close, most likely; the thread's own entry survives
     session.done_closing.set()  # what the real teardown this stands in for always fires
-    await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, THREAD))
-    fresh = world.sessions.get(CHANNEL, THREAD)
-    assert fresh is not None and fresh is not session
-    assert world.clients[-1].queries == ["hello"]  # sent, on a freshly rebuilt client
-    reacted = {a["name"] for a in world.slack.calls_to("reactions.add")}
-    assert Status.ERROR.value not in reacted
-    # `_closed` was set directly above, bypassing the real teardown: finished properly here, or
-    # the fixture's own `close_all` hangs behind this object's never-cancelled background tasks.
-    await session.close()
+    try:
+        await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, THREAD))
+        fresh = world.sessions.get(CHANNEL, THREAD)
+        assert fresh is not None and fresh is not session
+        assert world.clients[-1].queries == ["hello"]  # sent, on a freshly rebuilt client
+        reacted = {a["name"] for a in world.slack.calls_to("reactions.add")}
+        assert Status.ERROR.value not in reacted
+    finally:
+        # `_closed` was set directly above, bypassing the real teardown: finished properly here
+        # even when an assertion fails, or the fixture's own `close_all` hangs behind this
+        # object's never-cancelled background tasks.
+        await session.close()
 
 
 async def test_stop_in_the_held_thread_cancels_it(world: World) -> None:
     await start_a_hold(world)
     await world.dispatch(reply("!stop", THREAD))
-    assert len(world.clients) == 1
+    assert_held_unsent(world)
     # `!stop` cancelled the hold: `Not sent.` alone, from the waiter, since nothing Claude Code
     # itself was doing stopped (no separate "Nothing is running..." on top of it).
     assert world.ephemerals() == [texts.NOT_SENT]
@@ -1956,7 +2022,7 @@ async def test_stop_in_the_held_thread_cancels_it(world: World) -> None:
 async def test_a_top_level_stop_of_the_channel_cancels_the_hold(world: World) -> None:
     await start_a_hold(world)
     await world.dispatch(message("!stop"))
-    assert len(world.clients) == 1
+    assert_held_unsent(world)
     assert texts.NOT_SENT in world.ephemerals()
 
 
@@ -1979,7 +2045,7 @@ async def test_a_drain_cancels_the_hold(world: World) -> None:
     cut_short.set()  # returns as soon as the per-session cancellation pass is done
     await world.sessions.drain(cut_short)
     await asyncio.sleep(0.05)
-    assert len(world.clients) == 1
+    assert_held_unsent(world)
     assert texts.NOT_SENT in world.ephemerals()
 
 
@@ -2011,7 +2077,7 @@ async def test_the_other_session_finishing_does_not_skip_the_question(world: Wor
     async with asyncio.timeout(2):
         while not other.idle:  # noqa: ASYNC110
             await asyncio.sleep(0.01)
-    assert len(world.clients) == 1  # the hold still waits: nobody re-checked on its own
+    assert_held_unsent(world)  # the hold still waits: nobody re-checked on its own
     await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, THREAD))
     assert world.clients[-1].queries == ["hello"]
 
@@ -2028,7 +2094,7 @@ async def test_an_unpostable_question_fails_closed(world: World) -> None:
     world.slack.chat_postMessage = flaky  # type: ignore[method-assign]
     await world.dispatch(message("busy elsewhere", ts=OTHER_THREAD))
     await world.dispatch(message("hello", ts=THREAD))
-    assert len(world.clients) == 1
+    assert_held_unsent(world)
     assert world.ephemerals()[-1] == texts.HOLD_UNPOSTED
 
 
@@ -2054,7 +2120,7 @@ async def test_a_message_queued_behind_a_drain_cancelled_hold_is_also_refused(
     cut_short.set()
     await world.sessions.drain(cut_short)  # cancels "hello"'s hold
     await asyncio.wait_for(queued, 2)
-    assert len(world.clients) == 1  # neither "hello" nor "again" was ever sent
+    assert_held_unsent(world)  # neither "hello" nor "again" was ever sent
     assert texts.NOT_SENT in world.ephemerals()  # "hello", cancelled by the drain
     assert world.ephemerals()[-1] == texts.RESTARTING  # "again", refused once draining had begun
 
@@ -2090,13 +2156,16 @@ async def test_a_hold_decided_before_its_message_ts_is_known_does_not_flicker(
 
     world.slack.chat_postMessage = gated  # type: ignore[method-assign]
     task = asyncio.create_task(world.dispatch(message("hello", ts=THREAD)))
-    await asyncio.sleep(0.05)
+    await world.settle(0.2)  # Start on the setup; the question is then posted and gated
     world.holds.cancel(CHANNEL, THREAD)  # exactly what `!stop` would do
     gate.set()
     await asyncio.wait_for(task, 2)
+    await asyncio.sleep(0.1)  # the handler itself outlives the dispatch call
     assert texts.NOT_SENT in world.ephemerals()
     added = [a["name"] for a in world.slack.calls_to("reactions.add")]
-    assert Status.WAITING.value not in added  # hold_start/hold_end never ran: no ✋ flicker
+    # Only each setup's own ✋ (two threads opened): hold_start/hold_end never ran for the
+    # question, so it added none.
+    assert added.count(Status.WAITING.value) == 2
 
 
 async def test_a_report_turn_during_a_hold_keeps_the_raised_hand(world: World) -> None:
@@ -2149,3 +2218,173 @@ async def test_cancel_after_a_finished_report_turn_shows_done_not_a_stale_reacti
     # Not the stale snapshot from `hold_start` (WAITING, its own ✋): the session actually
     # finished its report turn during the hold, so cancelling now shows done.
     assert target._status.current is Status.DONE
+
+
+# Session setup (issue #74): model, effort and bypass, asked before a new session's first prompt.
+
+
+def setup_click(
+    world: World,
+    action_id: str = SETUP_START,
+    *,
+    model: str | None = None,
+    effort: str | None = None,
+    bypass: bool = False,
+    **where: Any,
+) -> dict[str, Any]:
+    """A click on the (only) waiting setup, carrying `state.values` as Slack would."""
+    ((setup_id, channel, thread_ts, ts),) = world.waiting_setups()
+    body = click_in(
+        action_id,
+        setup_id,
+        where.get("channel", channel),
+        where.get("thread_ts", thread_ts),
+        message_ts=ts,
+        **where.get("user", {}),
+    )
+    body["state"] = {"values": setup_state(model, effort, bypass)}
+    return body
+
+
+@pytest.fixture
+def manual(world: World) -> World:
+    world.auto_start = False
+    return world
+
+
+async def test_a_plain_prompt_waits_for_start(manual: World) -> None:
+    await manual.dispatch(message("hello", ts=THREAD))
+    assert manual.queries() == []
+    ((_, channel, thread_ts, _),) = manual.waiting_setups()
+    assert (channel, thread_ts) == (CHANNEL, THREAD)
+    session = manual.sessions.get(CHANNEL, THREAD)
+    assert session is not None and session.waiting_for_owner  # ✋, idle timer paused
+    assert reactions_on(manual, THREAD) == ["raised_hand"]
+    assert manual.state.thread(CHANNEL, THREAD).requests == (manual.slack.posted_ts[-1],)
+
+
+async def test_a_message_with_files_waits_for_start_too(manual: World) -> None:
+    body = shared_file("snippet")
+    manual.downloads[body["event"]["files"][0]["url_private_download"]] = b"hello\n"
+    await manual.dispatch(body)
+    await asyncio.sleep(0.2)
+    assert len(manual.waiting_setups()) == 1 and manual.queries() == []
+    await manual.dispatch(setup_click(manual))
+    await asyncio.sleep(0.2)
+    (query,) = manual.queries()
+    assert str(query).startswith(body["event"]["text"])
+
+
+async def test_a_top_level_passthrough_waits_for_start_too(manual: World) -> None:
+    await manual.dispatch(message("!compact", ts=THREAD))
+    assert len(manual.waiting_setups()) == 1 and manual.queries() == []
+    await manual.dispatch(setup_click(manual))
+    assert manual.queries() == ["/compact"] or manual.queries() == ["!compact"]
+
+
+async def test_daemon_words_and_thread_replies_show_no_setup(manual: World) -> None:
+    await manual.dispatch(message("!status"))
+    await manual.dispatch(message("!help"))
+    assert manual.waiting_setups() == []
+    await manual.dispatch(message("hi", ts=THREAD))
+    await manual.dispatch(setup_click(manual))
+    await manual.dispatch(reply("second", THREAD))
+    posted = [a["text"] for a in manual.slack.calls_to("chat.postMessage")]
+    assert posted.count(texts.SETUP_FALLBACK) == 1  # the top-level prompt's, not the reply's
+
+
+async def test_start_with_defaults_changes_nothing(manual: World) -> None:
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(setup_click(manual))
+    client = manual.clients[-1]
+    assert client.queries == ["hello"] and len(manual.clients) == 1
+    assert client.models_set == [] and client.modes == []
+    assert client.options.effort is None
+    summary = manual.slack.calls_to("chat.update")[-1]["text"]
+    assert summary == "Model: Default (recommended) · Effort: Default · Bypass: off"
+    assert manual.state.thread(CHANNEL, THREAD).requests == ()  # kept, no longer a request
+    assert manual.slack.calls_to("chat.delete") == []
+    assert reactions_on(manual, THREAD)[-1] == "hourglass_flowing_sand"
+
+
+async def test_start_applies_model_effort_and_bypass(manual: World) -> None:
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(setup_click(manual, model="opus", effort="high", bypass=True))
+    assert len(manual.clients) == 2  # reconnected once, for the effort
+    client = manual.clients[-1]
+    assert client.options.effort == "high"
+    assert client.models_set == ["opus"]
+    assert client.modes == ["bypassPermissions"]
+    assert client.queries == ["hello"] and manual.clients[0].queries == []
+    stored = manual.state.thread(CHANNEL, THREAD)
+    assert stored.bypass is True and stored.effort == "high"
+    summary = manual.slack.calls_to("chat.update")[-1]["text"]
+    assert summary == "Model: Opus 5.5 · Effort: high · Bypass: on"
+
+
+async def test_changing_the_model_rewrites_the_efforts(manual: World) -> None:
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(setup_click(manual, SETUP_MODEL, model="haiku", effort="high"))
+    update = manual.slack.calls_to("chat.update")[-1]
+    effort_block = next(b for b in update["blocks"] if b["block_id"] == SETUP_EFFORT)
+    assert [o["value"] for o in effort_block["accessory"]["options"]] == ["default"]
+    model_block = next(b for b in update["blocks"] if b["block_id"] == SETUP_MODEL)
+    assert model_block["accessory"]["initial_option"]["value"] == "haiku"
+    assert manual.queries() == []  # still waiting
+
+
+async def test_an_effort_or_bypass_change_only_acks(manual: World) -> None:
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(setup_click(manual, SETUP_EFFORT, effort="low"))
+    await manual.dispatch(setup_click(manual, SETUP_BYPASS, bypass=True))
+    assert manual.slack.calls_to("chat.update") == [] and manual.queries() == []
+
+
+@pytest.mark.parametrize("user", [{"id": STRANGER}, {"team_id": OTHER_TEAM}])
+async def test_a_setup_click_from_someone_else_is_ignored(
+    manual: World, user: dict[str, str]
+) -> None:
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(setup_click(manual, user=user))
+    assert manual.queries() == [] and not manual.ephemerals()
+
+
+async def test_a_setup_click_for_another_thread_or_channel_is_refused(manual: World) -> None:
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(setup_click(manual, thread_ts=OTHER_THREAD))
+    await manual.dispatch(setup_click(manual, channel=OTHER_CHANNEL))
+    assert manual.queries() == []
+    assert manual.ephemerals()[-1] == texts.HOLD_GONE
+
+
+async def test_a_second_start_is_stale(manual: World) -> None:
+    await manual.dispatch(message("hello", ts=THREAD))
+    body = setup_click(manual)
+    await manual.dispatch(body)
+    await manual.dispatch(body)
+    assert manual.queries() == ["hello"]
+    assert manual.ephemerals()[-1] == texts.HOLD_GONE
+
+
+async def test_stop_in_the_thread_cancels_a_waiting_setup(manual: World) -> None:
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(reply("!stop", THREAD))
+    assert manual.queries() == [] and manual.ephemerals() == [texts.NOT_SENT]
+    assert len(manual.slack.calls_to("chat.delete")) == 1
+    assert manual.state.thread(CHANNEL, THREAD).requests == ()
+
+
+async def test_a_top_level_stop_cancels_a_waiting_setup(manual: World) -> None:
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(message("!stop"))
+    assert manual.queries() == [] and texts.NOT_SENT in manual.ephemerals()
+    assert len(manual.slack.calls_to("chat.delete")) == 1
+
+
+async def test_a_drain_cancels_a_waiting_setup(manual: World) -> None:
+    await manual.dispatch(message("hello", ts=THREAD))
+    cut_short = asyncio.Event()
+    cut_short.set()
+    await manual.sessions.drain(cut_short)
+    await asyncio.sleep(0.05)
+    assert manual.queries() == [] and texts.NOT_SENT in manual.ephemerals()

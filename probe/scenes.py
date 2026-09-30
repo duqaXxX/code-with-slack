@@ -40,6 +40,7 @@ from code_with_slack.sessions import (
     Turn,
     directory_sessions,
 )
+from code_with_slack.setup import Choice
 from code_with_slack.state import StateStore
 from probe.claims import Observation
 from tests.fakes import FakeSlack, card_of
@@ -52,6 +53,8 @@ RESUME_THREAD = "1700000000.000200"  # the "resume" scene resumes P6/P7's sessio
 MODEL_THREAD = "1700000000.000300"  # the new session the "model and effort resume" scene opens
 MODEL_RESUME_THREAD = "1700000000.000301"  # its first resume, no effort stored: the losing half
 MODEL_RESUME_THREAD2 = "1700000000.000302"  # its second resume, effort stored: the restoring half
+SETUP_THREAD = "1700000000.000400"  # the new session the "setup model resume" scene opens
+SETUP_RESUME_THREAD = "1700000000.000401"  # its resume, no model passed
 TURN_LIMIT = 180.0
 COUNT_TO = 2000
 # What a background command's task card says while it runs (`renderer.BACKGROUND`).
@@ -271,7 +274,17 @@ async def first_turn(s: Stage, word: str) -> dict[str, Observation]:
         "P1": Observation(True, s.session.cli_version is not None, f"cli {s.session.cli_version}"),
         "P3": Observation(True, bool(stored and stored.session_id)),
         "P2": Observation(True, "Context:" in status),
+        "P17": models_listed(s.session.models),
     }
+
+
+def models_listed(models: list[dict[str, Any]]) -> Observation:
+    """P17: the setup message is built from these fields, so each entry must carry the first two
+    and every entry that supports effort must list its levels."""
+    named = bool(models) and all(m.get("value") and m.get("displayName") for m in models)
+    levels = all(m.get("supportedEffortLevels") for m in models if m.get("supportsEffort"))
+    detail = "" if named and levels else f"models: {[sorted(m) for m in models][:2]}"
+    return Observation(True, named and levels, detail)
 
 
 async def image_turn(s: Stage) -> dict[str, Observation]:
@@ -466,6 +479,30 @@ async def model_effort_resume(s: Stage) -> dict[str, Observation]:
     }
 
 
+async def setup_model_resume(s: Stage) -> dict[str, Observation]:
+    """P18: a model set with `set_model()` (what the setup's Start does) survives a resume that
+    passes none. The session's connect forces Haiku, so Sonnet showing after the resume can only
+    come from the session's own record."""
+    session = s.manager.open(CHANNEL, SETUP_THREAD)
+    assert session is not None
+    await session.apply_setup(Choice(model="sonnet"))
+    await s.turn_on(session, "Reply with the single word: ok")
+    stored = s.state.thread(CHANNEL, SETUP_THREAD)
+    session_id = stored.session_id if stored else None
+    await session.close()
+    if session_id is None:
+        return {"P18": Observation(False, False, "no session id stored")}
+    s.allow_model_free_resume(session_id)
+    resumed = await s.manager.resume(CHANNEL, SETUP_RESUME_THREAD, session_id)
+    if resumed is None:
+        return {"P18": Observation(False, False, "the resume was refused")}
+    await s.turn_on(resumed, "Reply with the single word: ok")
+    status = await resumed.status()
+    await resumed.close()
+    kept = "sonnet" in status.lower()
+    return {"P18": Observation(True, kept, "" if kept else status[:160])}
+
+
 async def bypass(s: Stage) -> dict[str, Observation]:
     # `!status` shows the switch this daemon stored, whatever the CLI does with it, and the CLI's
     # server info keeps the mode the session started in (measured 2026-09-27 on 2.1.283): the
@@ -532,7 +569,7 @@ def forget_sessions(workdir: Path, log: Log) -> None:
 # Each scene and the claims it observes: the one place a claim id meets its scene.
 # `tests/test_probe.py` checks that together they cover `probe.claims.CLAIMS` exactly.
 SCENES: dict[str, tuple[str, ...]] = {
-    "first turn": ("P1", "P2", "P3"),
+    "first turn": ("P1", "P2", "P3", "P17"),
     "image": ("P4",),
     "file": ("P5",),
     "bash and approval": ("P10", "P11"),
@@ -541,6 +578,7 @@ SCENES: dict[str, tuple[str, ...]] = {
     "interrupt": ("P8",),
     "resume": ("P6", "P7"),
     "model and effort resume": ("P15", "P16"),
+    "setup model resume": ("P18",),
     "bypass": ("P9",),
     "working folder": ("P14",),
 }
@@ -562,6 +600,7 @@ async def run_scenes(log: Log) -> dict[str, Observation]:
             seen |= await attempt("interrupt", s, interrupt(s))
             seen |= await attempt("resume", s, resume(s, word))
             seen |= await attempt("model and effort resume", s, model_effort_resume(s))
+            seen |= await attempt("setup model resume", s, setup_model_resume(s))
             seen |= await attempt("bypass", s, bypass(s))
             seen |= await attempt("working folder", s, working_folder(s))
         finally:
