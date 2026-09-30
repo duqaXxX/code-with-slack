@@ -2154,6 +2154,63 @@ async def test_a_stop_waits_only_a_while_for_a_notification_that_never_comes(
     await asyncio.wait_for(drained, 1)
 
 
+def split_at_task_start(turn: list[Any]) -> tuple[list[Any], list[Any]]:
+    """A recorded turn cut where its background task starts: what came before, and the rest."""
+    at = next(i for i, m in enumerate(turn) if isinstance(m, TaskStartedMessage))
+    return turn[:at], turn[at:]
+
+
+async def test_a_stop_does_not_wait_for_a_task_its_running_turn_starts_afterwards(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A session that ran `launchctl kill TERM` then waited in the background for the new process
+    # held the restart until `!stop` or the limit (issue #87, three times on 2026-09-30). The
+    # signal names no sender; the one that ordered it has a turn running when it arrives.
+    monkeypatch.setattr(sessions, "DRAIN_POLL_SECONDS", 0.01)
+    first, _, _ = split_background()
+    before, after = split_at_task_start(first)
+    h = harness_for({"turns": [before]})
+    session = h.session()
+    turn = await session.submit("restart the daemon")
+    await until(lambda: bool(h.clients) and h.clients[0].queries == ["restart the daemon"])
+    drained = asyncio.create_task(h.manager.drain(asyncio.Event()))
+    await asyncio.sleep(0.05)
+    assert not drained.done()  # its turn still runs
+    h.clients[0].inject(after)
+    await asyncio.wait_for(drained, 1)
+    assert turn.done.is_set()
+    assert session._running_task_ids()  # still running: the shutdown ends it
+    posted = [p["text"] for p in h.slack.calls_to("chat.postMessage")]
+    assert not any(t.startswith(texts.RESTART_WAITS.split("{")[0]) for t in posted)
+    await asyncio.wait_for(h.manager.close_all(), 2)  # the shutdown that follows
+    stored = h.state.thread(CHANNEL, THREAD)
+    assert stored is not None and not stored.open_replies and stored.status is None
+    # Its turn ended well: the task the shutdown ends is its own wait, not work cut short (decided
+    # 2026-10-01: ✅, as `!stop` showed before this change).
+    assert h.reactions()[-1] == Status.DONE.value
+    assert Status.ERROR.value not in h.reactions()
+
+
+async def test_a_stop_still_waits_for_a_task_the_running_turn_started_before_it(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "DRAIN_POLL_SECONDS", 0.01)
+    first, _, _ = split_background()
+    *running, result = first
+    h = harness_for({"turns": [running]})
+    turn = await h.session().submit("start it")
+    await until(lambda: bool(h.clients) and h.clients[0].queries == ["start it"])
+    await until(lambda: bool(h.session()._running_task_ids()))
+    drained = asyncio.create_task(h.manager.drain(asyncio.Event()))
+    h.clients[0].inject([result])
+    await asyncio.wait_for(turn.done.wait(), 2)
+    await asyncio.sleep(0.1)
+    assert not drained.done()  # the task began before the signal: it is waited for
+    posted = [p["text"] for p in h.slack.calls_to("chat.postMessage")]
+    assert posted.count(texts.RESTART_WAITS.format(counts="1 shell")) == 1
+    drained.cancel()
+
+
 def stopped_end(notice: list[Any]) -> list[Any]:
     """The recorded end of a background task, as `stop_task` makes it: a `killed` task_updated
     and a `stopped` notification (SDK 0.2.160 `stop_task` docstring)."""

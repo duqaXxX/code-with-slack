@@ -215,7 +215,11 @@ a session that restarts the daemon can still finish its turn. The daemon's `!wor
 `!stop` ends a long turn so the restart goes on. A channel left with only background tasks gets one
 message naming them (`code-with-slack is restarting once these background tasks end: 1 shell.`),
 since code-with-slack cannot tell whether a task such as a dev server ever ends; `!stop` there stops
-them and the restart goes on. After 29 minutes code-with-slack stops waiting and ends what still
+them and the restart goes on. The signal does not say who sent it, and a session that sends it
+has a turn running at that moment: for every session with a turn running when the signal arrives,
+code-with-slack waits for the turn but not for a background task the session starts after the
+signal, such as a loop waiting for the new process, which could only end once this one has exited.
+The shutdown ends those tasks, and the session's root shows ✅. After 29 minutes code-with-slack stops waiting and ends what still
 runs, whose replies say that it stopped. Sending the signal a second time stops without waiting.
 `SIGINT` (Ctrl-C in a terminal) stops without waiting too, because the terminal sends it to the
 Claude Code processes as well.
