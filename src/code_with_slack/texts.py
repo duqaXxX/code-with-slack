@@ -147,8 +147,8 @@ HOLD_GONE = (
 NOT_SENT = "Not sent."
 # Session setup: asked once per top-level message, before the first prompt of a new session.
 SETUP_FALLBACK = "Set up this session"
-SETUP_MODEL_LABEL = "*Model*"
-SETUP_EFFORT_LABEL = "*Effort*"
+SETUP_HEADER = "*Choose how this session starts*"
+SETUP_EFFORT_OPTION = "Effort: {level}"
 SETUP_EFFORT_DEFAULT = "Default"
 SETUP_BYPASS_OPTION = "Bypass permissions"
 SETUP_BYPASS_DESCRIPTION = "Run every tool without asking, until `!bypass off`."

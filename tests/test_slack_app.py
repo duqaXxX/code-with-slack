@@ -42,6 +42,7 @@ from tests.fakes import (
     slack_payload,
     split_turns,
 )
+from tests.test_setup import controls as setup_controls
 from tests.test_setup import state as setup_state
 
 # The click fixtures (000-005-block_actions.json) sit at their message's own ts, no thread_ts:
@@ -2330,10 +2331,10 @@ async def test_changing_the_model_rewrites_the_efforts(manual: World) -> None:
     await manual.dispatch(message("hello", ts=THREAD))
     await manual.dispatch(setup_click(manual, SETUP_MODEL, model="haiku", effort="high"))
     update = manual.slack.calls_to("chat.update")[-1]
-    effort_block = next(b for b in update["blocks"] if b["block_id"] == SETUP_EFFORT)
-    assert [o["value"] for o in effort_block["accessory"]["options"]] == ["default"]
-    model_block = next(b for b in update["blocks"] if b["block_id"] == SETUP_MODEL)
-    assert model_block["accessory"]["initial_option"]["value"] == "haiku"
+    found = setup_controls(update["blocks"])
+    assert [o["value"] for o in found[SETUP_EFFORT]["options"]] == ["default"]
+    assert found[SETUP_MODEL]["initial_option"]["value"] == "haiku"
+    assert "initial_options" not in found[SETUP_BYPASS]  # the tick state is kept
     assert manual.queries() == []  # still waiting
 
 
@@ -2493,10 +2494,9 @@ def assert_a_fresh_setup(world: World) -> None:
     Start in `state.json` or on the client that will be used."""
     ((_, _, _, ts),) = world.waiting_setups()
     blocks = world.slack.messages[ts].blocks
-    effort = next(b for b in blocks if b.get("block_id") == SETUP_EFFORT)
-    assert effort["accessory"]["initial_option"]["value"] == "default"
-    bypass = next(b for b in blocks if b.get("block_id") == SETUP_BYPASS)
-    assert "initial_options" not in bypass["elements"][0]
+    found = setup_controls(blocks)
+    assert found[SETUP_EFFORT]["initial_option"]["value"] == "default"
+    assert "initial_options" not in found[SETUP_BYPASS]
     stored = world.state.thread(CHANNEL, THREAD)
     assert stored.bypass is None and stored.effort is None
     client = world.clients[-1]
@@ -2687,8 +2687,7 @@ def native_bypass_folder(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def bypass_box(world: World) -> dict[str, Any]:
     ((_, _, _, ts),) = world.waiting_setups()
-    block = next(b for b in world.slack.messages[ts].blocks if b.get("block_id") == SETUP_BYPASS)
-    return block["elements"][0]
+    return setup_controls(world.slack.messages[ts].blocks)[SETUP_BYPASS]
 
 
 async def test_a_native_bypass_folder_starts_the_box_ticked(
@@ -2885,3 +2884,12 @@ async def test_a_failed_first_turn_does_not_announce_bypass_at_restart(manual: W
     await session.announce_restart()
     await asyncio.sleep(0.05)
     assert texts.BYPASS_RESTARTING not in said(manual)
+
+
+async def test_a_model_change_keeps_a_supported_effort_and_the_tick(manual: World) -> None:
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(setup_click(manual, SETUP_MODEL, model="opus", effort="low", bypass=True))
+    found = setup_controls(manual.slack.calls_to("chat.update")[-1]["blocks"])
+    assert found[SETUP_MODEL]["initial_option"]["value"] == "opus"
+    assert found[SETUP_EFFORT]["initial_option"]["value"] == "low"
+    assert [o["value"] for o in found[SETUP_BYPASS]["initial_options"]] == ["on"]

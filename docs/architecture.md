@@ -412,12 +412,18 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   sent: a top-level message that opens a session (a prompt, files, or a `!name` passthrough), and
   a reply in a thread where nothing was ever sent (`ThreadSession.never_ran`: no turn queued and
   no stored session id), as after a cancelled setup or a D8 Cancel. `slack_app.setup_before_sending`
-  connects the client, then posts one message in the thread (`setup.setup_blocks`): a Model select
-  with the CLI's own list (`get_server_info()["models"]`, kept as `ThreadSession.models` and
-  stored with the pending setup, so a click reads its choice against the list the message was
-  built from), an Effort select with the chosen model's `supportedEffortLevels` (and `Default`,
-  which passes nothing), a Bypass checkbox (ticked when the folder's own Claude Code settings start the process in
-  bypassPermissions, so unticking is an explicit off, with `!bypass off`'s semantics) and Start. Changing the model rewrites the message
+  connects the client, then posts one message in the thread (`setup.setup_blocks`): a header
+  (`texts.SETUP_HEADER`) and one `actions` block (block_id `setup`, one row that Slack wraps on a
+  narrow screen) holding the four controls. A Model select lists the CLI's own models
+  (`get_server_info()["models"]`, kept as `ThreadSession.models` and stored with the pending
+  setup, so a click reads its choice against the list the message was built from), each option
+  showing the model's `displayName` and, under it, the CLI's own `description` (cut to Slack's 75
+  characters, left out when the entry has none). An Effort select offers `Effort: default`
+  (which passes nothing) and `Effort: <level>` for the chosen model's `supportedEffortLevels`.
+  A Bypass checkbox is ticked when the folder's own Claude Code settings start the process in
+  bypassPermissions, so unticking is an explicit off, with `!bypass off`'s semantics. Start
+  carries the setup id. `state.values` is keyed by that block_id, then by each control's
+  action_id (`setup.read_choice`). Changing the model rewrites the message
   (`chat.update`, which never notifies, and is skipped once the setup is decided) with the new
   model's levels. Start reads every control from the click's `state.values`
   (`setup.read_choice`), and `ThreadSession.apply_setup` applies it, and Start is authoritative: effort and bypass are written

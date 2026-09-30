@@ -10,6 +10,7 @@ from typing import Any
 
 from code_with_slack import texts
 
+SETUP_BLOCK = "setup"  # the one `actions` block that holds every control
 SETUP_MODEL = "setup_model"
 SETUP_EFFORT = "setup_effort"
 SETUP_BYPASS = "setup_bypass"
@@ -35,52 +36,63 @@ def effort_levels(models: list[dict[str, Any]], model: str) -> list[str]:
     return []
 
 
-def _option(label: str, value: str, **extra: Any) -> dict[str, Any]:
-    text = {"type": "plain_text", "text": label[:_OPTION_TEXT_LIMIT]}
-    return {"text": text, "value": value, **extra}
+def _option(label: str, value: str, description: dict[str, Any] | None = None) -> dict[str, Any]:
+    option: dict[str, Any] = {
+        "text": {"type": "plain_text", "text": label[:_OPTION_TEXT_LIMIT]},
+        "value": value,
+    }
+    if description:
+        option["description"] = description
+    return option
 
 
 def _model_options(models: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [_option(str(m.get("displayName") or m["value"]), str(m["value"])) for m in models]
+    return [
+        _option(
+            str(m.get("displayName") or m["value"]),
+            str(m["value"]),
+            # The CLI's own words, shown under the name (plain_text, at most 75 characters).
+            {"type": "plain_text", "text": str(m["description"])[:_OPTION_TEXT_LIMIT]}
+            if m.get("description")
+            else None,
+        )
+        for m in models
+    ]
 
 
 def _effort_options(models: list[dict[str, Any]], model: str) -> list[dict[str, Any]]:
-    default = _option(texts.SETUP_EFFORT_DEFAULT, DEFAULT)
-    return [default, *(_option(level, level) for level in effort_levels(models, model))]
+    levels = [DEFAULT, *effort_levels(models, model)]
+    return [_option(texts.SETUP_EFFORT_OPTION.format(level=level), level) for level in levels]
 
 
 def _initial(options: list[dict[str, Any]], value: str) -> dict[str, Any]:
     return next((o for o in options if o["value"] == value), options[0])
 
 
+def _select(action_id: str, options: list[dict[str, Any]], value: str) -> dict[str, Any]:
+    return {
+        "type": "static_select",
+        "action_id": action_id,
+        "options": options,
+        "initial_option": _initial(options, value),
+    }
+
+
 def setup_blocks(
     setup_id: str, models: list[dict[str, Any]], choice: Choice
 ) -> list[dict[str, Any]]:
-    """The setup message: a Model select (left out when the CLI listed no model), an Effort
-    select with the chosen model's levels, the Bypass checkbox and Start. `choice` is what each
-    control shows; Start carries `setup_id`, the one thing that resolves the question."""
-    blocks: list[dict[str, Any]] = []
+    """The setup message: a header and one row of controls (Slack wraps it on a narrow screen):
+    a Model select (left out when the CLI listed no model), an Effort select with the chosen
+    model's levels, the Bypass checkbox and Start. `choice` is what each control shows; Start
+    carries `setup_id`, the one thing that resolves the question."""
+    elements: list[dict[str, Any]] = []
     if models:
-        options = _model_options(models)
-        blocks.append(
-            _row(
-                SETUP_MODEL,
-                texts.SETUP_MODEL_LABEL,
-                {"options": options, "initial_option": _initial(options, choice.model)},
-            )
-        )
-    options = _effort_options(models, choice.model)
-    blocks.append(
-        _row(
-            SETUP_EFFORT,
-            texts.SETUP_EFFORT_LABEL,
-            {"options": options, "initial_option": _initial(options, choice.effort)},
-        )
-    )
+        elements.append(_select(SETUP_MODEL, _model_options(models), choice.model))
+    elements.append(_select(SETUP_EFFORT, _effort_options(models, choice.model), choice.effort))
     bypass = _option(
         texts.SETUP_BYPASS_OPTION,
         _BYPASS_ON,
-        description={"type": "mrkdwn", "text": texts.SETUP_BYPASS_DESCRIPTION},
+        {"type": "mrkdwn", "text": texts.SETUP_BYPASS_DESCRIPTION},
     )
     checkboxes: dict[str, Any] = {
         "type": "checkboxes",
@@ -89,32 +101,20 @@ def setup_blocks(
     }
     if choice.bypass:
         checkboxes["initial_options"] = [bypass]
-    blocks.append({"type": "actions", "block_id": SETUP_BYPASS, "elements": [checkboxes]})
-    blocks.append(
+    elements.append(checkboxes)
+    elements.append(
         {
-            "type": "actions",
-            "block_id": SETUP_START,
-            "elements": [
-                {
-                    "type": "button",
-                    "action_id": SETUP_START,
-                    "value": setup_id,
-                    "style": "primary",
-                    "text": {"type": "plain_text", "text": texts.SETUP_START_BUTTON},
-                }
-            ],
+            "type": "button",
+            "action_id": SETUP_START,
+            "value": setup_id,
+            "style": "primary",
+            "text": {"type": "plain_text", "text": texts.SETUP_START_BUTTON},
         }
     )
-    return blocks
-
-
-def _row(action_id: str, label: str, select: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "type": "section",
-        "block_id": action_id,
-        "text": {"type": "mrkdwn", "text": label},
-        "accessory": {"type": "static_select", "action_id": action_id, **select},
-    }
+    return [
+        {"type": "section", "text": {"type": "mrkdwn", "text": texts.SETUP_HEADER}},
+        {"type": "actions", "block_id": SETUP_BLOCK, "elements": elements},
+    ]
 
 
 def read_choice(values: dict[str, Any], models: list[dict[str, Any]]) -> Choice:
@@ -122,8 +122,10 @@ def read_choice(values: dict[str, Any], models: list[dict[str, Any]]) -> Choice:
     naming something the CLI did not list, reads as its default; an effort the chosen model does
     not support reads as `Default`, which is what the message shows after a model change."""
 
-    def selected(block: str) -> str:
-        control = (values.get(block) or {}).get(block) or {}
+    row = values.get(SETUP_BLOCK) or {}
+
+    def selected(action: str) -> str:
+        control = row.get(action) or {}
         return str((control.get("selected_option") or {}).get("value") or DEFAULT)
 
     model = selected(SETUP_MODEL)
@@ -132,7 +134,7 @@ def read_choice(values: dict[str, Any], models: list[dict[str, Any]]) -> Choice:
     effort = selected(SETUP_EFFORT)
     if effort not in effort_levels(models, model):
         effort = DEFAULT
-    picked = ((values.get(SETUP_BYPASS) or {}).get(SETUP_BYPASS) or {}).get("selected_options")
+    picked = (row.get(SETUP_BYPASS) or {}).get("selected_options")
     bypass = any(o.get("value") == _BYPASS_ON for o in picked or [])
     return Choice(model, effort, bypass)
 
