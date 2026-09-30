@@ -1,10 +1,11 @@
-"""D8: two busy sessions in one folder. Before a message wakes an idle session while a live
-session of another thread (any channel) is busy in the same resolved folder, the daemon asks
-`Another session is working in this folder: <link>. Send anyway?`, with Continue and Cancel.
+"""Questions that hold a message before it is sent. D8: before a message wakes an idle session
+while a live session of another thread (any channel) is busy in the same resolved folder, the
+daemon asks `Another session is working in this folder: <link>. Send anyway?`, with Continue and
+Cancel. The session setup (`setup.py`) is the other one: model, effort and bypass, then Start.
 
 Kept in memory only, like `approvals.Approvals`: a hold never outlives the process (`!stop`, a
 top-level `!stop` of its channel, and a drain all cancel one exactly as Cancel does), so nothing
-here needs to survive a restart.
+here needs to survive a restart. A thread has at most one open at a time, whichever kind.
 """
 
 import asyncio
@@ -22,8 +23,15 @@ HOLD_CANCEL = "hold_cancel"
 class Pending:
     channel_id: str
     thread_ts: str
-    future: asyncio.Future[bool]  # True: Continue was chosen; False: cancelled
+    # What the owner chose (D8: True for Continue; the setup: its `Choice`), or None when the
+    # question was cancelled (Cancel, `!stop`, a drain).
+    future: asyncio.Future[Any]
     message_ts: str | None = field(default=None)
+    # What the asker needs back with a click that carries only the id (the setup's model list).
+    context: Any = None
+    # Set by `Holds.cancel` while an answer is being applied (the setup's Start settling): the
+    # asker sends nothing once it is done.
+    cancelled: bool = False
 
 
 class Holds:
@@ -33,19 +41,21 @@ class Holds:
     def __init__(self) -> None:
         self._pending: dict[str, Pending] = {}
 
-    def open(self, channel_id: str, thread_ts: str) -> tuple[str, Pending]:
+    def open(self, channel_id: str, thread_ts: str, context: Any = None) -> tuple[str, Pending]:
         hold_id = secrets.token_urlsafe(16)
-        pending = Pending(channel_id, thread_ts, asyncio.get_running_loop().create_future())
+        pending = Pending(
+            channel_id, thread_ts, asyncio.get_running_loop().create_future(), context=context
+        )
         self._pending[hold_id] = pending
         return hold_id, pending
 
     def get(self, hold_id: str) -> Pending | None:
         return self._pending.get(hold_id)
 
-    def resolve(
-        self, hold_id: str, channel_id: str, thread_ts: str, *, continue_: bool
-    ) -> Pending | None:
-        """Resolve once, and only from the channel and thread the request was posted in."""
+    def resolve(self, hold_id: str, channel_id: str, thread_ts: str, value: Any) -> Pending | None:
+        """Resolve once with `value` (None cancels), and only from the channel and thread the
+        request was posted in. A value keeps the entry until the asker `discard`s it, so a stop
+        that arrives while the answer is applied still finds it (`cancel`)."""
         pending = self._pending.get(hold_id)
         if (
             pending is None
@@ -54,31 +64,47 @@ class Holds:
             or pending.future.done()
         ):
             return None
-        pending.future.set_result(continue_)
-        del self._pending[hold_id]
+        pending.future.set_result(value)
+        if value is None:
+            del self._pending[hold_id]
         return pending
 
     def posted(self, hold_id: str, message_ts: str) -> bool:
         """Record the message that shows a hold, so it can be removed once decided; False when
-        the hold was decided before its message was known (`!stop` while posting)."""
+        the hold was decided before its message was known (a click or `!stop` while posting)."""
         pending = self._pending.get(hold_id)
         if pending is None:
             return False
         pending.message_ts = message_ts
-        return True
+        return not pending.future.done()
 
     def cancel(self, channel_id: str, thread_ts: str) -> Pending | None:
         """Cancel the hold open in this thread, if any: the same outcome as the owner clicking
-        Cancel (`!stop`, a top-level `!stop` of its channel, a drain)."""
+        Cancel (`!stop`, a top-level `!stop` of its channel, a drain). One already answered but
+        still being applied is flagged `cancelled` instead: its asker sends nothing."""
         for hold_id, pending in list(self._pending.items()):
+            if pending.channel_id != channel_id or pending.thread_ts != thread_ts:
+                continue
+            if not pending.future.done():
+                pending.future.set_result(None)
+                del self._pending[hold_id]
+                return pending
+            if not pending.cancelled:
+                pending.cancelled = True
+                return pending
+        return None
+
+    def at_message(self, channel_id: str, thread_ts: str, message_ts: str) -> str | None:
+        """The id of the open hold shown by this message, for a control that carries no id of its
+        own (a select): None when it is decided, gone, or shown elsewhere."""
+        for hold_id, pending in self._pending.items():
             if (
                 pending.channel_id == channel_id
                 and pending.thread_ts == thread_ts
+                and pending.message_ts == message_ts
                 and not pending.future.done()
             ):
-                pending.future.set_result(False)
-                del self._pending[hold_id]
-                return pending
+                return hold_id
         return None
 
     def discard(self, hold_id: str) -> None:

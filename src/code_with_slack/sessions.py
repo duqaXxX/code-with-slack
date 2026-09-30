@@ -87,6 +87,7 @@ from code_with_slack.render.sinks import (
 )
 from code_with_slack.render.status import Status, StatusReaction
 from code_with_slack.resume import by_last_activity
+from code_with_slack.setup import DEFAULT, Choice
 from code_with_slack.state import StateStore
 from code_with_slack.trust import workspace_trusted
 
@@ -195,6 +196,7 @@ class ClaudeClient(Protocol):
     async def query(self, prompt: str | AsyncIterable[dict[str, Any]]) -> None: ...
     def receive_messages(self) -> AsyncIterator[Message]: ...
     async def set_permission_mode(self, mode: PermissionMode) -> None: ...
+    async def set_model(self, model: str | None = None) -> None: ...
     async def interrupt(self) -> None: ...
     async def stop_task(self, task_id: str) -> None: ...
     async def get_server_info(self) -> dict[str, Any] | None: ...
@@ -441,6 +443,19 @@ class ThreadSession:
         # queued, so the timer is genuinely cancelled there, not reset to fire again mid-await.
         self._pending_submits = 0
         self.commands: list[dict[str, Any]] = []
+        # The CLI's own model list (value, displayName, supportedEffortLevels), for the setup.
+        self.models: list[dict[str, Any]] = []
+        # A prompt was ever queued on this object; with no stored session id it tells a thread
+        # that never ran a turn from one whose first turn is still starting.
+        self._submitted = False
+        # `apply_setup` changed something that `forget_setup` has not undone.
+        self._setup_applied = False
+        # What the live client was built with or switched to: the effort option (no runtime
+        # setter exists) and whether it effectively runs in bypass (the switch, or the folder's own
+        # settings starting it so). `apply_setup` compares the owner's choice with these, not with
+        # what was stored, which a restart or a `!bypass on` can have moved.
+        self._client_effort: str | None = None
+        self._client_bypass = False
         self.native_mode = "default"
         self.cli_version: str | None = None
         # The effort level Claude Code last reported: its Stop hook, or the output of `/effort`
@@ -460,10 +475,29 @@ class ThreadSession:
         self._told_waiting = False
 
     @property
-    def bypass(self) -> bool:
-        """`!bypass on` in this thread, as state.json holds it: a restart keeps it."""
+    def bypass_choice(self) -> bool | None:
+        """The owner's last word on bypass in this thread, as state.json holds it (a restart keeps
+        it): True on, False off, None never chosen."""
         stored = self._deps.state.thread(self.channel_id, self.thread_ts)
-        return stored is not None and stored.bypass
+        return stored.bypass if stored is not None else None
+
+    def _bypass_runs(self, choice: bool | None) -> bool:
+        """Whether a client runs in bypass given `choice`: what the owner chose, else what Claude
+        Code itself started in (`native_mode`, as it reported it)."""
+        return choice if choice is not None else self.native_mode == "bypassPermissions"
+
+    @property
+    def bypass(self) -> bool:
+        """Whether this thread runs in bypass: the one answer the footer's ⚡, `!status`, the
+        channel list and the setup's checkbox read."""
+        return self._bypass_runs(self.bypass_choice)
+
+    def _mode_for(self, on: bool) -> str:
+        """The permission mode that means `on`; off is the native mode, or `default` when the
+        process itself started in bypass."""
+        if on:
+            return "bypassPermissions"
+        return "default" if self.native_mode == "bypassPermissions" else self.native_mode
 
     @property
     def resolved_directory(self) -> Path:
@@ -652,6 +686,7 @@ class ThreadSession:
         # above zero, so the timer is genuinely cancelled here, not reset only to fire again
         # during the awaits below (D9).
         self._pending_submits += 1
+        self._submitted = True
         try:
             self._idle_timer_check()
             turn = Turn(prompt, await self._sink())
@@ -744,14 +779,29 @@ class ThreadSession:
             try:
                 info = await client.get_server_info() or {}
                 self.commands = list(info.get("commands") or [])
+                # The setup keys every option on `value`: an entry without one is left out here,
+                # so a CLI that lists one cannot stop every first prompt.
+                self.models = [
+                    m
+                    for m in info.get("models") or []
+                    if isinstance(m, dict) and isinstance(m.get("value"), str) and m["value"]
+                ]
                 self.native_mode = str(info.get("current_permission_mode") or "default")
-                if self.bypass:
+                # Read once: a Start writing the switch meanwhile must not make the client's
+                # mode and what is recorded for it disagree.
+                choice = self.bypass_choice
+                if choice is True:
                     await client.set_permission_mode("bypassPermissions")
+                elif choice is False and self.native_mode == "bypassPermissions":
+                    # An explicit off outlives a rebuild: the folder's own bypass would return.
+                    await client.set_permission_mode("default")
             except BaseException:
                 # A client nobody holds would leave its Claude Code process running.
                 await self._disconnect(client)
                 raise
             self._client = client
+            self._client_effort = effort
+            self._client_bypass = self._bypass_runs(choice)
             # A resumed session runs at the settings' level (measured), unknown until reported,
             # unless the daemon itself just asked for a stored level: that request is shown at
             # once, until Claude Code's own report (every turn ends with one) corrects it.
@@ -766,26 +816,104 @@ class ThreadSession:
 
     async def set_bypass(self, on: bool) -> None:
         client = await self.ensure_connected()
-        # Off means asking again, even when the folder's own settings started it in bypass: from
-        # then on this process's mode to return to is `default`, which the footer and !status show.
-        if not on and self.native_mode == "bypassPermissions":
-            self.native_mode = "default"
-        mode = "bypassPermissions" if on else self.native_mode
+        mode = self._mode_for(on)
         try:
             await client.set_permission_mode(mode)  # type: ignore[arg-type]
         except Exception:
             if self._closed:  # the close disconnected the client under the call
                 raise SessionClosed from None
             raise
+        self._client_bypass = on
         # The session closed while the mode was being set: the thread this would write to may
         # already be gone, so the switch is never recorded after the fact.
         if self._closed:
             raise SessionClosed
         self._deps.state.set_bypass(self.channel_id, self.thread_ts, on)
 
+    @property
+    def never_ran(self) -> bool:
+        """No turn was ever queued in this thread: its next message is a first prompt, which asks
+        for the setup again (after a cancelled setup or a D8 Cancel, nothing was sent)."""
+        stored = self._deps.state.thread(self.channel_id, self.thread_ts)
+        return not self._submitted and (stored is None or stored.session_id is None)
+
+    async def apply_setup(self, choice: Choice) -> None:
+        """Apply the owner's session setup before the first prompt. Start is authoritative: the
+        effort and the bypass switch are written from the choice whatever state.json held
+        (a restart or a `!bypass on` typed while the setup waited can have left either), so what
+        runs is what the summary line says. An effort the live client was not built with goes
+        through a fresh client (the SDK has no runtime effort setter; no query has been sent, so
+        no session is lost), then the model on the live client, then the permission mode: when
+        the choice differs from what the client effectively runs (the switch, or a folder whose
+        own settings start it in bypass), `set_bypass` moves it. Unticking in such a folder is an
+        explicit off with the semantics of `!bypass off`: the mode it returns to is `default`.
+        Measured 2026-09-30 (CLI 2.1.285): `set_model` survives a resume and leaves the owner's
+        own default alone, so the daemon does not store the model. A failure undoes what was
+        applied (`forget_setup`) and goes on."""
+        self._setup_applied = True
+        effort = None if choice.effort == DEFAULT else choice.effort
+        try:
+            self._deps.state.set_effort(self.channel_id, self.thread_ts, effort)
+            self._deps.state.set_bypass(self.channel_id, self.thread_ts, choice.bypass)
+            client = await self.ensure_connected()
+            if effort != self._client_effort:
+                client = await self._reconnect()
+            if choice.model != DEFAULT:
+                await client.set_model(choice.model)
+            if choice.bypass != self._client_bypass:
+                # A client connected above applies the stored switch itself: this only moves one
+                # that was already live, off meaning the mode it would have had without bypass.
+                await self.set_bypass(choice.bypass)
+        except BaseException:
+            try:
+                await self.forget_setup()
+            except Exception as undo:
+                logger.warning(
+                    "could not undo a failed setup in %s/%s: %s",
+                    self.channel_id,
+                    self.thread_ts,
+                    describe(undo),
+                )
+            raise
+
+    async def forget_setup(self) -> None:
+        """Undo a Start whose message was not sent (a failure, a stop, a D8 Cancel, or a restart
+        that kept what it wrote): the stored effort and bypass go back to never chosen, and the
+        client is dropped, since it carries the effort option, the model and the mode, which the
+        next connect rebuilds. A no-op for a thread that ran a turn (its choices are the
+        owner's) and when there is nothing to undo."""
+        stored = self._deps.state.thread(self.channel_id, self.thread_ts)
+        left = stored is not None and (stored.effort is not None or stored.bypass is not None)
+        if not self.never_ran or not (self._setup_applied or left):
+            return
+        self._setup_applied = False
+        self._deps.state.set_effort(self.channel_id, self.thread_ts, None)
+        self._deps.state.set_bypass(self.channel_id, self.thread_ts, None)
+        await self._drop_client()
+
+    async def _reconnect(self) -> ClaudeClient:
+        """Close the live client and connect again, so `ensure_connected` builds the options
+        from state as they are now."""
+        await self._drop_client()
+        return await self.ensure_connected()
+
+    async def _drop_client(self) -> None:
+        async with self._connect_lock:
+            reader, self._reader = self._reader, None
+            client, self._client = self._client, None
+            if reader is not None:
+                reader.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await reader
+            if client is not None:
+                await self._disconnect(client)
+
     async def announce_restart(self) -> None:
-        """Say in the thread that bypass outlives the restart, when it is on."""
-        if self.bypass:
+        """Say in the thread that bypass outlives the restart, when the owner turned it on. Not
+        for a thread with no session id: it never ran, its next message asks the setup again, and
+        Start decides."""
+        stored = self._deps.state.thread(self.channel_id, self.thread_ts)
+        if self.bypass_choice is True and stored is not None and stored.session_id is not None:
             await self._post(texts.BYPASS_RESTARTING)
 
     async def announce_waiting(self) -> None:
@@ -880,7 +1008,7 @@ class ThreadSession:
         text = texts.STATUS.format(
             directory=self.directory,
             session=(stored.session_id if stored else None) or "new",
-            mode="bypassPermissions" if self.bypass else self.native_mode,
+            mode=self._mode_for(self.bypass),
             # Only a turn's `init` message carries the version, never the connect (measured).
             version=self.cli_version
             or (texts.VERSION_PENDING if self._client is not None else "not started"),
@@ -1758,7 +1886,7 @@ class ThreadSession:
         here = self.working_directory or self.directory
         branch, changes = await asyncio.gather(git_branch(here), git_changes(here))
         return FooterData(
-            bypass=self.bypass or self.native_mode == "bypassPermissions",
+            bypass=self.bypass,
             branch=branch,
             model=context.get("model"),
             context_percent=context.get("percentage"),

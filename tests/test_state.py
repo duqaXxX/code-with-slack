@@ -115,13 +115,15 @@ def test_holder_finds_a_session_across_channels(tmp_path: Path) -> None:
     assert store.holder("no-such-session") is None
 
 
-@pytest.mark.parametrize("value", ["true", "false", 1, None])
-def test_only_a_literal_true_turns_bypass_on(tmp_path: Path, value: object) -> None:
+@pytest.mark.parametrize("value", ["true", "false", 1, None, False])
+def test_only_a_literal_true_turns_bypass_on_and_the_rest_is_unset(
+    tmp_path: Path, value: object
+) -> None:
     path = tmp_path / "state.json"
     thread = {"directory": str(tmp_path), "session_id": None, "bypass": value, "effort": None}
     channel = {"directory": str(tmp_path), "notice_pending": False, "threads": {THREAD_TS: thread}}
     path.write_text(json.dumps({"version": 2, "channels": {CHANNEL: channel}}))
-    assert StateStore(path).thread(CHANNEL, THREAD_TS) == ThreadState(tmp_path, bypass=False)
+    assert StateStore(path).thread(CHANNEL, THREAD_TS) == ThreadState(tmp_path, bypass=None)
 
 
 def test_v2_round_trips_every_field(tmp_path: Path) -> None:
@@ -525,3 +527,59 @@ def test_prune_keeps_every_thread_of_a_folder_it_cannot_decide(tmp_path: Path) -
     assert store.prune(alive, 1700000000.0) == 1
     assert store.thread("C000CHAN", "1700000000.000100") is not None
     assert store.thread("C000CHAN", "1700000000.000200") is None
+
+
+def written(path: Path) -> dict[str, object]:
+    return json.loads(path.read_text())["channels"][CHANNEL]["threads"][THREAD_TS]
+
+
+def test_an_explicit_off_is_kept_apart_from_never_chosen(tmp_path: Path) -> None:
+    """`bypass` keeps its old meaning (`true` on, `false` not on); an explicit off (`!bypass off`
+    or an unticked Start) adds `bypass_off: true`, which must survive a restart. The two keys are
+    never both set, and clearing to unset removes `bypass_off`."""
+    path = tmp_path / "state.json"
+    store = StateStore(path)
+    store.bind(CHANNEL, tmp_path / "project")
+    store.open_thread(CHANNEL, THREAD_TS)
+    assert store.thread(CHANNEL, THREAD_TS).bypass is None
+    assert written(path)["bypass"] is False and "bypass_off" not in written(path)
+    store.set_bypass(CHANNEL, THREAD_TS, False)
+    assert StateStore(path).thread(CHANNEL, THREAD_TS).bypass is False
+    assert written(path)["bypass"] is False and written(path)["bypass_off"] is True
+    store.set_bypass(CHANNEL, THREAD_TS, True)
+    assert StateStore(path).thread(CHANNEL, THREAD_TS).bypass is True
+    assert written(path)["bypass"] is True and "bypass_off" not in written(path)
+    store.set_bypass(CHANNEL, THREAD_TS, None)
+    assert StateStore(path).thread(CHANNEL, THREAD_TS).bypass is None
+    assert written(path)["bypass"] is False and "bypass_off" not in written(path)
+    assert json.loads(path.read_text())["version"] == 2
+
+
+@pytest.mark.parametrize(
+    ("keys", "expected"),
+    [
+        ({"bypass": True}, True),
+        ({"bypass": False}, None),  # an old file: a thread that never chose
+        ({}, None),
+        ({"bypass": False, "bypass_off": True}, False),
+        ({"bypass_off": True}, False),
+    ],
+)
+def test_bypass_is_read_from_the_two_keys(
+    tmp_path: Path, keys: dict[str, object], expected: bool | None
+) -> None:
+    path = tmp_path / "state.json"
+    thread = {"directory": str(tmp_path), "session_id": None, "effort": None, **keys}
+    channel = {"directory": str(tmp_path), "notice_pending": False, "threads": {THREAD_TS: thread}}
+    path.write_text(json.dumps({"version": 2, "channels": {CHANNEL: channel}}))
+    assert StateStore(path).thread(CHANNEL, THREAD_TS).bypass is expected
+
+
+def test_a_written_off_reads_as_not_on_through_bypass_alone(tmp_path: Path) -> None:
+    """The old code looked at `bypass is True` and ignored every other key."""
+    path = tmp_path / "state.json"
+    store = StateStore(path)
+    store.bind(CHANNEL, tmp_path / "project")
+    store.open_thread(CHANNEL, THREAD_TS)
+    store.set_bypass(CHANNEL, THREAD_TS, False)
+    assert written(path).get("bypass") is not True

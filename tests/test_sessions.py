@@ -1621,6 +1621,28 @@ async def test_bypass_from_the_folder_s_own_settings_shows_and_turns_off(
     assert not statuses(h)[-1].startswith("⚡ bypass")
 
 
+async def test_a_listed_model_without_a_value_is_left_out(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # The setup builds one option per entry from `value`: an entry a future CLI lists without
+    # one must not break every first prompt, so it is dropped where the list is read.
+    info = {
+        "commands": [],
+        "current_permission_mode": "default",
+        "models": [
+            {"value": "default", "displayName": "Default (recommended)"},
+            {"displayName": "No value"},
+            {"value": ""},
+            "not an entry",
+            {"value": "haiku", "displayName": "Haiku 4.5"},
+        ],
+    }
+    h = harness_for({"server_info": info})
+    session = h.session()
+    await session.ensure_connected()
+    assert [m["value"] for m in session.models] == ["default", "haiku"]
+
+
 async def test_every_message_is_posted_without_link_previews(
     harness_for: Callable[..., Harness],
 ) -> None:
@@ -2024,6 +2046,9 @@ async def test_a_stop_says_bypass_ends_only_where_it_is_on(
 ) -> None:
     h = harness_for({})
     await h.session().set_bypass(bypass)
+    h.state.set_session(
+        CHANNEL, THREAD, "sess-ran"
+    )  # a thread that ran: bypass outlives the restart
     await asyncio.wait_for(h.manager.drain(asyncio.Event()), 2)
     posted = h.slack.calls_to("chat.postMessage")
     assert [p["text"] for p in posted] == ([texts.BYPASS_RESTARTING] if bypass else [])
@@ -2263,7 +2288,7 @@ async def test_bypass_asked_while_the_session_closes_is_not_stored(
     with pytest.raises(sessions.SessionClosed):
         await asyncio.wait_for(word, 2)
     stored = h.state.thread(CHANNEL, THREAD)
-    assert stored is not None and stored.bypass is False
+    assert stored is not None and stored.bypass is None  # never stored
 
 
 async def test_the_status_of_a_session_closed_meanwhile_is_not_given(
@@ -2308,7 +2333,7 @@ async def test_bypass_whose_client_closes_under_it_says_the_session_closed(
     with pytest.raises(sessions.SessionClosed):
         await session.set_bypass(True)
     stored = h.state.thread(CHANNEL, THREAD)
-    assert stored is not None and stored.bypass is False
+    assert stored is not None and stored.bypass is None  # never stored
 
 
 # D9: the effort level `/effort` sets is stored per thread and passed back on the next connect;

@@ -107,6 +107,7 @@ class FakeClaudeClient:
         )
         self._server_info = server_info or {
             "commands": sdk_json("server-info")["commands"],
+            "models": sdk_json("server-info")["models"],
             "current_permission_mode": "default",
         }
         self._context_usage = context_usage or sdk_json("context-usage")
@@ -123,6 +124,7 @@ class FakeClaudeClient:
         # A prompt as sent: text, or the user messages of an image prompt (streaming input).
         self.queries: list[Any] = []
         self.modes: list[str] = []
+        self.models_set: list[str | None] = []
         self.interrupts = 0
         self.stopped_tasks: list[str] = []
         self.permission_results: list[PermissionResult] = []
@@ -140,6 +142,9 @@ class FakeClaudeClient:
         self.connected = False
         if self._disconnect_error is not None:
             raise self._disconnect_error
+
+    async def set_model(self, model: str | None = None) -> None:
+        self.models_set.append(model)
 
     async def query(self, prompt: str | AsyncIterable[dict[str, Any]]) -> None:
         self.queries.append(prompt if isinstance(prompt, str) else [m async for m in prompt])

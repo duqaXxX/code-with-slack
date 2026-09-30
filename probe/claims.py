@@ -176,6 +176,22 @@ CLAIMS = [
         "in a thread, send `!effort low`, restart the daemon, send a message; the footer shows "
         "`low`",
     ),
+    Claim(
+        "P17",
+        "gesture",
+        "the server info lists models with `value`, `displayName` and `supportedEffortLevels`",
+        "code_with_slack.setup.setup_blocks",
+        "send a message at the top level of a bound channel; its thread offers Model and Effort "
+        "with the CLI's own names",
+    ),
+    Claim(
+        "P18",
+        "gesture",
+        "a resumed session keeps the model set with `set_model()`",
+        "code_with_slack.sessions.ThreadSession.apply_setup",
+        "at the top level, pick a model in the setup and press Start, restart the daemon, reply "
+        "in the thread; `!status` shows the model",
+    ),
 ]
 
 

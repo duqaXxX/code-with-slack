@@ -65,7 +65,7 @@ from code_with_slack.guards import (
     is_prompt_message,
     message_actor,
 )
-from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, hold_blocks
+from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, Pending, hold_blocks
 from code_with_slack.prompt import Prompt
 from code_with_slack.render.escape import markdown_escape, mrkdwn_escape
 from code_with_slack.render.renderer import one_line
@@ -93,6 +93,16 @@ from code_with_slack.sessions import (
     ThreadSession,
     resolve_directory,
 )
+from code_with_slack.setup import (
+    SETUP_BYPASS,
+    SETUP_EFFORT,
+    SETUP_MODEL,
+    SETUP_START,
+    Choice,
+    read_choice,
+    setup_blocks,
+)
+from code_with_slack.setup import summary as setup_summary
 from code_with_slack.state import StateStore
 
 logger = logging.getLogger(__name__)
@@ -439,10 +449,22 @@ def build_app(
             # reassign, so a non-submit exit always restores the reaction on the object that
             # actually shows it.
             held: ThreadSession | None = None
+            asked_setup = False
+            if not in_thread or session.never_ran:
+                # A session's first prompt: its setup comes before anything else, the D8 question
+                # included. A reply in a thread whose setup was cancelled, or whose D8 question
+                # was, is a first prompt too: nothing was ever sent in it.
+                ready = await setup_before_sending(channel, thread_ts, session)
+                if ready is None:
+                    return
+                session = held = ready
+                asked_setup = True
             if not session.busy:
                 other = sessions.working_in(besides=session)
                 if other is not None:
                     if not await hold_before_sending(channel, thread_ts, session, other):
+                        if asked_setup:
+                            await session.forget_setup()  # the Start that nothing was sent for
                         return
                     held = session
             # Retried once against a freshly looked-up session: the one this call was handed can
@@ -496,29 +518,128 @@ def build_app(
         the whole channel) or a drain. True to send the message on; False when it was not,
         either way telling the owner `Not sent.` already."""
         link = await thread_mrkdwn_link(other.channel_id, other.thread_ts, "Session")
-        if sessions.draining:  # a restart could have started during the permalink call above
+        answer = await ask_owner(
+            channel,
+            thread_ts,
+            session,
+            text=texts.HOLD_QUESTION.format(link=link),
+            blocks=lambda hold_id: hold_blocks(hold_id, link),
+        )
+        return answer is True
+
+    async def setup_before_sending(
+        channel: str, thread_ts: str, session: ThreadSession
+    ) -> ThreadSession | None:
+        """Ask for the session's model, effort and bypass before its first prompt, and apply
+        the answer to the live client. The session to send the message on, or None when it was
+        not sent, either way telling the owner `Not sent.` already. The client is connected
+        first: the CLI's own model list is what the message offers, and a folder that cannot
+        start fails here, before the owner picks anything."""
+        try:
+            # First what an earlier, unsent Start left: the client it changed is dropped, so the
+            # connect below reads the folder's own mode again.
+            await session.forget_setup()
+            await session.ensure_connected()
+        except SessionClosed:
+            # Closed during the downloads before this: the retry of the submit below never
+            # sees this step, so the thread's fresh session is looked up here, as it does.
+            fresh = sessions.get(channel, thread_ts)
+            if fresh is None:
+                raise SessionGone from None
+            session = fresh
+            await session.ensure_connected()
+        models = session.models
+        # Ticked when the connect above runs in bypass (a folder whose own settings start Claude
+        # Code so): it is what would run, and unticking is the explicit off.
+        ticked = session.bypass
+
+        async def settle(choice: Choice, message_ts: str, pending: Pending) -> None:
+            """Apply the choice, then turn the message into its summary line: all of it while
+            the hold is still open, so a stop that lands anywhere in here still cancels."""
+            await session.apply_setup(choice)
+            # The message stays as a record of what was set: no longer a request, not deleted.
+            try:
+                state.remove_request(channel, thread_ts, message_ts)
+            except Exception as exc:
+                logger.warning(
+                    "could not clear a setup message from state.json in %s/%s: %s",
+                    channel,
+                    thread_ts,
+                    describe(exc),
+                )
+            line = setup_summary(models, choice)
+            try:
+                await sessions.update_limiter.acquire()
+                if pending.cancelled:
+                    return  # the cancel deleted the message during the wait: nothing to edit
+                await slack.chat_update(
+                    channel=channel,
+                    ts=message_ts,
+                    text=line,
+                    blocks=[context_block(notice_text(line))],
+                )
+            except Exception as exc:
+                logger.warning("could not update a setup message in %s: %s", channel, describe(exc))
+
+        answer = await ask_owner(
+            channel,
+            thread_ts,
+            session,
+            text=texts.SETUP_FALLBACK,
+            blocks=lambda setup_id: setup_blocks(setup_id, models, Choice(bypass=ticked)),
+            settle=settle,
+            context=models,
+        )
+        if answer is None:
+            await session.forget_setup()  # a stop or drain that came while Start was applied
+            return None
+        return session
+
+    async def ask_owner(
+        channel: str,
+        thread_ts: str,
+        session: ThreadSession,
+        *,
+        text: str,
+        blocks: Callable[[str], list[dict[str, Any]]],
+        settle: Callable[[Any, str, Pending], Awaitable[None]] | None = None,
+        context: Any = None,
+    ) -> Any:
+        """Post a question that holds the owner's message and wait for the answer: whatever its
+        buttons resolved it with, or None when it was cancelled (`!stop`, a drain) or never shown
+        (`Not sent.` or the unposted notice, told already). `blocks` gets the id only its buttons
+        carry; `context` comes back with a click that carries only that id. `settle(answer,
+        message_ts, pending)` applies an answer and writes its summary while the thread still
+        shows ✋ and the hold is still open, so a `!stop` or drain meanwhile cancels
+        (`Pending.cancelled`: nothing is sent, the message is removed, `Not sent.`). When it
+        raises, the message is removed, the hold ends as a cancel would and the error goes on."""
+        if sessions.draining:  # a restart could have started during an await before this
             await tell_owner(channel, thread_ts, texts.RESTARTING)
-            return False
-        hold_id, pending = holds.open(channel, thread_ts)
+            return None
+        hold_id, pending = holds.open(channel, thread_ts, context)
         try:
             posted = await slack.chat_postMessage(
                 channel=channel,
                 thread_ts=thread_ts,
-                text=texts.HOLD_QUESTION.format(link=link),
-                blocks=hold_blocks(hold_id, link),
+                text=text,
+                blocks=blocks(hold_id),
                 unfurl_links=False,
                 unfurl_media=False,
             )
         except Exception as exc:
             # Nobody can answer a question that was never shown: fail closed, as an unpostable
             # approval does, rather than send into a folder another session is using.
-            logger.error("could not post a D8 hold in %s/%s: %s", channel, thread_ts, describe(exc))
+            logger.error("could not post a hold in %s/%s: %s", channel, thread_ts, describe(exc))
             holds.discard(hold_id)
             await tell_owner(channel, thread_ts, texts.HOLD_UNPOSTED)
-            return False
+            return None
         message_ts = str(posted["ts"])
-        if holds.posted(hold_id, message_ts):
-            # Crash repair (issue #19): a D8 hold question is a request like an approval.
+        # False when the answer came before `chat.postMessage` returned (a fast click, `!stop`, a
+        # drain): nobody knew the ts then, so the message is still ours to settle or remove, and
+        # `hold_start`/`hold_end` (and their ✋) never run for it.
+        waiting = holds.posted(hold_id, message_ts)
+        if waiting:
+            # Crash repair (issue #19): a hold question is a request like an approval.
             # Best-effort (fix round 2 item 1): outside the try/finally below on purpose, so a
             # failed write here can never skip `hold_start`/`hold_end` and leave the hold itself
             # undiscarded; the message is already live either way, so a failure is logged loudly.
@@ -526,27 +647,45 @@ def build_app(
                 state.add_request(channel, thread_ts, message_ts)
             except Exception as exc:
                 logger.error(
-                    "posted a D8 hold in %s/%s that state.json could not record: %s",
+                    "posted a hold in %s/%s that state.json could not record: %s",
                     channel,
                     thread_ts,
                     describe(exc),
                 )
-            continued = False
-            try:
+        answer: Any = None
+        sent = False
+        try:
+            if waiting:
                 session.hold_start()
-                continued = await pending.future
-            finally:
-                await session.hold_end(continued=continued)
-                holds.discard(hold_id)  # a no-op once resolved; catches a cancelled wait
-        else:
-            # Decided (a fast `!stop` or drain) before the message's own ts was known: nobody
-            # else learned it in time to remove it, and the wait below is already over, so
-            # `hold_start`/`hold_end` (and their ✋) never ran for it either.
-            await remove_request(channel, thread_ts, message_ts)
-            continued = pending.future.result()
-        if not continued:
+            answer = await pending.future
+            if answer is None:
+                if not waiting:
+                    await remove_request(channel, thread_ts, message_ts)
+            elif settle is not None:
+                try:
+                    await settle(answer, message_ts, pending)
+                except Exception as exc:
+                    if not pending.cancelled:
+                        await remove_request(channel, thread_ts, message_ts)
+                        raise
+                    logger.warning(
+                        "a cancelled hold in %s/%s failed while applied: %s",
+                        channel,
+                        thread_ts,
+                        describe(exc),
+                    )
+            if pending.cancelled:
+                answer = None
+                if not waiting:
+                    await remove_request(channel, thread_ts, message_ts)
+            sent = answer is not None
+        finally:
+            if waiting:
+                await session.hold_end(continued=sent)
+            holds.discard(hold_id)  # catches a cancelled wait, and ends an answered hold
+        if answer is None:
             await tell_owner(channel, thread_ts, texts.NOT_SENT)
-        return continued
+        return answer
 
     async def on_hold_decision(ack: AsyncAck, body: dict[str, Any]) -> None:
         await ack()
@@ -558,11 +697,75 @@ def build_app(
         assert channel is not None
         action = body["actions"][0]
         hold_id = str(action.get("value"))
-        continue_ = action["action_id"] == HOLD_CONTINUE
-        if holds.resolve(hold_id, channel, thread_ts, continue_=continue_) is None:
+        answer = True if action["action_id"] == HOLD_CONTINUE else None
+        if holds.resolve(hold_id, channel, thread_ts, answer) is None:
             await tell_owner(channel, thread_ts, texts.HOLD_GONE)
             return
         await remove_request(channel, thread_ts, body["message"]["ts"])
+
+    async def on_setup_start(ack: AsyncAck, body: dict[str, Any]) -> None:
+        await ack()
+        user, team = interaction_actor(body)
+        channel = (body.get("channel") or {}).get("id")
+        thread_ts = click_thread(body)
+        if not await admitted(user, team, channel, thread_ts):
+            return
+        assert channel is not None
+        setup_id = str(body["actions"][0].get("value"))
+        pending = holds.get(setup_id)
+        if pending is None:
+            await tell_owner(channel, thread_ts, texts.HOLD_GONE)
+            return
+        # The controls' own state rides on the click: nothing about the choice is stored here,
+        # and the model list is the one the message was built from.
+        values = (body.get("state") or {}).get("values") or {}
+        choice = read_choice(values, pending.context or [])
+        if holds.resolve(setup_id, channel, thread_ts, choice) is None:
+            await tell_owner(channel, thread_ts, texts.HOLD_GONE)
+
+    async def on_setup_model(ack: AsyncAck, body: dict[str, Any]) -> None:
+        """A new model changes which efforts exist: the message is rewritten with the levels of
+        the model now chosen, keeping the rest. An edit never rings a phone."""
+        await ack()
+        user, team = interaction_actor(body)
+        channel = (body.get("channel") or {}).get("id")
+        thread_ts = click_thread(body)
+        if not await admitted(user, team, channel, thread_ts):
+            return
+        assert channel is not None
+        message_ts = str(body["message"]["ts"])
+        setup_id = holds.at_message(channel, thread_ts, message_ts)
+        pending = holds.get(setup_id) if setup_id is not None else None
+        if setup_id is None or pending is None:
+            await tell_owner(channel, thread_ts, texts.HOLD_GONE)
+            return
+        models = pending.context or []
+        values = (body.get("state") or {}).get("values") or {}
+        choice = read_choice(values, models)
+        try:
+            await sessions.update_limiter.acquire()
+            # The wait above can outlast Start: a decided setup now shows its summary, which this
+            # edit must not overwrite.
+            if holds.at_message(channel, thread_ts, message_ts) != setup_id:
+                return
+            await slack.chat_update(
+                channel=channel,
+                ts=message_ts,
+                text=texts.SETUP_FALLBACK,
+                blocks=setup_blocks(setup_id, models, choice),
+            )
+        except Exception as exc:
+            # The controls keep what they showed; Start still reads the model and the effort.
+            logger.warning("could not update a setup message in %s: %s", channel, describe(exc))
+
+    async def on_setup_edit(ack: AsyncAck) -> None:
+        """An effort or bypass change needs nothing: Start reads every control's state."""
+        await ack()
+
+    app.action(SETUP_START)(on_setup_start)
+    app.action(SETUP_MODEL)(on_setup_model)
+    app.action(SETUP_EFFORT)(on_setup_edit)
+    app.action(SETUP_BYPASS)(on_setup_edit)
 
     for action_id in (HOLD_CONTINUE, HOLD_CANCEL):
         app.action(action_id)(on_hold_decision)

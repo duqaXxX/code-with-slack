@@ -45,8 +45,11 @@ refuses tokens of the wrong kind. [setup.md](setup.md) lists the variables.
 ## State and the single-instance lock
 
 `code_with_slack.state.StateStore` keeps, for each bound channel, its directory and, for each of
-its threads, the folder it was opened in, its Claude Code session id, its bypass switch and the
-effort level set with `/effort`, in `~/.config/code-with-slack/state.json` (version 2). Every
+its threads, the folder it was opened in, its Claude Code session id, its bypass choice (on, off, or
+never chosen) and the effort level set with `/effort`, in `~/.config/code-with-slack/state.json`
+(version 2). `bypass` keeps its old meaning (`true` on, `false` not on); an explicit off adds
+`bypass_off: true`, and neither set means never chosen, so older files read as before and old code
+ignores the extra key (an off reads as not on there). Every
 change is written to a temporary file beside it, synced, and renamed over it, so a crash leaves
 either the old file or the new one. A file that cannot be read stops the daemon instead of being
 replaced. A version 1 file (one session id and bypass switch per channel, no threads) is migrated
@@ -374,8 +377,11 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   callback, and `--allow-dangerously-skip-permissions`, which makes `!bypass on` possible
   without turning it on.
 - After connecting, `get_server_info()` gives the commands the session offers (for `!help` and
-  `!`) and the permission mode that `!bypass off` returns to, or `default` when the folder's own
-  settings start it in `bypassPermissions`. The footer shows `⚡ bypass` in either case.
+  `!`) and the permission mode Claude Code started in (`native_mode`, kept as reported):
+  `!bypass off` returns to it, or to `default` when the folder's own settings start it in
+  `bypassPermissions`. `ThreadSession.bypass` is the one answer to "does this run in bypass":
+  the owner's choice when there is one, else `native_mode`. The footer's `⚡ bypass`, `!status`,
+  the channel list and the setup's checkbox all read it.
 - If the thread's stored session cannot be resumed (its transcript was deleted), its entry is
   dropped, the thread ends (`SessionGone`), and its reply, and every reply still waiting in it,
   says so (`texts.SESSION_GONE`); the next message in that thread starts a session there again,
@@ -402,6 +408,43 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   itself, since the drain never revisits it). Either way the owner gets `Not sent.`; a hold a
   message could not post is cancelled and told `HOLD_UNPOSTED`, failing closed rather than
   sending into a folder another session is using.
+- Session setup (issue #74): a session's first prompt is held before D8 and before anything is
+  sent: a top-level message that opens a session (a prompt, files, or a `!name` passthrough), and
+  a reply in a thread where nothing was ever sent (`ThreadSession.never_ran`: no turn queued and
+  no stored session id), as after a cancelled setup or a D8 Cancel. `slack_app.setup_before_sending`
+  connects the client, then posts one message in the thread (`setup.setup_blocks`): a header
+  (`texts.SETUP_HEADER`) and one `actions` block (block_id `setup`, one row that Slack wraps on a
+  narrow screen) holding the four controls. A Model select lists the CLI's own models
+  (`get_server_info()["models"]`, kept as `ThreadSession.models` and stored with the pending
+  setup, so a click reads its choice against the list the message was built from), each option
+  showing the model's `displayName` and, under it, the CLI's own `description` (cut to Slack's 75
+  characters, left out when the entry has none). An Effort select offers `Effort: default`
+  (which passes nothing) and `Effort: <level>` for the chosen model's `supportedEffortLevels`.
+  A Bypass checkbox is ticked when the folder's own Claude Code settings start the process in
+  bypassPermissions, so unticking is an explicit off, with `!bypass off`'s semantics. Start
+  carries the setup id. `state.values` is keyed by that block_id, then by each control's
+  action_id (`setup.read_choice`). Changing the model rewrites the message
+  (`chat.update`, which never notifies, and is skipped once the setup is decided) with the new
+  model's levels. Start reads every control from the click's `state.values`
+  (`setup.read_choice`), and `ThreadSession.apply_setup` applies it, and Start is authoritative: effort and bypass are written
+  from the choice whatever `state.json` held (a restart or a `!bypass on` typed meanwhile can
+  have left either), so what runs is what the summary says. An effort the live client was not
+  built with is stored and the client reconnected (the SDK has no runtime effort setter and no query has been
+  sent, so no session is lost), a non-default model is `set_model()` on the live client (not
+  stored: it survives a resume and leaves the owner's default alone, measured 2026-09-30, CLI
+  2.1.285), and bypass goes through `set_bypass` when the choice differs from what the live client
+  effectively runs (`_client_bypass`: the choice, or the folder's own bypass). The message then
+  becomes one summary line, written inside the same wait (the cancel window covers the limiter
+  wait; a cancel that already deleted the message skips the edit), and stays; the held message goes on unchanged. The wait shares `slack_app.ask_owner` and
+  `hold.Holds` with D8. The entry stays in `Holds` while the answer is applied, so `!stop`, a
+  top-level `!stop` and a drain cancel it then too (`Pending.cancelled`): nothing is sent, the
+  message is deleted, the owner gets `Not sent.` and `!stop` does not say nothing is running. An
+  answer that arrives before `chat.postMessage` has returned is applied the same way. A failed
+  apply removes the message and the error reaches the owner. Whatever an unsent Start applied
+  (stored effort, bypass, the client with its effort and model) is undone by
+  `ThreadSession.forget_setup`, called when a setup is cancelled or fails, when D8 cancels after
+  Start, and before each new setup, so the setup asked again shows the defaults. A setup shows
+  ✋ and pauses the idle timer; crash repair deletes a setup message left standing.
 - Each `ThreadSession` keeps one `render.status.StatusReaction` on its own root message (D10),
   which `thread_ts` always is: a top-level owner message, or the owner's own `!resume` message.
   `ThreadSession._react` shows it as a tracked background task, since a reaction must never delay
@@ -492,19 +535,22 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   process after EOF, and resuming the same session id any sooner would race it.
 - Logs carry channel and thread ids and exception type names, never prompt or reply text.
 
-Bypass is a thread's own `ThreadState.bypass` in `state.json`, which `ThreadSession.bypass`
-reads: an idle close and a restart of the daemon, whatever its cause, keep it, and the next Claude
-Code process in that thread gets it back from `ensure_connected`, through `set_permission_mode`,
-since Claude Code's own `--resume` never restores `bypassPermissions` (sessions reference, read
-2026-09-26). At the start of `SessionManager.drain`, every thread with bypass on gets
-`texts.BYPASS_RESTARTING`. A session `!resume` opens starts in its new thread with bypass off and
+Bypass is a thread's own `ThreadState.bypass` in `state.json` (on, off or never chosen), which
+`ThreadSession.bypass_choice` reads: an idle close and a restart of the daemon, whatever its
+cause, keep it, and the next Claude Code process in that thread gets it back from
+`ensure_connected`, through `set_permission_mode`: on sets `bypassPermissions`; an explicit off in
+a folder whose own settings start in bypass sets `default`, so the folder's bypass does not return
+silently; never chosen leaves Claude Code's own mode. This is needed since Claude Code's own `--resume` never restores `bypassPermissions` (sessions reference, read
+2026-09-26). At the start of `SessionManager.drain`, every thread whose owner turned bypass on gets
+`texts.BYPASS_RESTARTING` (a thread with no session id never ran: its next message asks the setup
+again, so it is not told). A session `!resume` opens starts in its new thread with bypass never chosen (it follows the folder's own mode) and
 no `/effort` level set, whatever the session had before: both belong to the thread, not to the
 Claude Code session id, and `!resume` never touches or waits on any other thread.
 
 ## Slack handlers
 
 `code_with_slack.slack_app.build_app` registers one listener per inbound path: `message`
-events, the Approve, Deny, Answer and Skip buttons, and the question form's Next and Submit. The app registers no slash command. Each
+events, the Approve, Deny, Answer and Skip buttons, the setup's Model select and Start, and the question form's Next and Submit. The app registers no slash command. Each
 acknowledges Slack first, then checks the owner, the workspace and the channel itself. A
 failure after the checks reaches the owner as an ephemeral error line.
 A link Slack made from a typed address (`<url|label>`, `<url>`) reaches Claude Code as typed; a
@@ -542,7 +588,7 @@ activity, git branch, size), the first 8 characters of the session id and a Resu
 list is posted in the channel, and each button carries the session id and the ts of the `!resume`
 message (`resume.parse_resume_value`). A Resume click or a typed `!resume <id or name>`
 (`slack_app.resume_into_thread`) opens the chosen session in the thread of that message
-(`sessions.resume`), with a fresh thread entry: bypass off and no `/effort` level, whatever
+(`sessions.resume`), with a fresh thread entry: bypass never chosen (the folder's own mode) and no `/effort` level, whatever
 the session had before. It is refused, with no `await` between the check and the `resume` call it
 guards so nothing can change in between, when that thread already holds a session
 (`texts.RESUME_HELD`: a resume is never a swap) or the channel was bound to another folder while
