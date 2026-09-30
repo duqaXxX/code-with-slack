@@ -57,7 +57,7 @@ From then on:
 - `!bind`, typed in the channel, lists the folders under `ALLOWED_ROOT` that Claude Code trusts,
   with a Bind button each; `!bind <folder>` binds one directly.
 - `!bypass on`, sent inside a session's thread, switches that session to `bypassPermissions`
-  until `!bypass off` or a restart.
+  until `!bypass off`; a restart of code-with-slack keeps it.
 
 The full list is in [docs/setup.md](docs/setup.md#using-it).
 

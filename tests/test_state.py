@@ -529,21 +529,57 @@ def test_prune_keeps_every_thread_of_a_folder_it_cannot_decide(tmp_path: Path) -
     assert store.thread("C000CHAN", "1700000000.000200") is None
 
 
+def written(path: Path) -> dict[str, object]:
+    return json.loads(path.read_text())["channels"][CHANNEL]["threads"][THREAD_TS]
+
+
 def test_an_explicit_off_is_kept_apart_from_never_chosen(tmp_path: Path) -> None:
-    """Old files wrote `false` for a thread that never chose; `true` is on; `"off"` is the
-    explicit off (`!bypass off` or an unticked Start), which must survive a restart."""
+    """`bypass` keeps its old meaning (`true` on, `false` not on); an explicit off (`!bypass off`
+    or an unticked Start) adds `bypass_off: true`, which must survive a restart. The two keys are
+    never both set, and clearing to unset removes `bypass_off`."""
     path = tmp_path / "state.json"
     store = StateStore(path)
     store.bind(CHANNEL, tmp_path / "project")
     store.open_thread(CHANNEL, THREAD_TS)
     assert store.thread(CHANNEL, THREAD_TS).bypass is None
-    assert (
-        json.loads(path.read_text())["channels"][CHANNEL]["threads"][THREAD_TS]["bypass"] is False
-    )
+    assert written(path)["bypass"] is False and "bypass_off" not in written(path)
     store.set_bypass(CHANNEL, THREAD_TS, False)
     assert StateStore(path).thread(CHANNEL, THREAD_TS).bypass is False
+    assert written(path)["bypass"] is False and written(path)["bypass_off"] is True
     store.set_bypass(CHANNEL, THREAD_TS, True)
     assert StateStore(path).thread(CHANNEL, THREAD_TS).bypass is True
+    assert written(path)["bypass"] is True and "bypass_off" not in written(path)
     store.set_bypass(CHANNEL, THREAD_TS, None)
     assert StateStore(path).thread(CHANNEL, THREAD_TS).bypass is None
+    assert written(path)["bypass"] is False and "bypass_off" not in written(path)
     assert json.loads(path.read_text())["version"] == 2
+
+
+@pytest.mark.parametrize(
+    ("keys", "expected"),
+    [
+        ({"bypass": True}, True),
+        ({"bypass": False}, None),  # an old file: a thread that never chose
+        ({}, None),
+        ({"bypass": False, "bypass_off": True}, False),
+        ({"bypass_off": True}, False),
+    ],
+)
+def test_bypass_is_read_from_the_two_keys(
+    tmp_path: Path, keys: dict[str, object], expected: bool | None
+) -> None:
+    path = tmp_path / "state.json"
+    thread = {"directory": str(tmp_path), "session_id": None, "effort": None, **keys}
+    channel = {"directory": str(tmp_path), "notice_pending": False, "threads": {THREAD_TS: thread}}
+    path.write_text(json.dumps({"version": 2, "channels": {CHANNEL: channel}}))
+    assert StateStore(path).thread(CHANNEL, THREAD_TS).bypass is expected
+
+
+def test_a_written_off_reads_as_not_on_through_bypass_alone(tmp_path: Path) -> None:
+    """The old code looked at `bypass is True` and ignored every other key."""
+    path = tmp_path / "state.json"
+    store = StateStore(path)
+    store.bind(CHANNEL, tmp_path / "project")
+    store.open_thread(CHANNEL, THREAD_TS)
+    store.set_bypass(CHANNEL, THREAD_TS, False)
+    assert written(path).get("bypass") is not True

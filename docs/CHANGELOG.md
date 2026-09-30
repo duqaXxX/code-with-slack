@@ -13,8 +13,8 @@ All notable changes to this project are documented here. The format follows
   and sends the held message; `!stop`, a drain or a restart cancels it with `Not sent.`, also
   while Start is being applied. The Bypass box starts ticked in a folder whose own Claude Code
   settings start in bypass; unticking it turns bypass off, as `!bypass off` does, and that off
-  now survives an idle close or a restart (`state.json` keeps on, off and never chosen apart;
-  older files read as never chosen). A reply in a
+  now survives an idle close or a restart (`state.json` keeps on, off and never chosen apart,
+  with an additive `bypass_off` key; older files read as never chosen). A reply in a
   thread where nothing was ever sent (after a cancel) asks the setup again, from the defaults.
   Probe claims P17 (the server info's model fields) and P18 (a model set with `set_model()`
   survives a resume).

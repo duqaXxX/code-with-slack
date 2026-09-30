@@ -47,9 +47,9 @@ refuses tokens of the wrong kind. [setup.md](setup.md) lists the variables.
 `code_with_slack.state.StateStore` keeps, for each bound channel, its directory and, for each of
 its threads, the folder it was opened in, its Claude Code session id, its bypass choice (on, off, or
 never chosen) and the effort level set with `/effort`, in `~/.config/code-with-slack/state.json`
-(version 2). The bypass value is `true` for on, `"off"` for an explicit off and `false` for never
-chosen, the value older files hold for a thread that never chose, so they read as unset and
-the version stays 2; old code reads `"off"` as not on. Every
+(version 2). `bypass` keeps its old meaning (`true` on, `false` not on); an explicit off adds
+`bypass_off: true`, and neither set means never chosen, so older files read as before and old code
+ignores the extra key (an off reads as not on there). Every
 change is written to a temporary file beside it, synced, and renamed over it, so a crash leaves
 either the old file or the new one. A file that cannot be read stops the daemon instead of being
 replaced. A version 1 file (one session id and bypass switch per channel, no threads) is migrated
@@ -537,7 +537,7 @@ a folder whose own settings start in bypass sets `default`, so the folder's bypa
 silently; never chosen leaves Claude Code's own mode. This is needed since Claude Code's own `--resume` never restores `bypassPermissions` (sessions reference, read
 2026-09-26). At the start of `SessionManager.drain`, every thread whose owner turned bypass on gets
 `texts.BYPASS_RESTARTING` (a thread with no session id never ran: its next message asks the setup
-again, so it is not told). A session `!resume` opens starts in its new thread with bypass off and
+again, so it is not told). A session `!resume` opens starts in its new thread with bypass never chosen (it follows the folder's own mode) and
 no `/effort` level set, whatever the session had before: both belong to the thread, not to the
 Claude Code session id, and `!resume` never touches or waits on any other thread.
 
@@ -582,7 +582,7 @@ activity, git branch, size), the first 8 characters of the session id and a Resu
 list is posted in the channel, and each button carries the session id and the ts of the `!resume`
 message (`resume.parse_resume_value`). A Resume click or a typed `!resume <id or name>`
 (`slack_app.resume_into_thread`) opens the chosen session in the thread of that message
-(`sessions.resume`), with a fresh thread entry: bypass off and no `/effort` level, whatever
+(`sessions.resume`), with a fresh thread entry: bypass never chosen (the folder's own mode) and no `/effort` level, whatever
 the session had before. It is refused, with no `await` between the check and the `resume` call it
 guards so nothing can change in between, when that thread already holds a session
 (`texts.RESUME_HELD`: a resume is never a swap) or the channel was bound to another folder while

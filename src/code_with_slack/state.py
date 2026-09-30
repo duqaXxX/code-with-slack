@@ -27,10 +27,10 @@ class ThreadState:
     session_id: str | None = None
     # The owner's last word on bypass, kept across restarts (a restart is the daemon's doing, not
     # the owner's): True after `!bypass on` or a ticked setup, False after `!bypass off` or an
-    # unticked one, None when never chosen, which leaves Claude Code's own mode alone. On disk:
-    # `true`, `"off"`, and `false` for None, the value every file written before this existed
-    # holds for a thread that never chose, so old files read as unset and new ones stay readable
-    # by the old code (which takes anything but `true` as off): the version stays 2.
+    # unticked one, None when never chosen, which leaves Claude Code's own mode alone. On disk,
+    # `bypass` keeps its old meaning (`true` on, `false` not on) and an explicit off adds
+    # `bypass_off: true`, written for that alone. A file from before reads as never chosen where
+    # it held `false`; old code ignores the extra key and reads an off as not on.
     bypass: bool | None = None
     # The level set with `/effort`; `None` when unset or set back to the default.
     effort: str | None = None
@@ -59,18 +59,25 @@ class StateError(Exception):
     """state.json exists but cannot be read; the daemon refuses to guess."""
 
 
-def _parse_bypass(raw: object) -> bool | None:
-    return True if raw is True else False if raw == "off" else None
+def _parse_bypass(raw: dict[str, Any]) -> bool | None:
+    if raw.get("bypass") is True:
+        return True
+    return False if raw.get("bypass_off") is True else None
 
 
-def _dump_bypass(bypass: bool | None) -> bool | str:
-    return True if bypass else "off" if bypass is False else False
+def _dump_bypass(bypass: bool | None) -> dict[str, bool]:
+    """`bypass` as it always was (`true` on, `false` not on), plus `bypass_off: true` for an
+    explicit off only: never both set."""
+    if bypass:
+        return {"bypass": True}
+    return {"bypass": False, "bypass_off": True} if bypass is False else {"bypass": False}
 
 
 def _parse_thread(raw: dict[str, Any]) -> ThreadState:
     """Tolerant of a v2 file written before the repair fields existed (they default to "nothing
     open"), and a v2 file written with them read by code that does not know them yet ignores the
-    extra keys: both directions of the additive version stay 2. A file written by 1304c5e's single
+    extra keys: both directions of the additive version stay 2 (`bypass_off` is one such key:
+    a file without it reads its `bypass: false` as never chosen). A file written by 1304c5e's single
     `open_reply` field (never shipped) is read the same as one with none at all: that key is not
     looked at."""
     effort = raw.get("effort")
@@ -80,7 +87,7 @@ def _parse_thread(raw: dict[str, Any]) -> ThreadState:
     return ThreadState(
         directory=Path(raw["directory"]),
         session_id=raw.get("session_id"),
-        bypass=_parse_bypass(raw.get("bypass")),
+        bypass=_parse_bypass(raw),
         effort=effort if isinstance(effort, str) else None,
         open_replies=tuple(open_replies) if isinstance(open_replies, list) else (),
         requests=tuple(requests) if isinstance(requests, list) else (),
@@ -338,7 +345,7 @@ class StateStore:
                         thread_ts: {
                             "directory": str(t.directory),
                             "session_id": t.session_id,
-                            "bypass": _dump_bypass(t.bypass),
+                            **_dump_bypass(t.bypass),
                             "effort": t.effort,
                             "open_replies": list(t.open_replies),
                             "requests": list(t.requests),
