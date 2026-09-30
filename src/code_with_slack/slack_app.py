@@ -549,9 +549,9 @@ def build_app(
             session = fresh
             await session.ensure_connected()
         models = session.models
-        # A folder whose own settings start Claude Code in bypass shows the box ticked: it is
-        # what would run, and unticking is the explicit off.
-        ticked = session.native_mode == "bypassPermissions"
+        # Ticked when the connect above runs in bypass (a folder whose own settings start Claude
+        # Code so): it is what would run, and unticking is the explicit off.
+        ticked = session.bypass
 
         async def settle(choice: Choice, message_ts: str, pending: Pending) -> None:
             """Apply the choice, then turn the message into its summary line: all of it while

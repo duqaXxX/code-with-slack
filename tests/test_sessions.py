@@ -2266,7 +2266,7 @@ async def test_bypass_asked_while_the_session_closes_is_not_stored(
     with pytest.raises(sessions.SessionClosed):
         await asyncio.wait_for(word, 2)
     stored = h.state.thread(CHANNEL, THREAD)
-    assert stored is not None and stored.bypass is False
+    assert stored is not None and stored.bypass is None  # never stored
 
 
 async def test_the_status_of_a_session_closed_meanwhile_is_not_given(
@@ -2311,7 +2311,7 @@ async def test_bypass_whose_client_closes_under_it_says_the_session_closed(
     with pytest.raises(sessions.SessionClosed):
         await session.set_bypass(True)
     stored = h.state.thread(CHANNEL, THREAD)
-    assert stored is not None and stored.bypass is False
+    assert stored is not None and stored.bypass is None  # never stored
 
 
 # D9: the effort level `/effort` sets is stored per thread and passed back on the next connect;

@@ -2498,7 +2498,7 @@ def assert_a_fresh_setup(world: World) -> None:
     bypass = next(b for b in blocks if b.get("block_id") == SETUP_BYPASS)
     assert "initial_options" not in bypass["elements"][0]
     stored = world.state.thread(CHANNEL, THREAD)
-    assert stored.bypass is False and stored.effort is None
+    assert stored.bypass is None and stored.effort is None
     client = world.clients[-1]
     assert client.options.effort is None and client.models_set == [] and client.modes == []
 
@@ -2551,7 +2551,7 @@ async def test_a_failing_start_leaves_no_controls_and_no_leftovers(
     assert manual.queries() == []
     assert len(manual.slack.calls_to("chat.delete")) == 1  # the controls are gone
     stored = manual.state.thread(CHANNEL, THREAD)
-    assert stored.requests == () and stored.effort is None and stored.bypass is False
+    assert stored.requests == () and stored.effort is None and stored.bypass is None
     assert manual.ephemerals() or any("RuntimeError" in t for t in said(manual))
 
 
@@ -2636,7 +2636,9 @@ async def test_a_restart_during_start_leaves_nothing_for_the_next_start(manual: 
     assert client.queries == ["again"]
     assert client.options.effort is None and client.modes in ([], ["default"])
     stored = manual.state.thread(CHANNEL, THREAD)
-    assert stored.bypass is False and stored.effort is None
+    assert (
+        stored.bypass is False
+    )  # Start's unticked box is an explicit off and stored.effort is None
     assert manual.slack.calls_to("chat.update")[-1]["text"].endswith(
         "Effort: Default · Bypass: off"
     )
@@ -2714,7 +2716,7 @@ async def test_unticking_in_a_native_bypass_folder_turns_bypass_off(
     await manual.settle(0.3)
     client = manual.clients[-1]
     session = manual.sessions.get(CHANNEL, THREAD)
-    assert session is not None and session.native_mode == "default"
+    assert session is not None and session.bypass is False
     assert client.modes[-1] == "default" and client.queries == ["hello"]
     assert manual.slack.calls_to("chat.update")[-1]["text"].endswith("Bypass: off")
 
@@ -2796,3 +2798,91 @@ async def test_a_native_bypass_folder_asks_again_with_the_box_ticked_after_a_sto
     await manual.settle(0.3)
     await manual.dispatch(reply("again", THREAD))
     assert [o["value"] for o in bypass_box(manual)["initial_options"]] == ["on"]
+
+
+async def ran_in_a_native_bypass_folder(
+    manual: World, monkeypatch: pytest.MonkeyPatch, *, unticked: bool = True
+) -> Any:
+    """A native-bypass folder's thread that started with an explicit off and ran a turn."""
+    native_bypass_folder(monkeypatch)
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(setup_click(manual, bypass=not unticked))
+    await manual.settle(0.3)
+    manual.state.set_session(CHANNEL, THREAD, "sess-ran")  # a thread that ran
+    session = manual.sessions.get(CHANNEL, THREAD)
+    assert session is not None
+    return session
+
+
+async def test_an_unticked_off_survives_an_idle_close(
+    manual: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = await ran_in_a_native_bypass_folder(manual, monkeypatch)
+    await session.close()
+    await manual.dispatch(reply("second", THREAD))
+    await manual.settle(0.3)
+    fresh = manual.sessions.get(CHANNEL, THREAD)
+    assert fresh is not None and fresh is not session
+    assert manual.clients[-1].queries == ["second"]
+    assert manual.clients[-1].modes[-1] == "default"  # not back in the folder's own bypass
+    assert fresh.bypass is False
+
+
+async def test_an_unticked_off_survives_a_lost_client(
+    manual: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = await ran_in_a_native_bypass_folder(manual, monkeypatch)
+    await session._drop_client()  # the reader-crash path
+    await manual.dispatch(reply("second", THREAD))
+    await manual.settle(0.3)
+    assert manual.clients[-1].modes[-1] == "default" and session.bypass is False
+
+
+async def test_bang_bypass_off_in_a_native_folder_survives_a_restart(
+    manual: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = await ran_in_a_native_bypass_folder(manual, monkeypatch, unticked=False)
+    assert session.bypass is True
+    await manual.dispatch(reply("!bypass off", THREAD))
+    assert manual.clients[-1].modes[-1] == "default"
+    await session.close()  # the restart: a new object from state.json
+    await manual.dispatch(reply("second", THREAD))
+    await manual.settle(0.3)
+    assert manual.clients[-1].modes[-1] == "default"
+
+
+async def test_a_thread_that_never_chose_keeps_the_folders_own_bypass(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native_bypass_folder(monkeypatch)
+    await world.dispatch(message("hello", ts=THREAD))  # the harness presses Start, ticked
+    await world.dispatch(reply("!bypass off", THREAD))
+    world.state.set_bypass(CHANNEL, THREAD, None)  # never chosen
+    session = world.sessions.get(CHANNEL, THREAD)
+    assert session is not None
+    await session._drop_client()
+    await session.ensure_connected()
+    assert world.clients[-1].modes == []  # left as Claude Code started it
+    assert session.bypass is True
+
+
+async def test_the_channel_status_row_reads_the_effective_bypass(
+    manual: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await ran_in_a_native_bypass_folder(manual, monkeypatch)
+    await manual.dispatch(message("!status"))
+    assert texts.STATUS_CHANNEL_BYPASS not in said(manual)[-1]
+    manual.state.set_bypass(CHANNEL, THREAD, None)  # never chosen: the folder's bypass runs
+    await manual.dispatch(message("!status"))
+    assert texts.STATUS_CHANNEL_BYPASS in said(manual)[-1]
+
+
+async def test_a_failed_first_turn_does_not_announce_bypass_at_restart(manual: World) -> None:
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(setup_click(manual, bypass=True))
+    await manual.settle(0.3)
+    session = manual.sessions.get(CHANNEL, THREAD)
+    assert session is not None and manual.state.thread(CHANNEL, THREAD).session_id is None
+    await session.announce_restart()
+    await asyncio.sleep(0.05)
+    assert texts.BYPASS_RESTARTING not in said(manual)

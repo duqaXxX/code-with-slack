@@ -115,13 +115,15 @@ def test_holder_finds_a_session_across_channels(tmp_path: Path) -> None:
     assert store.holder("no-such-session") is None
 
 
-@pytest.mark.parametrize("value", ["true", "false", 1, None])
-def test_only_a_literal_true_turns_bypass_on(tmp_path: Path, value: object) -> None:
+@pytest.mark.parametrize("value", ["true", "false", 1, None, False])
+def test_only_a_literal_true_turns_bypass_on_and_the_rest_is_unset(
+    tmp_path: Path, value: object
+) -> None:
     path = tmp_path / "state.json"
     thread = {"directory": str(tmp_path), "session_id": None, "bypass": value, "effort": None}
     channel = {"directory": str(tmp_path), "notice_pending": False, "threads": {THREAD_TS: thread}}
     path.write_text(json.dumps({"version": 2, "channels": {CHANNEL: channel}}))
-    assert StateStore(path).thread(CHANNEL, THREAD_TS) == ThreadState(tmp_path, bypass=False)
+    assert StateStore(path).thread(CHANNEL, THREAD_TS) == ThreadState(tmp_path, bypass=None)
 
 
 def test_v2_round_trips_every_field(tmp_path: Path) -> None:
@@ -525,3 +527,23 @@ def test_prune_keeps_every_thread_of_a_folder_it_cannot_decide(tmp_path: Path) -
     assert store.prune(alive, 1700000000.0) == 1
     assert store.thread("C000CHAN", "1700000000.000100") is not None
     assert store.thread("C000CHAN", "1700000000.000200") is None
+
+
+def test_an_explicit_off_is_kept_apart_from_never_chosen(tmp_path: Path) -> None:
+    """Old files wrote `false` for a thread that never chose; `true` is on; `"off"` is the
+    explicit off (`!bypass off` or an unticked Start), which must survive a restart."""
+    path = tmp_path / "state.json"
+    store = StateStore(path)
+    store.bind(CHANNEL, tmp_path / "project")
+    store.open_thread(CHANNEL, THREAD_TS)
+    assert store.thread(CHANNEL, THREAD_TS).bypass is None
+    assert (
+        json.loads(path.read_text())["channels"][CHANNEL]["threads"][THREAD_TS]["bypass"] is False
+    )
+    store.set_bypass(CHANNEL, THREAD_TS, False)
+    assert StateStore(path).thread(CHANNEL, THREAD_TS).bypass is False
+    store.set_bypass(CHANNEL, THREAD_TS, True)
+    assert StateStore(path).thread(CHANNEL, THREAD_TS).bypass is True
+    store.set_bypass(CHANNEL, THREAD_TS, None)
+    assert StateStore(path).thread(CHANNEL, THREAD_TS).bypass is None
+    assert json.loads(path.read_text())["version"] == 2

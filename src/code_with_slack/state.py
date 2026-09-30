@@ -25,8 +25,13 @@ def _empty_threads() -> Mapping[str, "ThreadState"]:
 class ThreadState:
     directory: Path
     session_id: str | None = None
-    # `!bypass on`, kept across restarts: a restart is the daemon's doing, not the owner's.
-    bypass: bool = False
+    # The owner's last word on bypass, kept across restarts (a restart is the daemon's doing, not
+    # the owner's): True after `!bypass on` or a ticked setup, False after `!bypass off` or an
+    # unticked one, None when never chosen, which leaves Claude Code's own mode alone. On disk:
+    # `true`, `"off"`, and `false` for None, the value every file written before this existed
+    # holds for a thread that never chose, so old files read as unset and new ones stay readable
+    # by the old code (which takes anything but `true` as off): the version stays 2.
+    bypass: bool | None = None
     # The level set with `/effort`; `None` when unset or set back to the default.
     effort: str | None = None
     # Crash repair (issue #19), each an id only, never message content:
@@ -54,6 +59,14 @@ class StateError(Exception):
     """state.json exists but cannot be read; the daemon refuses to guess."""
 
 
+def _parse_bypass(raw: object) -> bool | None:
+    return True if raw is True else False if raw == "off" else None
+
+
+def _dump_bypass(bypass: bool | None) -> bool | str:
+    return True if bypass else "off" if bypass is False else False
+
+
 def _parse_thread(raw: dict[str, Any]) -> ThreadState:
     """Tolerant of a v2 file written before the repair fields existed (they default to "nothing
     open"), and a v2 file written with them read by code that does not know them yet ignores the
@@ -67,7 +80,7 @@ def _parse_thread(raw: dict[str, Any]) -> ThreadState:
     return ThreadState(
         directory=Path(raw["directory"]),
         session_id=raw.get("session_id"),
-        bypass=raw.get("bypass") is True,
+        bypass=_parse_bypass(raw.get("bypass")),
         effort=effort if isinstance(effort, str) else None,
         open_replies=tuple(open_replies) if isinstance(open_replies, list) else (),
         requests=tuple(requests) if isinstance(requests, list) else (),
@@ -140,8 +153,9 @@ class StateStore:
         if current is not None and current.session_id != session_id:
             self._set_thread(channel_id, thread_ts, replace(current, session_id=session_id))
 
-    def set_bypass(self, channel_id: str, thread_ts: str, on: bool) -> None:
-        """Record a thread's bypass switch; a no-op for a thread that does not exist."""
+    def set_bypass(self, channel_id: str, thread_ts: str, on: bool | None) -> None:
+        """Record a thread's bypass choice (`None`: never chosen); a no-op for a thread that does
+        not exist."""
         current = self.thread(channel_id, thread_ts)
         if current is not None and current.bypass != on:
             self._set_thread(channel_id, thread_ts, replace(current, bypass=on))
@@ -324,7 +338,7 @@ class StateStore:
                         thread_ts: {
                             "directory": str(t.directory),
                             "session_id": t.session_id,
-                            "bypass": t.bypass,
+                            "bypass": _dump_bypass(t.bypass),
                             "effort": t.effort,
                             "open_replies": list(t.open_replies),
                             "requests": list(t.requests),

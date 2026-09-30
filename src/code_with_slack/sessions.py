@@ -475,10 +475,29 @@ class ThreadSession:
         self._told_waiting = False
 
     @property
-    def bypass(self) -> bool:
-        """`!bypass on` in this thread, as state.json holds it: a restart keeps it."""
+    def bypass_choice(self) -> bool | None:
+        """The owner's last word on bypass in this thread, as state.json holds it (a restart keeps
+        it): True on, False off, None never chosen."""
         stored = self._deps.state.thread(self.channel_id, self.thread_ts)
-        return stored is not None and stored.bypass
+        return stored.bypass if stored is not None else None
+
+    def _bypass_runs(self, choice: bool | None) -> bool:
+        """Whether a client runs in bypass given `choice`: what the owner chose, else what Claude
+        Code itself started in (`native_mode`, as it reported it)."""
+        return choice if choice is not None else self.native_mode == "bypassPermissions"
+
+    @property
+    def bypass(self) -> bool:
+        """Whether this thread runs in bypass: the one answer the footer's ⚡, `!status`, the
+        channel list and the setup's checkbox read."""
+        return self._bypass_runs(self.bypass_choice)
+
+    def _mode_for(self, on: bool) -> str:
+        """The permission mode that means `on`; off is the native mode, or `default` when the
+        process itself started in bypass."""
+        if on:
+            return "bypassPermissions"
+        return "default" if self.native_mode == "bypassPermissions" else self.native_mode
 
     @property
     def resolved_directory(self) -> Path:
@@ -764,16 +783,19 @@ class ThreadSession:
                 self.native_mode = str(info.get("current_permission_mode") or "default")
                 # Read once: a Start writing the switch meanwhile must not make the client's
                 # mode and what is recorded for it disagree.
-                switched = self.bypass
-                if switched:
+                choice = self.bypass_choice
+                if choice is True:
                     await client.set_permission_mode("bypassPermissions")
+                elif choice is False and self.native_mode == "bypassPermissions":
+                    # An explicit off outlives a rebuild: the folder's own bypass would return.
+                    await client.set_permission_mode("default")
             except BaseException:
                 # A client nobody holds would leave its Claude Code process running.
                 await self._disconnect(client)
                 raise
             self._client = client
             self._client_effort = effort
-            self._client_bypass = switched or self.native_mode == "bypassPermissions"
+            self._client_bypass = self._bypass_runs(choice)
             # A resumed session runs at the settings' level (measured), unknown until reported,
             # unless the daemon itself just asked for a stored level: that request is shown at
             # once, until Claude Code's own report (every turn ends with one) corrects it.
@@ -788,18 +810,14 @@ class ThreadSession:
 
     async def set_bypass(self, on: bool) -> None:
         client = await self.ensure_connected()
-        # Off means asking again, even when the folder's own settings started it in bypass: from
-        # then on this process's mode to return to is `default`, which the footer and !status show.
-        if not on and self.native_mode == "bypassPermissions":
-            self.native_mode = "default"
-        mode = "bypassPermissions" if on else self.native_mode
+        mode = self._mode_for(on)
         try:
             await client.set_permission_mode(mode)  # type: ignore[arg-type]
         except Exception:
             if self._closed:  # the close disconnected the client under the call
                 raise SessionClosed from None
             raise
-        self._client_bypass = on or self.native_mode == "bypassPermissions"
+        self._client_bypass = on
         # The session closed while the mode was being set: the thread this would write to may
         # already be gone, so the switch is never recorded after the fact.
         if self._closed:
@@ -853,15 +871,18 @@ class ThreadSession:
             raise
 
     async def forget_setup(self) -> None:
-        """Undo `apply_setup` for a message that was not sent (a failure, a stop, a D8 Cancel):
-        the stored effort and bypass are cleared, and the client dropped, since it carries the
-        effort option and the model, which nothing stores. A no-op when nothing was applied on
-        this object; whatever a restart left in `state.json` is overwritten by the next Start."""
-        if not self._setup_applied:
+        """Undo a Start whose message was not sent (a failure, a stop, a D8 Cancel, or a restart
+        that kept what it wrote): the stored effort and bypass go back to never chosen, and the
+        client is dropped, since it carries the effort option, the model and the mode, which the
+        next connect rebuilds. A no-op for a thread that ran a turn (its choices are the
+        owner's) and when there is nothing to undo."""
+        stored = self._deps.state.thread(self.channel_id, self.thread_ts)
+        left = stored is not None and (stored.effort is not None or stored.bypass is not None)
+        if not self.never_ran or not (self._setup_applied or left):
             return
         self._setup_applied = False
         self._deps.state.set_effort(self.channel_id, self.thread_ts, None)
-        self._deps.state.set_bypass(self.channel_id, self.thread_ts, False)
+        self._deps.state.set_bypass(self.channel_id, self.thread_ts, None)
         await self._drop_client()
 
     async def _reconnect(self) -> ClaudeClient:
@@ -882,9 +903,11 @@ class ThreadSession:
                 await self._disconnect(client)
 
     async def announce_restart(self) -> None:
-        """Say in the thread that bypass outlives the restart, when it is on. Not for a thread that
-        never ran: its next message asks the setup again, and Start decides."""
-        if self.bypass and not self.never_ran:
+        """Say in the thread that bypass outlives the restart, when the owner turned it on. Not
+        for a thread with no session id: it never ran, its next message asks the setup again, and
+        Start decides."""
+        stored = self._deps.state.thread(self.channel_id, self.thread_ts)
+        if self.bypass_choice is True and stored is not None and stored.session_id is not None:
             await self._post(texts.BYPASS_RESTARTING)
 
     async def announce_waiting(self) -> None:
@@ -979,7 +1002,7 @@ class ThreadSession:
         text = texts.STATUS.format(
             directory=self.directory,
             session=(stored.session_id if stored else None) or "new",
-            mode="bypassPermissions" if self.bypass else self.native_mode,
+            mode=self._mode_for(self.bypass),
             # Only a turn's `init` message carries the version, never the connect (measured).
             version=self.cli_version
             or (texts.VERSION_PENDING if self._client is not None else "not started"),
@@ -1857,7 +1880,7 @@ class ThreadSession:
         here = self.working_directory or self.directory
         branch, changes = await asyncio.gather(git_branch(here), git_changes(here))
         return FooterData(
-            bypass=self.bypass or self.native_mode == "bypassPermissions",
+            bypass=self.bypass,
             branch=branch,
             model=context.get("model"),
             context_percent=context.get("percentage"),

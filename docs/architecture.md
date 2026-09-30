@@ -45,8 +45,11 @@ refuses tokens of the wrong kind. [setup.md](setup.md) lists the variables.
 ## State and the single-instance lock
 
 `code_with_slack.state.StateStore` keeps, for each bound channel, its directory and, for each of
-its threads, the folder it was opened in, its Claude Code session id, its bypass switch and the
-effort level set with `/effort`, in `~/.config/code-with-slack/state.json` (version 2). Every
+its threads, the folder it was opened in, its Claude Code session id, its bypass choice (on, off, or
+never chosen) and the effort level set with `/effort`, in `~/.config/code-with-slack/state.json`
+(version 2). The bypass value is `true` for on, `"off"` for an explicit off and `false` for never
+chosen, the value older files hold for a thread that never chose, so they read as unset and
+the version stays 2; old code reads `"off"` as not on. Every
 change is written to a temporary file beside it, synced, and renamed over it, so a crash leaves
 either the old file or the new one. A file that cannot be read stops the daemon instead of being
 replaced. A version 1 file (one session id and bypass switch per channel, no threads) is migrated
@@ -374,8 +377,11 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   callback, and `--allow-dangerously-skip-permissions`, which makes `!bypass on` possible
   without turning it on.
 - After connecting, `get_server_info()` gives the commands the session offers (for `!help` and
-  `!`) and the permission mode that `!bypass off` returns to, or `default` when the folder's own
-  settings start it in `bypassPermissions`. The footer shows `⚡ bypass` in either case.
+  `!`) and the permission mode Claude Code started in (`native_mode`, kept as reported):
+  `!bypass off` returns to it, or to `default` when the folder's own settings start it in
+  `bypassPermissions`. `ThreadSession.bypass` is the one answer to "does this run in bypass":
+  the owner's choice when there is one, else `native_mode`. The footer's `⚡ bypass`, `!status`,
+  the channel list and the setup's checkbox all read it.
 - If the thread's stored session cannot be resumed (its transcript was deleted), its entry is
   dropped, the thread ends (`SessionGone`), and its reply, and every reply still waiting in it,
   says so (`texts.SESSION_GONE`); the next message in that thread starts a session there again,
@@ -421,7 +427,7 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   sent, so no session is lost), a non-default model is `set_model()` on the live client (not
   stored: it survives a resume and leaves the owner's default alone, measured 2026-09-30, CLI
   2.1.285), and bypass goes through `set_bypass` when the choice differs from what the live client
-  effectively runs (`_client_bypass`: the switch, or the folder's own bypass). The message then
+  effectively runs (`_client_bypass`: the choice, or the folder's own bypass). The message then
   becomes one summary line, written inside the same wait (the cancel window covers the limiter
   wait; a cancel that already deleted the message skips the edit), and stays; the held message goes on unchanged. The wait shares `slack_app.ask_owner` and
   `hold.Holds` with D8. The entry stays in `Holds` while the answer is applied, so `!stop`, a
@@ -523,12 +529,15 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   process after EOF, and resuming the same session id any sooner would race it.
 - Logs carry channel and thread ids and exception type names, never prompt or reply text.
 
-Bypass is a thread's own `ThreadState.bypass` in `state.json`, which `ThreadSession.bypass`
-reads: an idle close and a restart of the daemon, whatever its cause, keep it, and the next Claude
-Code process in that thread gets it back from `ensure_connected`, through `set_permission_mode`,
-since Claude Code's own `--resume` never restores `bypassPermissions` (sessions reference, read
-2026-09-26). At the start of `SessionManager.drain`, every thread with bypass on gets
-`texts.BYPASS_RESTARTING`. A session `!resume` opens starts in its new thread with bypass off and
+Bypass is a thread's own `ThreadState.bypass` in `state.json` (on, off or never chosen), which
+`ThreadSession.bypass_choice` reads: an idle close and a restart of the daemon, whatever its
+cause, keep it, and the next Claude Code process in that thread gets it back from
+`ensure_connected`, through `set_permission_mode`: on sets `bypassPermissions`; an explicit off in
+a folder whose own settings start in bypass sets `default`, so the folder's bypass does not return
+silently; never chosen leaves Claude Code's own mode. This is needed since Claude Code's own `--resume` never restores `bypassPermissions` (sessions reference, read
+2026-09-26). At the start of `SessionManager.drain`, every thread whose owner turned bypass on gets
+`texts.BYPASS_RESTARTING` (a thread with no session id never ran: its next message asks the setup
+again, so it is not told). A session `!resume` opens starts in its new thread with bypass off and
 no `/effort` level set, whatever the session had before: both belong to the thread, not to the
 Claude Code session id, and `!resume` never touches or waits on any other thread.
 
