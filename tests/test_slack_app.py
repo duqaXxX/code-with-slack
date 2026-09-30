@@ -3,7 +3,7 @@ import copy
 import itertools
 import json
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +21,7 @@ from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds
 from code_with_slack.render.sinks import UpdateLimiter
 from code_with_slack.render.status import Status
 from code_with_slack.sessions import SessionDeps, SessionManager
-from code_with_slack.setup import SETUP_BYPASS, SETUP_EFFORT, SETUP_MODEL, SETUP_START
+from code_with_slack.setup import SETUP_BYPASS, SETUP_EFFORT, SETUP_MODEL, SETUP_START, Choice
 from code_with_slack.slack_app import build_app, slack_unescape
 from code_with_slack.state import StateStore
 from tests.fakes import (
@@ -160,6 +160,7 @@ class World:
         shown = {
             element["value"]: ts
             for ts, message in self.slack.messages.items()
+            if not message.deleted
             for block in message.blocks
             for element in block.get("elements") or []
             if element.get("action_id") == SETUP_START
@@ -2247,9 +2248,11 @@ def setup_click(
 
 
 @pytest.fixture
-def manual(world: World) -> World:
+def manual(world: World) -> Iterator[World]:
     world.auto_start = False
-    return world
+    yield world
+    if world.connect_gate is not None:  # a failed test must not leave the teardown waiting on it
+        world.connect_gate.set()
 
 
 async def test_a_plain_prompt_waits_for_start(manual: World) -> None:
@@ -2316,6 +2319,7 @@ async def test_start_applies_model_effort_and_bypass(manual: World) -> None:
     assert client.models_set == ["opus"]
     assert client.modes == ["bypassPermissions"]
     assert client.queries == ["hello"] and manual.clients[0].queries == []
+    assert manual.clients[0].connected is False  # the effort reconnect closed the first client
     stored = manual.state.thread(CHANNEL, THREAD)
     assert stored.bypass is True and stored.effort == "high"
     summary = manual.slack.calls_to("chat.update")[-1]["text"]
@@ -2350,10 +2354,19 @@ async def test_a_setup_click_from_someone_else_is_ignored(
 
 
 async def test_a_setup_click_for_another_thread_or_channel_is_refused(manual: World) -> None:
+    # Sessions exist at both places, so the refusal is `Holds.resolve`'s own channel/thread check,
+    # not merely a lookup that finds no session.
+    manual.auto_start = True
+    manual.state.bind(OTHER_CHANNEL, manual.root / "app")
+    await manual.dispatch(message("elsewhere", ts=OTHER_THREAD))
+    await manual.dispatch(message("elsewhere", ts=THREAD, channel=OTHER_CHANNEL))
+    manual.auto_start = False
     await manual.dispatch(message("hello", ts=THREAD))
+    before = len(manual.queries())
     await manual.dispatch(setup_click(manual, thread_ts=OTHER_THREAD))
     await manual.dispatch(setup_click(manual, channel=OTHER_CHANNEL))
-    assert manual.queries() == []
+    assert len(manual.queries()) == before
+    assert len(manual.waiting_setups()) == 1  # still waiting
     assert manual.ephemerals()[-1] == texts.HOLD_GONE
 
 
@@ -2388,3 +2401,179 @@ async def test_a_drain_cancels_a_waiting_setup(manual: World) -> None:
     await manual.sessions.drain(cut_short)
     await asyncio.sleep(0.05)
     assert manual.queries() == [] and texts.NOT_SENT in manual.ephemerals()
+
+
+def answer_inside_post(
+    world: World, text_starts: str, answer: Any, action: str | None = None
+) -> None:
+    """Resolve the hold a message shows before `chat.postMessage` has answered, as a fast click
+    does when it arrives ahead of the HTTP answer."""
+    original = world.slack.api_call
+
+    async def api_call(method: str, **kwargs: Any) -> Any:
+        result = await original(method, **kwargs)
+        args = {**(kwargs.get("json") or {}), **(kwargs.get("params") or {})}
+        if method == "chat.postMessage" and str(args.get("text", "")).startswith(text_starts):
+            for block in args["blocks"]:
+                for element in block.get("elements") or []:
+                    if element.get("action_id") == action:
+                        world.holds.resolve(element["value"], CHANNEL, THREAD, answer)
+        return result
+
+    world.slack.api_call = api_call  # type: ignore[method-assign]
+
+
+async def test_a_start_decided_before_the_post_returns_is_still_applied(manual: World) -> None:
+    answer_inside_post(manual, texts.SETUP_FALLBACK, Choice("opus", "high", True), SETUP_START)
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.settle(0.3)
+    client = manual.clients[-1]
+    assert manual.queries() == ["hello"]
+    assert client.models_set == ["opus"] and client.options.effort == "high"
+    assert client.modes == ["bypassPermissions"]
+    assert manual.slack.calls_to("chat.delete") == []  # the record stays
+    summary = manual.slack.calls_to("chat.update")[-1]["text"]
+    assert summary == "Model: Opus 5.5 · Effort: high · Bypass: on"
+    assert manual.state.thread(CHANNEL, THREAD).requests == ()
+
+
+async def test_a_continue_decided_before_the_post_returns_still_sends(world: World) -> None:
+    await world.dispatch(message("busy elsewhere", ts=OTHER_THREAD))
+    answer_inside_post(world, texts.HOLD_QUESTION.split("{")[0], True, HOLD_CONTINUE)
+    await world.dispatch(message("hello", ts=THREAD))
+    await world.settle(0.3)
+    assert world.clients[-1].queries == ["hello"]
+
+
+async def start_with_a_gated_reconnect(manual: World) -> None:
+    """Start with an effort, while the reconnect's CLI is slow to come up: the window in which
+    the answer is applied but nothing is sent yet."""
+    await manual.dispatch(message("hello", ts=THREAD))
+    manual.connect_gate = asyncio.Event()
+    await manual.dispatch(setup_click(manual, effort="high", bypass=True))
+    await asyncio.sleep(0.1)
+
+
+async def assert_cancelled_while_settling(manual: World) -> None:
+    assert manual.connect_gate is not None
+    manual.connect_gate.set()
+    await manual.settle(0.3)
+    assert manual.queries() == []
+    assert texts.NOT_SENT in manual.ephemerals()
+    assert manual.state.thread(CHANNEL, THREAD).requests == ()
+    assert len(manual.slack.calls_to("chat.delete")) == 1
+
+
+async def test_stop_while_start_settles_cancels(manual: World) -> None:
+    await start_with_a_gated_reconnect(manual)
+    await manual.dispatch(reply("!stop", THREAD))
+    await asyncio.sleep(0.1)
+    assert texts.NOTHING_TO_STOP not in said(manual) + manual.ephemerals()
+    await assert_cancelled_while_settling(manual)
+
+
+async def test_a_channel_stop_while_start_settles_cancels(manual: World) -> None:
+    await start_with_a_gated_reconnect(manual)
+    await manual.dispatch(message("!stop"))
+    await asyncio.sleep(0.1)
+    assert texts.NOTHING_TO_STOP not in said(manual) + manual.ephemerals()
+    await assert_cancelled_while_settling(manual)
+
+
+async def test_a_drain_while_start_settles_cancels(manual: World) -> None:
+    await start_with_a_gated_reconnect(manual)
+    cut_short = asyncio.Event()
+    cut_short.set()
+    await manual.sessions.drain(cut_short)
+    await assert_cancelled_while_settling(manual)
+
+
+def assert_a_fresh_setup(world: World) -> None:
+    """The setup shown again: bypass unticked, effort Default, nothing left from the aborted
+    Start in `state.json` or on the client that will be used."""
+    ((_, _, _, ts),) = world.waiting_setups()
+    blocks = world.slack.messages[ts].blocks
+    effort = next(b for b in blocks if b.get("block_id") == SETUP_EFFORT)
+    assert effort["accessory"]["initial_option"]["value"] == "default"
+    bypass = next(b for b in blocks if b.get("block_id") == SETUP_BYPASS)
+    assert "initial_options" not in bypass["elements"][0]
+    stored = world.state.thread(CHANNEL, THREAD)
+    assert stored.bypass is False and stored.effort is None
+    client = world.clients[-1]
+    assert client.options.effort is None and client.models_set == [] and client.modes == []
+
+
+async def test_a_reply_after_a_stopped_setup_asks_the_setup_again(manual: World) -> None:
+    await start_with_a_gated_reconnect(manual)
+    await manual.dispatch(reply("!stop", THREAD))
+    await assert_cancelled_while_settling(manual)
+    manual.connect_gate = None
+    await manual.dispatch(reply("again", THREAD))
+    assert manual.queries() == []  # held, not sent with what the aborted Start left
+    assert_a_fresh_setup(manual)
+    await manual.dispatch(setup_click(manual))
+    assert manual.clients[-1].queries == ["again"]
+
+
+async def test_a_reply_after_a_cancelled_d8_hold_asks_the_setup_again(manual: World) -> None:
+    manual.auto_start = True
+    await manual.dispatch(message("busy elsewhere", ts=OTHER_THREAD))
+    manual.auto_start = False
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(setup_click(manual, model="opus", effort="high", bypass=True))
+    hold_id = button_value(posted_blocks(manual), HOLD_CANCEL)
+    await manual.dispatch(click_in(HOLD_CANCEL, hold_id, CHANNEL, THREAD))
+    assert texts.NOT_SENT in manual.ephemerals()
+    await manual.dispatch(reply("again", THREAD))
+    assert_a_fresh_setup(manual)
+
+
+async def test_a_reply_while_the_first_turn_runs_is_not_asked_again(manual: World) -> None:
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(setup_click(manual))
+    await manual.dispatch(reply("more", THREAD))
+    await manual.settle(0.3)
+    posted = [a["text"] for a in manual.slack.calls_to("chat.postMessage")]
+    assert posted.count(texts.SETUP_FALLBACK) == 1  # the first prompt's, not the reply's
+    assert manual.waiting_setups() == []
+
+
+async def test_a_failing_start_leaves_no_controls_and_no_leftovers(
+    manual: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def boom(self: FakeClaudeClient, model: str | None = None) -> None:
+        raise RuntimeError("bad model")
+
+    monkeypatch.setattr(FakeClaudeClient, "set_model", boom)
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(setup_click(manual, model="opus", effort="high", bypass=True))
+    await manual.settle(0.3)
+    assert manual.queries() == []
+    assert len(manual.slack.calls_to("chat.delete")) == 1  # the controls are gone
+    stored = manual.state.thread(CHANNEL, THREAD)
+    assert stored.requests == () and stored.effort is None and stored.bypass is False
+    assert manual.ephemerals() or any("RuntimeError" in t for t in said(manual))
+
+
+async def test_a_model_change_cannot_overwrite_the_summary(manual: World) -> None:
+    await manual.dispatch(message("hello", ts=THREAD))
+    gate = asyncio.Event()
+    acquire = manual.sessions.update_limiter.acquire
+    slow = [True]
+
+    async def gated() -> None:
+        if slow:
+            slow.pop()
+            await gate.wait()
+        await acquire()
+
+    manual.sessions.update_limiter.acquire = gated  # type: ignore[method-assign]
+    body = setup_click(manual, SETUP_MODEL, model="haiku")
+    start = setup_click(manual)
+    await manual.dispatch(body)  # waits on the limiter
+    await manual.dispatch(start)
+    await manual.settle(0.2)
+    gate.set()
+    await manual.settle(0.2)
+    last = manual.slack.calls_to("chat.update")[-1]
+    assert last["text"].startswith("Model:")

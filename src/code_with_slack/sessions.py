@@ -445,6 +445,11 @@ class ThreadSession:
         self.commands: list[dict[str, Any]] = []
         # The CLI's own model list (value, displayName, supportedEffortLevels), for the setup.
         self.models: list[dict[str, Any]] = []
+        # A prompt was ever queued on this object; with no stored session id it tells a thread
+        # that never ran a turn from one whose first turn is still starting.
+        self._submitted = False
+        # `apply_setup` changed something that `forget_setup` has not undone.
+        self._setup_applied = False
         self.native_mode = "default"
         self.cli_version: str | None = None
         # The effort level Claude Code last reported: its Stop hook, or the output of `/effort`
@@ -656,6 +661,7 @@ class ThreadSession:
         # above zero, so the timer is genuinely cancelled here, not reset only to fire again
         # during the awaits below (D9).
         self._pending_submits += 1
+        self._submitted = True
         try:
             self._idle_timer_check()
             turn = Turn(prompt, await self._sink())
@@ -788,20 +794,45 @@ class ThreadSession:
             raise SessionClosed
         self._deps.state.set_bypass(self.channel_id, self.thread_ts, on)
 
+    @property
+    def never_ran(self) -> bool:
+        """No turn was ever queued in this thread: its next message is a first prompt, which asks
+        for the setup again (after a cancelled setup or a D8 Cancel, nothing was sent)."""
+        stored = self._deps.state.thread(self.channel_id, self.thread_ts)
+        return not self._submitted and (stored is None or stored.session_id is None)
+
     async def apply_setup(self, choice: Choice) -> None:
         """Apply the owner's session setup before the first prompt: an effort goes through
         state and a fresh client (the SDK has no runtime effort setter; no query has been sent,
         so no session is lost), then the model on the live client, then bypass. Measured
         2026-09-30 (CLI 2.1.285): `set_model` survives a resume and leaves the owner's own
-        default alone, so the daemon does not store the model."""
-        client = await self.ensure_connected()
-        if choice.effort != DEFAULT:
-            self._deps.state.set_effort(self.channel_id, self.thread_ts, choice.effort)
-            client = await self._reconnect()
-        if choice.model != DEFAULT:
-            await client.set_model(choice.model)
-        if choice.bypass:
-            await self.set_bypass(True)
+        default alone, so the daemon does not store the model. A failure undoes what was
+        applied (`forget_setup`) and goes on."""
+        self._setup_applied = True
+        try:
+            client = await self.ensure_connected()
+            if choice.effort != DEFAULT:
+                self._deps.state.set_effort(self.channel_id, self.thread_ts, choice.effort)
+                client = await self._reconnect()
+            if choice.model != DEFAULT:
+                await client.set_model(choice.model)
+            if choice.bypass:
+                await self.set_bypass(True)
+        except BaseException:
+            await self.forget_setup()
+            raise
+
+    async def forget_setup(self) -> None:
+        """Undo `apply_setup` for a message that was not sent (a failure, a stop, a D8 Cancel), so
+        the setup shown next starts from the defaults: the stored effort and bypass are cleared
+        and the client dropped (it carries the effort option and the model). The one place this
+        is reset; a no-op when nothing was applied."""
+        if not self._setup_applied:
+            return
+        self._setup_applied = False
+        self._deps.state.set_effort(self.channel_id, self.thread_ts, None)
+        self._deps.state.set_bypass(self.channel_id, self.thread_ts, False)
+        await self._drop_client()
 
     async def _reconnect(self) -> ClaudeClient:
         """Close the live client and connect again, so `ensure_connected` builds the options

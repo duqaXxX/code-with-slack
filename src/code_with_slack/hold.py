@@ -27,6 +27,11 @@ class Pending:
     # question was cancelled (Cancel, `!stop`, a drain).
     future: asyncio.Future[Any]
     message_ts: str | None = field(default=None)
+    # What the asker needs back with a click that carries only the id (the setup's model list).
+    context: Any = None
+    # Set by `Holds.cancel` while an answer is being applied (the setup's Start settling): the
+    # asker sends nothing once it is done.
+    cancelled: bool = False
 
 
 class Holds:
@@ -36,9 +41,11 @@ class Holds:
     def __init__(self) -> None:
         self._pending: dict[str, Pending] = {}
 
-    def open(self, channel_id: str, thread_ts: str) -> tuple[str, Pending]:
+    def open(self, channel_id: str, thread_ts: str, context: Any = None) -> tuple[str, Pending]:
         hold_id = secrets.token_urlsafe(16)
-        pending = Pending(channel_id, thread_ts, asyncio.get_running_loop().create_future())
+        pending = Pending(
+            channel_id, thread_ts, asyncio.get_running_loop().create_future(), context=context
+        )
         self._pending[hold_id] = pending
         return hold_id, pending
 
@@ -47,7 +54,8 @@ class Holds:
 
     def resolve(self, hold_id: str, channel_id: str, thread_ts: str, value: Any) -> Pending | None:
         """Resolve once with `value` (None cancels), and only from the channel and thread the
-        request was posted in."""
+        request was posted in. A value keeps the entry until the asker `discard`s it, so a stop
+        that arrives while the answer is applied still finds it (`cancel`)."""
         pending = self._pending.get(hold_id)
         if (
             pending is None
@@ -57,29 +65,32 @@ class Holds:
         ):
             return None
         pending.future.set_result(value)
-        del self._pending[hold_id]
+        if value is None:
+            del self._pending[hold_id]
         return pending
 
     def posted(self, hold_id: str, message_ts: str) -> bool:
         """Record the message that shows a hold, so it can be removed once decided; False when
-        the hold was decided before its message was known (`!stop` while posting)."""
+        the hold was decided before its message was known (a click or `!stop` while posting)."""
         pending = self._pending.get(hold_id)
         if pending is None:
             return False
         pending.message_ts = message_ts
-        return True
+        return not pending.future.done()
 
     def cancel(self, channel_id: str, thread_ts: str) -> Pending | None:
         """Cancel the hold open in this thread, if any: the same outcome as the owner clicking
-        Cancel (`!stop`, a top-level `!stop` of its channel, a drain)."""
+        Cancel (`!stop`, a top-level `!stop` of its channel, a drain). One already answered but
+        still being applied is flagged `cancelled` instead: its asker sends nothing."""
         for hold_id, pending in list(self._pending.items()):
-            if (
-                pending.channel_id == channel_id
-                and pending.thread_ts == thread_ts
-                and not pending.future.done()
-            ):
+            if pending.channel_id != channel_id or pending.thread_ts != thread_ts:
+                continue
+            if not pending.future.done():
                 pending.future.set_result(None)
                 del self._pending[hold_id]
+                return pending
+            if not pending.cancelled:
+                pending.cancelled = True
                 return pending
         return None
 

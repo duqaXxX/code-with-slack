@@ -402,22 +402,32 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   itself, since the drain never revisits it). Either way the owner gets `Not sent.`; a hold a
   message could not post is cancelled and told `HOLD_UNPOSTED`, failing closed rather than
   sending into a folder another session is using.
-- Session setup (issue #74): a top-level message that opens a session (a prompt, files, or a
-  `!name` passthrough) is held before D8 and before anything is sent. `slack_app.setup_before_sending`
+- Session setup (issue #74): a session's first prompt is held before D8 and before anything is
+  sent: a top-level message that opens a session (a prompt, files, or a `!name` passthrough), and
+  a reply in a thread where nothing was ever sent (`ThreadSession.never_ran`: no turn queued and
+  no stored session id), as after a cancelled setup or a D8 Cancel. `slack_app.setup_before_sending`
   connects the client, then posts one message in the thread (`setup.setup_blocks`): a Model select
-  with the CLI's own list (`get_server_info()["models"]`, kept as `ThreadSession.models`), an
-  Effort select with the chosen model's `supportedEffortLevels` (and `Default`, which passes
-  nothing), a Bypass checkbox and Start. Changing the model rewrites the message (`chat.update`,
-  which never notifies) with the new model's levels. Start reads every control from the click's
-  `state.values` (`setup.read_choice`), and `ThreadSession.apply_setup` applies it: a non-default
-  effort is stored and the client reconnected (the SDK has no runtime effort setter and no query
-  has been sent, so no session is lost), a non-default model is `set_model()` on the live client
-  (not stored: it survives a resume and leaves the owner's default alone, measured 2026-09-30,
-  CLI 2.1.285), and bypass goes through `set_bypass`. The message then becomes one summary line and
-  stays; the held message goes on unchanged. The wait shares `slack_app.ask_owner` and `hold.Holds`
-  with D8, so `!stop`, a top-level `!stop` and a drain cancel it the same way (message deleted,
-  `Not sent.`), it shows ✋ and pauses the idle timer, and crash repair deletes a setup message
-  left standing.
+  with the CLI's own list (`get_server_info()["models"]`, kept as `ThreadSession.models` and
+  stored with the pending setup, so a click reads its choice against the list the message was
+  built from), an Effort select with the chosen model's `supportedEffortLevels` (and `Default`,
+  which passes nothing), a Bypass checkbox and Start. Changing the model rewrites the message
+  (`chat.update`, which never notifies, and is skipped once the setup is decided) with the new
+  model's levels. Start reads every control from the click's `state.values`
+  (`setup.read_choice`), and `ThreadSession.apply_setup` applies it: a non-default effort is
+  stored and the client reconnected (the SDK has no runtime effort setter and no query has been
+  sent, so no session is lost), a non-default model is `set_model()` on the live client (not
+  stored: it survives a resume and leaves the owner's default alone, measured 2026-09-30, CLI
+  2.1.285), and bypass goes through `set_bypass`. The message then becomes one summary line and
+  stays; the held message goes on unchanged. The wait shares `slack_app.ask_owner` and
+  `hold.Holds` with D8. The entry stays in `Holds` while the answer is applied, so `!stop`, a
+  top-level `!stop` and a drain cancel it then too (`Pending.cancelled`): nothing is sent, the
+  message is deleted, the owner gets `Not sent.` and `!stop` does not say nothing is running. An
+  answer that arrives before `chat.postMessage` has returned is applied the same way. A failed
+  apply removes the message and the error reaches the owner. Whatever an unsent Start applied
+  (stored effort, bypass, the client with its effort and model) is undone by
+  `ThreadSession.forget_setup`, called when a setup is cancelled or fails, when D8 cancels after
+  Start, and before each new setup, so the setup asked again shows the defaults. A setup shows
+  ✋ and pauses the idle timer; crash repair deletes a setup message left standing.
 - Each `ThreadSession` keeps one `render.status.StatusReaction` on its own root message (D10),
   which `thread_ts` always is: a top-level owner message, or the owner's own `!resume` message.
   `ThreadSession._react` shows it as a tracked background task, since a reaction must never delay
