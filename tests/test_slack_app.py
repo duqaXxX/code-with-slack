@@ -2636,9 +2636,8 @@ async def test_a_restart_during_start_leaves_nothing_for_the_next_start(manual: 
     assert client.queries == ["again"]
     assert client.options.effort is None and client.modes in ([], ["default"])
     stored = manual.state.thread(CHANNEL, THREAD)
-    assert (
-        stored.bypass is False
-    )  # Start's unticked box is an explicit off and stored.effort is None
+    # Start's unticked box is an explicit off.
+    assert stored.bypass is False and stored.effort is None
     assert manual.slack.calls_to("chat.update")[-1]["text"].endswith(
         "Effort: Default · Bypass: off"
     )
