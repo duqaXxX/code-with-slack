@@ -16,7 +16,7 @@ from code_with_slack.setup import (
 )
 from tests.fakes import sdk_json
 
-# The CLI's own list (tests/fixtures/sdk/server-info.json, Claude Code 2.1.285): the first entry
+# The CLI's own list (tests/fixtures/sdk/server-info.json, Claude Code 2.1.286): the first entry
 # is `default`, and Haiku carries no effort fields at all.
 MODELS: list[dict[str, Any]] = sdk_json("server-info")["models"]
 
