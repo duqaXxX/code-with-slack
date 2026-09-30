@@ -473,6 +473,13 @@ class ThreadSession:
         self.draining = False
         # Whether this stop has said which background tasks it waits for.
         self._told_waiting = False
+        # Set when a stop begins while this session has a turn running. The signal names no
+        # sender, and the session that sent it has its turn running then; a background task it
+        # starts from that point is often its own wait for the new process, which cannot end
+        # before this one exits (issue #87). Those tasks are not waited for: the shutdown ends
+        # them with the Claude Code process.
+        self.may_have_ordered_restart = False
+        self._after_restart: set[str] = set()
 
     @property
     def bypass_choice(self) -> bool | None:
@@ -526,10 +533,19 @@ class ThreadSession:
         one, and no background task still working: the session can be closed without a loss
         (closing it ends its Claude Code process). `bind` (D5) waits for every thread of a
         channel to be idle before it stores a new folder."""
+        return self._quiet(awaited_only=False)
+
+    @property
+    def restart_ready(self) -> bool:
+        """`idle` as a stop reads it: a background task started after the stop began, in a
+        session that may have sent the signal (`may_have_ordered_restart`), does not count."""
+        return self._quiet(awaited_only=True)
+
+    def _quiet(self, *, awaited_only: bool) -> bool:
         return (
             not self.busy
             and not self._pending_submits
-            and not self._running_counts()
+            and not self._running_kinds(awaited_only=awaited_only)
             and self._taken is None
             and self._queue.empty()
             and self._settled.is_set()
@@ -919,7 +935,7 @@ class ThreadSession:
     async def announce_waiting(self) -> None:
         """Once per stop, when only background tasks are left: say which ones the restart waits
         for, since only the owner knows whether a task (a dev server, a watcher) ever ends."""
-        if self._told_waiting or self.busy or not (kinds := self._running_kinds()):
+        if self._told_waiting or self.busy or not (kinds := self._running_kinds(awaited_only=True)):
             return
         self._told_waiting = True
         await self._post(texts.RESTART_WAITS.format(counts=kinds))
@@ -1275,6 +1291,8 @@ class ThreadSession:
                 self._deps.state.set_session(self.channel_id, self.thread_ts, init_session_id)
         if isinstance(message, TaskStartedMessage):
             self._tasks[message.task_id] = (message.task_type or "", message.description)
+            if self.may_have_ordered_restart:
+                self._after_restart.add(message.task_id)
             while len(self._tasks) > TASKS_KEPT:
                 del self._tasks[next(iter(self._tasks))]
         stopped = isinstance(message, TASK_MESSAGES) and message.task_id in self._stopped
@@ -1694,10 +1712,13 @@ class ThreadSession:
         current = self._active.renderer.running_tasks if self._active is not None else []
         return list(dict.fromkeys(outlived + current))
 
-    def _running_kinds(self) -> str:
-        """`1 shell · 2 agents`, or empty when no task outlived its turn."""
+    def _running_kinds(self, *, awaited_only: bool = False) -> str:
+        """`1 shell · 2 agents`, or empty when no task outlived its turn. `awaited_only` leaves
+        out the tasks a stop does not wait for (`may_have_ordered_restart`)."""
         counts: dict[str, int] = {}
         for task_id, renderer in self._task_replies.items():
+            if awaited_only and task_id in self._after_restart:
+                continue
             if task_id in renderer.running_tasks:
                 kind = TASK_KINDS.get(self._tasks.get(task_id, ("", ""))[0], UNKNOWN_KIND)[0]
                 counts[kind] = counts.get(kind, 0) + 1
@@ -2183,6 +2204,7 @@ class SessionManager:
         # Every flag before the first await: no worker sends a queued turn in between.
         for session in sessions:
             session.draining = True
+            session.may_have_ordered_restart = session.busy
         for session in sessions:
             await session.cancel_hold()
             # D10: a queued turn genuinely dropped by the drain reacts ❌ (the restart itself is
@@ -2190,7 +2212,7 @@ class SessionManager:
             await session.drop_queued(error=True)
             await session.announce_restart()
         while not cut_short.is_set():
-            if all(s.idle and not s.reporting for s in self._sessions.values()):
+            if all(s.restart_ready and not s.reporting for s in self._sessions.values()):
                 return
             for session in list(self._sessions.values()):
                 with contextlib.suppress(Exception):  # a failed post must not end the wait

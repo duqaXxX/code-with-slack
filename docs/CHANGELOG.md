@@ -158,6 +158,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A restart ordered from a Slack session no longer waits for that session's own background wait
+  for the new process (issue #87). The signal names no sender, so every session with a turn
+  running when it arrives is treated as a possible sender: its turn is waited for, a background
+  task it starts after the signal is not, and the shutdown ends it. Every other background task is
+  still waited for, and the drain notice no longer counts the ones it skips.
 - A top-level word whose failure report itself fails no longer pushes `ERROR_REPLY` as a reply
   under the word; the failure is logged. A Resume click edits its list before it posts the
   confirmation, so a failing confirmation no longer leaves buttons for a session already
