@@ -73,35 +73,35 @@ def view(rows: list[HomeRow], chosen: HomeFilter | None = None, **kwargs: Any) -
     )
 
 
-def carousels(page: dict[str, Any]) -> list[dict[str, Any]]:
-    return [b for b in page["blocks"] if b["type"] == "carousel"]
-
-
 def cards(page: dict[str, Any]) -> list[dict[str, Any]]:
-    return [card for carousel in carousels(page) for card in carousel["elements"]]
+    return [
+        b
+        for b in page["blocks"]
+        if b["type"] == "section" and b["accessory"]["action_id"] == HOME_OPEN_ACTION
+    ]
 
 
 def titles(page: dict[str, Any]) -> list[str]:
-    return [c["title"]["text"] for c in cards(page)]
-
-
-def subtitles(page: dict[str, Any]) -> list[str]:
-    return [c["subtitle"]["text"] for c in cards(page)]
+    return [c["text"]["text"] for c in cards(page)]
 
 
 def headers(page: dict[str, Any]) -> list[str]:
-    return [b["text"]["text"] for b in page["blocks"] if b["type"] == "section"]
+    return [
+        b["text"]["text"]
+        for b in page["blocks"]
+        if b["type"] == "section" and b["accessory"]["action_id"] == NEW_THREAD_ACTION
+    ]
 
 
 def notes(page: dict[str, Any]) -> list[str]:
     return [b["elements"][0]["text"] for b in page["blocks"] if b["type"] == "context"]
 
 
-def test_a_channel_is_a_header_with_a_new_thread_link_and_a_carousel_of_cards() -> None:
+def test_a_channel_is_a_header_with_a_new_thread_link_and_a_card_per_session() -> None:
     page = view([row()], channels={CHANNEL: "cc-articles"})
     assert page["type"] == "home"
     # The view shape and the 100 block cap: docs.slack.dev/surfaces/app-home, read 2026-10-01.
-    controls, search, written, divider, header, carousel = page["blocks"]
+    controls, search, written, divider, header, card, details = page["blocks"]
     assert (controls["type"], search["type"]) == ("actions", "input")
     assert written["elements"][0]["text"] == texts.HOME_HEADER.format(
         time=f"<!date^{EPOCH}^{{time}}|2026-09-21 14:13 UTC>"
@@ -118,33 +118,21 @@ def test_a_channel_is_a_header_with_a_new_thread_link_and_a_carousel_of_cards() 
             "url": f"slack://channel?team={TEAM}&id={CHANNEL}",
         },
     }
-    # The carousel and card blocks (their references, read 2026-10-01; this shape was published
-    # to a real Home tab the same day). The age is Slack's own relative date
-    # (formatting-message-text): it stays right while the page sits unpublished.
-    assert carousel == {
-        "type": "carousel",
-        "elements": [
-            {
-                "type": "card",
-                "title": {
-                    "type": "mrkdwn",
-                    "text": ":hourglass_flowing_sand:  Refactor the feed parser",
-                },
-                "subtitle": {
-                    "type": "mrkdwn",
-                    "text": f"working · <!date^{EPOCH - 120}^{{ago}}|2026-09-21 14:11 UTC>",
-                },
-                "actions": [
-                    {
-                        "type": "button",
-                        "action_id": HOME_OPEN_ACTION,
-                        "text": {"type": "plain_text", "text": texts.HOME_OPEN},
-                        "url": LINK,
-                    }
-                ],
-            }
-        ],
+    assert card == {
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": ":hourglass_flowing_sand:  *Refactor the feed parser*"},
+        "accessory": {
+            "type": "button",
+            "action_id": HOME_OPEN_ACTION,
+            "text": {"type": "plain_text", "text": texts.HOME_OPEN},
+            "url": LINK,
+        },
     }
+    # Slack's own relative date (formatting-message-text, read 2026-10-01): it stays right while
+    # the page sits unpublished.
+    assert details["elements"][0]["text"] == (
+        f"working · <!date^{EPOCH - 120}^{{ago}}|2026-09-21 14:11 UTC>"
+    )
 
 
 @pytest.mark.parametrize(
@@ -158,14 +146,14 @@ def test_a_channel_is_a_header_with_a_new_thread_link_and_a_carousel_of_cards() 
 )
 def test_each_reaction_has_its_word(status: Status, word: str) -> None:
     page = view([row(status=status.value)])
-    assert titles(page) == [f":{status.value}:  Refactor the feed parser"]
-    assert subtitles(page)[0].startswith(f"{word} · <!date^")
+    assert titles(page) == [f":{status.value}:  *Refactor the feed parser*"]
+    assert any(note.startswith(f"{word} · <!date^") for note in notes(page))
 
 
 def test_a_card_with_no_reaction_shows_the_title_and_the_age_alone() -> None:
     page = view([row(status=None)], channels={CHANNEL: "cc-articles"})
-    assert titles(page) == ["Refactor the feed parser"]
-    assert subtitles(page) == [f"<!date^{EPOCH - 120}^{{ago}}|2026-09-21 14:11 UTC>"]
+    assert titles(page) == ["*Refactor the feed parser*"]
+    assert notes(page)[-1] == f"<!date^{EPOCH - 120}^{{ago}}|2026-09-21 14:11 UTC>"
 
 
 def test_a_title_is_shown_as_written_on_one_line() -> None:
@@ -173,13 +161,6 @@ def test_a_title_is_shown_as_written_on_one_line() -> None:
     (title,) = titles(view([row("ping <!channel> & `more`\nsecond line")]))
     assert "<!channel>" not in title and "&lt;!channel&gt; &amp;" in title
     assert "\n" not in title
-
-
-def test_a_title_that_escaping_lengthens_still_fits_a_card() -> None:
-    # A card's title holds 150 characters (card block reference): one title too long and Slack
-    # refuses the whole page.
-    (title,) = titles(view([row("&" * 200)]))
-    assert len(title) <= 150 and title.endswith("…")
 
 
 def test_channels_with_sessions_come_first_by_their_newest_then_the_empty_ones() -> None:
@@ -201,8 +182,7 @@ def many(count: int, **fields: Any) -> list[HomeRow]:
 
 def test_a_channel_shows_its_newest_five_and_a_button_for_all_of_them() -> None:
     page = view(many(8), channels={CHANNEL: "cc-articles"})
-    assert titles(page) == [f":hourglass_flowing_sand:  s{i}" for i in range(PER_CHANNEL)]
-    assert len(carousels(page)) == 1  # side by side, in one carousel
+    assert titles(page) == [f":hourglass_flowing_sand:  *s{i}*" for i in range(PER_CHANNEL)]
     assert page["blocks"][-1] == {
         "type": "actions",
         "elements": [
@@ -240,7 +220,7 @@ def test_a_status_filter_keeps_the_sessions_in_that_status_whatever_their_number
 def test_the_search_matches_a_part_of_the_title_whatever_the_case() -> None:
     rows = [row("Fix the Footer on long replies"), row("Bump the SDK pin")]
     assert titles(view(rows, HomeFilter(search="footer"))) == [
-        ":hourglass_flowing_sand:  Fix the Footer on long replies"
+        ":hourglass_flowing_sand:  *Fix the Footer on long replies*"
     ]
 
 
@@ -269,7 +249,7 @@ def test_the_date_filter_reads_the_sessions_last_message(
         row(title, last_activity=int((NOW - age).timestamp()), status=None)
         for title, age in ages.items()
     ]
-    assert titles(view(rows, HomeFilter(date=date))) == expected
+    assert titles(view(rows, HomeFilter(date=date))) == [f"*{title}*" for title in expected]
 
 
 def test_the_page_starts_on_the_last_48_hours_and_keeps_its_shape_under_a_period() -> None:
@@ -285,7 +265,7 @@ def test_the_page_starts_on_the_last_48_hours_and_keeps_its_shape_under_a_period
 def test_filters_add_up_and_no_match_says_so() -> None:
     rows = [row("Fix the footer", status=Status.DONE.value), row("Fix the header")]
     both = HomeFilter(status=Status.DONE.value, search="fix")
-    assert titles(view(rows, both)) == [":white_check_mark:  Fix the footer"]
+    assert titles(view(rows, both)) == [":white_check_mark:  *Fix the footer*"]
     nothing = view(rows, HomeFilter(status=Status.ERROR.value, search="fix"))
     assert cards(nothing) == [] and notes(nothing)[-1] == texts.HOME_NO_MATCH
 
@@ -295,22 +275,23 @@ def test_no_bound_channel_says_how_to_bind_one() -> None:
     assert notes(page)[-1] == texts.HOME_EMPTY
 
 
-def test_a_long_channel_fills_one_carousel_after_another() -> None:
-    # A carousel holds 10 cards (carousel block reference, read 2026-10-01).
-    page = view(many(34), HomeFilter(channel=CHANNEL))
-    assert [len(c["elements"]) for c in carousels(page)] == [10, 10, 10, 4]
-
-
 def test_the_page_stops_within_slacks_blocks_and_says_how_many_it_shows() -> None:
-    channels = {f"C{i:08d}": f"project-{i}" for i in range(40)}
+    page = view(many(60), HomeFilter(channel=CHANNEL))
+    assert len(page["blocks"]) <= HOME_BLOCKS
+    shown = len(cards(page))
+    assert 40 < shown < 60
+    assert notes(page)[-1] == texts.HOME_MORE.format(rows=shown)
+
+
+def test_many_channels_stop_within_slacks_blocks_too() -> None:
+    channels = {f"C{i:08d}": f"project-{i}" for i in range(12)}
     rows = [
-        row(f"s{n}-{i}", channel_id=c, thread_ts=f"1789{i}.{n}", last_activity=EPOCH - n * 60 - i)
+        row(f"s{c}-{i}", channel_id=c, thread_ts=f"1789{i}.{n}", last_activity=EPOCH - n * 60 - i)
         for n, c in enumerate(channels)
         for i in range(6)
     ]
     page = view(rows, channels=channels)
     assert len(page["blocks"]) <= HOME_BLOCKS
-    assert 0 < len(cards(page)) < len(rows)
     assert notes(page)[-1] == texts.HOME_MORE.format(rows=len(cards(page)))
 
 
@@ -472,12 +453,12 @@ async def test_publish_lists_every_held_session_by_channel_newest_first(
     page = call["view"]
     assert headers(page) == [f"*<#{OTHER_CHANNEL}>*", f"*<#{CHANNEL}>*"]
     assert titles(page) == [
-        ":raised_hand:  Add retry to the uploader",
-        ":white_check_mark:  Fix the footer",
+        ":raised_hand:  *Add retry to the uploader*",
+        ":white_check_mark:  *Fix the footer*",
     ]
     # Dated by the last message of each transcript, not by the file.
-    assert subtitles(page)[0].startswith("waiting for you · <!date^1789984800^{ago}|")
-    assert all(c["actions"][0]["url"] == LINK for c in cards(page))
+    assert any(n.startswith("waiting for you · <!date^1789984800^{ago}|") for n in notes(page))
+    assert all(c["accessory"]["url"] == LINK for c in cards(page))
     # The channel menu names the channels as Slack does (conversations.info).
     name = slack_payload("api-conversations-info")["channel"]["name"]
     assert [o["text"]["text"] for o in control(page, CHANNEL_ACTION)["options"]][1:] == [name, name]
@@ -489,7 +470,7 @@ async def test_a_cross_over_a_kept_status_shows_the_cross(
     # An answer that never reached Slack: the root shows ❌ while crash repair still holds ⏳.
     state.set_status_pending(CHANNEL, OLD_THREAD, Status.WORKING.value, Status.ERROR.value)
     await make_home(slack, state, listing(tmp_path)).publish()
-    assert ":x:  Fix the footer" in titles(published(slack)[0])
+    assert ":x:  *Fix the footer*" in titles(published(slack)[0])
 
 
 async def test_a_session_claude_code_does_not_list_yet_shows_its_id_and_its_roots_time(
@@ -498,9 +479,9 @@ async def test_a_session_claude_code_does_not_list_yet_shows_its_id_and_its_root
     home = make_home(slack, state, {tmp_path / "project": [], tmp_path / "other": []})
     await home.choose(HomeFilter(date=None))  # the roots are older than the page's 48 hours
     page = published(slack)[0]
-    assert titles(page)[0] == f":raised_hand:  {texts.HOME_UNTITLED.format(id=NEW[:8])}"
-    assert f"<!date^{int(float(NEW_THREAD))}^{{ago}}|" in subtitles(page)[0]
-    assert f"<!date^{int(float(OLD_THREAD))}^{{ago}}|" in subtitles(page)[1]
+    assert titles(page)[0] == f":raised_hand:  *{texts.HOME_UNTITLED.format(id=NEW[:8])}*"
+    assert any(f"<!date^{int(float(NEW_THREAD))}^{{ago}}|" in n for n in notes(page))
+    assert any(f"<!date^{int(float(OLD_THREAD))}^{{ago}}|" in n for n in notes(page))
 
 
 async def test_a_folder_that_cannot_be_listed_does_not_stop_the_page(
@@ -532,8 +513,8 @@ async def test_dates_that_cannot_be_read_keep_the_titles(
     monkeypatch.setattr(home_module, "dated", broken)
     await make_home(slack, state, listing(tmp_path)).publish()
     assert sorted(titles(published(slack)[0])) == [
-        ":raised_hand:  Add retry to the uploader",
-        ":white_check_mark:  Fix the footer",
+        ":raised_hand:  *Add retry to the uploader*",
+        ":white_check_mark:  *Fix the footer*",
     ]
 
 
@@ -549,7 +530,7 @@ async def test_a_channel_slack_no_longer_has_is_left_out_with_its_threads_and_as
     await home.publish()
     page = published(slack)[0]
     assert headers(page) == [f"*<#{CHANNEL}>*"]
-    assert titles(page) == [":white_check_mark:  Fix the footer"]
+    assert titles(page) == [":white_check_mark:  *Fix the footer*"]
     assert len(control(page, CHANNEL_ACTION)["options"]) == 2  # All channels, and the one left
     # No permalink is asked for a thread of a channel that is gone.
     assert [a["channel"] for a in slack.calls_to("chat.getPermalink")] == [CHANNEL]
@@ -595,11 +576,11 @@ async def test_choose_publishes_at_once_with_the_filter(
     home = make_home(slack, state, listing(tmp_path), debounce=60)
     await home.choose(HomeFilter(status=Status.WAITING.value))
     page = published(slack)[0]
-    assert titles(page) == [":raised_hand:  Add retry to the uploader"]
+    assert titles(page) == [":raised_hand:  *Add retry to the uploader*"]
     assert control(page, STATUS_ACTION)["initial_option"]["value"] == Status.WAITING.value
     # The filter stays for the pages a later change of the sessions publishes.
     await home.publish()
-    assert titles(published(slack)[1]) == [":raised_hand:  Add retry to the uploader"]
+    assert titles(published(slack)[1]) == [":raised_hand:  *Add retry to the uploader*"]
 
 
 async def test_a_channel_that_is_not_bound_is_no_filter(
@@ -635,7 +616,7 @@ async def test_a_filter_chosen_while_a_page_is_on_its_way_is_the_page_that_stays
     await asyncio.sleep(0.02)
     release.set()
     await asyncio.gather(slow, choosing)
-    assert titles(published(slack)[-1]) == [":white_check_mark:  Fix the footer"]
+    assert titles(published(slack)[-1]) == [":white_check_mark:  *Fix the footer*"]
 
 
 async def test_a_disabled_home_tab_is_logged_once_and_never_asked_again(
@@ -693,7 +674,7 @@ async def test_a_change_during_a_publish_is_not_lost(
         pages = published(slack)
         return titles(pages[-1]) if pages else []
 
-    await until(lambda: ":hourglass_flowing_sand:  Fix the footer" in last_titles(), 3)
+    await until(lambda: ":hourglass_flowing_sand:  *Fix the footer*" in last_titles(), 3)
 
 
 async def test_close_publishes_what_a_pending_request_still_owed(

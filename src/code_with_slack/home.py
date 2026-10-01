@@ -1,8 +1,8 @@
 """The app's Home tab: the owner's index of sessions. One card per thread that holds a session,
-side by side in a carousel per channel, each channel and each card ordered by the session's last
-message, with a button that opens the thread: a channel lists its threads by when they started,
-and Slack's Threads view by unread replies (Help Center, "Use threads to organize discussions",
-read 2026-10-01), so neither finds the thread worked in last.
+grouped by channel, each group and each card ordered by the session's last message, with a
+button that opens the thread: a channel lists its threads by when they started, and Slack's
+Threads view by unread replies (Help Center, "Use threads to organize discussions", read
+2026-10-01), so neither finds the thread worked in last.
 
 A card is built from what the daemon already keeps and what Claude Code already knows: the thread
 and its root's reaction from `state.json`, the title and last message from the session's
@@ -12,11 +12,9 @@ chooses live in memory and start again at their defaults with the daemon.
 `views.publish` (docs.slack.dev/reference/methods/views.publish, read 2026-10-01) takes no scope
 and may be called at any time, with no event from the owner ("Home tab updates can happen when a
 user isn't interacting with Slack or the app", docs.slack.dev/surfaces/app-home), so the page is
-rewritten when the index changes, with no event subscribed. A view holds 100 blocks, and a
-carousel, one block, holds 10 cards (docs.slack.dev/reference/block-kit/blocks/carousel-block
-and card-block, read 2026-10-01: both work in a Home tab). Ages are Slack's own `{ago}` date
-token (docs.slack.dev/messaging/formatting-message-text, seen rendered in a Home view on
-2026-10-01), so they do not go stale between two publishes.
+rewritten when the index changes, with no event subscribed. A view holds 100 blocks. Ages are
+Slack's own `{ago}` date token (docs.slack.dev/messaging/formatting-message-text, seen rendered
+in a Home view on 2026-10-01), so they do not go stale between two publishes.
 
 What reaches the app from the page is a `block_actions` payload per use of a control
 (`slack_app` owns the listeners): a filter, which carries the state of every control in
@@ -55,9 +53,6 @@ logger = logging.getLogger(__name__)
 HOME_BLOCKS = 100
 # What a channel shows while no filter is chosen; a filter shows every session it matches.
 PER_CHANNEL = 5
-# A carousel holds 10 cards and a card's title 150 characters (the two blocks' references).
-CAROUSEL_CARDS = 10
-CARD_TITLE = 150
 # A turn changes its root's reaction several times in a row (⏳, ✋ at an approval, ⏳ again):
 # one publish covers the burst.
 DEBOUNCE_SECONDS = 2.0
@@ -267,32 +262,17 @@ def _channel_header(team_id: str, channel_id: str) -> dict[str, Any]:
     }
 
 
-def _card(row: HomeRow) -> dict[str, Any]:
+def _card(row: HomeRow) -> list[dict[str, Any]]:
     icon = f":{row.status}:  " if row.status else ""
-    # Escaping can lengthen a title (`&` becomes `&amp;`): cut it until the card takes it, since
-    # one title too long would have Slack refuse the whole page.
-    limit = TITLE_LIMIT
-    title = icon + shown_as_written(one_line(row.title, limit))
-    while len(title) > CARD_TITLE:
-        limit -= 10
-        title = icon + shown_as_written(one_line(row.title, limit))
+    title = shown_as_written(one_line(row.title, TITLE_LIMIT))
     details = [_WORDS.get(row.status) if row.status else None, _date(row.last_activity, "ago")]
-    return {
-        "type": "card",
-        "title": {"type": "mrkdwn", "text": title},
-        "subtitle": {"type": "mrkdwn", "text": " · ".join(d for d in details if d)},
-        "actions": [_link_button(texts.HOME_OPEN, row.permalink, HOME_OPEN_ACTION)],
-    }
-
-
-def _carousels(rows: list[HomeRow]) -> list[dict[str, Any]]:
-    """`rows` as cards side by side, a carousel for every `CAROUSEL_CARDS` of them."""
     return [
         {
-            "type": "carousel",
-            "elements": [_card(row) for row in rows[start : start + CAROUSEL_CARDS]],
-        }
-        for start in range(0, len(rows), CAROUSEL_CARDS)
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"{icon}*{title}*"},
+            "accessory": _link_button(texts.HOME_OPEN, row.permalink, HOME_OPEN_ACTION),
+        },
+        context_block(" · ".join(d for d in details if d)),
     ]
 
 
@@ -307,9 +287,9 @@ def home_view(
     """The Home tab's view. `rows` are newest first and `channels` maps each bound channel Slack
     still has to its name. Only the sessions of the chosen period are shown. With no channel,
     status or search chosen, every channel is a group, the ones with sessions first by their
-    newest, each showing its `PER_CHANNEL` newest side by side and a button to see them all
-    (which chooses that channel); otherwise only what matches, with no such cut. Never past
-    Slack's 100 blocks: a channel that does not fit whole is left out, and the page says so."""
+    newest, each showing its `PER_CHANNEL` newest and a button to see them all (which chooses
+    that channel); otherwise only what matches, with no such cut. Never past Slack's 100 blocks:
+    the page says when it stops short."""
     blocks: list[dict[str, Any]] = [
         *_controls(channels, chosen),
         context_block(texts.HOME_HEADER.format(time=_date(int(now.timestamp()), "time"))),
@@ -331,11 +311,23 @@ def home_view(
     shown = 0
     for channel_id, found in groups.items():
         cards = found if chosen.narrowed else found[:PER_CHANNEL]
-        group = [{"type": "divider"}, _channel_header(team_id, channel_id), *_carousels(cards)]
+        # One block is kept for the line that says the page stops short; a group is a divider,
+        # a header, two blocks a card, and one closing block at most.
+        room = (HOME_BLOCKS - 1 - len(blocks) - 3) // 2
+        if room < min(1, len(cards)) or HOME_BLOCKS - 1 - len(blocks) < 3:
+            blocks.append(context_block(texts.HOME_MORE.format(rows=shown)))
+            break
+        blocks += [{"type": "divider"}, _channel_header(team_id, channel_id)]
+        for row in cards[:room]:
+            blocks += _card(row)
+        shown += min(len(cards), room)
+        if len(cards) > room:
+            blocks.append(context_block(texts.HOME_MORE.format(rows=shown)))
+            break
         if not found:
             # A channel with sessions, none of them in the period or under the filters.
             hidden = channel_id in with_sessions
-            group.append(context_block(texts.HOME_NO_MATCH if hidden else texts.HOME_NO_SESSIONS))
+            blocks.append(context_block(texts.HOME_NO_MATCH if hidden else texts.HOME_NO_SESSIONS))
         elif len(found) > len(cards):
             show_all = {
                 "type": "button",
@@ -346,13 +338,7 @@ def home_view(
                 },
                 "value": channel_id,
             }
-            group.append({"type": "actions", "elements": [show_all]})
-        # One block is kept for the line that says the page stops short.
-        if len(blocks) + len(group) > HOME_BLOCKS - 1:
-            blocks.append(context_block(texts.HOME_MORE.format(rows=shown)))
-            break
-        blocks += group
-        shown += len(cards)
+            blocks.append({"type": "actions", "elements": [show_all]})
     return {"type": "home", "blocks": blocks}
 
 
