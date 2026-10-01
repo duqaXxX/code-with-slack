@@ -708,3 +708,39 @@ def test_the_observer_hears_a_prune_that_removed_something(tmp_path: Path) -> No
     assert heard == []
     assert store.prune(lambda _directory: set(), now=float(THREAD_TS)) == 1
     assert heard == [{(CHANNEL, THREAD_TS)}]
+
+
+def test_remove_channel_forgets_the_channel_and_its_threads_and_says_which(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    store = StateStore(path)
+    store.bind(CHANNEL, tmp_path / "project")
+    store.bind(OTHER_CHANNEL, tmp_path / "other")
+    store.open_thread(CHANNEL, THREAD_TS, session_id=SESSION)
+    store.open_thread(OTHER_CHANNEL, OTHER_THREAD_TS)
+    heard: list[frozenset[tuple[str, str]]] = []
+    store.on_sessions_change = heard.append
+
+    store.remove_channel(CHANNEL)
+    assert store.channels() == [OTHER_CHANNEL]
+    assert store.thread(CHANNEL, THREAD_TS) is None
+    assert list(json.loads(path.read_text())["channels"]) == [OTHER_CHANNEL]
+    assert heard == [{(CHANNEL, THREAD_TS)}]
+    assert StateStore(path).channels() == [OTHER_CHANNEL]  # it stays forgotten after a restart
+
+    store.remove_channel(CHANNEL)  # not there any more: nothing written, nothing announced
+    assert heard == [{(CHANNEL, THREAD_TS)}]
+
+
+def test_prune_leaves_alone_the_threads_it_is_told_to_keep(tmp_path: Path) -> None:
+    # A thread with a live session in the daemon: its session id may not be on disk yet, and
+    # its setup may have been open for more than a day.
+    store = StateStore(tmp_path / "state.json")
+    store.bind(CHANNEL, tmp_path / "project")
+    store.open_thread(CHANNEL, THREAD_TS, session_id=SESSION)
+    store.open_thread(CHANNEL, OTHER_THREAD_TS)
+    later = float(OTHER_THREAD_TS) + 2 * 24 * 60 * 60
+    keep = {(CHANNEL, THREAD_TS), (CHANNEL, OTHER_THREAD_TS)}
+    assert store.prune(lambda _directory: set(), later, keep=keep) == 0
+    assert store.prune(lambda _directory: set(), later, keep={(CHANNEL, THREAD_TS)}) == 1
+    assert store.thread(CHANNEL, THREAD_TS) is not None
+    assert store.thread(CHANNEL, OTHER_THREAD_TS) is None

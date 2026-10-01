@@ -6,7 +6,6 @@ import logging
 import os
 import signal
 import sys
-import time
 import unicodedata
 from collections.abc import Collection
 from pathlib import Path
@@ -19,6 +18,7 @@ from slack_sdk.web.async_client import AsyncWebClient
 from code_with_slack import texts
 from code_with_slack.approvals import Approvals
 from code_with_slack.attachments import prepare_uploads, uploads_dir
+from code_with_slack.cleanup import CLEAN_EVERY_SECONDS, clean
 from code_with_slack.config import CONFIG_DIR, ConfigError, load_config
 from code_with_slack.footer import UsageCache, UsageProbe
 from code_with_slack.guards import ChannelGuard, Identity
@@ -75,12 +75,20 @@ def _alive_sessions(directory: Path) -> Collection[str] | None:
     under the documented location, pruning must err on keeping. Past `LONG_PROJECT_KEY`
     characters the CLI names the folder with a hash the SDK does not reproduce (the SDK's own
     `_find_project_dir` docstring, 0.2.160): a missing folder there proves nothing, so the answer
-    is None ("cannot tell") and `state.prune` keeps that folder's threads."""
+    is None ("cannot tell") and `state.prune` keeps that folder's threads. A folder that is there
+    and cannot be listed answers None too."""
     alive = {info.session_id for info in directory_sessions(directory)}
     key = project_key_for_directory(directory)
     folder = _projects_dir() / key
     if folder.is_dir():
-        return alive | {p.stem for p in folder.glob("*.jsonl")}
+        try:
+            # `glob` reads an unreadable folder as an empty one, and so does the SDK's listing:
+            # every session would look gone. A folder that cannot be listed cannot tell.
+            with os.scandir(folder) as entries:
+                transcripts = {Path(e.name).stem for e in entries if e.name.endswith(".jsonl")}
+        except OSError:
+            return None
+        return alive | transcripts
     return None if len(key) > LONG_PROJECT_KEY else alive
 
 
@@ -100,6 +108,18 @@ async def _post_upgrade_notices(slack: AsyncWebClient, state: StateStore) -> Non
             logger.warning("could not post the upgrade notice in %s: %s", channel_id, describe(exc))
             continue
         state.clear_notice(channel_id)
+
+
+async def _clean_every(
+    seconds: float, slack: AsyncWebClient, state: StateStore, sessions: SessionManager
+) -> None:
+    """The scheduled cleanup of `state.json`: a pass every `seconds`, none once a stop has
+    begun (the sessions are closing, and the next start cleans anyway)."""
+    while True:
+        await asyncio.sleep(seconds)
+        if sessions.draining:
+            return
+        await clean(slack, state, alive=_alive_sessions, live=sessions.live_threads)
 
 
 def make_clients(bot_token: str) -> tuple[AsyncWebClient, AsyncWebClient]:
@@ -184,17 +204,13 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, on_signal, sig)
 
-        # Issue #19 fix round item 3: repaired, then pruned, before the Socket Mode connection
+        # Issue #19 fix round item 3: repaired, then cleaned, before the Socket Mode connection
         # even opens. `slack` (a plain `AsyncWebClient`, already `auth_test`'d above) works
         # without it; opening Socket Mode is what starts delivering events, and a pruned thread's
         # leftovers must still be repaired first.
         await repair_crash(slack, state, sessions.update_limiter)
-        try:
-            removed = state.prune(_alive_sessions, time.time())
-            if removed:
-                logger.info("pruned %d stale thread(s) from state.json", removed)
-        except Exception as exc:
-            logger.warning("could not prune stale threads: %s", exc)
+        await clean(slack, state, alive=_alive_sessions, live=sessions.live_threads)
+        cleaning = asyncio.create_task(_clean_every(CLEAN_EVERY_SECONDS, slack, state, sessions))
         # The session index (the owner's Home tab): written once what the last run left is
         # repaired and pruned, then again whenever state.json's sessions change.
         state.on_sessions_change = home.request
@@ -215,6 +231,9 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
                     await asyncio.wait_for(sessions.drain(stop), DRAIN_LIMIT_SECONDS)
         finally:
             logger.info("shutting down")
+            cleaning.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cleaning
             await handler.close_async()  # type: ignore[no-untyped-call]
             await sessions.close_all()
             # After the sessions: the page shows them as this stop left them.

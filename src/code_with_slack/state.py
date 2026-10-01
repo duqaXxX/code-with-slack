@@ -176,6 +176,15 @@ class StateStore:
         if current is None:
             self._announce()  # a new channel in the session index; a rebind changes no row
 
+    def remove_channel(self, channel_id: str) -> None:
+        """Forget a channel: its binding and every thread in it. A no-op for one that is not
+        bound."""
+        channel = self._channels.pop(channel_id, None)
+        if channel is None:
+            return
+        self._save()
+        self._announce(frozenset((channel_id, thread_ts) for thread_ts in channel.threads))
+
     def open_thread(
         self, channel_id: str, thread_ts: str, session_id: str | None = None
     ) -> ThreadState:
@@ -310,18 +319,28 @@ class StateStore:
         self._channels[channel_id] = replace(channel, notice_pending=False)
         self._save()
 
-    def prune(self, alive: Callable[[Path], Collection[str] | None], now: float) -> int:
+    def prune(
+        self,
+        alive: Callable[[Path], Collection[str] | None],
+        now: float,
+        keep: Collection[tuple[str, str]] = (),
+    ) -> int:
         """Remove a thread whose session id is gone from its folder's sessions, and a
         no-session thread whose root message is older than `ONE_DAY`. Calls `alive` once per
-        distinct folder; None means it cannot tell, and that folder's threads are kept. If
-        `alive` raises, nothing is removed or written; the caller decides what to do next.
-        Returns how many entries were removed."""
+        distinct folder; None means it cannot tell, and that folder's threads are kept. `keep`
+        names the (channel_id, thread_ts) to leave alone whatever they look like: the threads
+        with a live session, whose id may not be on disk yet. If `alive` raises, nothing is
+        removed or written; the caller decides what to do next. Returns how many entries were
+        removed."""
         alive_cache: dict[Path, Collection[str] | None] = {}
         updated: dict[str, ChannelRecord] = {}
         removed = 0
         for channel_id, channel in self._channels.items():
             kept: dict[str, ThreadState] = {}
             for thread_ts, thread in channel.threads.items():
+                if (channel_id, thread_ts) in keep:
+                    kept[thread_ts] = thread
+                    continue
                 if thread.session_id is not None:
                     if thread.directory not in alive_cache:
                         alive_cache[thread.directory] = alive(thread.directory)

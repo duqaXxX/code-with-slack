@@ -3,6 +3,7 @@ import contextlib
 import functools
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from code_with_slack.home import Home
 from code_with_slack.lock import single_instance
 from code_with_slack.state import StateStore
 from tests.fakes import CHANNEL, FakeSlack, slack_payload
+from tests.test_repair import slack_error
 from tests.test_sessions import until
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -168,6 +170,79 @@ async def test_run_publishes_the_session_index_once_started_and_after_a_change(
         running.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await running
+
+
+GONE = "C000GONE"
+
+
+def _channels_in_slack(fake_slack: FakeSlack, gone: set[str]) -> None:
+    def answer(args: dict[str, object]) -> object:
+        if args["channel"] in gone:
+            return slack_error("channel_not_found")
+        return slack_payload("api-conversations-info")
+
+    fake_slack.responses["conversations.info"] = answer
+
+
+async def test_run_forgets_a_gone_channel_at_start_and_again_on_its_schedule(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = tmp_path / ".env"
+    env.write_text(
+        f"SLACK_BOT_TOKEN={'xox' + 'b-1'}\nSLACK_APP_TOKEN={'xap' + 'p-1'}\n"
+        f"SLACK_OWNER_USER_ID=U000ALICE\nALLOWED_ROOT={tmp_path}\n"
+    )
+    env.chmod(0o600)
+    path = tmp_path / "state.json"
+    state = _v1_state(tmp_path, GONE)  # a channel still owing its upgrade notice
+    state.bind(CHANNEL, tmp_path)
+    state.bind("C000LATE", tmp_path)
+
+    fake_slack = FakeSlack()
+    gone = {GONE}
+    _channels_in_slack(fake_slack, gone)
+    monkeypatch.setattr(entry, "AsyncWebClient", lambda token, retry_handlers=None: fake_slack)
+    monkeypatch.setattr(entry, "AsyncSocketModeHandler", _FakeHandler)
+    monkeypatch.setattr(entry, "CLEAN_EVERY_SECONDS", 0.05)
+
+    def bound() -> list[str]:
+        return list(json.loads(path.read_text())["channels"])
+
+    running = asyncio.create_task(entry.run(tmp_path))
+    try:
+        await until(lambda: bound() == [CHANNEL, "C000LATE"])
+        # Forgotten before anything is posted to it: no upgrade notice is tried there.
+        assert [a["channel"] for a in fake_slack.calls_to("chat.postMessage")] == []
+        gone.add("C000LATE")  # deleted while the daemon runs
+        await until(lambda: bound() == [CHANNEL])
+    finally:
+        running.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await running
+    # The schedule ends with the daemon: no pass asks Slack about a channel after the stop.
+    asked = len(fake_slack.calls_to("conversations.info"))
+    await asyncio.sleep(0.2)
+    assert len(fake_slack.calls_to("conversations.info")) == asked
+
+
+async def test_the_scheduled_cleanup_stops_once_a_stop_has_begun(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Draining:
+        draining = True
+
+    passes: list[str] = []
+
+    async def recording_clean(*args: object, **kwargs: object) -> None:
+        passes.append("clean")
+
+    monkeypatch.setattr(entry, "clean", recording_clean)
+    state = StateStore(tmp_path / "state.json")
+    await asyncio.wait_for(
+        entry._clean_every(0.01, FakeSlack(), state, Draining()),  # type: ignore[arg-type]
+        1,
+    )
+    assert passes == []
 
 
 async def test_repair_and_prune_run_before_the_socket_mode_connection_opens(
@@ -332,6 +407,26 @@ def test_alive_sessions_keeps_a_transcript_list_sessions_filters_out(
 
     monkeypatch.setattr("code_with_slack.sessions.list_sessions", fake_list_sessions)
     assert entry._alive_sessions(project) == {"68da9311-0000-4000-8000-000000000001"}
+
+
+def test_alive_sessions_cannot_tell_about_a_folder_it_cannot_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An unreadable transcripts folder lists as empty, which would read as "every session is
+    # gone" and prune every thread of that folder.
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config"))
+    folder = entry._projects_dir() / entry.project_key_for_directory(project)
+    folder.mkdir(parents=True)
+    (folder / "68da9311-0000-4000-8000-000000000001.jsonl").write_text("{}\n")
+    folder.chmod(0o000)
+    try:
+        if os.access(folder, os.R_OK):
+            pytest.skip("running as a user no mode stops from reading")
+        assert entry._alive_sessions(project) is None
+    finally:
+        folder.chmod(0o700)
 
 
 def test_prune_uses_alive_sessions_to_drop_a_gone_thread(
