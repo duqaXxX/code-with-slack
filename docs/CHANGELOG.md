@@ -190,6 +190,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A streamed reply whose append Slack refuses with `msg_too_long` no longer loses its end and no
+  longer leaves ❌ on a thread whose turn ended well (issues #92 and #96). The same append was
+  sent again on every write and refused each time, the end and its one retry included, so the
+  session showed ❌; the reply became whole only when its stream reached `STREAM_SECONDS`, and the
+  ❌ stayed. `ReplySink._stream_step` now stops the stream on that refusal alone, without the footer,
+  and the message goes on by `chat.update`, with a closing message at the end, as for a reply
+  past `STREAM_SECONDS`: the stop notifies, and the closing message notifies a second time. The
+  refusal is logged as `chat.appendStream refused` with the text size, the element and card
+  counts and the card text sent so far, never content. When the update of that message is
+  refused as well and no later one passes, the end counts as not landed and the root shows ❌,
+  since the reply is short of what Claude wrote. The card text is still not counted
+  toward a message's size: Slack's formula is not established.
 - A restart ordered from a Slack session no longer waits for that session's own background wait
   for the new process (issue #87). The signal names no sender, so every session with a turn
   running when it arrives is treated as a possible sender: its turn is waited for, a background
