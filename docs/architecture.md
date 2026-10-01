@@ -197,12 +197,30 @@ start, an append and a stop are not idempotent, and a reset can come after Slack
 call.
 
 Within a reply, writes happen in the order things happen. Claude's text goes as `markdown_text`
-chunks. Each tool is a `task_update` chunk keyed by its `tool_use_id`, updated in place as the
-call progresses: `in_progress` with what it is doing now (`details`), then `complete`, or `error`
-with the output's first line. Its title is the terminal's words where the terminal has words
-(`render.previews.folded`'s wording: `Ran 1 shell command`, `Read notes.txt`) and the tool's name
-with its first argument for any other tool; a subagent's title counts its calls, and a task keeps
-its card, `in_progress`, for as long as it runs. A finished `Edit` or `Write` shows its preview
+chunks. Tools go as `task_update` chunks, each a card Slack updates in place by its id.
+
+A run of calls, the calls between two pieces of text, shares two cards (`render.fold.Fold`, fed
+by `ReplySink.task`). The first card shows the run's first call; once a call has ended and
+another is shown, it holds the counts of what ended, in the terminal's words where the terminal
+has words (`render.previews.folded`: `Ran 2 shell commands · Read 1 file`), the failed calls
+after `✗`. The second card shows one call whole, titled with the tool's name and its first
+argument: the last call started that still runs, else the last one shown, which joins the counts
+when another call takes its place. A failed call says why in its title (`Bash: pytest -q · Exit
+code 1`). Neither card carries `details` or `output`: Slack appends both to what a card already
+holds (measured 2026-10-01, slack-sdk 3.44.1), so a card that is reused keeps its text in its
+title.
+
+A call with a view of its own has a card of its own, keyed by its `tool_use_id`, and ends the
+run: an `Edit` or a `Write` that ended well, a subagent, whose title counts its calls and whose
+`details` say what it is doing now, a background task, which keeps its card `in_progress` for as
+long as it runs, and a stopped call. A call that turns into one of these while a card of a run
+shows it keeps that card.
+
+Once the reply's body has ended, each run reads as one line of counts in a `context` block
+(`✓ Ran 2 shell commands · Read 1 file · ✗ Ran 1 shell command`), as the terminal folds a run
+that ended (`TaskUpdate.folded`, `ReplySink._card_blocks`). A stream cannot replace what it
+showed, so the line is written by the `chat.update` that follows the stream's stop
+(`ReplySink._end`), which never notifies. A finished `Edit` or `Write` shows its preview
 as a `blocks` chunk under the card (`render.previews.preview`): a diff is a collapsible,
 full-width `container` block (`sinks.diff_containers`), closed until the owner opens it, whose
 title is the call's line (`✓ Update(notes.txt)`), its subtitle the sentence (`Added 1 line,
@@ -226,7 +244,8 @@ little earlier itself.
 - **280 seconds pass first.** `ReplySink._expire` stops the stream (Slack pushes on the stop, the
   first notification) and the same message keeps growing with `chat.update`, which never
   notifies (measured 2026-09-29: stop at 4 minutes 51 seconds, ten updates, silent). Each update
-  writes the whole message from the renderer's model as `markdown` blocks and `task_card` blocks,
+  writes the whole message from the renderer's model as `markdown` blocks and `task_card` blocks
+  (a run of calls keeps its two cards until the body ends),
   with a short `text`, since a `chat.update` whose `text` is long fails `msg_too_long`. The end
   posts a closing message in the thread with the footer (`ReplySink._write_closing`), the second
   notification. Its `text`, the banner, is the start of Claude's answer as plain text

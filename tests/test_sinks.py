@@ -103,7 +103,7 @@ async def test_a_turn_that_opens_with_a_tool_starts_with_its_card(slack: FakeSla
     await settled()
     [start] = slack.calls_to("chat.startStream")
     assert start["chunks"] == [
-        {"type": "task_update", "id": "t1", "title": "Bash: t1", "status": "in_progress"}
+        {"type": "task_update", "id": "fold:t1", "title": "Bash: t1", "status": "in_progress"}
     ]
 
 
@@ -120,7 +120,7 @@ async def test_text_grows_the_stream_and_a_card_updates_in_place(slack: FakeSlac
     assert slack.message_texts() == ["Let me look.\n\nThe tree is clean."]
     # one card, which the stream keeps updating where it first appeared
     assert slack.message_cards() == [
-        [{"id": "t1", "title": "Bash: t1", "status": "complete"}],
+        [{"id": "fold:t1", "title": "Bash: t1", "status": "complete"}],
     ]
     chunks = [c for a in slack.calls_to("chat.appendStream") for c in a["chunks"]]
     assert [c["type"] for c in chunks] == ["task_update", "task_update", "markdown_text"]
@@ -139,7 +139,7 @@ async def test_changes_inside_one_debounce_go_in_one_append(slack: FakeSlack) ->
     [append] = slack.calls_to("chat.appendStream")
     assert append["chunks"] == [
         {"type": "markdown_text", "text": "BCD"},
-        {"type": "task_update", "id": "t1", "title": "Bash: t1", "status": "complete"},
+        {"type": "task_update", "id": "fold:t1", "title": "Bash: t1", "status": "complete"},
     ]
 
 
@@ -237,7 +237,9 @@ async def test_the_stream_stops_at_280_seconds_and_the_message_grows_by_update(
     update = slack.calls_to("chat.update")[-1]
     assert update["ts"] == slack.stream_ts[0]
     assert update["blocks"][0] == {"type": "markdown", "text": "First words."}
-    assert update["blocks"][1]["type"] == "task_card" and update["blocks"][1]["task_id"] == "t1"
+    assert (
+        update["blocks"][1]["type"] == "task_card" and update["blocks"][1]["task_id"] == "fold:t1"
+    )
     assert update["blocks"][2] == {"type": "markdown", "text": "Later words."}
     assert update["text"] == "First words."  # short, the banner of the message
     assert slack.pushes() == 1  # an update never pushes
@@ -358,7 +360,7 @@ async def test_text_past_the_limit_continues_in_a_new_stream(slack: FakeSlack) -
 async def test_cards_past_the_limit_continue_in_a_new_stream(slack: FakeSlack) -> None:
     sink = reply(slack)
     for i in range(60):
-        await sink.task(tool(f"t{i}", "Read"))
+        await sink.task(tool(f"t{i}", "Agent", task=True))  # each has a card of its own
     await settled()
     await sink.finish([])
     await sink.close_out(None)
@@ -773,9 +775,11 @@ async def test_a_card_says_what_the_tool_line_said(slack: FakeSlack) -> None:
             "status": "in_progress",
             "details": "Read: x\nBash: ls",
         },
-        {"id": "b", "title": "Bash: b", "status": "error", "output": "exit 1"},
+        # a call of a run of calls says why it failed in its title: its card is reused, and
+        # Slack appends `output` to what a card already holds
+        {"id": "fold:b", "title": "Bash: b · exit 1", "status": "error"},
         {"id": "c", "title": "Bash: c", "status": "complete", "output": STOPPED},
-        {"id": "d", "title": "Bash: d", "status": "complete"},
+        {"id": "fold:d", "title": "Bash: d", "status": "complete"},
     ]
 
 
@@ -835,10 +839,9 @@ async def test_a_failed_call_shows_its_error_even_if_it_carries_a_preview(slack:
     assert start["chunks"] == [
         {
             "type": "task_update",
-            "id": "e",
-            "title": "Edit: e",
+            "id": "fold:e",
+            "title": "Edit: e · File not found",
             "status": "error",
-            "output": "File not found",
         }
     ]
 
@@ -1295,7 +1298,7 @@ async def test_a_message_stays_tracked_while_its_cards_run_after_a_roll_over(
     sink = reply(slack, on_open_reply=lambda old, new: seen.append((old, new)))
     await sink.task(tool("t0", "Bash", "in_progress", task=True, details="Running in background"))
     for i in range(1, 60):
-        await sink.task(tool(f"t{i}", "Read"))
+        await sink.task(tool(f"t{i}", "Agent", task=True))
     await settled()
     first, second = slack.stream_ts
     assert (None, second) in seen and (first, None) not in seen  # a card still runs in the first
@@ -1440,7 +1443,7 @@ async def test_a_late_preview_that_does_not_fit_its_message_is_cut_with_a_pointe
     sink = reply(slack)
     await sink.task(tool("t0", "Write", "in_progress"))
     for i in range(1, 60):
-        await sink.task(tool(f"t{i}", "Read"))
+        await sink.task(tool(f"t{i}", "Agent", task=True))
     await settled()
     first = slack.stream_ts[0]
     body = "\n".join(f"{i:>4} {'x' * 90}" for i in range(100))  # about 9,000 characters
@@ -1493,7 +1496,7 @@ async def test_many_late_previews_in_a_full_message_get_one_note_and_stay_in_the
     for w in range(10):
         await sink.task(tool(f"w{w}", "Write", "in_progress"))
     for i in range(60):
-        await sink.task(tool(f"t{i}", "Read"))
+        await sink.task(tool(f"t{i}", "Agent", task=True))
     await settled()
     first = slack.stream_ts[0]
     body = "\n".join(f"{i:>4} {'x' * 90}" for i in range(100))
@@ -1531,3 +1534,138 @@ async def test_a_start_with_nothing_to_compare_is_not_adopted() -> None:
     await sink.text(" and then more words")
     await settled()
     assert len(slack.calls_to("chat.startStream")) == 2  # tried again, not guessed at
+
+
+# A run of calls: two cards while the reply is written, a line of counts once its body ended.
+
+
+def context(text: str) -> dict[str, Any]:
+    return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
+
+
+async def run_of_calls(sink: ReplySink) -> None:
+    """Text, then three calls one after the other (the last fails), then text."""
+    await sink.text("Let me look.\n\n")
+    for id, name, status, fields in (
+        ("a", "Bash", "complete", {}),
+        ("b", "Read", "complete", {}),
+        ("c", "Bash", "error", {"output": "Exit code 1"}),
+    ):
+        await sink.task(tool(id, name, "in_progress"))
+        await settled()
+        await sink.task(tool(id, name, status, **fields))
+        await settled()
+    await sink.text("One test fails.")
+    await settled()
+
+
+async def test_a_run_of_calls_streams_as_the_counts_and_the_call_shown(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await run_of_calls(sink)
+    assert slack.message_cards() == [
+        [
+            {"id": "fold:a", "title": "Ran 1 shell command · Read 1 file", "status": "complete"},
+            {"id": "now:b", "title": "Bash: c · Exit code 1", "status": "error"},
+        ]
+    ]
+    # No chunk carries text Slack would append to what a reused card holds.
+    chunks = [c for _, a in slack.calls if "chunks" in a for c in a["chunks"]]
+    assert not any("details" in c or "output" in c for c in chunks)
+    assert slack.calls_to("chat.update") == []
+
+
+async def test_the_end_folds_the_run_into_a_line_with_a_silent_update(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await run_of_calls(sink)
+    await sink.finish([])
+    assert await sink.close_out("main · ctx 6%") is True
+    assert methods(slack)[-2:] == ["chat.stopStream", "chat.update"]
+    [update] = slack.calls_to("chat.update")
+    assert update["ts"] == slack.stream_ts[0]
+    assert update["blocks"] == [
+        {"type": "markdown", "text": "Let me look."},
+        context("✓ Ran 1 shell command · Read 1 file · ✗ Ran 1 shell command"),
+        {"type": "markdown", "text": "One test fails."},
+        {"type": "divider"},
+        context("main · ctx 6%"),
+    ]
+    assert slack.pushes() == 1  # the stop pushed; the update that folds never does
+
+
+async def test_a_reply_with_no_run_of_calls_gets_no_update_at_its_end(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.text("Working.\n\n")
+    await sink.task(tool("t", "Agent", "in_progress", task=True))
+    await sink.task(tool("t", "Agent", "complete", task=True, calls=2))
+    await settled()
+    await sink.finish([])
+    assert await sink.close_out("footer") is True
+    assert slack.calls_to("chat.update") == []
+
+
+async def test_a_fold_that_cannot_be_written_is_tried_once_more(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.02)
+    sink = reply(slack)
+    await sink.task(tool("a", "Bash"))
+    await settled()
+    await sink.finish([])
+    slack.responses["chat.update"] = [rejected("ratelimited"), {"ok": True}]
+    assert await sink.close_out("footer") is False
+    assert await sink.wait_landed() is True
+    assert slack.calls_to("chat.update")[-1]["blocks"][0] == context("✓ Ran 1 shell command")
+    assert slack.pushes() == 1 and slack.posted_ts == []  # no second stop, no closing message
+
+
+async def test_past_the_window_the_run_keeps_its_two_cards_until_the_body_ends(
+    slack: FakeSlack,
+) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.task(tool("a", "Bash"))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.task(tool("b", "Read", "in_progress"))
+    await settled()
+    blocks = slack.calls_to("chat.update")[-1]["blocks"]
+    assert [(b["type"], b["title"], b["status"]) for b in blocks] == [
+        ("task_card", "Ran 1 shell command", "complete"),
+        ("task_card", "Read: b", "in_progress"),
+    ]
+    await sink.finish([tool("b", "Read")])
+    assert slack.calls_to("chat.update")[-1]["blocks"] == [
+        context("✓ Ran 1 shell command · Read 1 file")
+    ]
+
+
+async def test_a_task_that_outlives_the_turn_keeps_its_card_beside_the_folded_line(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.task(tool("a", "Read"))
+    await sink.task(tool("t", "Bash", "in_progress", task=True, details="Running in background"))
+    await settled()
+    await sink.finish([])
+    assert await sink.close_out(None) is True
+    blocks = slack.calls_to("chat.update")[-1]["blocks"]
+    assert blocks[0] == context("✓ Read 1 file")
+    assert blocks[1]["type"] == "task_card" and blocks[1]["status"] == "in_progress"
+
+
+async def test_a_run_in_a_message_the_reply_has_left_is_folded_at_the_end_too(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.task(tool("a", "Bash"))
+    for i in range(sinks.BLOCKS_LIMIT + 5):
+        await sink.task(tool(f"t{i}", "Agent", task=True))
+    await settled()
+    assert len(slack.stream_ts) == 2
+    await sink.text("More.")  # a later pass finds the first message as its stream left it
+    await settled()
+    await sink.finish([])
+    assert await sink.close_out(None) is True
+    first = slack.message_blocks()[0]
+    assert first[0] == context("✓ Ran 1 shell command")
+    assert all(block.get("task_id") != "fold:a" for block in first)

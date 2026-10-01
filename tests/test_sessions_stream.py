@@ -92,9 +92,12 @@ async def test_a_tool_first_turn_and_its_cards_read_as_the_recorded_turn(
     h = harness_for({"turns": [sdk_messages("tools")]})
     turn = await h.session().submit("list the files")
     await asyncio.wait_for(turn.done.wait(), 2)
-    [cards] = h.slack.message_cards()
-    assert cards and all(c["status"] == "complete" for c in cards)
-    assert all(c["title"].split(":")[0] for c in cards)
+    cards = [c for _, a in h.slack.calls for c in a.get("chunks", []) if c["type"] == "task_update"]
+    assert cards and all(c["title"] for c in cards)
+    # Once the body has ended the run of calls is one line of counts, in the terminal's words.
+    [blocks] = h.slack.message_blocks()
+    assert blocks[0]["elements"][0]["text"] == "✓ Ran 1 shell command · Read 1 file"
+    assert h.slack.message_cards() == [[]]
 
 
 async def test_a_reply_waits_for_its_background_task_before_it_stops(
@@ -245,8 +248,10 @@ async def test_an_error_that_cuts_a_turn_ends_the_stream_with_the_cross(
     assert open_streams(h) == []
     await until(lambda: h.reactions()[-1] == Status.ERROR.value)
     assert "Claude Code reported an error" in h.slack.stream_texts()[0]
-    [cards] = h.slack.message_cards()
-    assert [c["status"] for c in cards] == ["complete"]  # the call that was running is closed
+    # the call that was running is closed, and counted like any call that ended
+    [blocks] = h.slack.message_blocks()
+    lines = [b["elements"][0]["text"] for b in blocks if b["type"] == "context"]
+    assert lines[0] == "✓ Ran 1 shell command"
     assert h.slack.pushes() == 1
 
 

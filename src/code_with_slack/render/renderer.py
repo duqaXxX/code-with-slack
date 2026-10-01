@@ -50,6 +50,9 @@ class TaskUpdate:
     task: bool = False  # a subagent's or a background command's card
     calls: int = 0  # calls made inside it (a subagent's), counted in its title
     preview: Preview | None = None  # the terminal's own view of a finished call
+    # On a card of a run of calls (`render.fold`): the line that replaces the card once the
+    # reply's body has ended; empty removes the card. None on any other card, which stays.
+    folded: str | None = None
 
     @property
     def shown_preview(self) -> Preview | None:
