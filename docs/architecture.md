@@ -154,15 +154,16 @@ looked-up session for the same thread.
 ## Rendering
 
 `code_with_slack.render.renderer.TurnRenderer` reads SDK message types only, never tool names, so
-a tool Claude Code adds later gets its card in the reply with no code change. The table says
-"line" for what the model holds per tool (`renderer.TaskUpdate`); the sink writes each as a card.
+a tool Claude Code adds later shows in the reply with no code change. The table says "line" for
+what the model holds per tool (`renderer.TaskUpdate`); the sink draws the lines on task cards, two
+for a run of calls and one for a line with a view of its own (see below).
 
 | SDK input | What the owner sees |
 |---|---|
 | `StreamEvent` with no parent, a `text_delta` | the text, as it is written |
 | a top-level `TextBlock` in an `AssistantMessage` | nothing more: the same text already arrived as deltas |
 | `ToolUseBlock` or `ServerToolUseBlock` with no parent | a new tool line, in progress, titled `Name: first string argument` |
-| the same inside a subagent or a skill run in a forked context (`parent_tool_use_id` set) | the parent's line counts the subagent's calls (`⏳ Agent: review · 12 calls`) and, while it runs, shows its latest one on a line below, indented with no-break spaces under `⎿` (`sinks.NESTED`), and becomes a task's line: it keeps a line of its own once it ends, in the foreground or in the background |
+| the same inside a subagent or a skill run in a forked context (`parent_tool_use_id` set) | the parent's line counts the subagent's calls (`Agent: review · 12 calls`) and, while it runs, holds its latest ones (`renderer.CHILD_LINES`) as the card's `details`, and becomes a task's line: it keeps a card of its own once it ends, in the foreground or in the background |
 | `ToolResultBlock` or `ServerToolResultBlock` for a line | the line completes, or shows an error with the output's first line when `is_error`; a line whose task already ended as stopped keeps `Stopped` |
 | `TaskStartedMessage` | for a tool call, nothing yet: Claude Code starts a task for a long command in the foreground too, which ends before the call's result. When the call's result arrives with its task still running, the line becomes a task's line, notes "Running in background" on its nested line and stays in progress. A task with no call in the reply gets a new line; one started by a call the reply never saw, while such a task (a command's) runs, is an agent inside that command and shows on the command's line, counted as a call with its description, as a subagent's calls show on its line |
 | `TaskProgressMessage` | the line shows the task's description |
@@ -200,12 +201,13 @@ Within a reply, writes happen in the order things happen. Claude's text goes as 
 chunks. Tools go as `task_update` chunks, each a card Slack updates in place by its id.
 
 A run of calls, the calls between two pieces of text, shares two cards (`render.fold.Fold`, fed
-by `ReplySink.task`). The first card shows the run's first call; once a call has ended and
-another is shown, it holds the counts of what ended, in the terminal's words where the terminal
-has words (`render.previews.folded`: `Ran 2 shell commands · Read 1 file`), the failed calls
-after `✗`. The second card shows one call whole, titled with the tool's name and its first
-argument: the last call started that still runs, else the last one shown, which joins the counts
-when another call takes its place. A failed call says why in its title (`Bash: pytest -q · Exit
+by `ReplySink.task`). One call of the run is shown whole, titled with the tool's name and its
+first argument: the last call started that still runs, else the last one shown, which joins the
+counts when another call takes its place. Until there is a call to count, the first card shows
+that call, and a run of one call stays one card. From then on the first card holds the counts of
+what ended, in the terminal's words where the terminal has words (`render.previews.folded`: `Ran
+2 shell commands · Read 1 file`), the failed calls after `✗`, and the second card shows the call.
+Calls that run at the same time show one at a time. A failed call says why in its title (`Bash: pytest -q · Exit
 code 1`). Neither card carries `details` or `output`: Slack appends both to what a card already
 holds (measured 2026-10-01, slack-sdk 3.44.1), so a card that is reused keeps its text in its
 title.
@@ -221,8 +223,10 @@ Once the reply's body has ended, each run reads as one line of counts in a `cont
 that ended (`TaskUpdate.folded`, `ReplySink._card_blocks`). A stream cannot replace what it
 showed, so the line is written by the `chat.update` that follows the stream's stop
 (`ReplySink._end`), which never notifies. The reply has ended with the stop: an update that fails
-is tried once more with the next write, and the cards stay if that fails too. A finished `Edit` or `Write` shows its preview
-as a `blocks` chunk under the card (`render.previews.preview`): a diff is a collapsible,
+is tried once more with the next write, and the cards stay if that fails too.
+
+A finished `Edit` or `Write` shows its preview as a `blocks` chunk under the card
+(`render.previews.preview`): a diff is a collapsible,
 full-width `container` block (`sinks.diff_containers`), closed until the owner opens it, whose
 title is the call's line (`✓ Update(notes.txt)`), its subtitle the sentence (`Added 1 line,
 removed 1 line`), and inside is the whole numbered diff in a rich text preformatted element with
@@ -246,8 +250,8 @@ little earlier itself.
   first notification) and the same message keeps growing with `chat.update`, which never
   notifies (measured 2026-09-29: stop at 4 minutes 51 seconds, ten updates, silent). Each update
   writes the whole message from the renderer's model as `markdown` blocks and `task_card` blocks
-  (a run of calls keeps its two cards until the body ends),
-  with a short `text`, since a `chat.update` whose `text` is long fails `msg_too_long`. The end
+  (a run of calls keeps its two cards until the body ends), with a short `text`, since a
+  `chat.update` whose `text` is long fails `msg_too_long`. The end
   posts a closing message in the thread with the footer (`ReplySink._write_closing`), the second
   notification. Its `text`, the banner, is the start of Claude's answer as plain text
   (`sinks.banner_text`), never a line of the daemon's.

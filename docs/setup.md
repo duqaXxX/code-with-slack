@@ -359,10 +359,10 @@ counts what ended, in the terminal's words (`Ran 2 shell commands · Read 1 file
 names the call that runs now. A subagent's card counts the calls it made and shows what it is
 doing now, and a background task keeps its card open until it ends. An Edit or a Write shows its
 preview under its card. When the reply ends, a divider and the footer close the same message, and
-each pair of cards gives way to one line (`✓ Ran 2 shell commands · Read 1 file`). A reply still running
-280 seconds after it started stops being a stream (Slack closes streams at 5 minutes) and goes on
-in the same message, updated instead of streamed; its footer then arrives in a closing message. A
-reply longer than one Slack message (12,000 characters or 50 cards) continues in the next one.
+each pair of cards gives way to one line (`✓ Ran 2 shell commands · Read 1 file`). A reply still
+running 280 seconds after it started stops being a stream (Slack closes streams at 5 minutes) and
+goes on in the same message, updated instead of streamed; its footer then arrives in a closing
+message. A reply longer than one Slack message (12,000 characters or 50 cards) continues in the next one.
 
 An approval request is a message of its own in the thread, below the reply, and rings, as a
 question does; once you decide, it disappears and the tool's line in the reply records the call.
