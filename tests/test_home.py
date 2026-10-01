@@ -15,7 +15,6 @@ from code_with_slack.home import (
     DATE_ACTION,
     FILTERS_BLOCK,
     HOME_BLOCKS,
-    HOME_OPEN_ACTION,
     LAST_7,
     LAST_30,
     LAST_48,
@@ -24,6 +23,7 @@ from code_with_slack.home import (
     SEARCH_ACTION,
     SEARCH_BLOCK,
     SHOW_ALL_ACTION,
+    SPACER,
     STATUS_ACTION,
     TODAY,
     YESTERDAY,
@@ -76,11 +76,8 @@ def view(rows: list[HomeRow], chosen: HomeFilter | None = None, **kwargs: Any) -
 
 
 def cards(page: dict[str, Any]) -> list[dict[str, Any]]:
-    return [
-        b
-        for b in page["blocks"]
-        if b["type"] == "section" and b["accessory"]["action_id"] == HOME_OPEN_ACTION
-    ]
+    """The sessions' title rows: the sections that carry no button."""
+    return [b for b in page["blocks"] if b["type"] == "section" and "accessory" not in b]
 
 
 def titles(page: dict[str, Any]) -> list[str]:
@@ -89,14 +86,17 @@ def titles(page: dict[str, Any]) -> list[str]:
 
 def headers(page: dict[str, Any]) -> list[str]:
     return [
-        b["text"]["text"]
-        for b in page["blocks"]
-        if b["type"] == "section" and b["accessory"]["action_id"] == NEW_THREAD_ACTION
+        b["text"]["text"] for b in page["blocks"] if b["type"] == "section" and "accessory" in b
     ]
 
 
 def notes(page: dict[str, Any]) -> list[str]:
-    return [b["elements"][0]["text"] for b in page["blocks"] if b["type"] == "context"]
+    """The small lines of the page, the blank rows between two sessions left out."""
+    found = [b["elements"][0]["text"] for b in page["blocks"] if b["type"] == "context"]
+    return [text for text in found if text != SPACER]
+
+
+OPEN = f"<{LINK}|{texts.HOME_OPEN}>"
 
 
 def test_a_channel_is_a_header_with_a_new_thread_link_and_a_card_per_session() -> None:
@@ -123,18 +123,29 @@ def test_a_channel_is_a_header_with_a_new_thread_link_and_a_card_per_session() -
     assert card == {
         "type": "section",
         "text": {"type": "mrkdwn", "text": ":hourglass_flowing_sand:  *Refactor the feed parser*"},
-        "accessory": {
-            "type": "button",
-            "action_id": HOME_OPEN_ACTION,
-            "text": {"type": "plain_text", "text": texts.HOME_OPEN},
-            "url": LINK,
-        },
     }
     # Slack's own relative date (formatting-message-text, read 2026-10-01): it stays right while
     # the page sits unpublished.
+    # Open is a link in the small line under the title, not a button beside it.
     assert details["elements"][0]["text"] == (
         f"working · 3 replies · last reply <!date^{EPOCH - 120}^{{ago}}|2026-09-21 14:11 UTC>"
+        f" · <{LINK}|Open>"
     )
+
+
+def test_a_blank_row_separates_two_sessions_of_a_channel() -> None:
+    page = view(many(3), channels={CHANNEL: "cc-articles"})
+    kinds = [
+        "blank" if b["type"] == "context" and b["elements"][0]["text"] == SPACER else b["type"]
+        for b in page["blocks"][3:]
+    ]
+    # Under the channel's header: title and details, then a blank row before each next one.
+    assert kinds == [
+        "divider", "section",
+        "section", "context",
+        "blank", "section", "context",
+        "blank", "section", "context",
+    ]  # fmt: skip
 
 
 @pytest.mark.parametrize(
@@ -156,15 +167,15 @@ def test_a_card_with_no_reaction_shows_the_title_and_the_age_alone() -> None:
     page = view([row(status=None)], channels={CHANNEL: "cc-articles"})
     assert titles(page) == ["*Refactor the feed parser*"]
     when = f"<!date^{EPOCH - 120}^{{ago}}|2026-09-21 14:11 UTC>"
-    assert notes(page)[-1] == f"3 replies · last reply {when}"
+    assert notes(page)[-1] == f"3 replies · last reply {when} · {OPEN}"
 
 
 def test_a_card_counts_its_replies_and_says_started_when_it_has_none() -> None:
     when = f"<!date^{EPOCH - 120}^{{ago}}|2026-09-21 14:11 UTC>"
     one = view([row(status=None, replies=1)], channels={CHANNEL: "cc-articles"})
-    assert notes(one)[-1] == f"1 reply · last reply {when}"
+    assert notes(one)[-1] == f"1 reply · last reply {when} · {OPEN}"
     none = view([row(status=None, replies=0)], channels={CHANNEL: "cc-articles"})
-    assert notes(none)[-1] == f"started {when}"
+    assert notes(none)[-1] == f"started {when} · {OPEN}"
 
 
 def test_a_title_is_shown_as_written_on_one_line() -> None:
@@ -290,7 +301,7 @@ def test_the_page_stops_within_slacks_blocks_and_says_how_many_it_shows() -> Non
     page = view(many(60), HomeFilter(channel=CHANNEL))
     assert len(page["blocks"]) <= HOME_BLOCKS
     shown = len(cards(page))
-    assert 40 < shown < 60
+    assert 25 < shown < 40
     assert notes(page)[-1] == texts.HOME_MORE.format(rows=shown)
 
 
@@ -518,7 +529,7 @@ async def test_publish_lists_every_held_session_by_channel_last_reply_first(
     # The replies and the last reply are the thread's own, as Slack shows them in the channel.
     assert f"waiting for you · 1 reply · last reply <!date^{EPOCH - 600}^{{ago}}|" in notes(page)[1]
     assert f"ended · 19 replies · last reply <!date^{EPOCH - 3600}^{{ago}}|" in notes(page)[2]
-    assert all(c["accessory"]["url"] == LINK for c in cards(page))
+    assert all(note.endswith(f" · {OPEN}") for note in notes(page)[1:])
     # The root alone is asked for: its own ts, one message.
     asked = slack.calls_to("conversations.replies")
     assert [(a["ts"], a["limit"]) for a in asked] == [(OLD_THREAD, 1), (NEW_THREAD, 1)]

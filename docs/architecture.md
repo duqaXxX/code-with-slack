@@ -606,10 +606,11 @@ refuses is left out for the rest of the run, and one whose request failed withou
 asked again at the next publish. `home.THREADS_AT_ONCE` threads are asked about at a time.
 
 `home.home_view` lays the rows out. Under the controls, each channel is a group: a header with
-the channel and a **New thread** link button (the `slack://channel` deep link), then one card
-per session, a section with the title and an **Open** link button and a context line with the
-status word, the number of replies and the time of the last reply as Slack's own `{ago}` date
-token, which the client renders, so the age stays right between two publishes. With no filter chosen every bound channel is a group, the ones with
+the channel and a **New thread** link button (the `slack://channel` deep link), then two blocks
+per session: a section with the title, and a context line with the status word, the number of
+replies, the time of the last reply as Slack's own `{ago}` date token, which the client renders,
+so the age stays right between two publishes, and an **Open** link to the thread. A context line
+holding `home.SPACER` leaves a blank row between two sessions of a channel. With no filter chosen every bound channel is a group, the ones with
 sessions first by their newest, each cut to `home.PER_CHANNEL` cards with a **Show all** button;
 with a channel, a status or a search chosen (`HomeFilter.narrowed`), only the channels with a
 match, uncut. The period applies either way and leaves that shape alone: a channel whose sessions
@@ -625,8 +626,9 @@ payload, checked on its own for the owner and the workspace (a Home tab payload 
 channel). A filter's payload carries the state of all four controls in `view.state.values`,
 which `home.read_filter` reads by action id and turns into the filter; a status or a date the page never offered keeps
 the current one. **Show all** carries its channel, and `Home.publish` drops a chosen channel
-that is not one of the page's own. `Home.choose` then publishes at once. The two link buttons
-are followed by Slack itself and still send their click, which is acknowledged and not read.
+that is not one of the page's own. `Home.choose` then publishes at once. The **New thread** link
+button is followed by Slack itself and still sends its click, which is acknowledged and not read;
+a session's **Open** is a link in text and sends nothing.
 
 `StateStore.on_sessions_change` calls `Home.request` after a write that changed what the page
 shows: a channel bound for the first time, a thread added or removed, a session id, a root's
@@ -645,7 +647,7 @@ and the next change tries again.
 ## Slack handlers
 
 `code_with_slack.slack_app.build_app` registers one listener per inbound path: `message`
-events, the Approve, Deny, Answer and Skip buttons, the setup's Model select and Start, the question form's Next and Submit, and the session index's controls (its filters and Show all, and its two link buttons, which are only acknowledged). The app registers no slash command. Each
+events, the Approve, Deny, Answer and Skip buttons, the setup's Model select and Start, the question form's Next and Submit, and the session index's controls (its filters and Show all, and its New thread link button, which is only acknowledged). The app registers no slash command. Each
 acknowledges Slack first, then checks the owner, the workspace and the channel itself. A
 failure after the checks reaches the owner as an ephemeral error line.
 A link Slack made from a typed address (`<url|label>`, `<url>`) reaches Claude Code as typed; a

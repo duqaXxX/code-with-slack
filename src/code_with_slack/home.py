@@ -24,8 +24,9 @@ in a Home view on 2026-10-01), so they do not go stale between two publishes.
 
 What reaches the app from the page is a `block_actions` payload per use of a control
 (`slack_app` owns the listeners): a filter, which carries the state of every control in
-`view.state.values`, and a link button, which Slack follows itself and still reports (button
-element reference, read 2026-10-01). **New thread** is the documented deep link to the channel
+`view.state.values`, and the **New thread** link button, which Slack follows itself and still
+reports (button element reference, read 2026-10-01). A session's **Open** is a plain link in its
+line of details, which reports nothing. **New thread** is the documented deep link to the channel
 (docs.slack.dev/interactivity/deep-linking; it opened the channel in the desktop app on
 2026-10-01): the owner's own top-level message there starts the session, so the thread is one
 the owner started and its replies notify.
@@ -77,10 +78,13 @@ STATUS_ACTION = "home_status"
 DATE_ACTION = "home_date"
 SEARCH_ACTION = "home_search_text"
 SHOW_ALL_ACTION = "home_show_all"
-HOME_OPEN_ACTION = "home_open"
 NEW_THREAD_ACTION = "home_new_thread"
 FILTER_ACTIONS = (CHANNEL_ACTION, STATUS_ACTION, DATE_ACTION, SEARCH_ACTION)
-LINK_ACTIONS = (HOME_OPEN_ACTION, NEW_THREAD_ACTION)
+# A blank row between two sessions: a context line that holds a zero-width space, since Slack
+# sets the distance between blocks itself and takes no empty text.
+SPACER = "\u200b"
+# A session is a title, a line of details and the blank row above it.
+CARD_BLOCKS = 3
 ALL = "all"
 SEARCH_LIMIT = 80
 # A select option's text holds 75 characters (option object reference).
@@ -311,12 +315,11 @@ def _card(row: HomeRow) -> list[dict[str, Any]]:
         replies if row.replies else None,
         when.format(when=_date(row.last_activity, "ago")),
     ]
+    # Open is a link in the small line, not a button: a button sits at the far right of the
+    # title's row, and a row that carries one cannot be small (the maintainer, 2026-10-01).
+    details.append(f"<{row.permalink}|{texts.HOME_OPEN}>")
     return [
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": f"{icon}*{title}*"},
-            "accessory": _link_button(texts.HOME_OPEN, row.permalink, HOME_OPEN_ACTION),
-        },
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"{icon}*{title}*"}},
         context_block(" · ".join(d for d in details if d)),
     ]
 
@@ -357,14 +360,14 @@ def home_view(
     for channel_id, found in groups.items():
         cards = found if chosen.narrowed else found[:PER_CHANNEL]
         # One block is kept for the line that says the page stops short; a group is a divider,
-        # a header, two blocks a card, and one closing block at most.
-        room = (HOME_BLOCKS - 1 - len(blocks) - 3) // 2
+        # a header, `CARD_BLOCKS` a card at most, and one closing block at most.
+        room = (HOME_BLOCKS - 1 - len(blocks) - 3) // CARD_BLOCKS
         if room < min(1, len(cards)) or HOME_BLOCKS - 1 - len(blocks) < 3:
             blocks.append(context_block(texts.HOME_MORE.format(rows=shown)))
             break
         blocks += [{"type": "divider"}, _channel_header(team_id, channel_id)]
-        for row in cards[:room]:
-            blocks += _card(row)
+        for index, row in enumerate(cards[:room]):
+            blocks += [*([context_block(SPACER)] if index else []), *_card(row)]
         shown += min(len(cards), room)
         if len(cards) > room:
             blocks.append(context_block(texts.HOME_MORE.format(rows=shown)))

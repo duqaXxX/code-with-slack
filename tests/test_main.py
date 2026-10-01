@@ -11,7 +11,7 @@ from claude_agent_sdk import SDKSessionInfo
 
 from code_with_slack import __main__ as entry
 from code_with_slack import texts
-from code_with_slack.home import HOME_OPEN_ACTION, Home
+from code_with_slack.home import Home
 from code_with_slack.lock import single_instance
 from code_with_slack.state import StateStore
 from tests.fakes import CHANNEL, FakeSlack, slack_payload
@@ -154,7 +154,7 @@ async def test_run_publishes_the_session_index_once_started_and_after_a_change(
             block["text"]["text"].splitlines()[0]
             for args in fake_slack.calls_to("views.publish")
             for block in args["view"]["blocks"]
-            if block["type"] == "section" and block["accessory"]["action_id"] == HOME_OPEN_ACTION
+            if block["type"] == "section" and "accessory" not in block
         ]
 
     running = asyncio.create_task(entry.run(tmp_path))

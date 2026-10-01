@@ -69,7 +69,7 @@ from code_with_slack.guards import (
 from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, Pending, hold_blocks
 from code_with_slack.home import (
     FILTER_ACTIONS,
-    LINK_ACTIONS,
+    NEW_THREAD_ACTION,
     SHOW_ALL_ACTION,
     Home,
     read_filter,
@@ -920,14 +920,12 @@ def build_app(
     async def on_answer(ack: AsyncAck) -> None:
         await ack()  # a menu inside a question: its value is read when Submit is clicked
 
+    @app.action(NEW_THREAD_ACTION)
     async def on_home_link(ack: AsyncAck) -> None:
-        # A link button of the Home tab: Slack follows the link itself and still sends the
-        # click, which only needs acknowledging. Nothing is read from it and nothing is done,
-        # whoever clicked.
+        # The Home tab's link button: Slack follows the link itself and still sends the click,
+        # which only needs acknowledging. Nothing is read from it and nothing is done, whoever
+        # clicked.
         await ack()
-
-    for action_id in LINK_ACTIONS:
-        app.action(action_id)(on_home_link)
 
     def home_owner(body: dict[str, Any]) -> bool:
         """Whether a use of a Home tab control is the owner's. The page is published to the

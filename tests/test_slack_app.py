@@ -21,7 +21,7 @@ from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds
 from code_with_slack.home import (
     CHANNEL_ACTION,
     FILTERS_BLOCK,
-    LINK_ACTIONS,
+    NEW_THREAD_ACTION,
     SEARCH_ACTION,
     SEARCH_BLOCK,
     SHOW_ALL_ACTION,
@@ -666,14 +666,14 @@ def chosen_option(value: str) -> dict[str, Any]:
     return {"type": "static_select", "selected_option": option}
 
 
-@pytest.mark.parametrize("action_id", LINK_ACTIONS)
 @pytest.mark.parametrize("user", [OWNER, STRANGER])
-async def test_a_click_on_a_home_link_is_acknowledged_and_does_nothing(
-    world: World, action_id: str, user: str
+async def test_a_click_on_new_thread_is_acknowledged_and_does_nothing(
+    world: World, user: str
 ) -> None:
     # A link button still sends its click to the app, which must acknowledge it (button element
     # reference, read 2026-10-01); Slack itself opens the link.
-    response = await world.dispatch(home_action({"type": "button", "action_id": action_id}, user))
+    action = {"type": "button", "action_id": NEW_THREAD_ACTION}
+    response = await world.dispatch(home_action(action, user))
     assert response.status == 200
     assert world.clients == [] and world.slack.calls == []
 

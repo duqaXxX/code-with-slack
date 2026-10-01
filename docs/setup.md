@@ -305,10 +305,11 @@ sent to it resumes the session, as `claude --resume <id>` would.
 To find a session again, open the app from Slack's sidebar and choose its **Home** tab. It lists
 the sessions your threads hold, one group per bound channel, the channel used last first. A
 channel shows its five newest sessions and, when it has more, a **Show all** button. Each
-session is a card: the status reaction of the thread's root message, the title Claude Code gives
-the session, an **Open** button for its thread, and under it the status in a word (`working`,
-`waiting for you`, `ended`, `error`), the thread's number of replies and the time since its last
-reply, as the channel shows them under the root message. **New
+session takes two lines, with a blank row before the next: the status reaction of the thread's
+root message and the title Claude Code gives the session, then in small text the status in a
+word (`working`, `waiting for you`, `ended`, `error`), the thread's number of replies and the
+time since its last reply, as the channel shows them under the root message, and an **Open**
+link to the thread. **New
 thread**, beside a channel's name, opens that channel: the message you send there starts a
 session.
 
