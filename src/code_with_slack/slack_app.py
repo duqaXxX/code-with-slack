@@ -66,6 +66,7 @@ from code_with_slack.guards import (
     message_actor,
 )
 from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, Pending, hold_blocks
+from code_with_slack.home import HOME_OPEN_ACTION
 from code_with_slack.prompt import Prompt
 from code_with_slack.render.escape import markdown_escape, mrkdwn_escape
 from code_with_slack.render.renderer import one_line
@@ -910,6 +911,12 @@ def build_app(
     @app.action("answer")
     async def on_answer(ack: AsyncAck) -> None:
         await ack()  # a menu inside a question: its value is read when Submit is clicked
+
+    @app.action(HOME_OPEN_ACTION)
+    async def on_home_open(ack: AsyncAck) -> None:
+        # A link button: Slack opens the thread itself and still sends the click, which only
+        # needs acknowledging. Nothing is read from it and nothing is done, whoever clicked.
+        await ack()
 
     async def on_decision(ack: AsyncAck, body: dict[str, Any]) -> None:
         await ack()

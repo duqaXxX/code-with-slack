@@ -1,4 +1,6 @@
 import asyncio
+import contextlib
+import functools
 import json
 import logging
 import time
@@ -9,9 +11,11 @@ from claude_agent_sdk import SDKSessionInfo
 
 from code_with_slack import __main__ as entry
 from code_with_slack import texts
+from code_with_slack.home import Home
 from code_with_slack.lock import single_instance
 from code_with_slack.state import StateStore
 from tests.fakes import CHANNEL, FakeSlack
+from tests.test_sessions import until
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -107,6 +111,58 @@ async def test_run_repairs_a_crashed_thread_before_pruning_it(
     assert StateStore(tmp_path / "state.json").thread(CHANNEL, "1000000000.000001") is None
 
 
+async def test_run_publishes_the_session_index_once_started_and_after_a_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = tmp_path / ".env"
+    env.write_text(
+        f"SLACK_BOT_TOKEN={'xox' + 'b-1'}\nSLACK_APP_TOKEN={'xap' + 'p-1'}\n"
+        f"SLACK_OWNER_USER_ID=U000ALICE\nALLOWED_ROOT={tmp_path}\n"
+    )
+    env.chmod(0o600)
+    thread_ts = "1780000000.000001"
+    state = StateStore(tmp_path / "state.json")
+    state.bind(CHANNEL, tmp_path)
+    state.open_thread(CHANNEL, thread_ts, session_id="some-id")
+    state.set_status_pending(CHANNEL, thread_ts, "hourglass_flowing_sand")  # a crash left it
+
+    def one_session(*, directory: str, include_worktrees: bool) -> list[SDKSessionInfo]:
+        return [SDKSessionInfo(session_id="some-id", summary="Fix the footer", last_modified=1)]
+
+    fake_slack = FakeSlack()
+    stores: list[StateStore] = []
+
+    def recording_store(path: Path) -> StateStore:
+        stores.append(StateStore(path))
+        return stores[-1]
+
+    monkeypatch.setattr("code_with_slack.sessions.list_sessions", one_session)
+    monkeypatch.setattr(entry, "AsyncWebClient", lambda token, retry_handlers=None: fake_slack)
+    monkeypatch.setattr(entry, "AsyncSocketModeHandler", _FakeHandler)
+    monkeypatch.setattr(entry, "StateStore", recording_store)
+    monkeypatch.setattr(entry, "Home", functools.partial(Home, debounce=0.01))
+
+    def first_lines() -> list[str]:
+        return [
+            block["text"]["text"].splitlines()[0]
+            for args in fake_slack.calls_to("views.publish")
+            for block in args["view"]["blocks"]
+            if block["type"] == "section"
+        ]
+
+    running = asyncio.create_task(entry.run(tmp_path))
+    try:
+        # Published after the repair: the root a crash left ⏳ already reads ❌.
+        await until(lambda: first_lines() == [":x:  *Fix the footer*"])
+        assert fake_slack.calls_to("views.publish")[0]["user_id"] == "U000ALICE"
+        stores[0].set_status_pending(CHANNEL, thread_ts, "raised_hand")
+        await until(lambda: first_lines()[-1] == ":raised_hand:  *Fix the footer*")
+    finally:
+        running.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await running
+
+
 async def test_repair_and_prune_run_before_the_socket_mode_connection_opens(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -198,6 +254,13 @@ def test_the_manifest_asks_for_the_minimum() -> None:
     ]
     assert manifest["settings"]["event_subscriptions"]["bot_events"] == ["message.groups"]
     assert manifest["settings"]["is_mcp_enabled"] is False
+    # The session index is the app's Home tab: published with no scope and no event
+    # (views.publish reference, read 2026-10-01). Nobody writes to the app in its Messages tab.
+    assert manifest["features"]["app_home"] == {
+        "home_tab_enabled": True,
+        "messages_tab_enabled": True,
+        "messages_tab_read_only_enabled": True,
+    }
     # Replies are plain messages in the main window: no agent view, no task cards.
     assert "agent_view" not in manifest["features"]
     # Commands are typed as `!word` messages: the app registers no slash command.

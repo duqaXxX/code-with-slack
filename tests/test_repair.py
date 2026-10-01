@@ -227,6 +227,8 @@ async def test_a_root_left_waiting_or_working_gets_x_and_the_field_clears(
     assert removed == {s.value for s in Status if s is not Status.ERROR}
     assert added == [Status.ERROR.value]
     assert state.thread(CHANNEL, THREAD).status is None
+    # What the Home tab shows for it from now on.
+    assert state.thread(CHANNEL, THREAD).ended == Status.ERROR.value
 
 
 async def test_already_reacted_and_no_reaction_count_as_done(

@@ -1139,7 +1139,7 @@ class ThreadSession:
                 self._deps.state.clear_repair(self.channel_id, self.thread_ts, keep_open=lost)
                 if lost:
                     self._deps.state.set_status_pending(
-                        self.channel_id, self.thread_ts, Status.WORKING.value
+                        self.channel_id, self.thread_ts, Status.WORKING.value, Status.ERROR.value
                     )
             except Exception as exc:
                 logger.warning(
@@ -1489,10 +1489,25 @@ class ThreadSession:
 
     def _note_status(self, state: Status) -> None:
         """Crash repair (issue #19): the root's reaction while it is ⏳ or ✋, cleared once ✅ or
-        ❌ is requested. Called from `_react` and from the two other places that ask
-        `StatusReaction` for a state directly (`close`'s ❌, `_react_done_if_idle`'s ✅)."""
-        pending = state.value if state in (Status.WORKING, Status.WAITING) else None
-        self._deps.state.set_status_pending(self.channel_id, self.thread_ts, pending)
+        ❌ is requested; that one is kept as the thread's ended reaction, which the Home tab
+        shows. Called from `_react` and from the two other places that ask `StatusReaction` for
+        a state directly (`close`'s ❌, `_react_done_if_idle`'s ✅)."""
+        pending = state in (Status.WORKING, Status.WAITING)
+        self._deps.state.set_status_pending(
+            self.channel_id,
+            self.thread_ts,
+            state.value if pending else None,
+            None if pending else state.value,
+        )
+
+    def _note_cross_over_status(self) -> None:
+        """❌ is shown while the persisted ⏳ or ✋ stays for crash repair (an answer never reached
+        Slack): kept as the ended reaction, which is what the session index shows."""
+        stored = self._deps.state.thread(self.channel_id, self.thread_ts)
+        if stored is not None:
+            self._deps.state.set_status_pending(
+                self.channel_id, self.thread_ts, stored.status, Status.ERROR.value
+            )
 
     def _react_error(self) -> None:
         """❌ (D10). It stands until another state is asked for: `_react` records it in
@@ -1547,6 +1562,7 @@ class ThreadSession:
         else:
             # ❌ shown, but `state.json` keeps ⏳ or ✋: the answer never reached Slack.
             self._error_standing = True
+            self._note_cross_over_status()
             task = asyncio.create_task(self._status.show(Status.ERROR))
             self._background.add(task)
             task.add_done_callback(self._background.discard)

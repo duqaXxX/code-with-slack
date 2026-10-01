@@ -45,7 +45,9 @@ not the `claude` on your `PATH`. Both read the same login, so logging in once wi
 
 The manifest asks for private channels only (`groups:history`, `groups:read`,
 `message.groups`), `chat:write`, `files:read` to download the files you attach to a message, and
-`reactions:write` for the status reaction on a session's root message.
+`reactions:write` for the status reaction on a session's root message. It also switches on the
+app's **Home** tab, where code-with-slack keeps the list of your sessions; publishing it needs no
+scope and no event.
 The app registers no slash command: commands are typed as `!word` messages. Socket Mode is on,
 so the app needs no public URL and your machine opens no inbound port.
 
@@ -53,6 +55,10 @@ An app created before `files:read` or `reactions:write` was added needs the scop
 app's **OAuth & Permissions** page add the missing bot scope, then reinstall the app to the
 workspace. Without `files:read`, every attached file is refused with `HTTP 302`; without
 `reactions:write`, the status reaction is silently skipped (logged, never surfaced).
+
+An app created before the Home tab was added needs it switched on: on the app's **App Home**
+page, under **Show Tabs**, turn on **Home Tab**, then restart code-with-slack. Without it the
+session list is not published, and the log says so once per start.
 
 code-with-slack needs none of the app's agent features: leave **Agent experience** and the
 **Slack Model Context Protocol (MCP) Server** off in the app settings. The MCP server lets an app
@@ -96,7 +102,7 @@ code-with-slack keeps its files in `~/.config/code-with-slack/`:
 | File | Written by | Holds |
 |---|---|---|
 | `.env` | you | the tokens and the settings below |
-| `state.json` | code-with-slack | for each channel, its directory; for each of its threads, the folder it was opened in, its Claude Code session id, its bypass choice (on, off or never chosen) and the effort level set with `/effort` |
+| `state.json` | code-with-slack | for each channel, its directory; for each of its threads, the folder it was opened in, its Claude Code session id, its bypass choice (on, off or never chosen), the effort level set with `/effort` and the status reaction on its root message |
 
 `state.json` looks like this; you never need to edit it:
 
@@ -295,6 +301,15 @@ cancels it with `Not sent.`, and a reply in a thread where nothing was sent asks
 thread keeps the folder it was opened in: `!bind` only changes where the *next* thread starts. A
 thread's Claude Code process closes on its own after an hour with nothing to do; the next message
 sent to it resumes the session, as `claude --resume <id>` would.
+
+To find a session again, open the app from Slack's sidebar and choose its **Home** tab. It lists every session a thread holds, across all your channels, the one with the latest
+message first. Each row shows the status reaction of the thread's root message, the title Claude
+Code gives the session, the channel, the status in a word (`working`, `waiting for you`, `ended`,
+`error`), the time since the session's last message, its git branch, and an **Open thread**
+button. The list holds the newest 97 sessions; `!resume` in a channel lists the rest of its
+folder. code-with-slack rewrites the page whenever a session starts, ends or changes status, and
+nothing notifies you when it does. A session that ended before this version kept its last
+reaction shows no status until it runs again.
 
 Upgrading from an earlier version that held one session per channel: the channel keeps its
 directory, loses its old session pointer and bypass switch, and gets this message once, posted

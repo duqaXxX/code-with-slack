@@ -7,6 +7,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Session index: the app's Home tab lists every session a thread holds, across all channels,
+  ordered by last message, newest first, each row with the root's status reaction, the session's
+  title, the channel, the status in a word, the age, the git branch and an Open thread button
+  (new module `code_with_slack.home`). The page is published with `views.publish` whenever
+  `state.json`'s sessions change, with no notification, and holds the newest 97 sessions. The
+  manifest switches the Home tab on (`features.app_home`); an existing app needs **Home Tab**
+  turned on under **App Home**, and without it the daemon logs once and publishes nothing.
+  `state.json` gains an additive per-thread key, `ended`: the root's reaction name once ✅ or ❌ is
+  requested (`state.json` stays version 2; a thread that ended before this shows no status).
 - Session setup before the first prompt (issue #74): a top-level message that opens a session
   first gets a message in its thread with a Model select (the CLI's own list), an Effort select
   (`Default` or the chosen model's levels), a Bypass checkbox and Start. Start applies the choice

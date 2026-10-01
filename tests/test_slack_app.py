@@ -18,6 +18,7 @@ from code_with_slack.config import Config
 from code_with_slack.footer import UsageCache
 from code_with_slack.guards import ChannelGuard, Identity
 from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds
+from code_with_slack.home import HOME_OPEN_ACTION
 from code_with_slack.render.sinks import UpdateLimiter
 from code_with_slack.render.status import Status
 from code_with_slack.sessions import SessionDeps, SessionManager
@@ -151,7 +152,11 @@ class World:
 
     async def dispatch(self, body: dict[str, Any]) -> Any:
         response = await self.app.async_dispatch(AsyncBoltRequest(body=body, mode="socket_mode"))
-        await asyncio.sleep(0.05)  # let the listener tasks run
+        # Let the listener tasks run. In short waits, not one: a garbage collection can stop the
+        # process for longer than the whole wait (57 ms measured over the full suite,
+        # 2026-10-01), and one pause must not use it all up.
+        for _ in range(5):
+            await asyncio.sleep(0.01)
         if self.auto_start:
             await self.start_waiting_setups()
         return response
@@ -613,6 +618,40 @@ async def test_a_malformed_daemon_word_inside_a_thread_shows_the_session_s_help_
 async def test_bang_from_anyone_else_does_nothing(world: World) -> None:
     await world.dispatch(message("!bypass on", user=STRANGER))
     assert world.clients == [] and not world.posted_anything()
+
+
+def home_click(user: str = OWNER) -> dict[str, Any]:
+    """A click on a Home tab row's button: no channel and no message, a `view` container (the
+    block_actions payload reference's Home tab example, docs.slack.dev, read 2026-10-01)."""
+    return {
+        "type": "block_actions",
+        "team": {"id": TEAM, "domain": "example"},
+        "user": {"id": user, "username": "alice", "name": "alice", "team_id": TEAM},
+        "api_app_id": "A000APP",
+        "container": {"type": "view", "view_id": "V000HOME"},
+        "trigger_id": "1.2.abc",
+        "view": {"id": "V000HOME", "team_id": TEAM, "type": "home", "blocks": []},
+        "actions": [
+            {
+                "type": "button",
+                "block_id": "b1",
+                "action_id": HOME_OPEN_ACTION,
+                "text": {"type": "plain_text", "text": "Open thread", "emoji": True},
+                "action_ts": "1790000000.000001",
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize("user", [OWNER, STRANGER])
+async def test_a_click_on_a_home_row_is_acknowledged_and_does_nothing(
+    world: World, user: str
+) -> None:
+    # A link button still sends its click to the app, which must acknowledge it (button element
+    # reference, read 2026-10-01); Slack itself opens the link.
+    response = await world.dispatch(home_click(user))
+    assert response.status == 200
+    assert world.clients == [] and world.slack.calls == []
 
 
 def click(action_id: str, value: str, **user: Any) -> dict[str, Any]:

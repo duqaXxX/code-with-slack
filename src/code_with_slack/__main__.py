@@ -23,6 +23,7 @@ from code_with_slack.config import CONFIG_DIR, ConfigError, load_config
 from code_with_slack.footer import UsageCache, UsageProbe
 from code_with_slack.guards import ChannelGuard, Identity
 from code_with_slack.hold import Holds
+from code_with_slack.home import Home
 from code_with_slack.lock import AlreadyRunning, single_instance
 from code_with_slack.render.sinks import (
     ConnectionRetryUnlessCreating,
@@ -156,6 +157,12 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
             uploads=uploads,
         )
         handler = AsyncSocketModeHandler(app, config.app_token)
+        home = Home(
+            slack,
+            owner_user_id=identity.owner_user_id,
+            state=state,
+            sessions_of=directory_sessions,
+        )
 
         stop = asyncio.Event()
         received: list[signal.Signals] = []
@@ -186,6 +193,10 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
                 logger.info("pruned %d stale thread(s) from state.json", removed)
         except Exception as exc:
             logger.warning("could not prune stale threads: %s", exc)
+        # The session index (the owner's Home tab): written once what the last run left is
+        # repaired and pruned, then again whenever state.json's sessions change.
+        state.on_sessions_change = home.request
+        home.request()
 
         await handler.connect_async()  # type: ignore[no-untyped-call]  # untyped in Bolt 1.30.0
         logger.info("connected to Slack workspace %s", identity.team_id)
@@ -204,6 +215,8 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
             logger.info("shutting down")
             await handler.close_async()  # type: ignore[no-untyped-call]
             await sessions.close_all()
+            # After the sessions: the page shows them as this stop left them.
+            await home.close()
             await probe.close()
 
 

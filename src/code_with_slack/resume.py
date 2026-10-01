@@ -122,6 +122,25 @@ def by_last_activity(directory: Path, sessions: list[SDKSessionInfo]) -> list[SD
     return sorted(dated, key=lambda s: s.last_modified, reverse=True)
 
 
+def dated(directory: Path, sessions: list[SDKSessionInfo]) -> list[SDKSessionInfo]:
+    """Each of `sessions`, in the same order, dated by its last message instead of its file (see
+    `_last_message_ms`); a session whose transcript gives none keeps its file's time. For the
+    Home tab, which dates the sessions its threads hold, however old. Blocking file reads, run
+    it off the event loop."""
+    folder = _find_project_dir(_canonicalize_path(str(directory)))
+    if folder is None:
+        logger.warning("found no transcript folder: session dates fall back to file times")
+        return sessions
+    return [
+        dataclasses.replace(
+            session,
+            last_modified=_last_message_ms(folder / f"{session.session_id}.jsonl")
+            or session.last_modified,
+        )
+        for session in sessions
+    ]
+
+
 def _age(modified_ms: int, now: datetime) -> str:
     """As the terminal's picker writes it ("2 days ago", seen 2026-09-25)."""
     seconds = max(0.0, now.timestamp() - modified_ms / 1000)

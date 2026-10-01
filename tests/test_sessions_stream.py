@@ -291,6 +291,8 @@ async def test_a_reply_whose_end_failed_shows_no_checkmark_then_the_cross(
     assert Status.DONE.value not in h.reactions()
     # kept, so a crash right now is still repaired
     assert h.state.thread(CHANNEL, THREAD).status == Status.WORKING.value
+    # and the cross the root shows is what the session index reads
+    assert h.state.thread(CHANNEL, THREAD).ended == Status.ERROR.value
     assert h.state.thread(CHANNEL, THREAD).open_replies == (h.slack.stream_ts[0],)
 
 
@@ -323,6 +325,7 @@ async def test_a_close_that_cannot_end_a_reply_shows_the_cross_and_keeps_what_re
     assert h.reactions()[-1] == Status.ERROR.value
     stored = h.state.thread(CHANNEL, THREAD)
     assert stored.status == Status.WORKING.value  # repair covers it
+    assert stored.ended == Status.ERROR.value  # what the root shows, for the session index
     assert stored.open_replies == (h.slack.stream_ts[0],)  # the stream Slack still holds open
 
 

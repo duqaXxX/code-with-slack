@@ -240,6 +240,20 @@ RESUME_LISTED = "Resumed {title} in {link}."
 # holding thread's permalink (a plain fallback when Slack would not give one).
 RESUME_ELSEWHERE = "This session is already open in another thread: {link}."
 RESUME_ELSEWHERE_ROW = " · {link}"
+# The app's Home tab: every session a thread holds, across the channels, newest activity first.
+# `{time}` is Slack's own date token, shown in the reader's time zone.
+HOME_HEADER = "All sessions, newest first · updated {time}"
+HOME_EMPTY = "No sessions yet: a message in a bound channel starts one."
+HOME_MORE = (
+    "Only the newest {rows} sessions are shown: `!resume` in a channel lists the rest of its "
+    "folder."
+)
+HOME_OPEN = "Open thread"
+HOME_UNTITLED = "Session {id}"
+HOME_WORKING = "working"
+HOME_WAITING = "waiting for you"
+HOME_ENDED = "ended"
+HOME_ERROR = "error"
 # `!guide`: how to use the bot, in the owner's words. tests/test_commands.py fails when a word of
 # the daemon is missing here; keep the tone plain and every line true of the current behaviour.
 GUIDE = """**code-with-slack**
