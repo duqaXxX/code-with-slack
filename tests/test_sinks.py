@@ -1193,6 +1193,66 @@ async def test_update_limiter_refund_never_exceeds_burst() -> None:
     assert limiter._tokens == 2
 
 
+# An append Slack refuses for its content (`msg_too_long` on `chat.appendStream`, measured
+# 2026-10-01, slack-sdk 3.44.1): the same append would be refused again.
+
+
+async def test_an_append_refused_for_its_content_stops_the_stream_and_goes_on_by_update(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.text("Hello. ")
+    await settled()
+    slack.responses["chat.appendStream"] = rejected("msg_too_long")
+    await sink.text("World.")
+    await settled()
+    # stopped at once, and written from the model: nothing waits for the next change
+    assert slack.messages[slack.stream_ts[0]].streaming is False
+    assert slack.stream_texts() == ["Hello. World."]
+    await sink.text(" Again.")
+    await settled()
+    assert len(slack.calls_to("chat.appendStream")) == 1  # the refused append is never repeated
+    assert slack.stream_texts() == ["Hello. World. Again."]
+    assert slack.posted_ts == []
+
+
+async def test_a_final_append_refused_for_its_content_still_ends_the_reply(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.text("Hello. ")
+    await settled()
+    slack.responses["chat.appendStream"] = rejected("msg_too_long")
+    await sink.text("Done.")
+    await sink.finish([])
+    assert await sink.close_out("footer") is True  # landed in this pass: no retry is owed
+    assert slack.stream_texts() == ["Hello. Done."]
+    # as a reply past STREAM_SECONDS ends: the bare stop, then the closing message
+    assert slack.calls_to("chat.stopStream")[0].get("blocks") is None
+    [closing] = slack.posted_ts
+    assert slack.messages[closing].blocks[-1]["elements"][0]["text"] == "footer"
+    assert slack.pushes() == 2
+
+
+async def test_a_refused_append_logs_the_method_and_the_sizes_without_content(
+    slack: FakeSlack, caplog: pytest.LogCaptureFixture
+) -> None:
+    sink = reply(slack)
+    await sink.text("Hello. ")
+    await sink.task(tool("t1", "Bash", "in_progress"))
+    await settled()
+    slack.responses["chat.appendStream"] = rejected("msg_too_long")
+    await sink.text("World.")
+    await settled()
+    [line] = [r.getMessage() for r in caplog.records if "chat.appendStream refused" in r.message]
+    assert "msg_too_long" in line
+    # what the message would hold: both texts, three elements (text, card, text), one card,
+    # whose title was sent before and is not in the refused append
+    assert "text 13, elements 3, cards 1" in line
+    assert f"card text sent {len('Bash: t1')} and 0 more" in line
+    assert "Bash" not in caplog.text and "Hello" not in caplog.text
+
+
 # A call whose outcome is unknown: Slack may have applied it. Stream calls are not idempotent.
 
 

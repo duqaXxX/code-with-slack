@@ -296,6 +296,30 @@ async def test_a_reply_whose_end_failed_shows_no_checkmark_then_the_cross(
     assert h.state.thread(CHANNEL, THREAD).open_replies == (h.slack.stream_ts[0],)
 
 
+async def test_a_reply_whose_appends_slack_refuses_ends_whole_with_the_checkmark(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.05)
+    first, notice, injected = split_background()
+    h = harness_for({"turns": [first]})
+    await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
+    await asyncio.sleep(0.05)
+    assert open_streams(h) == h.slack.stream_ts  # open: the report is owed to this stream
+    h.slack.responses["chat.appendStream"] = {"ok": False, "error": "msg_too_long"}
+    h.clients[0].inject(notice + injected)
+    await until(lambda: bool(h.slack.calls_to("chat.appendStream")))  # the refusal did happen
+    await asyncio.sleep(0.2)  # past where a failed end's retry would have shown the cross
+    assert h.reactions()[-1] == Status.DONE.value
+    assert Status.ERROR.value not in h.reactions()
+    summary = next(m.summary for m in notice if isinstance(m, TaskNotificationMessage))
+    assert f"✓ {summary}" in h.slack.stream_texts()[0]  # the report reached the reply
+    assert open_streams(h) == []
+    assert h.state.thread(CHANNEL, THREAD).status is None
+    assert h.state.thread(CHANNEL, THREAD).open_replies == ()
+    # the footer is in the closing message, as for a reply past STREAM_SECONDS
+    assert h.slack.calls_to("chat.postMessage")[-1]["blocks"][-1]["type"] == "context"
+
+
 async def test_a_retry_that_lands_shows_the_checkmark_and_clears_the_status(
     harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
 ) -> None:

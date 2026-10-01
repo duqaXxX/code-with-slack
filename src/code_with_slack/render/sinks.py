@@ -65,6 +65,7 @@ BANNER_LIMIT = 300
 # holds at most 3,000 characters.
 CARD_TEXT_LIMIT = 2_900
 CARD_TITLE_LIMIT = 150
+CARD_TEXT_FIELDS = ("title", "details", "output")
 # chat.update errors that refuse the content itself (reference, read 2026-09-25): a plain retry
 # can pass where the blocks did not. A transient error such as `ratelimited` is not one.
 REFUSED_CONTENT = {"invalid_blocks", "invalid_blocks_format", "msg_too_long", "invalid_arguments"}
@@ -453,6 +454,11 @@ class _Plan:
     counted: set[int] = field(default_factory=set)
 
 
+def plan_card_text(plan: _Plan) -> int:
+    """The characters of card text a plan's chunks carry."""
+    return sum(len(chunk.get(key, "")) for chunk in plan.cards.values() for key in CARD_TEXT_FIELDS)
+
+
 @dataclass
 class _Message:
     """One Slack message of a reply: the span of the reply's model from `start` to the next
@@ -467,6 +473,9 @@ class _Message:
     text_sent: dict[int, int] = field(default_factory=dict)
     pieces_sent: set[tuple[int, int]] = field(default_factory=set)
     cards: dict[str, dict[str, Any]] = field(default_factory=dict)  # last chunk sent per tool
+    # Characters of card text (title, details, output) in every chunk sent: Slack keeps the
+    # details and the output of each one (measured 2026-10-01), and `size` counts none of it.
+    card_text: int = 0
     size: int = 0
     count: int = 0
     counted: set[int] = field(default_factory=set)
@@ -494,7 +503,8 @@ class ReplySink:
     (`render.fold`), which a silent update folds into a line of counts once the stream has
     stopped at the reply's end. The stream starts with the first content (never a placeholder)
     and stops with the reply's end, the footer at the bottom.
-    It stops on its own at STREAM_SECONDS, since Slack closes a stream at 5 minutes: from then on
+    It stops on its own at STREAM_SECONDS, since Slack closes a stream at 5 minutes, and when
+    Slack refuses an append for its content, which it would refuse again: from then on
     the same message grows by `chat.update`, and the end posts a closing message with the footer.
     A reply past MESSAGE_LIMIT or BLOCKS_LIMIT continues in a new message (a new stream while
     the message still streams, else a post). `finish` ends the body only: a task that outlives
@@ -922,6 +932,7 @@ class ReplySink:
         message.text_sent.update(plan.text)
         message.pieces_sent |= plan.pieces
         message.cards.update(plan.cards)
+        message.card_text += plan_card_text(plan)
         message.size, message.count = plan.size, plan.count
         message.counted |= plan.counted
 
@@ -1259,8 +1270,28 @@ class ReplySink:
                 channel=self._channel, ts=message.ts, chunks=plan.chunks
             )
         except Exception as exc:
-            logger.warning("could not write a reply to Slack: %s", describe(exc))
-            if describe(exc) == NOT_STREAMING:
+            code = describe(exc)
+            if code in REFUSED_CONTENT:
+                # Slack counts what the plan cannot (the text of the cards, kept from every
+                # update: measured 2026-10-01) and would refuse the same append again. The
+                # stream is stopped bare, as at STREAM_SECONDS, and the message goes on by
+                # update, from the model; the end then posts the closing message.
+                logger.warning(
+                    "chat.appendStream refused (%s) with text %d, elements %d, cards %d, "
+                    "card text sent %d and %d more in this append: "
+                    "the stream is stopped and the message goes on by update",
+                    code,
+                    plan.size,
+                    plan.count,
+                    len(message.cards | plan.cards),
+                    message.card_text,
+                    plan_card_text(plan),
+                )
+                if await self._stop(message, None, None) == "failed":
+                    return False, None
+                return await self._update_step(message, None)
+            logger.warning("could not write a reply to Slack: %s", code)
+            if code == NOT_STREAMING:
                 # Slack ended the stream first: the message goes on by update.
                 self._gone(message)
                 return await self._update_step(message, None)
