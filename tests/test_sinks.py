@@ -1234,6 +1234,24 @@ async def test_a_final_append_refused_for_its_content_still_ends_the_reply(
     assert slack.pushes() == 2
 
 
+async def test_an_append_refused_for_another_reason_stays_a_failed_write(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Not measured on `chat.appendStream`, and an update of the same content may be refused
+    # too, which would drop it: the end is reported lost, so the session shows the cross.
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.01)
+    sink = reply(slack)
+    await sink.text("Hello. ")
+    await settled()
+    slack.responses["chat.appendStream"] = rejected("invalid_blocks")
+    await sink.text("Done.")
+    await sink.finish([])
+    assert await sink.close_out("footer") is False
+    assert await sink.wait_landed() is False
+    assert slack.messages[slack.stream_ts[0]].streaming is True
+    assert slack.calls_to("chat.stopStream") == [] and slack.calls_to("chat.update") == []
+
+
 async def test_a_refused_append_logs_the_method_and_the_sizes_without_content(
     slack: FakeSlack, caplog: pytest.LogCaptureFixture
 ) -> None:

@@ -303,7 +303,7 @@ through the same path, at once: the stream stops with the footer and, for `!stop
 command's card, and that stop is the notification (`ThreadSession._stop_task_replies` for the
 tasks' replies). A stream whose last append has an unknown outcome (a reset, a timeout) is told
 nothing more: it is stopped and the message goes on by `chat.update` from the model. An append
-Slack refuses for its content (`msg_too_long`) would be refused again, so `ReplySink._stream_step`
+Slack refuses as too long (`msg_too_long`) would be refused again, so `ReplySink._stream_step`
 stops the stream at once, without the footer, and writes the message by `chat.update`; the end
 then posts a closing message, as for a reply past `STREAM_SECONDS`. The text of a message's cards
 counts toward the cap of a streamed message, by a formula Slack does not document (measured

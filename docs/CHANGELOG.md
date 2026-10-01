@@ -194,7 +194,7 @@ All notable changes to this project are documented here. The format follows
   longer leaves ❌ on a thread whose turn ended well (issues #92 and #96). The same append was
   sent again on every write and refused each time, the end and its one retry included, so the
   session showed ❌; the reply became whole only when its stream reached `STREAM_SECONDS`, and the
-  ❌ stayed. `ReplySink._stream_step` now stops the stream on such a refusal, without the footer,
+  ❌ stayed. `ReplySink._stream_step` now stops the stream on that refusal alone, without the footer,
   and the message goes on by `chat.update`, with a closing message at the end, as for a reply
   past `STREAM_SECONDS`: the stop notifies, and the closing message notifies a second time. The
   refusal is logged as `chat.appendStream refused` with the text size, the element and card

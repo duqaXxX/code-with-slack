@@ -71,6 +71,9 @@ CARD_TEXT_FIELDS = ("title", "details", "output")
 REFUSED_CONTENT = {"invalid_blocks", "invalid_blocks_format", "msg_too_long", "invalid_arguments"}
 # Slack's answers about a stream's state (measured 2026-09-28): it is over, or still open.
 NOT_STREAMING = "message_not_in_streaming_state"
+# The one refusal of an append's content measured on `chat.appendStream` (2026-10-01, slack-sdk
+# 3.44.1), and the one a `chat.update` of the same message was seen to pass.
+TOO_LONG = "msg_too_long"
 STILL_STREAMING = "streaming_state_conflict"
 # What stands where a preview arrived too late for its message.
 PREVIEW_CUT = "Preview left out: it did not fit this message."
@@ -504,7 +507,7 @@ class ReplySink:
     stopped at the reply's end. The stream starts with the first content (never a placeholder)
     and stops with the reply's end, the footer at the bottom.
     It stops on its own at STREAM_SECONDS, since Slack closes a stream at 5 minutes, and when
-    Slack refuses an append for its content, which it would refuse again: from then on
+    Slack refuses an append as too long, which it would refuse again: from then on
     the same message grows by `chat.update`, and the end posts a closing message with the footer.
     A reply past MESSAGE_LIMIT or BLOCKS_LIMIT continues in a new message (a new stream while
     the message still streams, else a post). `finish` ends the body only: a task that outlives
@@ -1271,11 +1274,12 @@ class ReplySink:
             )
         except Exception as exc:
             code = describe(exc)
-            if code in REFUSED_CONTENT:
+            if code == TOO_LONG:
                 # Slack counts what the plan cannot (the text of the cards, kept from every
                 # update: measured 2026-10-01) and would refuse the same append again. The
                 # stream is stopped bare, as at STREAM_SECONDS, and the message goes on by
-                # update, from the model; the end then posts the closing message.
+                # update, from the model; the end then posts the closing message. Only this
+                # code: any other refusal stays a failed write, which the session shows.
                 logger.warning(
                     "chat.appendStream refused (%s) with text %d, elements %d, cards %d, "
                     "card text sent %d and %d more in this append: "
