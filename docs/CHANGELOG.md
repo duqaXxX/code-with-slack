@@ -9,8 +9,9 @@ All notable changes to this project are documented here. The format follows
 
 - Session index: the app's Home tab lists the sessions the threads hold, grouped by channel, the
   channel and the session used last first (new module `code_with_slack.home`). A channel shows
-  its five newest sessions and a Show all button; each session is a card with the root's status
-  reaction, the title, an Open button for its thread, the status in a word and the age. New
+  its five newest sessions side by side, in a carousel of cards, and a Show all button; each
+  card has the root's status reaction, the title, the status in a word, the age and an Open
+  button for its thread. New
   thread, beside a channel, opens it. Four controls narrow the page and add up: channel, status,
   period (the last 48 hours to start with) and a search on titles; the choices live in memory. A thread whose root was deleted and a
   channel Slack no longer has are left out. The page is published with `views.publish` whenever

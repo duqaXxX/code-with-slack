@@ -304,10 +304,11 @@ sent to it resumes the session, as `claude --resume <id>` would.
 
 To find a session again, open the app from Slack's sidebar and choose its **Home** tab. It lists
 the sessions your threads hold, one group per bound channel, the channel used last first. A
-channel shows its five newest sessions and, when it has more, a **Show all** button. Each
-session is a card: the status reaction of the thread's root message, the title Claude Code gives
-the session, an **Open** button for its thread, and under it the status in a word (`working`,
-`waiting for you`, `ended`, `error`) with the time since the session's last message. **New
+channel shows its five newest sessions side by side and, when it has more, a **Show all**
+button. Each session is a card: the status reaction of the thread's root message and the title
+Claude Code gives the session, the status in a word (`working`, `waiting for you`, `ended`,
+`error`) with the time since the session's last message, and an **Open** button for its
+thread. **New
 thread**, beside a channel's name, opens that channel: the message you send there starts a
 session.
 
@@ -319,7 +320,7 @@ session that matches, not five. **Show all** chooses that channel. The choices l
 code-with-slack restarts.
 
 The page leaves out a thread whose root message was deleted and a channel Slack no longer has.
-It holds about 45 sessions at once and says so when it stops short. code-with-slack rewrites it
+code-with-slack rewrites it
 whenever a session starts, ends or changes status, and nothing notifies you when it does. A
 session that ended before code-with-slack kept its last reaction shows no status until it runs
 again. A link that opens the Home tab from anywhere, for the Dock or a shortcut:

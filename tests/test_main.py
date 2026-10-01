@@ -11,7 +11,7 @@ from claude_agent_sdk import SDKSessionInfo
 
 from code_with_slack import __main__ as entry
 from code_with_slack import texts
-from code_with_slack.home import HOME_OPEN_ACTION, Home
+from code_with_slack.home import Home
 from code_with_slack.lock import single_instance
 from code_with_slack.state import StateStore
 from tests.fakes import CHANNEL, FakeSlack
@@ -147,19 +147,20 @@ async def test_run_publishes_the_session_index_once_started_and_after_a_change(
 
     def first_lines() -> list[str]:
         return [
-            block["text"]["text"].splitlines()[0]
+            card["title"]["text"]
             for args in fake_slack.calls_to("views.publish")
             for block in args["view"]["blocks"]
-            if block["type"] == "section" and block["accessory"]["action_id"] == HOME_OPEN_ACTION
+            if block["type"] == "carousel"
+            for card in block["elements"]
         ]
 
     running = asyncio.create_task(entry.run(tmp_path))
     try:
         # Published after the repair: the root a crash left ⏳ already reads ❌.
-        await until(lambda: first_lines() == [":x:  *Fix the footer*"])
+        await until(lambda: first_lines() == [":x:  Fix the footer"])
         assert fake_slack.calls_to("views.publish")[0]["user_id"] == "U000ALICE"
         stores[0].set_status_pending(CHANNEL, thread_ts, "raised_hand")
-        await until(lambda: first_lines()[-1] == ":raised_hand:  *Fix the footer*")
+        await until(lambda: first_lines()[-1] == ":raised_hand:  Fix the footer")
     finally:
         running.cancel()
         with contextlib.suppress(asyncio.CancelledError):

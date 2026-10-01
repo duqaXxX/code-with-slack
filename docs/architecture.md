@@ -600,15 +600,17 @@ rest of the run, and one whose request failed without an answer is asked again a
 publish.
 
 `home.home_view` lays the rows out. Under the controls, each channel is a group: a header with
-the channel and a **New thread** link button (the `slack://channel` deep link), then one card
-per session, a section with the title and an **Open** link button and a context line with the
-status word and Slack's own `{ago}` date token, which the client renders, so the age stays right
-between two publishes. With no filter chosen every bound channel is a group, the ones with
+the channel and a **New thread** link button (the `slack://channel` deep link), then its
+sessions side by side in a `carousel` block, `home.CAROUSEL_CARDS` to a carousel. A session is a
+`card` block: the reaction and the title, a subtitle with the status word and Slack's own
+`{ago}` date token, which the client renders, so the age stays right between two publishes, and
+an **Open** link button. A title is cut until its escaped form fits `home.CARD_TITLE`. With no filter chosen every bound channel is a group, the ones with
 sessions first by their newest, each cut to `home.PER_CHANNEL` cards with a **Show all** button;
 with a channel, a status or a search chosen (`HomeFilter.narrowed`), only the channels with a
 match, uncut. The period applies either way and leaves that shape alone: a channel whose sessions
-are all older keeps its header and says `texts.HOME_NO_MATCH`. A Home view holds 100 blocks: the page
-stops before that and ends with `texts.HOME_MORE`.
+are all older keeps its header and says `texts.HOME_NO_MATCH`. A Home view holds 100 blocks: a
+channel that would not fit whole is left out with the ones after it, and the page ends with
+`texts.HOME_MORE`.
 
 The filters are a `home.HomeFilter` kept in memory: channel, status, period and a search on the
 title. The period starts on the last 48 hours; the others start unset. Every use of a control reaches `slack_app` as a `block_actions`
