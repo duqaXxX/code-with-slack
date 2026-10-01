@@ -114,6 +114,9 @@ Messages with a subtype (edits, deletions, joins) and messages from bots are ign
 the same for every file, or the message is refused. A refusal reaches the owner as an ephemeral
 message; everyone else gets nothing.
 
+A control of the session index (the Home tab) runs the first check alone. Its payload names no
+channel, and all it does is choose what the owner's own page shows: nothing reaches Claude Code.
+
 Where the daemon's own answers go is decided in `slack_app.handle_word`. A word typed at the top
 level, or in a thread that holds no session, acts as a top-level word: its answer is a normal post
 in the channel (`in_channel`, or `say` with no thread), which is neither ephemeral nor a thread
@@ -614,8 +617,9 @@ holding `home.SPACER` leaves a blank row between two sessions of a channel. With
 sessions first by their newest, each cut to `home.PER_CHANNEL` cards with a **Show all** button;
 with a channel, a status or a search chosen (`HomeFilter.narrowed`), only the channels with a
 match, uncut. The period applies either way and leaves that shape alone: a channel whose sessions
-are all older keeps its header and says `texts.HOME_NO_MATCH`. A Home view holds 100 blocks: the page
-stops before that and ends with `texts.HOME_MORE`.
+are all older keeps its header and says `texts.HOME_NO_MATCH`. A Home view holds 100 blocks and a
+session takes up to `home.CARD_BLOCKS` of them: the page stops before the cap and ends with
+`texts.HOME_MORE`.
 
 The filters are a `home.HomeFilter` kept in memory: channel, status, period and a search on the
 title. The period starts on the last 48 hours; the others start unset. The two blocks that hold
@@ -648,8 +652,9 @@ and the next change tries again.
 
 `code_with_slack.slack_app.build_app` registers one listener per inbound path: `message`
 events, the Approve, Deny, Answer and Skip buttons, the setup's Model select and Start, the question form's Next and Submit, and the session index's controls (its filters and Show all, and its New thread link button, which is only acknowledged). The app registers no slash command. Each
-acknowledges Slack first, then checks the owner, the workspace and the channel itself. A
-failure after the checks reaches the owner as an ephemeral error line.
+acknowledges Slack first, then checks the owner, the workspace and the channel itself; a control
+of the session index comes with no channel and checks the owner and the workspace. A failure
+after the checks reaches the owner as an ephemeral error line.
 A link Slack made from a typed address (`<url|label>`, `<url>`) reaches Claude Code as typed; a
 link the owner named reaches it as `label (url)`, so the address is not lost; a mention stays in Slack's form (`<@U…>`), since naming the user would need a
 scope the app does not have.

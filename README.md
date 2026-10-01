@@ -53,8 +53,8 @@ From then on:
 - `!resume`, typed in the channel, lists the directory's sessions, from the terminal too, with a
   Resume button each; `!resume <id or name>` or a click moves that session into a new thread.
 - The app's **Home** tab lists the sessions by channel, the one used last first, each with its
-  status, its replies and a link that opens its thread, under filters by channel, status, date
-  and title;
+  status, its replies and a link that opens its thread, under filters by channel, status,
+  period and title;
   a button beside each channel opens it for a new thread.
 - Images and files attached to a message reach Claude: a JPEG, PNG, GIF or WebP image as an
   image; a text, code, PDF, JSON, XML, YAML or notebook file as a path to a copy saved in a
