@@ -18,6 +18,7 @@ from code_with_slack.home import (
     HOME_OPEN_ACTION,
     LAST_7,
     LAST_30,
+    LAST_48,
     NEW_THREAD_ACTION,
     PER_CHANNEL,
     SEARCH_ACTION,
@@ -226,6 +227,7 @@ def test_the_search_matches_a_part_of_the_title_whatever_the_case() -> None:
 @pytest.mark.parametrize(
     ("date", "expected"),
     [
+        (LAST_48, ["an hour ago", "yesterday evening"]),
         (TODAY, ["an hour ago"]),
         (YESTERDAY, ["yesterday evening"]),  # that day alone
         (LAST_7, ["an hour ago", "yesterday evening", "five days ago"]),
@@ -248,6 +250,16 @@ def test_the_date_filter_reads_the_sessions_last_message(
         for title, age in ages.items()
     ]
     assert titles(view(rows, HomeFilter(date=date))) == [f"*{title}*" for title in expected]
+
+
+def test_the_page_starts_on_the_last_48_hours_and_keeps_its_shape_under_a_period() -> None:
+    assert HomeFilter().date == LAST_48
+    old = row("three days ago", last_activity=EPOCH - 3 * 86400, channel_id=OTHER_CHANNEL)
+    page = view([*many(8), old])
+    assert len(cards(page)) == PER_CHANNEL  # a period alone still cuts a channel to its newest
+    # Every channel keeps its group and its New thread button; one says its sessions are older.
+    assert headers(page) == [f"*<#{CHANNEL}>*", f"*<#{OTHER_CHANNEL}>*", f"*<#{EMPTY_CHANNEL}>*"]
+    assert notes(page)[-2:] == [texts.HOME_NO_MATCH, texts.HOME_NO_SESSIONS]
 
 
 def test_filters_add_up_and_no_match_says_so() -> None:
@@ -290,8 +302,13 @@ def control(page: dict[str, Any], action_id: str) -> dict[str, Any]:
 
 def test_the_controls_start_on_all_and_show_what_is_chosen() -> None:
     page = view([row()])
-    for action_id in (CHANNEL_ACTION, STATUS_ACTION, DATE_ACTION):
+    for action_id in (CHANNEL_ACTION, STATUS_ACTION):
         assert control(page, action_id)["initial_option"]["value"] == ALL
+    assert control(page, DATE_ACTION)["initial_option"]["value"] == LAST_48
+    assert control(view([row()], HomeFilter(date=None)), DATE_ACTION)["initial_option"] == {
+        "text": {"type": "plain_text", "text": texts.HOME_ANY_TIME},
+        "value": ALL,
+    }
     assert [o["text"]["text"] for o in control(page, CHANNEL_ACTION)["options"]] == [
         texts.HOME_ALL_CHANNELS,
         "cc-articles",
@@ -306,11 +323,12 @@ def test_the_controls_start_on_all_and_show_what_is_chosen() -> None:
         "Error",
     ]
     assert [o["value"] for o in control(page, DATE_ACTION)["options"]] == [
-        ALL,
+        LAST_48,
         TODAY,
         YESTERDAY,
         LAST_7,
         LAST_30,
+        ALL,
     ]
     (search,) = [b for b in page["blocks"] if b.get("block_id") == SEARCH_BLOCK]
     assert search["dispatch_action"] is True and "initial_value" not in search["element"]
@@ -349,7 +367,7 @@ def test_all_clears_a_filter_and_an_emptied_search_clears_it() -> None:
         FILTERS_BLOCK: {a: option(ALL) for a in (CHANNEL_ACTION, STATUS_ACTION, DATE_ACTION)},
         SEARCH_BLOCK: {SEARCH_ACTION: {"type": "plain_text_input", "value": None}},
     }
-    assert read_filter(values, current) == HomeFilter()
+    assert read_filter(values, current) == HomeFilter(date=None)
 
 
 def test_a_value_the_page_never_offered_and_a_missing_control_keep_what_was_chosen() -> None:
@@ -366,8 +384,10 @@ OLD_THREAD, NEW_THREAD, EMPTY_THREAD = "1789000000.000100", "1789000500.000100",
 
 
 def info(sid: str, summary: str, **fields: Any) -> SDKSessionInfo:
-    """Session metadata as `list_sessions` returns it (claude-agent-sdk 0.2.163 SDKSessionInfo)."""
-    return SDKSessionInfo(session_id=sid, summary=summary, last_modified=1, **fields)
+    """Session metadata as `list_sessions` returns it (claude-agent-sdk 0.2.163 SDKSessionInfo),
+    its file an hour old: inside the 48 hours the page starts on."""
+    an_hour_ago = (EPOCH - 3600) * 1000
+    return SDKSessionInfo(session_id=sid, summary=summary, last_modified=an_hour_ago, **fields)
 
 
 @pytest.fixture
@@ -456,7 +476,8 @@ async def test_a_cross_over_a_kept_status_shows_the_cross(
 async def test_a_session_claude_code_does_not_list_yet_shows_its_id_and_its_roots_time(
     tmp_path: Path, slack: FakeSlack, state: StateStore
 ) -> None:
-    await make_home(slack, state, {tmp_path / "project": [], tmp_path / "other": []}).publish()
+    home = make_home(slack, state, {tmp_path / "project": [], tmp_path / "other": []})
+    await home.choose(HomeFilter(date=None))  # the roots are older than the page's 48 hours
     page = published(slack)[0]
     assert titles(page)[0] == f":raised_hand:  *{texts.HOME_UNTITLED.format(id=NEW[:8])}*"
     assert any(f"<!date^{int(float(NEW_THREAD))}^{{ago}}|" in n for n in notes(page))
@@ -478,7 +499,7 @@ async def test_a_folder_that_cannot_be_listed_does_not_stop_the_page(
         clock=lambda: EPOCH,
     )
     with caplog.at_level(logging.WARNING):
-        await home.publish()
+        await home.choose(HomeFilter(date=None))
     assert len(cards(published(slack)[0])) == 2
     assert "OSError" in caplog.text
 

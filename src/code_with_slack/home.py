@@ -85,8 +85,11 @@ _WORDS = {
     Status.DONE.value: texts.HOME_ENDED,
     Status.ERROR.value: texts.HOME_ERROR,
 }
-TODAY, YESTERDAY, LAST_7, LAST_30 = "today", "yesterday", "7", "30"
+LAST_48, TODAY, YESTERDAY, LAST_7, LAST_30 = "48h", "today", "yesterday", "7", "30"
+# How far back each rolling period reaches.
+_REACH = {LAST_48: timedelta(hours=48), LAST_7: timedelta(days=7), LAST_30: timedelta(days=30)}
 _DATES = {
+    LAST_48: texts.HOME_LAST_48,
     TODAY: texts.HOME_TODAY,
     YESTERDAY: texts.HOME_YESTERDAY,
     LAST_7: texts.HOME_LAST_7,
@@ -108,16 +111,19 @@ class HomeRow:
 
 @dataclass(frozen=True)
 class HomeFilter:
-    """What the owner chose in the page's controls; every field unset shows everything."""
+    """What the owner chose in the page's controls. The page starts on the last 48 hours
+    (the maintainer, 2026-10-01); `date` None is any time, and the other fields unset match all."""
 
     channel: str | None = None
     status: str | None = None
-    date: str | None = None
+    date: str | None = LAST_48
     search: str = ""
 
     @property
-    def active(self) -> bool:
-        return bool(self.channel or self.status or self.date or self.search)
+    def narrowed(self) -> bool:
+        """Whether a channel, a status or a search is chosen: the page then shows every session
+        that matches. The period alone keeps the page's shape, each channel cut to its newest."""
+        return bool(self.channel or self.status or self.search)
 
     def matches(self, row: HomeRow, now: datetime) -> bool:
         """Whether `row` passes every chosen filter. The date is the session's last message, on
@@ -131,8 +137,8 @@ class HomeFilter:
         when = datetime.fromtimestamp(row.last_activity, now.tzinfo)
         if self.date in (TODAY, YESTERDAY):
             return (now.date() - when.date()).days == (0 if self.date == TODAY else 1)
-        if self.date in (LAST_7, LAST_30):
-            return now - when <= timedelta(days=int(self.date))
+        if self.date in _REACH:
+            return now - when <= _REACH[self.date]
         return True
 
 
@@ -184,11 +190,11 @@ def _link_button(text: str, url: str, action_id: str) -> dict[str, Any]:
 
 
 def _select(action_id: str, options: list[tuple[str, str]], chosen: str | None) -> dict[str, Any]:
-    """A menu whose first option is "all"; `chosen` starts selected, the first one otherwise."""
+    """A menu that starts on `chosen`, or on its `ALL` option when nothing is chosen."""
     built = [
         {"text": {"type": "plain_text", "text": text}, "value": value} for text, value in options
     ]
-    initial = next((option for option in built if option["value"] == chosen), built[0])
+    initial = next(option for option in built if option["value"] == (chosen or ALL))
     return {
         "type": "static_select",
         "action_id": action_id,
@@ -229,7 +235,7 @@ def _controls(channels: dict[str, str], chosen: HomeFilter) -> list[dict[str, An
                 ),
                 _select(
                     DATE_ACTION,
-                    [(texts.HOME_ANY_TIME, ALL), *((text, key) for key, text in _DATES.items())],
+                    [*((text, key) for key, text in _DATES.items()), (texts.HOME_ANY_TIME, ALL)],
                     chosen.date,
                 ),
             ],
@@ -279,10 +285,11 @@ def home_view(
     now: datetime,
 ) -> dict[str, Any]:
     """The Home tab's view. `rows` are newest first and `channels` maps each bound channel Slack
-    still has to its name. With no filter, every channel is a group, the ones with sessions
-    first by their newest, each showing its `PER_CHANNEL` newest and a button to see them all
-    (which chooses that channel); with a filter, only what matches, with no such cut. Never past
-    Slack's 100 blocks: the page says when it stops short."""
+    still has to its name. Only the sessions of the chosen period are shown. With no channel,
+    status or search chosen, every channel is a group, the ones with sessions first by their
+    newest, each showing its `PER_CHANNEL` newest and a button to see them all (which chooses
+    that channel); otherwise only what matches, with no such cut. Never past Slack's 100 blocks:
+    the page says when it stops short."""
     blocks: list[dict[str, Any]] = [
         *_controls(channels, chosen),
         context_block(texts.HOME_HEADER.format(time=_date(int(now.timestamp()), "time"))),
@@ -295,15 +302,15 @@ def home_view(
             groups.setdefault(row.channel_id, []).append(row)
     if chosen.channel:
         groups.setdefault(chosen.channel, [])
-    elif not chosen.active:
+    elif not chosen.narrowed:
         for channel_id in channels:
             groups.setdefault(channel_id, [])
     if not groups:
         blocks.append(context_block(texts.HOME_NO_MATCH))
-    only_channel_chosen = chosen == HomeFilter(channel=chosen.channel)
+    with_sessions = {row.channel_id for row in rows}
     shown = 0
     for channel_id, found in groups.items():
-        cards = found if chosen.active else found[:PER_CHANNEL]
+        cards = found if chosen.narrowed else found[:PER_CHANNEL]
         # One block is kept for the line that says the page stops short; a group is a divider,
         # a header, two blocks a card, and one closing block at most.
         room = (HOME_BLOCKS - 1 - len(blocks) - 3) // 2
@@ -318,8 +325,9 @@ def home_view(
             blocks.append(context_block(texts.HOME_MORE.format(rows=shown)))
             break
         if not found:
-            empty = texts.HOME_NO_MATCH if chosen.active and not only_channel_chosen else None
-            blocks.append(context_block(empty or texts.HOME_NO_SESSIONS))
+            # A channel with sessions, none of them in the period or under the filters.
+            hidden = channel_id in with_sessions
+            blocks.append(context_block(texts.HOME_NO_MATCH if hidden else texts.HOME_NO_SESSIONS))
         elif len(found) > len(cards):
             show_all = {
                 "type": "button",

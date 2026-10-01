@@ -127,7 +127,10 @@ async def test_run_publishes_the_session_index_once_started_and_after_a_change(
     state.set_status_pending(CHANNEL, thread_ts, "hourglass_flowing_sand")  # a crash left it
 
     def one_session(*, directory: str, include_worktrees: bool) -> list[SDKSessionInfo]:
-        return [SDKSessionInfo(session_id="some-id", summary="Fix the footer", last_modified=1)]
+        now_ms = int(time.time() * 1000)  # inside the 48 hours the page starts on
+        return [
+            SDKSessionInfo(session_id="some-id", summary="Fix the footer", last_modified=now_ms)
+        ]
 
     fake_slack = FakeSlack()
     stores: list[StateStore] = []

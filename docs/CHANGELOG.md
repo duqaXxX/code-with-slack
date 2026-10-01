@@ -12,7 +12,7 @@ All notable changes to this project are documented here. The format follows
   its five newest sessions and a Show all button; each session is a card with the root's status
   reaction, the title, an Open button for its thread, the status in a word and the age. New
   thread, beside a channel, opens it. Four controls narrow the page and add up: channel, status,
-  date and a search on titles; the choices live in memory. A thread whose root was deleted and a
+  period (the last 48 hours to start with) and a search on titles; the choices live in memory. A thread whose root was deleted and a
   channel Slack no longer has are left out. The page is published with `views.publish` whenever
   `state.json`'s sessions change, with no notification. The manifest switches the Home tab on
   (`features.app_home`); an existing app needs **Home Tab** turned on under **App Home**, and

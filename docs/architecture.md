@@ -605,11 +605,13 @@ per session, a section with the title and an **Open** link button and a context 
 status word and Slack's own `{ago}` date token, which the client renders, so the age stays right
 between two publishes. With no filter chosen every bound channel is a group, the ones with
 sessions first by their newest, each cut to `home.PER_CHANNEL` cards with a **Show all** button;
-with a filter, only the channels with a match, uncut. A Home view holds 100 blocks: the page
+with a channel, a status or a search chosen (`HomeFilter.narrowed`), only the channels with a
+match, uncut. The period applies either way and leaves that shape alone: a channel whose sessions
+are all older keeps its header and says `texts.HOME_NO_MATCH`. A Home view holds 100 blocks: the page
 stops before that and ends with `texts.HOME_MORE`.
 
-The filters are a `home.HomeFilter` kept in memory: channel, status, date and a search on the
-title, each unset by default. Every use of a control reaches `slack_app` as a `block_actions`
+The filters are a `home.HomeFilter` kept in memory: channel, status, period and a search on the
+title. The period starts on the last 48 hours; the others start unset. Every use of a control reaches `slack_app` as a `block_actions`
 payload, checked on its own for the owner and the workspace (a Home tab payload names no
 channel). A filter's payload carries the state of all four controls in `view.state.values`,
 which `home.read_filter` turns into the filter; a status or a date the page never offered keeps
