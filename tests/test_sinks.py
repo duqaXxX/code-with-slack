@@ -1614,8 +1614,9 @@ async def test_a_fold_that_cannot_be_written_does_not_undo_the_end(slack: FakeSl
     assert await sink.close_out("footer") is True
     assert await sink.wait_landed() is True
     assert (slack.stream_ts[0], None) in seen  # nothing is left for a crash repair to close
-    await settled()  # the fold is tried again with the next write
-    assert slack.calls_to("chat.update")[-1]["blocks"][0] == context("✓ Ran 1 shell command")
+    await settled()  # the fold Slack refused is tried again with the next write
+    updates = slack.calls_to("chat.update")
+    assert len(updates) == 2 and updates[-1]["blocks"][0] == context("✓ Ran 1 shell command")
     assert slack.pushes() == 1 and slack.posted_ts == []  # no second stop, no closing message
 
 
