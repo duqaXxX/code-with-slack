@@ -354,14 +354,15 @@ download, stops the whole message, and the reply says which file and why.
 
 A reply is one message in the session's thread, and a native Slack stream. It appears when Claude
 has something to show: its first words, or the card of the first tool it uses. Text then grows in
-the order it is written, and each tool is a card of its own, titled in the terminal's words
-(`Ran 1 shell command`, `Read notes.txt`), showing the command while it runs and then `complete`
-or `error`. A subagent's card counts the calls it made and shows what it is doing now, and a
-background task keeps its card open until it ends. An Edit or a Write shows its preview under its
-card. When the reply ends, a divider and the footer close the same message. A reply still running
-280 seconds after it started stops being a stream (Slack closes streams at 5 minutes) and goes on
-in the same message, updated instead of streamed; its footer then arrives in a closing message. A
-reply longer than one Slack message (12,000 characters or 50 cards) continues in the next one.
+the order it is written. The tool calls between two pieces of text show as two cards: the first
+counts what ended, in the terminal's words (`Ran 2 shell commands · Read 1 file`), and the second
+names the call that runs now. A subagent's card counts the calls it made and shows what it is
+doing now, and a background task keeps its card open until it ends. An Edit or a Write shows its
+preview under its card. When the reply ends, a divider and the footer close the same message, and
+each pair of cards gives way to one line (`✓ Ran 2 shell commands · Read 1 file`). A reply still
+running 280 seconds after it started stops being a stream (Slack closes streams at 5 minutes) and
+goes on in the same message, updated instead of streamed; its footer then arrives in a closing
+message. A reply longer than one Slack message (12,000 characters or 50 cards) continues in the next one.
 
 An approval request is a message of its own in the thread, below the reply, and rings, as a
 question does; once you decide, it disappears and the tool's line in the reply records the call.

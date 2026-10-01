@@ -73,6 +73,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Tool calls in a reply (issue #80): a run of calls, the calls between two pieces of text, is two
+  task cards in place of one card per call. The first holds the counts of what ended (`Ran 2 shell
+  commands · Read 1 file · ✗ Ran 1 shell command`), the second the call running now. A failed call
+  says why in its title. When the reply's body ends, one silent `chat.update` after the stream's
+  stop turns each run into a line of counts in a `context` block (`✓ Ran 2 shell commands · Read 1
+  file`). An Edit or a Write that ended well, a subagent, a background task and a stopped call
+  keep a card of their own. New module `render/fold.py` (`Fold`), new field `TaskUpdate.folded`;
+  `ReplySink.task` feeds the fold, `ReplySink._card_blocks` and `ReplySink._end` write the line.
+  The cards of a run carry no `details` and no `output`: Slack appends both to what a card
+  already holds (measured 2026-10-01, slack-sdk 3.44.1).
+
 - `claude-agent-sdk` 0.2.163, which bundles Claude Code 2.1.286 (was 0.2.162 with 2.1.285); its
   Python source differs from 0.2.162 only in the version strings. The SDK streams in
   `tests/fixtures/sdk/` are recorded again on 2.1.286. A `thinking_delta` now carries

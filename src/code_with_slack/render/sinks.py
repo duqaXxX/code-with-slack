@@ -25,6 +25,7 @@ from slack_sdk.http_retry.state import RetryState
 from slack_sdk.web.async_client import AsyncWebClient
 
 from code_with_slack.render.escape import mrkdwn_escape
+from code_with_slack.render.fold import Fold
 from code_with_slack.render.renderer import STOPPED, TaskUpdate
 
 logger = logging.getLogger(__name__)
@@ -488,9 +489,11 @@ class _Message:
 
 
 class ReplySink:
-    """One reply in a Slack thread, as a native stream: Claude's text as it is written, and a
-    task card per tool, updated in place, in the order things happen. The stream starts with the
-    first content (never a placeholder) and stops with the reply's end, the footer at the bottom.
+    """One reply in a Slack thread, as a native stream: Claude's text as it is written, and
+    task cards for its tools, updated in place, in the order things happen: two per run of calls
+    (`render.fold`), which a silent update folds into a line of counts once the stream has
+    stopped at the reply's end. The stream starts with the first content (never a placeholder)
+    and stops with the reply's end, the footer at the bottom.
     It stops on its own at STREAM_SECONDS, since Slack closes a stream at 5 minutes: from then on
     the same message grows by `chat.update`, and the end posts a closing message with the footer.
     A reply past MESSAGE_LIMIT or BLOCKS_LIMIT continues in a new message (a new stream while
@@ -533,7 +536,8 @@ class ReplySink:
         # The last message's body is whole, and only the closing message is owed.
         self._body_landed = False
         self._parts: list[_Text | _Tool] = []
-        self._tools: dict[str, _Tool] = {}
+        self._tools: dict[str, _Tool] = {}  # by the id of the card that shows them
+        self._fold = Fold()  # which cards show the calls: two per run of calls
         self._messages: list[_Message] = []
         self._pending: asyncio.Task[None] | None = None
         self._retry: asyncio.Task[None] | None = None
@@ -619,6 +623,8 @@ class ReplySink:
 
     async def text(self, markdown: str, *, notice: bool = False) -> None:
         """Claude's words, or with `notice` a line of the daemon's own (never a banner)."""
+        if markdown.strip():
+            self._fold.text()
         last = self._parts[-1] if self._parts else None
         if isinstance(last, _Text) and last.notice == notice:
             last.text += markdown
@@ -628,14 +634,19 @@ class ReplySink:
         await self._changed()
 
     async def task(self, update: TaskUpdate) -> None:
-        tool = self._tools.get(update.id)
-        if tool is None:
-            tool = self._tools[update.id] = _Tool(update)
-            self._parts.append(tool)
-        else:
-            tool.set(update)
-        tool.rev = self._next_rev()
-        await self._changed()
+        """A call's new state, on the cards that show it: a run of calls shares two cards
+        (`render.fold`), a call with a view of its own has one."""
+        cards = self._fold.task(update)
+        for card in cards:
+            tool = self._tools.get(card.id)
+            if tool is None:
+                tool = self._tools[card.id] = _Tool(card)
+                self._parts.append(tool)
+            else:
+                tool.set(card)
+            tool.rev = self._next_rev()
+        if cards:
+            await self._changed()
 
     def _next_rev(self) -> int:
         self._rev += 1
@@ -672,6 +683,11 @@ class ReplySink:
             # task can still read `.done()` as False for a while yet.
             self._pending = None
         self._finished = True
+        # What a card of a run of calls shows changes here, to its folded line: its message is
+        # rendered again even when nothing else in it changed.
+        for tool in self._tools.values():
+            if tool.update.folded is not None:
+                tool.rev = self._next_rev()
         await self._flush()
 
     async def close_out(self, footer: str | None) -> bool:
@@ -912,9 +928,13 @@ class ReplySink:
     def _stream_shows(self, message: _Message, end: Cursor | None) -> bool:
         """Whether the message's stream, as sent, shows what the model says for its span: every
         card as it is now, and ended (a card left in progress in a stopped stream is stored as
-        an error until it is updated: measured 2026-09-28), every preview piece, all the text."""
+        an error until it is updated: measured 2026-09-28), every preview piece, all the text.
+        Never once the body has ended, for a message with cards of a run of calls: the model
+        then says the folded line, which a stream cannot show."""
         for tool_id, sent in message.cards.items():
             update = self._tools[tool_id].update
+            if self._finished and update.folded is not None:
+                return False
             if update.status not in TERMINAL or card_chunk(update) != sent:
                 return False
         for index, part, floor, ceil in self._span(message.start, end):
@@ -935,9 +955,10 @@ class ReplySink:
     def _blocks(
         self, message: _Message, end: Cursor | None
     ) -> tuple[list[dict[str, Any]], Cursor | None]:
-        """The blocks of the message's span: Claude's text as markdown, a task card per tool,
-        the preview blocks after it. With no `end` (the reply's last message) only as many as fit
-        MESSAGE_LIMIT and BLOCKS_LIMIT, and where the reply goes on if it does not all fit."""
+        """The blocks of the message's span: Claude's text as markdown, the tools' task cards
+        (`_card_blocks`), the preview blocks after a card. With no `end` (the reply's last
+        message) only as many as fit MESSAGE_LIMIT and BLOCKS_LIMIT, and where the reply goes on
+        if it does not all fit."""
         blocks: list[dict[str, Any]] = []
         size = 0
         # A message whose span is fixed: what its cards and text take, and what previews took.
@@ -970,7 +991,7 @@ class ReplySink:
                 if has_card:
                     if end is None and len(blocks) >= BLOCKS_LIMIT:
                         return blocks, (index, 0)
-                    blocks.append(card_block(part.update))
+                    blocks += self._card_blocks(part.update)
                 for piece in pieces:
                     length = len(part.pieces()[piece - 1])
                     if end is None:
@@ -990,6 +1011,13 @@ class ReplySink:
                     blocks += shown
                     size += length
         return blocks, None
+
+    def _card_blocks(self, update: TaskUpdate) -> list[dict[str, Any]]:
+        """A tool's card, or once the reply's body has ended what a card of a run of calls
+        folds to: a line of counts, as the channel model drew it, or nothing."""
+        if not self._finished or update.folded is None:
+            return [card_block(update)]
+        return [context_block(mrkdwn_escape(update.folded))] if update.folded else []
 
     def _cut_pieces(
         self, message: _Message, end: Cursor, base_blocks: int, base_size: int
@@ -1383,6 +1411,13 @@ class ReplySink:
                 return False
             if result == "stopped":
                 self._end_mode = "inline"
+            # A stream cannot fold its cards: the update that follows its stop does, silently.
+            # The reply has ended whatever becomes of that write: one that fails is tried once
+            # more with the next pass, and the cards stay if that fails too.
+            if not (await self._update_step(message, None))[0]:
+                self._version += 1
+                self._schedule()
+            if result == "stopped":
                 return True
         self._end_mode = "post"
         self._body_landed = True  # every message is written: only the closing message is owed

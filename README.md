@@ -37,8 +37,9 @@ In a private channel with only you and the bot, `!guide` explains how the channe
 From then on:
 
 - A top-level message opens a new thread, which first asks for the model, the effort and bypass;
-  **Start** starts the session with them and sends the message. The reply appears in that
-  thread and grows as Claude works: Claude's text, a line per tool call, subagent and background
+  **Start** starts the session with them and sends the message. The reply appears in that thread
+  and grows as Claude works: Claude's text, the tool calls as a count of what ended above the call
+  that runs now (one line of counts once the reply has ended), a card per subagent and background
   task, and a footer with the branch and the lines changed since the last commit, the model, the
   effort level, the context used, the usage limits with their resets, and the folder. A reply
   inside a thread continues that thread's session, even days later.
