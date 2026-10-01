@@ -1603,19 +1603,47 @@ async def test_a_reply_with_no_run_of_calls_gets_no_update_at_its_end(slack: Fak
     assert slack.calls_to("chat.update") == []
 
 
-async def test_a_fold_that_cannot_be_written_is_tried_once_more(
-    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.02)
-    sink = reply(slack)
+async def test_a_fold_that_cannot_be_written_does_not_undo_the_end(slack: FakeSlack) -> None:
+    seen: list[tuple[str | None, str | None]] = []
+    sink = reply(slack, on_open_reply=lambda old, new: seen.append((old, new)))
     await sink.task(tool("a", "Bash"))
     await settled()
     await sink.finish([])
     slack.responses["chat.update"] = [rejected("ratelimited"), {"ok": True}]
-    assert await sink.close_out("footer") is False
+    # The stop carried the footer and pushed: the reply has ended, whatever the fold does.
+    assert await sink.close_out("footer") is True
     assert await sink.wait_landed() is True
+    assert (slack.stream_ts[0], None) in seen  # nothing is left for a crash repair to close
+    await settled()  # the fold is tried again with the next write
     assert slack.calls_to("chat.update")[-1]["blocks"][0] == context("✓ Ran 1 shell command")
     assert slack.pushes() == 1 and slack.posted_ts == []  # no second stop, no closing message
+
+
+async def test_a_fold_that_keeps_failing_is_given_up_and_the_cards_stay(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.task(tool("a", "Bash"))
+    await settled()
+    await sink.finish([])
+    slack.responses["chat.update"] = rejected("ratelimited")
+    assert await sink.close_out("footer") is True
+    await settled()
+    await settled()
+    assert len(slack.calls_to("chat.update")) == 2  # once at the end, once more, then no loop
+    assert await sink.settle() is True
+
+
+async def test_a_stream_slack_closed_first_is_folded_before_its_closing_message(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.task(tool("a", "Bash"))
+    await settled()
+    await sink.finish([])
+    slack.expire(slack.stream_ts[0])
+    assert await sink.close_out("footer") is True
+    [update] = slack.calls_to("chat.update")
+    assert update["blocks"] == [context("✓ Ran 1 shell command")]
+    assert len(slack.posted_ts) == 1  # the footer's own message, as for any stream Slack closed
 
 
 async def test_past_the_window_the_run_keeps_its_two_cards_until_the_body_ends(

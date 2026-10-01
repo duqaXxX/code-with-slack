@@ -74,6 +74,16 @@ class Fold:
         self._own: dict[str, str] = {}  # call id -> the card that is its own
         self._current: _Run | None = None
         self._sent: dict[str, TaskUpdate] = {}
+        self._cards: set[str] = set()  # every card id given out: none is used twice
+
+    def _card(self, kind: str, call: str) -> str:
+        """A new card's id, named after the call it first shows. A card a call took for its own
+        keeps its id, so a second card named after the same call gets a longer one."""
+        card = f"{kind}:{call}"
+        while card in self._cards:
+            card += "+"
+        self._cards.add(card)
+        return card
 
     def text(self) -> None:
         """Text was written: the calls after it are a new run."""
@@ -130,22 +140,22 @@ class Fold:
         counted = [run.calls[i] for i in run.ended if i != run.shown]
         # What replaces the run's cards once the reply's body has ended: every call that ended.
         line = counts([run.calls[i] for i in run.ended], check=True)
-        run.split = run.split or bool(counted)
         cards: list[TaskUpdate] = []
-        if not run.split:
-            if shown is not None:
-                run.summary = run.summary or f"fold:{shown.id}"
-                cards.append(self._whole(run.summary, shown, line))
-            return cards
         if counted:
-            run.summary = run.summary or f"fold:{counted[0].id}"
+            run.split = True
+            run.summary = run.summary or self._card("fold", counted[0].id)
             status: TaskStatus = (
                 "complete" if any(call.status == "complete" for call in counted) else "error"
             )
             title = counts(counted, check=False)
             cards.append(TaskUpdate(run.summary, title, status, folded=line))
-        if shown is not None:
-            run.now = run.now or f"now:{shown.id}"
+        elif shown is not None and (run.summary is not None or not run.split):
+            # Nothing to count: the first card shows the call whole. Before the run has two
+            # calls, and when a call the card counted alone stopped folding.
+            run.summary = run.summary or self._card("fold", shown.id)
+            cards.append(self._whole(run.summary, shown, line))
+        if shown is not None and run.split:
+            run.now = run.now or self._card("now", shown.id)
             cards.append(self._whole(run.now, shown, ""))
         return cards
 

@@ -1411,8 +1411,14 @@ class ReplySink:
                 return False
             if result == "stopped":
                 self._end_mode = "inline"
-                # A stream cannot fold its cards: the update that follows the stop does, silently.
-                return (await self._update_step(message, None))[0]
+            # A stream cannot fold its cards: the update that follows its stop does, silently.
+            # The reply has ended whatever becomes of that write: one that fails is tried once
+            # more with the next pass, and the cards stay if that fails too.
+            if not (await self._update_step(message, None))[0]:
+                self._version += 1
+                self._schedule()
+            if result == "stopped":
+                return True
         self._end_mode = "post"
         self._body_landed = True  # every message is written: only the closing message is owed
         return await self._write_closing()

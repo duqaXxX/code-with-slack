@@ -170,7 +170,42 @@ def test_the_calls_left_running_when_the_first_card_is_taken_get_a_new_one() -> 
     fold.task(call("a", "Read"))
     fold.task(call("b", "Agent"))
     cards = fold.task(call("b", "Agent", task=True, calls=1))
-    assert [(card.id, card.title) for card in cards] == [
-        ("fold:a", "Agent: b"),
-        ("fold:a", "Read: a"),
+    assert [card.title for card in cards] == ["Agent: b", "Read: a"]
+    taken, fresh = (card.id for card in cards)
+    assert taken == "fold:a" and fresh != taken  # a card given away is never used again
+    # Each call keeps to its own card from here on.
+    assert [c.id for c in fold.task(call("b", "Agent", "complete", task=True))] == [taken]
+    assert [c.id for c in fold.task(call("a", "Read", "complete"))] == [fresh]
+
+
+def test_the_call_left_running_when_the_second_card_is_taken_gets_a_new_one() -> None:
+    fold = Fold()
+    fold.task(call("x", "Read", "complete"))
+    fold.task(call("a", "Read"))
+    fold.task(call("b", "Bash"))
+    cards = fold.task(call("b", "Bash", task=True, details="Running in background"))
+    assert (cards[0].id, cards[0].title) == ("now:a", "Bash: b")
+    assert cards[-1].title == "Read: a" and cards[-1].id not in ("now:a", "fold:x")
+    assert len({card.id for card in cards}) == len(cards)
+
+
+def test_two_agents_started_together_never_share_a_card() -> None:
+    fold = Fold()
+    fold.task(call("a", "Agent"))
+    fold.task(call("b", "Agent"))
+    first = fold.task(call("b", "Agent", task=True, calls=1))
+    second = fold.task(call("a", "Agent", task=True, calls=1))
+    assert first[0].title == "Agent: b" and second[0].title == "Agent: a"
+    assert first[0].id != second[0].id
+
+
+def test_a_counted_call_that_stops_folding_leaves_the_line_to_the_calls_that_remain() -> None:
+    fold = Fold()
+    fold.task(call("a", "Agent", "complete"))
+    fold.task(call("b", "Read"))
+    fold.task(call("a", "Agent", "complete", task=True, calls=1))
+    cards = fold.task(call("b", "Read", "complete"))
+    assert [(card.title, card.folded) for card in cards] == [
+        ("Read: b", "\u2713 Read 1 file"),
+        ("Read: b", ""),
     ]

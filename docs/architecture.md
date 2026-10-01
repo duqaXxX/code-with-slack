@@ -220,7 +220,8 @@ Once the reply's body has ended, each run reads as one line of counts in a `cont
 (`✓ Ran 2 shell commands · Read 1 file · ✗ Ran 1 shell command`), as the terminal folds a run
 that ended (`TaskUpdate.folded`, `ReplySink._card_blocks`). A stream cannot replace what it
 showed, so the line is written by the `chat.update` that follows the stream's stop
-(`ReplySink._end`), which never notifies. A finished `Edit` or `Write` shows its preview
+(`ReplySink._end`), which never notifies. The reply has ended with the stop: an update that fails
+is tried once more with the next write, and the cards stay if that fails too. A finished `Edit` or `Write` shows its preview
 as a `blocks` chunk under the card (`render.previews.preview`): a diff is a collapsible,
 full-width `container` block (`sinks.diff_containers`), closed until the owner opens it, whose
 title is the call's line (`✓ Update(notes.txt)`), its subtitle the sentence (`Added 1 line,
