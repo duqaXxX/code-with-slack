@@ -90,7 +90,9 @@ So, inside a thread:
   Claude's answer, never a line of the daemon's.
 - A reply whose stream Slack refuses to grow (`msg_too_long`, which the text of many cards can
   reach below the limits the daemon counts) stops its stream at that moment, which rings, and
-  goes on the same way: by `chat.update`, with a closing message at its end.
+  goes on the same way: by `chat.update`, with a closing message at its end. If Slack refuses
+  that edit too and no later one passes, the reply is short of what Claude wrote and the root
+  shows ❌.
 - A reply longer than one message (12,000 characters or 50 cards) continues in a new message, and
   each extra message rings.
 - An approval request and a question (`AskUserQuestion`) ring.
