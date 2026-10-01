@@ -3,6 +3,7 @@ import contextlib
 import functools
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -218,6 +219,10 @@ async def test_run_forgets_a_gone_channel_at_start_and_again_on_its_schedule(
         running.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await running
+    # The schedule ends with the daemon: no pass asks Slack about a channel after the stop.
+    asked = len(fake_slack.calls_to("conversations.info"))
+    await asyncio.sleep(0.2)
+    assert len(fake_slack.calls_to("conversations.info")) == asked
 
 
 async def test_the_scheduled_cleanup_stops_once_a_stop_has_begun(
@@ -402,6 +407,26 @@ def test_alive_sessions_keeps_a_transcript_list_sessions_filters_out(
 
     monkeypatch.setattr("code_with_slack.sessions.list_sessions", fake_list_sessions)
     assert entry._alive_sessions(project) == {"68da9311-0000-4000-8000-000000000001"}
+
+
+def test_alive_sessions_cannot_tell_about_a_folder_it_cannot_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An unreadable transcripts folder lists as empty, which would read as "every session is
+    # gone" and prune every thread of that folder.
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config"))
+    folder = entry._projects_dir() / entry.project_key_for_directory(project)
+    folder.mkdir(parents=True)
+    (folder / "68da9311-0000-4000-8000-000000000001.jsonl").write_text("{}\n")
+    folder.chmod(0o000)
+    try:
+        if os.access(folder, os.R_OK):
+            pytest.skip("running as a user no mode stops from reading")
+        assert entry._alive_sessions(project) is None
+    finally:
+        folder.chmod(0o700)
 
 
 def test_prune_uses_alive_sessions_to_drop_a_gone_thread(

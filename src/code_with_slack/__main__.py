@@ -75,12 +75,20 @@ def _alive_sessions(directory: Path) -> Collection[str] | None:
     under the documented location, pruning must err on keeping. Past `LONG_PROJECT_KEY`
     characters the CLI names the folder with a hash the SDK does not reproduce (the SDK's own
     `_find_project_dir` docstring, 0.2.160): a missing folder there proves nothing, so the answer
-    is None ("cannot tell") and `state.prune` keeps that folder's threads."""
+    is None ("cannot tell") and `state.prune` keeps that folder's threads. A folder that is there
+    and cannot be listed answers None too."""
     alive = {info.session_id for info in directory_sessions(directory)}
     key = project_key_for_directory(directory)
     folder = _projects_dir() / key
     if folder.is_dir():
-        return alive | {p.stem for p in folder.glob("*.jsonl")}
+        try:
+            # `glob` reads an unreadable folder as an empty one, and so does the SDK's listing:
+            # every session would look gone. A folder that cannot be listed cannot tell.
+            with os.scandir(folder) as entries:
+                transcripts = {Path(e.name).stem for e in entries if e.name.endswith(".jsonl")}
+        except OSError:
+            return None
+        return alive | transcripts
     return None if len(key) > LONG_PROJECT_KEY else alive
 
 

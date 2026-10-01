@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from code_with_slack import cleanup
 from code_with_slack.cleanup import clean, forget_gone_channels
 from code_with_slack.state import StateStore
 from tests.fakes import FakeSlack, slack_payload
@@ -86,6 +87,21 @@ async def test_no_channel_slack_can_see_forgets_nothing_and_says_so(
     assert "none of the 2 bound channels" in caplog.text
 
 
+@pytest.mark.parametrize("failure", [OSError("network down"), slack_error("ratelimited")])
+async def test_a_pass_in_which_slack_found_no_channel_forgets_nothing(
+    slack: FakeSlack, state: StateStore, failure: Exception, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The token of another workspace, and one call that failed for a reason of its own: a
+    # channel Slack did not answer about is not a channel it found.
+    state.bind(OTHER_GONE, Path("/srv/elsewhere"))
+    gone = slack_error("channel_not_found")
+    channels_in_slack(slack, {CHANNEL: failure, GONE_CHANNEL: gone, OTHER_GONE: gone})
+    with caplog.at_level(logging.WARNING):
+        assert await forget_gone_channels(slack, state, nothing_live) == []
+    assert state.channels() == [CHANNEL, GONE_CHANNEL, OTHER_GONE]
+    assert "none of the 3 bound channels" in caplog.text
+
+
 async def test_a_channel_with_a_live_session_is_left_for_the_next_pass(
     slack: FakeSlack, state: StateStore
 ) -> None:
@@ -127,6 +143,38 @@ async def test_clean_keeps_a_thread_with_a_live_session(
     live = frozenset({(CHANNEL, THREAD)})
     await clean(slack, state, alive=lambda _directory: set(), live=lambda: live)
     assert state.thread(CHANNEL, THREAD) is not None
+
+
+async def test_a_thread_opened_while_the_folders_are_read_is_kept(
+    slack: FakeSlack, state: StateStore, tmp_path: Path
+) -> None:
+    # The sessions are listed off the event loop: what is opened meanwhile, in a folder the
+    # listing did not cover, cannot be told gone.
+    late = "1789000900.000100"
+
+    def alive(directory: Path) -> set[str]:
+        state.bind("C000LATE", tmp_path / "late")
+        state.open_thread("C000LATE", late, session_id="a-session-no-listing-saw")
+        return {SESSION}
+
+    await clean(slack, state, alive=alive, live=nothing_live)
+    assert state.thread("C000LATE", late) is not None
+
+
+async def test_clean_goes_on_to_prune_when_the_channel_check_itself_fails(
+    slack: FakeSlack,
+    state: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def broken(*args: object) -> list[str]:
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(cleanup, "forget_gone_channels", broken)
+    with caplog.at_level(logging.WARNING):
+        await clean(slack, state, alive=lambda _directory: set(), live=nothing_live)
+    assert "could not check the bound channels" in caplog.text
+    assert state.thread(CHANNEL, THREAD) is None  # the prune still ran
 
 
 async def test_clean_survives_a_folder_that_cannot_be_read_and_a_slack_that_fails(

@@ -64,26 +64,6 @@ replaced. A version 1 file (one session id and bypass switch per channel, no thr
 on load: each channel keeps its directory, gets an empty thread map and a pending upgrade notice;
 the old session id and bypass switch, which belonged to the channel itself, are dropped.
 
-### Cleaning `state.json`
-
-`code_with_slack.cleanup.clean` runs on start and then every `cleanup.CLEAN_EVERY_SECONDS`
-(`__main__._clean_every`), and removes only what an answer makes certain:
-
-- `cleanup.forget_gone_channels` asks `conversations.info` about each bound channel and removes,
-  with `StateStore.remove_channel`, each one Slack answers `channel_not_found` about, threads
-  included. Any other failure is no answer and removes nothing. A private channel the bot was
-  removed from gives the same answer as a deleted one, so it is forgotten too. When Slack finds
-  none of the bound channels, nothing is removed and a warning says so: that is what the token
-  of another workspace looks like.
-- `StateStore.prune` then drops a thread whose session id is no longer among its folder's
-  sessions (`__main__._alive_sessions`, read off the event loop; a folder it cannot tell about
-  keeps its threads) and a no-session thread whose root message is more than a day old.
-
-A pass leaves alone every thread and channel with a live session object
-(`SessionManager.live_threads`), whose session id may not be on disk yet; the next pass takes
-them once the session has closed. `clean` never raises: a pass that fails is logged and the next
-one tries again.
-
 Each thread also carries three fields for crash repair (issue #19), ids only, never message
 content: `open_replies`, the ts of every open reply's last message, a stream or a stopped message (more
 than one can be open at once, since a background task's own reply can outlive the turn that
@@ -116,6 +96,27 @@ thread's failure is logged and does not stop the others.
 `code_with_slack.lock.single_instance` holds an exclusive `flock` on the configuration directory
 itself. A second process fails to start. The kernel releases the lock when the holder exits, so
 a crash leaves no stale lock and no lock file.
+
+### Cleaning `state.json`
+
+`code_with_slack.cleanup.clean` runs on start and then every `cleanup.CLEAN_EVERY_SECONDS`
+(`__main__._clean_every`), and removes only what an answer makes certain:
+
+- `cleanup.forget_gone_channels` asks `conversations.info` about each bound channel and removes,
+  with `StateStore.remove_channel`, each one Slack answers `channel_not_found` about, threads
+  included. Any other failure is no answer and removes nothing. A private channel the bot was
+  removed from gives the same answer as a deleted one, so it is forgotten too. When Slack finds
+  none of the bound channels (a channel it gave no answer about is not one it found), nothing is
+  removed and a warning says so: that is what the token of another workspace looks like.
+- `StateStore.prune` then drops a thread whose session id is no longer among its folder's
+  sessions (`__main__._alive_sessions`, read off the event loop) and a no-session thread whose
+  root message is more than a day old. A folder `_alive_sessions` cannot tell about keeps its
+  threads: one whose transcripts cannot be listed, and one too long-named to be found.
+
+A pass leaves alone every thread and channel with a live session object
+(`SessionManager.live_threads`), whose session id may not be on disk yet; the next pass takes
+them once the session has closed. `clean` never raises: a pass that fails is logged and the next
+one tries again.
 
 ## Who may talk to it
 

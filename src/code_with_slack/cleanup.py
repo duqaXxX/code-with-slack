@@ -35,14 +35,16 @@ Live = Callable[[], Collection[tuple[str, str]]]
 async def forget_gone_channels(slack: AsyncWebClient, state: StateStore, live: Live) -> list[str]:
     """Remove from `state` each bound channel Slack answers `channel_not_found` about, with its
     threads, and return their ids. A channel with a live session is left for the next pass. When
-    Slack finds none of the bound channels, nothing is removed: that is what the token of
-    another workspace, or an app removed from every channel, looks like, and forgetting every
-    binding would be the wrong repair."""
+    Slack finds none of the bound channels (a channel it gave no answer about is not one it
+    found), nothing is removed: that is what the token of another workspace, or an app removed
+    from every channel, looks like, and forgetting every binding would be the wrong repair."""
     bound = state.channels()
     gone = []
+    found = 0
     for channel_id in bound:
         try:
             await slack.conversations_info(channel=channel_id)
+            found += 1
         except SlackApiError as exc:
             if describe(exc) == CHANNEL_NOT_FOUND:
                 gone.append(channel_id)
@@ -52,7 +54,7 @@ async def forget_gone_channels(slack: AsyncWebClient, state: StateStore, live: L
             logger.warning("could not read channel %s: %s", channel_id, describe(exc))
     if not gone:
         return []
-    if len(gone) == len(bound):
+    if not found:
         logger.warning(
             "Slack finds none of the %d bound channels: nothing is forgotten (check the "
             "workspace of the bot token, and that the bot is still in its channels)",
