@@ -52,6 +52,10 @@ From then on:
   `!stop`, typed in the channel, stops every session; inside a thread it stops that one.
 - `!resume`, typed in the channel, lists the directory's sessions, from the terminal too, with a
   Resume button each; `!resume <id or name>` or a click moves that session into a new thread.
+- The app's **Home** tab lists the sessions by channel, the one used last first, each with its
+  status, its replies and a link that opens its thread, under filters by channel, status,
+  period and title;
+  a button beside each channel opens it for a new thread.
 - Images and files attached to a message reach Claude: a JPEG, PNG, GIF or WebP image as an
   image; a text, code, PDF, JSON, XML, YAML or notebook file as a path to a copy saved in a
   private temporary folder. Any other file, and any file past a limit, stops the message, with
@@ -69,7 +73,7 @@ The bot answers one Slack user in one workspace, and only in private channels wh
 that user and the bot. Every message, button and form submission is checked on its own, and a
 session starts only in a folder you have trusted in Claude Code. The tokens live in a mode-600
 file, and nothing else is stored except each channel's directory and, per thread, its session id,
-bypass switch and effort level. Whoever controls the owner's Slack account controls the machine: see
+bypass switch, effort level and the status reaction on its root message. Whoever controls the owner's Slack account controls the machine: see
 [SECURITY.md](SECURITY.md) and the checklist in [docs/setup.md](docs/setup.md).
 
 ## Contributing

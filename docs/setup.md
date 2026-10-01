@@ -45,7 +45,9 @@ not the `claude` on your `PATH`. Both read the same login, so logging in once wi
 
 The manifest asks for private channels only (`groups:history`, `groups:read`,
 `message.groups`), `chat:write`, `files:read` to download the files you attach to a message, and
-`reactions:write` for the status reaction on a session's root message.
+`reactions:write` for the status reaction on a session's root message. It also switches on the
+app's **Home** tab, where code-with-slack keeps the list of your sessions; publishing it needs no
+scope and no event.
 The app registers no slash command: commands are typed as `!word` messages. Socket Mode is on,
 so the app needs no public URL and your machine opens no inbound port.
 
@@ -53,6 +55,10 @@ An app created before `files:read` or `reactions:write` was added needs the scop
 app's **OAuth & Permissions** page add the missing bot scope, then reinstall the app to the
 workspace. Without `files:read`, every attached file is refused with `HTTP 302`; without
 `reactions:write`, the status reaction is silently skipped (logged, never surfaced).
+
+An app created before the Home tab was added needs it switched on: on the app's **App Home**
+page, under **Show Tabs**, turn on **Home Tab**, then restart code-with-slack. Without it the
+session list is not published, and the log says so once per start.
 
 code-with-slack needs none of the app's agent features: leave **Agent experience** and the
 **Slack Model Context Protocol (MCP) Server** off in the app settings. The MCP server lets an app
@@ -96,7 +102,7 @@ code-with-slack keeps its files in `~/.config/code-with-slack/`:
 | File | Written by | Holds |
 |---|---|---|
 | `.env` | you | the tokens and the settings below |
-| `state.json` | code-with-slack | for each channel, its directory; for each of its threads, the folder it was opened in, its Claude Code session id, its bypass choice (on, off or never chosen) and the effort level set with `/effort` |
+| `state.json` | code-with-slack | for each channel, its directory; for each of its threads, the folder it was opened in, its Claude Code session id, its bypass choice (on, off or never chosen), the effort level set with `/effort` and the status reaction on its root message |
 
 `state.json` looks like this; you never need to edit it:
 
@@ -275,6 +281,7 @@ The bot answers one person, and the rest of this list protects what that person 
   is public, shared, Slack Connect, or has a third member.
 - The app stays undistributed: never turn on public distribution under **Manage Distribution**.
 - The Slack MCP server stays off.
+- The Home tab is published to you alone: code-with-slack writes that page for no other member.
 - `~/.config/code-with-slack/.env` is mode `600`.
 - Files you attach are copied to `$TMPDIR/code-with-slack/` (mode `700`) and stay there for 3
   days, so a conversation resumed after a restart still finds them.
@@ -295,6 +302,45 @@ cancels it with `Not sent.`, and a reply in a thread where nothing was sent asks
 thread keeps the folder it was opened in: `!bind` only changes where the *next* thread starts. A
 thread's Claude Code process closes on its own after an hour with nothing to do; the next message
 sent to it resumes the session, as `claude --resume <id>` would.
+
+### Finding a session again: the Home tab
+
+Open code-with-slack from Slack's sidebar and choose its **Home** tab. It lists the sessions your
+threads hold, one group per bound channel, the channel used last first. A channel shows its five
+newest sessions and, when it has more, a **Show all** button. Each session takes two lines, with
+a blank row before the next:
+
+- the status reaction of the thread's root message and the title Claude Code gives the session;
+- in small text, the status in a word (`working`, `waiting for you`, `ended`, `error`), the
+  thread's number of replies and the time since its last reply, as the channel shows them under
+  the root message, and an **Open** link to the thread.
+
+**New thread**, beside a channel's name, opens that channel: the message you send there starts a
+session.
+
+Four controls at the top of the page narrow it: a channel, a status, a period (`Last 48 hours`,
+`Today`, `Yesterday`, `Last 7 days`, `Last 30 days`, `Any time`, by the thread's last reply,
+the days being those of the machine code-with-slack runs on)
+and a search on the titles (type a word and press Enter). The page starts on `Last 48 hours`.
+The controls add up, and with a channel, a status or a search chosen a channel shows every
+session that matches, not five. **Show all** chooses that channel. The choices last until
+code-with-slack restarts.
+
+The page leaves out a thread whose root message was deleted and a channel Slack no longer has.
+It holds about 30 sessions at once and says so when it stops short. code-with-slack rewrites it
+whenever a session starts, ends or changes status, and nothing notifies you when it does. The
+number of replies is read when a session starts or ends a turn, so a word typed in a thread
+(`!status`) is counted at the thread's next turn.
+
+To keep the page one click away, star the app: open code-with-slack in Slack on desktop and
+click the star beside its name at the top of its page, or drag it from the apps list into
+**Starred**. It then sits in the **Starred** section at the top of the sidebar, and a click on
+it opens the Home tab. Slack's own steps for starring, mobile included, are in its Help Center
+under [Star channels and direct messages](https://slack.com/help/articles/201331016-Star-channels-and-direct-messages).
+
+From outside Slack, this link opens the Home tab in the desktop and mobile apps, for the Dock or
+a shortcut: `slack://app?team=<workspace id>&id=<app id>&tab=home`. The workspace id starts with
+`T` and the app id with `A`; the app id is on the app's **Basic Information** page.
 
 Upgrading from an earlier version that held one session per channel: the channel keeps its
 directory, loses its old session pointer and bypass switch, and gets this message once, posted
@@ -443,3 +489,5 @@ in [features.md](features.md#notifications), not restated here.
 | `The directory ... no longer exists` | The thread's directory was moved or deleted: bind the channel again with `!bind <path>` for the next thread |
 | `macOS does not let code-with-slack read ...` | The directory is in a folder macOS protects: see Part 4, "Folders macOS protects" |
 | `another code-with-slack is running` in the log | A second instance tried to start; only one may run |
+| The app has no **Home** tab, or it stays empty | **Home Tab** is off in the app's settings, and the log says `the Home tab is not enabled in the Slack app`: turn it on under **App Home**, **Show Tabs**, then restart code-with-slack |
+| A session is missing from the Home tab | The page starts on `Last 48 hours`: choose `Any time`. A thread whose root message was deleted, and a channel the bot is no longer in, are left out |

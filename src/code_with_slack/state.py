@@ -4,6 +4,7 @@ effort level."""
 
 import contextlib
 import json
+import logging
 import os
 import tempfile
 from collections.abc import Callable, Collection, Mapping
@@ -11,6 +12,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # A thread with no session id whose root message is older than this never finished its first
 # turn: `prune` drops it. A Slack `thread_ts` is the root message's epoch time in seconds.
@@ -45,6 +48,11 @@ class ThreadState:
     # The root's reaction name while it is ⏳ or ✋ (`render.status.Status.value`); cleared once
     # ✅ or ❌ is requested.
     status: str | None = None
+    # The root's reaction name once ✅ or ❌ is requested, cleared when it turns ⏳ or ✋ again:
+    # what the Home tab shows for a session with nothing running. Never read by crash repair.
+    # ❌ stands here next to a kept `status` when an answer never reached Slack: the root shows
+    # ❌, and repair still owes the thread its notice.
+    ended: str | None = None
 
 
 @dataclass(frozen=True)
@@ -77,13 +85,14 @@ def _parse_thread(raw: dict[str, Any]) -> ThreadState:
     """Tolerant of a v2 file written before the repair fields existed (they default to "nothing
     open"), and a v2 file written with them read by code that does not know them yet ignores the
     extra keys: both directions of the additive version stay 2 (`bypass_off` is one such key:
-    a file without it reads its `bypass: false` as never chosen). A file written by 1304c5e's single
-    `open_reply` field (never shipped) is read the same as one with none at all: that key is not
-    looked at."""
+    a file without it reads its `bypass: false` as never chosen; `ended` is another). A file
+    written by 1304c5e's single `open_reply` field (never shipped) is read the same as one with
+    none at all: that key is not looked at."""
     effort = raw.get("effort")
     open_replies = raw.get("open_replies")
     requests = raw.get("requests")
     status = raw.get("status")
+    ended = raw.get("ended")
     return ThreadState(
         directory=Path(raw["directory"]),
         session_id=raw.get("session_id"),
@@ -92,6 +101,7 @@ def _parse_thread(raw: dict[str, Any]) -> ThreadState:
         open_replies=tuple(open_replies) if isinstance(open_replies, list) else (),
         requests=tuple(requests) if isinstance(requests, list) else (),
         status=status if isinstance(status, str) else None,
+        ended=ended if isinstance(ended, str) else None,
     )
 
 
@@ -105,6 +115,12 @@ def _parse_v2(raw: dict[str, Any]) -> dict[str, ChannelRecord]:
             threads=MappingProxyType(threads),
         )
     return channels
+
+
+def _shown(threads: Mapping[str, ThreadState]) -> dict[str, tuple[str | None, ...]]:
+    """What the session index (the Home tab) shows of `threads`: a write that leaves this
+    unchanged is not announced to `StateStore.on_sessions_change`."""
+    return {ts: (t.session_id, t.status, t.ended) for ts, t in threads.items()}
 
 
 def _migrate_v1(raw: dict[str, Any]) -> dict[str, ChannelRecord]:
@@ -122,13 +138,30 @@ class StateStore:
     def __init__(self, path: Path) -> None:
         self._path = path
         self._channels = self._load()
+        # Called after a write that changed which channels are bound, which threads exist, the
+        # session one holds, or a root's reaction: what the session index is built from. It is
+        # given the (channel_id, thread_ts) of each thread the write touched. Never while
+        # loading.
+        self.on_sessions_change: Callable[[frozenset[tuple[str, str]]], None] | None = None
 
     def channel(self, channel_id: str) -> ChannelRecord | None:
         return self._channels.get(channel_id)
 
+    def channels(self) -> list[str]:
+        """The id of every bound channel, in the order they were bound."""
+        return list(self._channels)
+
     def thread(self, channel_id: str, thread_ts: str) -> ThreadState | None:
         channel = self._channels.get(channel_id)
         return channel.threads.get(thread_ts) if channel is not None else None
+
+    def threads(self) -> list[tuple[str, str, ThreadState]]:
+        """Every (channel_id, thread_ts, thread), across all channels."""
+        return [
+            (channel_id, thread_ts, thread)
+            for channel_id, channel in self._channels.items()
+            for thread_ts, thread in channel.threads.items()
+        ]
 
     def bind(self, channel_id: str, directory: Path) -> None:
         """Bind a channel to a directory; its threads and their own folders stay untouched
@@ -140,6 +173,8 @@ class StateStore:
             threads=current.threads if current is not None else _empty_threads(),
         )
         self._save()
+        if current is None:
+            self._announce()  # a new channel in the session index; a rebind changes no row
 
     def open_thread(
         self, channel_id: str, thread_ts: str, session_id: str | None = None
@@ -208,12 +243,16 @@ class StateStore:
             remaining = tuple(t for t in current.requests if t != message_ts)
             self._set_thread(channel_id, thread_ts, replace(current, requests=remaining))
 
-    def set_status_pending(self, channel_id: str, thread_ts: str, name: str | None) -> None:
+    def set_status_pending(
+        self, channel_id: str, thread_ts: str, name: str | None, ended: str | None = None
+    ) -> None:
         """Record the root's reaction while it is ⏳ or ✋ (`name`), or clear it once ✅ or ❌ is
-        requested (crash repair); a no-op for a thread that does not exist."""
+        requested (crash repair) and keep that one as `ended`; both None for a root left bare,
+        both set for a ❌ shown while repair still owes the thread. A no-op for a thread that does
+        not exist."""
         current = self.thread(channel_id, thread_ts)
-        if current is not None and current.status != name:
-            self._set_thread(channel_id, thread_ts, replace(current, status=name))
+        if current is not None and (current.status, current.ended) != (name, ended):
+            self._set_thread(channel_id, thread_ts, replace(current, status=name, ended=ended))
 
     def repairs_pending(self) -> list[tuple[str, str, ThreadState]]:
         """Every (channel_id, thread_ts, thread) whose crash-repair fields are not all empty:
@@ -300,8 +339,14 @@ class StateStore:
                 else replace(channel, threads=MappingProxyType(kept))
             )
         if removed:
+            gone = frozenset(
+                (channel_id, thread_ts)
+                for channel_id, channel in self._channels.items()
+                for thread_ts in channel.threads.keys() - updated[channel_id].threads.keys()
+            )
             self._channels = updated
             self._save()
+            self._announce(gone)
         return removed
 
     def _set_thread(self, channel_id: str, thread_ts: str, updated: ThreadState) -> None:
@@ -312,6 +357,23 @@ class StateStore:
         channel = self._channels[channel_id]
         self._channels[channel_id] = replace(channel, threads=MappingProxyType(threads))
         self._save()
+        before, after = _shown(channel.threads), _shown(threads)
+        changed = frozenset(
+            (channel_id, thread_ts)
+            for thread_ts in before.keys() | after.keys()
+            if before.get(thread_ts) != after.get(thread_ts)
+        )
+        if changed:
+            self._announce(changed)
+
+    def _announce(self, changed: frozenset[tuple[str, str]] = frozenset()) -> None:
+        """The write is already on disk: an observer that fails must not fail its caller."""
+        if self.on_sessions_change is None:
+            return
+        try:
+            self.on_sessions_change(changed)
+        except Exception as exc:
+            logger.warning("the session index was not told of a change: %s", type(exc).__name__)
 
     def _load(self) -> dict[str, ChannelRecord]:
         try:
@@ -350,6 +412,7 @@ class StateStore:
                             "open_replies": list(t.open_replies),
                             "requests": list(t.requests),
                             "status": t.status,
+                            "ended": t.ended,
                         }
                         for thread_ts, t in c.threads.items()
                     },

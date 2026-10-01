@@ -77,8 +77,8 @@ async def _repair_thread(
         await delete_request(slack, channel=channel_id, ts=message_ts)
         _safe(state.remove_request, channel_id, thread_ts, message_ts)
     if thread.status is not None:
-        await _repair_status(slack, channel_id, thread_ts, thread.status)
-        _safe(state.set_status_pending, channel_id, thread_ts, None)
+        ended = await _repair_status(slack, channel_id, thread_ts, thread.status)
+        _safe(state.set_status_pending, channel_id, thread_ts, None, ended)
 
 
 def _safe(write: Callable[..., None], *args: object) -> None:
@@ -159,11 +159,15 @@ def _say_stopped_in_the_footer(blocks: list[dict[str, Any]]) -> None:
     last["elements"] = [{**first, "text": joined}, *last["elements"][1:]]
 
 
-async def _repair_status(slack: AsyncWebClient, channel_id: str, thread_ts: str, name: str) -> None:
+async def _repair_status(
+    slack: AsyncWebClient, channel_id: str, thread_ts: str, name: str
+) -> str | None:
     """Set ❌ on a root left ⏳ or ✋, through the same `StatusReaction` a live session uses (issue
     #19 fix round item 9): a fresh instance's first `show` also strips every other stray
     reaction from the root on its own (D10), which is strictly more thorough than removing just
-    the one name state.json recorded."""
+    the one name state.json recorded. Returns the reaction asked for, the thread's ended one
+    from now on; None for a name that is neither."""
     if name not in (Status.WORKING.value, Status.WAITING.value):
-        return
+        return None
     await StatusReaction(slack, channel=channel_id, root_ts=thread_ts).show(Status.ERROR)
+    return Status.ERROR.value

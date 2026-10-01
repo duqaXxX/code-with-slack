@@ -151,6 +151,7 @@ def test_v2_round_trips_every_field(tmp_path: Path) -> None:
                         "open_replies": [],
                         "requests": [],
                         "status": None,
+                        "ended": None,
                     }
                 },
             }
@@ -583,3 +584,127 @@ def test_a_written_off_reads_as_not_on_through_bypass_alone(tmp_path: Path) -> N
     store.open_thread(CHANNEL, THREAD_TS)
     store.set_bypass(CHANNEL, THREAD_TS, False)
     assert written(path).get("bypass") is not True
+
+
+def test_the_ended_reaction_round_trips_and_a_pending_one_replaces_it(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    store = StateStore(path)
+    store.bind(CHANNEL, tmp_path / "project")
+    store.open_thread(CHANNEL, THREAD_TS)
+
+    store.set_status_pending(CHANNEL, THREAD_TS, None, "white_check_mark")
+    assert written(path)["status"] is None
+    assert written(path)["ended"] == "white_check_mark"
+    assert StateStore(path).thread(CHANNEL, THREAD_TS).ended == "white_check_mark"
+
+    store.set_status_pending(CHANNEL, THREAD_TS, "hourglass_flowing_sand")
+    assert written(path)["status"] == "hourglass_flowing_sand"
+    assert written(path)["ended"] is None
+
+
+def test_a_cross_shown_over_a_kept_status_keeps_both(tmp_path: Path) -> None:
+    """An answer that never reached Slack: the root shows ❌ and crash repair still owes it."""
+    path = tmp_path / "state.json"
+    store = StateStore(path)
+    store.bind(CHANNEL, tmp_path / "project")
+    store.open_thread(CHANNEL, THREAD_TS)
+    store.set_status_pending(CHANNEL, THREAD_TS, "hourglass_flowing_sand", "x")
+    assert (written(path)["status"], written(path)["ended"]) == ("hourglass_flowing_sand", "x")
+    assert [ts for _, ts, _ in store.repairs_pending()] == [THREAD_TS]
+
+
+def test_an_observer_that_raises_does_not_break_the_write(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = StateStore(tmp_path / "state.json")
+    store.bind(CHANNEL, tmp_path / "project")
+
+    def broken(changed: frozenset[tuple[str, str]]) -> None:
+        raise RuntimeError("no running event loop")
+
+    store.on_sessions_change = broken
+    with caplog.at_level("WARNING"):
+        store.open_thread(CHANNEL, THREAD_TS)
+    assert store.thread(CHANNEL, THREAD_TS) is not None
+    assert "RuntimeError" in caplog.text
+
+
+def test_an_ended_reaction_is_nothing_for_crash_repair_to_find(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.json")
+    store.bind(CHANNEL, tmp_path / "project")
+    store.open_thread(CHANNEL, THREAD_TS)
+    store.set_status_pending(CHANNEL, THREAD_TS, None, "x")
+    assert store.repairs_pending() == []
+
+
+def test_clear_repair_keeps_the_ended_reaction(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.json")
+    store.bind(CHANNEL, tmp_path / "project")
+    store.open_thread(CHANNEL, THREAD_TS)
+    store.set_status_pending(CHANNEL, THREAD_TS, None, "x")
+    store.add_request(CHANNEL, THREAD_TS, "1790549807.000001")
+    store.clear_repair(CHANNEL, THREAD_TS)
+    assert store.thread(CHANNEL, THREAD_TS).ended == "x"
+
+
+def test_a_file_without_the_ended_key_loads_with_none(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    thread = {"directory": str(tmp_path), "session_id": SESSION, "status": None}
+    channel = {"directory": str(tmp_path), "notice_pending": False, "threads": {THREAD_TS: thread}}
+    path.write_text(json.dumps({"version": 2, "channels": {CHANNEL: channel}}))
+    assert StateStore(path).thread(CHANNEL, THREAD_TS).ended is None
+
+
+def test_threads_lists_every_thread_of_every_channel(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.json")
+    store.bind(CHANNEL, tmp_path / "project")
+    store.bind(OTHER_CHANNEL, tmp_path / "other")
+    first = store.open_thread(CHANNEL, THREAD_TS)
+    second = store.open_thread(OTHER_CHANNEL, OTHER_THREAD_TS)
+    assert store.threads() == [
+        (CHANNEL, THREAD_TS, first),
+        (OTHER_CHANNEL, OTHER_THREAD_TS, second),
+    ]
+
+
+def test_the_observer_hears_what_the_session_index_shows_and_nothing_else(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.json")
+    heard: list[frozenset[tuple[str, str]]] = []
+    store.on_sessions_change = heard.append
+
+    store.bind(CHANNEL, tmp_path / "project")  # a new channel is a new group on the page
+    assert store.channels() == [CHANNEL]
+    assert heard == [frozenset()]  # no thread of its own yet
+    store.open_thread(CHANNEL, THREAD_TS)
+    store.open_thread(CHANNEL, OTHER_THREAD_TS)
+    store.set_session(CHANNEL, THREAD_TS, SESSION)
+    store.set_status_pending(CHANNEL, THREAD_TS, "hourglass_flowing_sand")
+    store.set_status_pending(CHANNEL, THREAD_TS, None, "white_check_mark")
+    assert len(heard) == 6
+    # Each time, the thread the write touched and no other.
+    assert heard[1] == {(CHANNEL, THREAD_TS)} and heard[2] == {(CHANNEL, OTHER_THREAD_TS)}
+    assert set(heard[3:]) == {frozenset({(CHANNEL, THREAD_TS)})}
+
+    # What no row of the index shows: a reply's bookkeeping, a request, bypass, effort, a rebind.
+    store.replace_open_reply(CHANNEL, THREAD_TS, None, "1790549807.000001")
+    store.add_request(CHANNEL, THREAD_TS, "1790549807.000002")
+    store.set_bypass(CHANNEL, THREAD_TS, True)
+    store.set_effort(CHANNEL, THREAD_TS, "low")
+    store.bind(CHANNEL, tmp_path / "elsewhere")
+    assert len(heard) == 6
+
+    store.remove_thread(CHANNEL, THREAD_TS)
+    assert heard[6:] == [{(CHANNEL, THREAD_TS)}]
+
+
+def test_the_observer_hears_a_prune_that_removed_something(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.json")
+    store.bind(CHANNEL, tmp_path / "project")
+    store.open_thread(CHANNEL, THREAD_TS, session_id=SESSION)
+    heard: list[frozenset[tuple[str, str]]] = []
+    store.on_sessions_change = heard.append
+
+    assert store.prune(lambda _directory: {SESSION}, now=float(THREAD_TS)) == 0
+    assert heard == []
+    assert store.prune(lambda _directory: set(), now=float(THREAD_TS)) == 1
+    assert heard == [{(CHANNEL, THREAD_TS)}]

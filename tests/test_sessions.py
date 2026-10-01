@@ -510,6 +510,33 @@ async def test_the_status_field_tracks_working_then_clears_once_done(
     await until(lambda: h.state.thread(CHANNEL, THREAD).status is None)
 
 
+async def test_the_ended_field_keeps_the_roots_final_reaction_until_work_starts_again(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"turns": [sdk_messages("tools"), sdk_messages("tools")]})
+    session = h.session()
+    turn = await session.submit("list the files")
+    assert h.state.thread(CHANNEL, THREAD).ended is None
+    await asyncio.wait_for(turn.done.wait(), 2)
+    await until(lambda: h.state.thread(CHANNEL, THREAD).ended == Status.DONE.value)
+    await session.submit("and again")
+    stored = h.state.thread(CHANNEL, THREAD)
+    assert (stored.status, stored.ended) == (Status.WORKING.value, None)
+
+
+async def test_a_close_that_cuts_a_turn_short_keeps_x_as_the_ended_reaction(
+    harness_for: Callable[..., Harness],
+) -> None:
+    ask = CanUseToolCall("Bash", {"command": "rm -rf build"})
+    h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
+    session = h.session()
+    await session.submit("clean")
+    await until(lambda: bool(h.approvals._pending))
+    await session.close()
+    stored = h.state.thread(CHANNEL, THREAD)
+    assert (stored.status, stored.ended) == (None, Status.ERROR.value)
+
+
 async def test_close_leaves_every_repair_field_cleared(
     harness_for: Callable[..., Harness],
 ) -> None:

@@ -1,0 +1,22 @@
+{
+  "ok": true,
+  "messages": [
+    {
+      "user": "U000ALICE",
+      "type": "message",
+      "ts": "1789000000.000100",
+      "client_msg_id": "00000000-0000-4000-8000-000000000001",
+      "text": "fix the footer",
+      "team": "T000TEAM",
+      "thread_ts": "1789000000.000100",
+      "reply_count": 19,
+      "reply_users_count": 2,
+      "latest_reply": "1789996400.000200",
+      "reply_users": ["U000BOT", "U000ALICE"],
+      "is_locked": false,
+      "subscribed": false,
+      "reactions": [{"name": "white_check_mark", "users": ["U000BOT"], "count": 1}]
+    }
+  ],
+  "has_more": false
+}

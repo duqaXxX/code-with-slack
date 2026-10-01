@@ -250,7 +250,8 @@ class FakeSlack(AsyncWebClient):
         self.stream_ends = 0  # streams that stopped, by the daemon's stop or by `expire`
         # Every call waits this long before answering, as a slow Slack API round trip would.
         self.delay = 0.0
-        # A response may be an exception: the call raises it, as a network failure would.
+        # A response may be an exception: the call raises it, as a network failure would. It may
+        # be a function of the call's arguments, which returns the answer (or the exception).
         self.responses: dict[str, Any] = {
             "auth.test": slack_payload("api-auth-test"),
             "conversations.info": slack_payload("api-conversations-info"),
@@ -327,6 +328,8 @@ class FakeSlack(AsyncWebClient):
         args = {**(params or {}), **(json or {}), **(data if isinstance(data, dict) else {})}
         self.calls.append((api_method, args))
         answer = self.responses.get(api_method, {"ok": True})
+        if callable(answer):  # an answer that depends on the call's arguments
+            answer = answer(args)
         if (
             api_method in ("chat.appendStream", "chat.stopStream")
             and api_method not in self.responses
