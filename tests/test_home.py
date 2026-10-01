@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import time
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -40,6 +42,17 @@ from code_with_slack.state import StateStore
 from tests.fakes import FakeSlack, slack_payload
 from tests.test_repair import slack_error
 from tests.test_sessions import until
+
+
+@pytest.fixture(autouse=True)
+def machine_in_utc(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Today and Yesterday are days of the machine's time zone: the same on every machine here."""
+    monkeypatch.setenv("TZ", "UTC")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
 
 OWNER = "U000ALICE"
 TEAM = "T000TEAM"
@@ -284,6 +297,24 @@ def test_the_page_starts_on_the_last_48_hours_and_keeps_its_shape_under_a_period
     assert notes(page)[-2:] == [texts.HOME_NO_MATCH, texts.HOME_NO_SESSIONS]
 
 
+def test_a_day_a_clock_change_makes_longer_is_still_one_day(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Europe/Rome, 2026-10-25: summer time ends at 03:00. A reply at 00:30 that morning, read at
+    # noon with noon's offset, would fall on the day before.
+    monkeypatch.setenv("TZ", "Europe/Rome")
+    time.tzset()
+    noon = datetime(2026, 10, 25, 11, 0, tzinfo=UTC)  # 12:00 in Rome, winter time
+    early = row(
+        "just after midnight",
+        last_activity=int(datetime(2026, 10, 24, 22, 30, tzinfo=UTC).timestamp()),
+    )
+    page = home_view([early], CHANNELS, team_id=TEAM, chosen=HomeFilter(date=TODAY), now=noon)
+    assert titles(page) == [":hourglass_flowing_sand:  *just after midnight*"]
+    page = home_view([early], CHANNELS, team_id=TEAM, chosen=HomeFilter(date=YESTERDAY), now=noon)
+    assert titles(page) == []
+
+
 def test_filters_add_up_and_no_match_says_so() -> None:
     rows = [row("Fix the footer", status=Status.DONE.value), row("Fix the header")]
     both = HomeFilter(status=Status.DONE.value, search="fix")
@@ -315,6 +346,20 @@ def test_many_channels_stop_within_slacks_blocks_too() -> None:
     page = view(rows, channels=channels)
     assert len(page["blocks"]) <= HOME_BLOCKS
     assert notes(page)[-1] == texts.HOME_MORE.format(rows=len(cards(page)))
+
+
+def test_empty_channels_falling_off_the_end_are_not_called_hidden_sessions() -> None:
+    channels = {CHANNEL: "cc-articles", **{f"C{i:08d}": f"empty-{i}" for i in range(40)}}
+    page = view([row()], channels=channels)
+    assert len(page["blocks"]) <= HOME_BLOCKS
+    assert len(cards(page)) == 1
+    assert texts.HOME_MORE.format(rows=1) not in notes(page)
+
+
+def test_the_channel_menu_stops_at_slacks_hundred_options() -> None:
+    # A select menu holds 100 options (select menu reference): one more and Slack refuses the page.
+    channels = {f"C{i:08d}": f"project-{i}" for i in range(120)}
+    assert len(control(view([], channels=channels), CHANNEL_ACTION)["options"]) == 100
 
 
 def control(page: dict[str, Any], action_id: str) -> dict[str, Any]:
@@ -413,6 +458,21 @@ def test_a_value_the_page_never_offered_and_a_missing_control_keep_what_was_chos
     assert read_filter({}, current) == current
 
 
+@pytest.mark.parametrize(
+    "values",
+    [
+        ["not", "a", "mapping"],
+        {FILTERS_BLOCK: "not a block"},
+        {FILTERS_BLOCK: {STATUS_ACTION: {"selected_option": "raised_hand"}}},
+        {FILTERS_BLOCK: {STATUS_ACTION: {"selected_option": ["raised_hand"]}}},
+        {SEARCH_BLOCK: {SEARCH_ACTION: "not a control"}},
+    ],
+)
+def test_a_shape_slack_does_not_send_changes_nothing_and_never_raises(values: Any) -> None:
+    current = HomeFilter(status=Status.DONE.value, search="x")
+    assert read_filter(values, current) == current
+
+
 # --- the publisher ---
 
 OLD, NEW = "68da9311-0000-4000-8000-00000000000a", "68da9311-0000-4000-8000-00000000000b"
@@ -497,6 +557,19 @@ def make_home(
     )
 
 
+def told_by_state(home: Home, state: StateStore) -> list[frozenset[tuple[str, str]]]:
+    """Wire the state's observer to the page as `run` does, without the debounced publish: the
+    test publishes itself. Returns what the state announced."""
+    heard: list[frozenset[tuple[str, str]]] = []
+
+    def hear(changed: frozenset[tuple[str, str]]) -> None:
+        heard.append(changed)
+        home._stale.update(changed)
+
+    state.on_sessions_change = hear
+    return heard
+
+
 def published(slack: FakeSlack) -> list[dict[str, Any]]:
     return [args["view"] for args in slack.calls_to("views.publish")]
 
@@ -542,6 +615,7 @@ async def test_a_thread_is_read_again_only_once_its_session_moved(
     tmp_path: Path, slack: FakeSlack, state: StateStore, roots: dict[str, Any]
 ) -> None:
     home = make_home(slack, state, listing(tmp_path))
+    told_by_state(home, state)
     await home.publish()
     await home.publish()
     assert len(slack.calls_to("conversations.replies")) == 2  # one per thread, not per publish
@@ -553,6 +627,21 @@ async def test_a_thread_is_read_again_only_once_its_session_moved(
     page = published(slack)[-1]
     assert titles(page)[0] == ":hourglass_flowing_sand:  *Fix the footer*"  # now the last reply
     assert notes(page)[1].startswith("working · 20 replies · last reply ")
+
+
+async def test_a_turn_that_starts_and_ends_between_two_pages_is_still_read(
+    tmp_path: Path, slack: FakeSlack, state: StateStore, roots: dict[str, Any]
+) -> None:
+    # The thread ends as it started (✅, a turn, ✅ again) before the page is rebuilt: its state
+    # reads the same, and the write that touched it is what says it moved.
+    home = make_home(slack, state, listing(tmp_path))
+    told_by_state(home, state)
+    await home.publish()
+    roots[OLD_THREAD] = root(OLD_THREAD, reply_count=21, latest_reply=f"{EPOCH - 5}.000300")
+    state.set_status_pending(CHANNEL, OLD_THREAD, Status.WORKING.value)
+    state.set_status_pending(CHANNEL, OLD_THREAD, None, Status.DONE.value)
+    await home.publish()
+    assert any(n.startswith("ended · 21 replies") for n in notes(published(slack)[-1]))
 
 
 async def test_a_thread_with_no_kept_reaction_shows_the_one_on_its_root(
@@ -660,6 +749,7 @@ async def test_a_thread_slack_did_not_answer_about_keeps_what_was_read(
     tmp_path: Path, slack: FakeSlack, state: StateStore, roots: dict[str, Any]
 ) -> None:
     home = make_home(slack, state, listing(tmp_path))
+    told_by_state(home, state)
     await home.publish()
     roots[OLD_THREAD] = OSError("network down")
     state.set_status_pending(CHANNEL, OLD_THREAD, Status.WORKING.value)
@@ -673,6 +763,72 @@ async def test_a_thread_slack_did_not_answer_about_keeps_what_was_read(
     roots[OLD_THREAD] = root(OLD_THREAD, reply_count=21, latest_reply=f"{EPOCH - 5}.000300")
     await home.publish()
     assert any(n.startswith("working · 21 replies") for n in notes(published(slack)[-1]))
+
+
+async def test_a_root_slack_returns_in_a_shape_it_cannot_read_does_not_stop_the_page(
+    tmp_path: Path, slack: FakeSlack, state: StateStore, roots: dict[str, Any]
+) -> None:
+    roots[OLD_THREAD] = root(OLD_THREAD, latest_reply="not-a-number")
+    await make_home(slack, state, listing(tmp_path)).publish()
+    assert titles(published(slack)[0]) == [":raised_hand:  *Add retry to the uploader*"]
+
+
+@pytest.mark.parametrize(
+    "method", ["conversations.info", "conversations.replies", "chat.getPermalink"]
+)
+@pytest.mark.parametrize("code", ["internal_error", "ratelimited", "service_unavailable"])
+async def test_an_error_that_is_not_a_refusal_is_asked_about_again(
+    tmp_path: Path, slack: FakeSlack, state: StateStore, method: str, code: str
+) -> None:
+    # Only `channel_not_found`, `message_not_found` and `thread_not_found` say a thing is gone.
+    # Anything else is Slack having a bad moment: kept as final, one such answer would hide a
+    # channel or a thread until the daemon restarts.
+    working = slack.responses[method]
+    slack.responses[method] = slack_error(code)
+    home = make_home(slack, state, listing(tmp_path))
+    await home.publish()
+    slack.responses[method] = working
+    await home.publish()
+    assert len(cards(published(slack)[-1])) == 2
+
+
+async def test_a_page_slack_did_not_fully_answer_for_is_tried_again_and_a_whole_one_is_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, slack: FakeSlack, state: StateStore
+) -> None:
+    monkeypatch.setattr(home_module, "RETRY_SECONDS", 0.05)
+    working = slack.responses["chat.getPermalink"]
+    slack.responses["chat.getPermalink"] = slack_error("ratelimited")
+    home = make_home(slack, state, listing(tmp_path))
+    await home.publish()
+    assert cards(published(slack)[0]) == []
+    slack.responses["chat.getPermalink"] = working
+    await until(lambda: len(published(slack)) == 2 and len(cards(published(slack)[1])) == 2)
+    await asyncio.sleep(0.15)  # the page is whole now: nothing is tried again
+    assert len(published(slack)) == 2
+
+
+async def test_no_channel_answered_about_keeps_the_page_and_does_not_say_none_is_bound(
+    tmp_path: Path, slack: FakeSlack, state: StateStore
+) -> None:
+    slack.responses["conversations.info"] = slack_error("internal_error")
+    await make_home(slack, state, listing(tmp_path)).publish()
+    assert published(slack) == []  # nothing false is written over the page that is there
+
+
+async def test_a_chosen_channel_slack_did_not_answer_about_stays_chosen(
+    tmp_path: Path, slack: FakeSlack, state: StateStore
+) -> None:
+    slack.responses["conversations.info"] = [
+        slack_payload("api-conversations-info"),
+        slack_error("ratelimited"),
+    ]
+    home = make_home(slack, state, listing(tmp_path))
+    await home.choose(HomeFilter(channel=OTHER_CHANNEL))
+    assert home.chosen.channel == OTHER_CHANNEL
+    # One Slack says is gone is dropped.
+    slack.responses["conversations.info"] = slack_error("channel_not_found")
+    await home.publish()
+    assert home.chosen.channel is None
 
 
 async def test_a_permalink_slack_refuses_leaves_the_thread_out_for_the_run(

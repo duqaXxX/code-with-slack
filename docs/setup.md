@@ -319,7 +319,8 @@ a blank row before the next:
 session.
 
 Four controls at the top of the page narrow it: a channel, a status, a period (`Last 48 hours`,
-`Today`, `Yesterday`, `Last 7 days`, `Last 30 days`, `Any time`, by the thread's last reply)
+`Today`, `Yesterday`, `Last 7 days`, `Last 30 days`, `Any time`, by the thread's last reply,
+the days being those of the machine code-with-slack runs on)
 and a search on the titles (type a word and press Enter). The page starts on `Last 48 hours`.
 The controls add up, and with a channel, a status or a search chosen a channel shows every
 session that matches, not five. **Show all** chooses that channel. The choices last until

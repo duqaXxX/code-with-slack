@@ -139,9 +139,10 @@ class StateStore:
         self._path = path
         self._channels = self._load()
         # Called after a write that changed which channels are bound, which threads exist, the
-        # session one holds, or a root's reaction: what the session index is built from. Never
-        # while loading.
-        self.on_sessions_change: Callable[[], None] | None = None
+        # session one holds, or a root's reaction: what the session index is built from. It is
+        # given the (channel_id, thread_ts) of each thread the write touched. Never while
+        # loading.
+        self.on_sessions_change: Callable[[frozenset[tuple[str, str]]], None] | None = None
 
     def channel(self, channel_id: str) -> ChannelRecord | None:
         return self._channels.get(channel_id)
@@ -338,9 +339,14 @@ class StateStore:
                 else replace(channel, threads=MappingProxyType(kept))
             )
         if removed:
+            gone = frozenset(
+                (channel_id, thread_ts)
+                for channel_id, channel in self._channels.items()
+                for thread_ts in channel.threads.keys() - updated[channel_id].threads.keys()
+            )
             self._channels = updated
             self._save()
-            self._announce()
+            self._announce(gone)
         return removed
 
     def _set_thread(self, channel_id: str, thread_ts: str, updated: ThreadState) -> None:
@@ -351,15 +357,21 @@ class StateStore:
         channel = self._channels[channel_id]
         self._channels[channel_id] = replace(channel, threads=MappingProxyType(threads))
         self._save()
-        if _shown(channel.threads) != _shown(threads):
-            self._announce()
+        before, after = _shown(channel.threads), _shown(threads)
+        changed = frozenset(
+            (channel_id, thread_ts)
+            for thread_ts in before.keys() | after.keys()
+            if before.get(thread_ts) != after.get(thread_ts)
+        )
+        if changed:
+            self._announce(changed)
 
-    def _announce(self) -> None:
+    def _announce(self, changed: frozenset[tuple[str, str]] = frozenset()) -> None:
         """The write is already on disk: an observer that fails must not fail its caller."""
         if self.on_sessions_change is None:
             return
         try:
-            self.on_sessions_change()
+            self.on_sessions_change(changed)
         except Exception as exc:
             logger.warning("the session index was not told of a change: %s", type(exc).__name__)
 

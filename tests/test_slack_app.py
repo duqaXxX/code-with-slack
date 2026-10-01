@@ -20,6 +20,7 @@ from code_with_slack.guards import ChannelGuard, Identity
 from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds
 from code_with_slack.home import (
     CHANNEL_ACTION,
+    FILTER_ACTIONS,
     FILTERS_BLOCK,
     NEW_THREAD_ACTION,
     SEARCH_ACTION,
@@ -53,6 +54,7 @@ from tests.fakes import (
     slack_payload,
     split_turns,
 )
+from tests.test_sessions import until
 from tests.test_setup import controls as setup_controls
 from tests.test_setup import state as setup_state
 
@@ -236,6 +238,7 @@ async def world(slack: FakeSlack, tmp_path: Path) -> AsyncIterator[World]:
     made = World(slack, tmp_path)
     yield made
     await made.sessions.close_all()
+    await made.home.close()
 
 
 def message(text: str = "hello", **event: Any) -> dict[str, Any]:
@@ -678,7 +681,11 @@ async def test_a_click_on_new_thread_is_acknowledged_and_does_nothing(
     assert world.clients == [] and world.slack.calls == []
 
 
-async def test_a_home_filter_is_read_from_the_pages_state_and_published(world: World) -> None:
+@pytest.mark.parametrize("action_id", FILTER_ACTIONS)
+async def test_a_home_filter_is_read_from_the_pages_state_and_published(
+    world: World, action_id: str
+) -> None:
+    # Whichever of the four controls was used, the payload carries the state of them all.
     values = {
         FILTERS_BLOCK: {
             CHANNEL_ACTION: chosen_option(CHANNEL),
@@ -686,21 +693,21 @@ async def test_a_home_filter_is_read_from_the_pages_state_and_published(world: W
         },
         SEARCH_BLOCK: {SEARCH_ACTION: {"type": "plain_text_input", "value": "Footer"}},
     }
-    action = {"type": "static_select", "action_id": STATUS_ACTION, **chosen_option("raised_hand")}
+    action = {"type": "static_select", "action_id": action_id, **chosen_option("raised_hand")}
     response = await world.dispatch(home_action(action, **values))
     assert response.status == 200
-    assert world.home.chosen == HomeFilter(channel=CHANNEL, status="raised_hand", search="Footer")
-    (call,) = world.slack.calls_to("views.publish")
-    assert call["user_id"] == OWNER
+    chosen = HomeFilter(channel=CHANNEL, status="raised_hand", search="Footer")
+    await until(lambda: world.home.chosen == chosen and bool(world.slack.calls_to("views.publish")))
+    assert {call["user_id"] for call in world.slack.calls_to("views.publish")} == {OWNER}
 
 
 async def test_show_all_chooses_that_channel(world: World) -> None:
     action = {"type": "button", "action_id": SHOW_ALL_ACTION, "value": CHANNEL}
     await world.dispatch(home_action(action))
-    assert world.home.chosen == HomeFilter(channel=CHANNEL)
+    await until(lambda: world.home.chosen == HomeFilter(channel=CHANNEL))
     # A channel that is not bound is no filter: the value of a click is untrusted.
     await world.dispatch(home_action({**action, "value": "C000NOPE"}))
-    assert world.home.chosen == HomeFilter()
+    await until(lambda: world.home.chosen == HomeFilter())
 
 
 @pytest.mark.parametrize(("user", "team"), [(STRANGER, TEAM), (OWNER, OTHER_TEAM)])

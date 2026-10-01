@@ -589,7 +589,8 @@ Claude Code session id, and `!resume` never touches or waits on any other thread
 scope and needs no event from the owner. It always publishes to the configured owner's user id.
 
 `Home.publish` reads the bound channels (`StateStore.channels`) and asks Slack for each one's
-name once per run (`conversations.info`); a channel Slack refuses is left out with its threads.
+name once per run (`conversations.info`); a channel Slack no longer has is left out with its
+threads.
 It then builds one row per thread of those channels that holds a session id
 (`StateStore.threads`). The title comes from Claude Code: `sessions.directory_sessions` lists
 each folder once, and a session it does not list yet shows `Session` and the start of its id.
@@ -600,13 +601,19 @@ none, and the rows are ordered by that date. The status is the root's reaction n
 `ThreadState.ended` when it is set, `ThreadState.status` otherwise, and the reaction read from
 the root for a thread that has neither (one that ended before the daemon kept it). `ended` and
 `status` are both set only for an answer that never reached Slack, where the root shows ❌ and
-`status` stays for crash repair. A root is read again only when its thread's session id, `status`
-or `ended` changed since the last read, which every turn does at its start and at its end;
-`thread_not_found` (the root was deleted) leaves the thread out for the rest of the run, and a
-request that got no answer keeps what was read before. Each row also needs the root message's
-permalink (`chat.getPermalink`, asked once per thread per run): a thread whose permalink Slack
-refuses is left out for the rest of the run, and one whose request failed without an answer is
-asked again at the next publish. `home.THREADS_AT_ONCE` threads are asked about at a time.
+`status` stays for crash repair. A root is read again only for a thread a state write touched
+since the last read, which every turn does at its start and at its end
+(`StateStore.on_sessions_change` names the threads it changed). Each row also needs the root
+message's permalink (`chat.getPermalink`, asked once per thread per run).
+`home.THREADS_AT_ONCE` threads are asked about at a time.
+
+Only three answers are final, the ones in `home.GONE`: `channel_not_found`, `message_not_found`
+and `thread_not_found`. The channel or the thread is then left out, a thread until a state write
+touches it again and a channel for the rest of the run. Any other failure (a rate limit, a
+server error, the network, a root in a shape that cannot be read) is no answer: nothing is kept
+from it, what was read before stands, and the page is tried again after `home.RETRY_SECONDS`.
+When Slack answered about no channel at all, nothing is published, so the page that is there
+stays.
 
 `home.home_view` lays the rows out. Under the controls, each channel is a group: a header with
 the channel and a **New thread** link button (the `slack://channel` deep link), then two blocks
@@ -618,8 +625,9 @@ sessions first by their newest, each cut to `home.PER_CHANNEL` cards with a **Sh
 with a channel, a status or a search chosen (`HomeFilter.narrowed`), only the channels with a
 match, uncut. The period applies either way and leaves that shape alone: a channel whose sessions
 are all older keeps its header and says `texts.HOME_NO_MATCH`. A Home view holds 100 blocks and a
-session takes up to `home.CARD_BLOCKS` of them: the page stops before the cap and ends with
-`texts.HOME_MORE`.
+session takes up to `home.CARD_BLOCKS` of them: the page stops before the cap, and ends with
+`texts.HOME_MORE` when that leaves a session out. The channel menu holds `home.CHANNEL_OPTIONS`
+channels, Slack's limit for a select menu.
 
 The filters are a `home.HomeFilter` kept in memory: channel, status, period and a search on the
 title. The period starts on the last 48 hours; the others start unset. The two blocks that hold
@@ -630,13 +638,13 @@ payload, checked on its own for the owner and the workspace (a Home tab payload 
 channel). A filter's payload carries the state of all four controls in `view.state.values`,
 which `home.read_filter` reads by action id and turns into the filter; a status or a date the page never offered keeps
 the current one. **Show all** carries its channel, and `Home.publish` drops a chosen channel
-that is not one of the page's own. `Home.choose` then publishes at once. The **New thread** link
+that is not bound or that Slack no longer has. `Home.choose` then publishes at once. The **New thread** link
 button is followed by Slack itself and still sends its click, which is acknowledged and not read;
 a session's **Open** is a link in text and sends nothing.
 
 `StateStore.on_sessions_change` calls `Home.request` after a write that changed what the page
-shows: a channel bound for the first time, a thread added or removed, a session id, a root's
-reaction. A write that changes anything else (a reply's bookkeeping, a request, bypass, effort,
+shows, with the threads the write touched: a channel bound for the first time, a thread added or
+removed, a session id, a root's reaction. A write that changes anything else (a reply's bookkeeping, a request, bypass, effort,
 a rebind) does not. `Home.request` returns at once and publishes after `home.DEBOUNCE_SECONDS`,
 so the burst of reaction changes one turn makes costs one publish; a change that lands during a
 publish is followed by another. Publishes run one at a time, each built after the one before it
@@ -646,7 +654,7 @@ after every session has closed and publishes what was still owed, giving up afte
 
 `Home.publish` never raises. `not_enabled` (the Home tab is off in the Slack app's settings) is
 logged once and ends the publishing for that run; any other failure is logged by its error code
-and the next change tries again.
+and tried again after `home.RETRY_SECONDS`.
 
 ## Slack handlers
 
