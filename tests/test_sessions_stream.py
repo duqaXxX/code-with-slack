@@ -320,6 +320,24 @@ async def test_a_reply_whose_appends_slack_refuses_ends_whole_with_the_checkmark
     assert h.slack.calls_to("chat.postMessage")[-1]["blocks"][-1]["type"] == "context"
 
 
+async def test_a_reply_slack_refuses_to_grow_by_append_and_by_update_shows_the_cross(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.05)
+    first, notice, injected = split_background()
+    h = harness_for({"turns": [first]})
+    await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
+    await asyncio.sleep(0.05)
+    h.slack.responses["chat.appendStream"] = {"ok": False, "error": "msg_too_long"}
+    h.slack.responses["chat.update"] = {"ok": False, "error": "msg_too_long"}
+    h.clients[0].inject(notice + injected)
+    await until(lambda: h.reactions()[-1] == Status.ERROR.value)
+    await asyncio.sleep(0.1)
+    assert Status.DONE.value not in h.reactions()[-1:]
+    summary = next(m.summary for m in notice if isinstance(m, TaskNotificationMessage))
+    assert f"✓ {summary}" not in h.slack.stream_texts()[0]  # the report never reached the reply
+
+
 async def test_a_retry_that_lands_shows_the_checkmark_and_clears_the_status(
     harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
 ) -> None:

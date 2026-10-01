@@ -308,7 +308,9 @@ stops the stream at once, without the footer, and writes the message by `chat.up
 then posts a closing message, as for a reply past `STREAM_SECONDS`. The text of a message's cards
 counts toward the cap of a streamed message, by a formula Slack does not document (measured
 2026-10-01 in a private test channel, slack-sdk 3.44.1, issue #92), and the plan does not count
-it; the refusal is logged with the sizes the plan knew and no content. Only the
+it; the refusal is logged with the sizes the plan knew and no content. If Slack then refuses
+the update of that message too, the change is dropped and the message shows less than the model:
+unless a later update passes, the reply's end counts as not landed and the root shows ❌. Only the
 thread's latest reply shows the footer (`ReplySink.set_latest`), so it stays at the bottom of the
 thread as the terminal's status line. A card left `in_progress` in a stopped message is stored
 as an error until it is updated (measured 2026-09-28), so every end closes its cards first.

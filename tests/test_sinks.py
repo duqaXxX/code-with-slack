@@ -1234,6 +1234,41 @@ async def test_a_final_append_refused_for_its_content_still_ends_the_reply(
     assert slack.pushes() == 2
 
 
+async def test_an_update_refused_after_a_refused_append_is_an_end_that_did_not_land(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The message shows less than the model and no later write can fix it: never a checkmark.
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.01)
+    sink = reply(slack)
+    await sink.text("Hello. ")
+    await settled()
+    slack.responses["chat.appendStream"] = rejected("msg_too_long")
+    slack.responses["chat.update"] = rejected("msg_too_long")
+    await sink.text("Done.")
+    await sink.finish([])
+    assert await sink.close_out("footer") is False
+    assert await sink.wait_landed() is False
+    assert slack.stream_texts() == ["Hello."]  # what the stream held when it was stopped
+    assert len(slack.posted_ts) == 1  # the closing message, posted once: the retry adds none
+
+
+async def test_a_later_update_that_passes_lands_the_reply_after_a_refused_one(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.text("Hello. ")
+    await settled()
+    slack.responses["chat.appendStream"] = rejected("msg_too_long")
+    slack.responses["chat.update"] = [rejected("msg_too_long"), {"ok": True}]
+    await sink.text("World.")
+    await settled()
+    assert slack.stream_texts() == ["Hello."]  # the update was refused too: the change is dropped
+    await sink.text(" Done.")
+    await sink.finish([])
+    assert await sink.close_out("footer") is True
+    assert slack.stream_texts() == ["Hello. World. Done."]
+
+
 async def test_an_append_refused_for_another_reason_stays_a_failed_write(
     slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
 ) -> None:

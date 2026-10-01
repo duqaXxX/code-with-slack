@@ -491,6 +491,11 @@ class _Message:
     # An append whose outcome is unknown: the stream is no longer told anything, it is stopped
     # and the message goes on by update, from the model.
     blind: bool = False
+    # Its stream was refused as too long (`refused`), and an update refused in turn left it
+    # showing less than the model (`short`), until an update passes: while a message is short
+    # the reply's end has not landed.
+    refused: bool = False
+    short: bool = False
     started: float = 0.0  # when its stream started, by the clock: a stream is over at 5 minutes
     # (span revision, end) of the last write of a stopped message that has a successor: while it
     # holds, nothing in the message changed and it is not rendered again.
@@ -1108,11 +1113,14 @@ class ReplySink:
                 await self._stop(message, None, end)
             elif code in REFUSED_CONTENT:
                 # The message already shows what it showed: never replaced by a plainer one.
-                # The change is dropped; the next one is tried.
+                # The change is dropped; the next one is tried. After a refused append nothing
+                # else would say the message is short of the model, so that is kept.
                 message.shown, message.exact, message.footer = blocks, False, footer
+                message.short = message.refused
                 return True, overflow
             return False, None
         message.shown, message.exact, message.footer = blocks, False, footer
+        message.short = False
         return True, overflow
 
     def _current(
@@ -1291,6 +1299,7 @@ class ReplySink:
                     message.card_text,
                     plan_card_text(plan),
                 )
+                message.refused = True
                 if await self._stop(message, None, None) == "failed":
                     return False, None
                 return await self._update_step(message, None)
@@ -1430,7 +1439,11 @@ class ReplySink:
             if message.streaming and await self._stop(message, None, overflow) == "failed":
                 return False
             self._messages.append(_Message(overflow, mode))
-        return await self._end() if self._closed_out else True
+        if not self._closed_out:
+            return True
+        # The end is written either way; a message left short of the model makes it one that
+        # did not land, which the session shows.
+        return await self._end() and not any(m.short for m in self._messages)
 
     async def _end(self) -> bool:
         """The reply's end, on Slack: the footer on the last stream's stop, or in a closing
