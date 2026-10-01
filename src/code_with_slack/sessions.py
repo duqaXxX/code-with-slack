@@ -2136,6 +2136,11 @@ class SessionManager:
         if self._sessions.get(key) is session:
             del self._sessions[key]
 
+    def live_threads(self) -> set[tuple[str, str]]:
+        """The (channel_id, thread_ts) of every thread with a session object that is not closed:
+        what the cleanup of `state.json` must not remove under a running session."""
+        return {key for key, session in self._sessions.items() if not session.closed}
+
     def sessions_of(self, channel_id: str) -> list[ThreadSession]:
         """The live sessions of a channel, across its threads; a closed one (D9's idle close, or
         a gone resume) is left out even before the next lookup evicts it."""

@@ -11,10 +11,10 @@ configuration, so a bad `.env` fails before anything else; takes the single-inst
 second daemon fails before it opens a Socket Mode connection; reads `state.json`; builds a plain
 `AsyncWebClient` and calls `auth.test` for the workspace id and the bot user id; then, with that
 client (Socket Mode not opened yet), repairs what a crashed daemon left open
-(`code_with_slack.repair.repair_crash`, issue #19: see below) and prunes `state.json`
-(`StateStore.prune`, run only after repair, so a pruned thread's leftovers are still repaired
-first): a thread whose session id no longer resumes in its folder, and a no-session thread whose
-root message is more than a day old, are dropped; asks for the first session index
+(`code_with_slack.repair.repair_crash`, issue #19: see below) and cleans `state.json`
+(`code_with_slack.cleanup.clean`, run only after repair, so a pruned thread's leftovers are still
+repaired first; see "Cleaning `state.json`" below), which it then does again every
+`cleanup.CLEAN_EVERY_SECONDS` until a stop begins; asks for the first session index
 (`Home.request`, see "The session index" below); only then opens the Socket Mode connection and,
 once connected, posts the v1-to-v2 upgrade notice to each channel that still owes one
 (`__main__._post_upgrade_notices`), as a message of its own, not a reply. On `SIGTERM`, which
@@ -63,6 +63,26 @@ either the old file or the new one. A file that cannot be read stops the daemon 
 replaced. A version 1 file (one session id and bypass switch per channel, no threads) is migrated
 on load: each channel keeps its directory, gets an empty thread map and a pending upgrade notice;
 the old session id and bypass switch, which belonged to the channel itself, are dropped.
+
+### Cleaning `state.json`
+
+`code_with_slack.cleanup.clean` runs on start and then every `cleanup.CLEAN_EVERY_SECONDS`
+(`__main__._clean_every`), and removes only what an answer makes certain:
+
+- `cleanup.forget_gone_channels` asks `conversations.info` about each bound channel and removes,
+  with `StateStore.remove_channel`, each one Slack answers `channel_not_found` about, threads
+  included. Any other failure is no answer and removes nothing. A private channel the bot was
+  removed from gives the same answer as a deleted one, so it is forgotten too. When Slack finds
+  none of the bound channels, nothing is removed and a warning says so: that is what the token
+  of another workspace looks like.
+- `StateStore.prune` then drops a thread whose session id is no longer among its folder's
+  sessions (`__main__._alive_sessions`, read off the event loop; a folder it cannot tell about
+  keeps its threads) and a no-session thread whose root message is more than a day old.
+
+A pass leaves alone every thread and channel with a live session object
+(`SessionManager.live_threads`), whose session id may not be on disk yet; the next pass takes
+them once the session has closed. `clean` never raises: a pass that fails is logged and the next
+one tries again.
 
 Each thread also carries three fields for crash repair (issue #19), ids only, never message
 content: `open_replies`, the ts of every open reply's last message, a stream or a stopped message (more

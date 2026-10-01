@@ -110,6 +110,17 @@ code-with-slack keeps its files in `~/.config/code-with-slack/`:
 {"version": 2, "channels": {"C0123456789": {"directory": "/home/dev/code/project", "notice_pending": false, "threads": {"1700000000.000100": {"directory": "/home/dev/code/project", "session_id": "...", "bypass": false, "effort": null}}}}}
 ```
 
+code-with-slack keeps `state.json` clean on its own, when it starts and then every 6 hours. It
+forgets a channel Slack answers `channel_not_found` about, with its threads, and a thread whose
+Claude Code session no longer exists. Anything it cannot tell for certain stays: a rate limit, a
+server error or an unreadable folder removes nothing, and neither does a thread or a channel
+with a session open at that moment. When Slack finds none of the bound channels it forgets none
+and says so in the log, since that is what a bot token of another workspace looks like.
+
+A private channel the bot was removed from answers `channel_not_found` too, so it is forgotten
+like a deleted one. After inviting the bot back, send `!bind` there again; `!resume` brings back
+the folder's sessions, which stay on disk.
+
 Create the directory and the file, readable by you only. code-with-slack refuses to start when
 `.env` is readable by anyone else, is a symbolic link, or belongs to another user, and when a
 token is of the wrong kind (`xoxb-` for the bot token, `xapp-` for the app-level token).
@@ -490,4 +501,6 @@ in [features.md](features.md#notifications), not restated here.
 | `macOS does not let code-with-slack read ...` | The directory is in a folder macOS protects: see Part 4, "Folders macOS protects" |
 | `another code-with-slack is running` in the log | A second instance tried to start; only one may run |
 | The app has no **Home** tab, or it stays empty | **Home Tab** is off in the app's settings, and the log says `the Home tab is not enabled in the Slack app`: turn it on under **App Home**, **Show Tabs**, then restart code-with-slack |
+| `forgot channel ...: Slack no longer has it` in the log | The channel was deleted, or the bot was removed from it: its binding and its threads are gone from `state.json`. If the bot is back in it, send `!bind` there again |
+| `Slack finds none of the ... bound channels: nothing is forgotten` in the log | Every bound channel is out of the bot's reach: check that `SLACK_BOT_TOKEN` is the one of this workspace and that the bot is still in its channels |
 | A session is missing from the Home tab | The page starts on `Last 48 hours`: choose `Any time`. A thread whose root message was deleted, and a channel the bot is no longer in, are left out |

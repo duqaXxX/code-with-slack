@@ -7,6 +7,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Cleanup of `state.json` (new module `code_with_slack.cleanup`): on start and then every 6
+  hours, a bound channel Slack answers `channel_not_found` about is forgotten with its threads
+  (`StateStore.remove_channel`), and the pruning of threads whose session is gone, which ran on
+  start alone, runs on the same schedule. A failure that is not that answer removes nothing, a
+  thread or channel with a live session is left for the next pass, and when Slack finds none of
+  the bound channels nothing is forgotten. A private channel the bot was removed from is
+  forgotten like a deleted one: `!bind` there again once the bot is back.
 - Session index: the app's Home tab lists the sessions the threads hold, grouped by channel, the
   channel and the session used last first (new module `code_with_slack.home`). A channel shows
   its five newest sessions and a Show all button; each session is two lines, the root's status

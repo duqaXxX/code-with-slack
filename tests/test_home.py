@@ -729,6 +729,24 @@ async def test_a_channel_slack_no_longer_has_is_left_out_with_its_threads_and_as
     assert len(slack.calls_to("conversations.info")) == 2  # each asked once per run
 
 
+async def test_a_channel_forgotten_and_bound_again_is_asked_about_again(
+    tmp_path: Path, slack: FakeSlack, state: StateStore
+) -> None:
+    slack.responses["conversations.info"] = [
+        slack_payload("api-conversations-info"),
+        slack_error("channel_not_found"),
+        slack_payload("api-conversations-info"),
+    ]
+    home = make_home(slack, state, listing(tmp_path))
+    await home.publish()
+    assert headers(published(slack)[-1]) == [f"*<#{CHANNEL}>*"]
+    state.remove_channel(OTHER_CHANNEL)  # the cleanup forgets it
+    await home.publish()
+    state.bind(OTHER_CHANNEL, tmp_path / "other")  # the bot is back in it, and `!bind` again
+    await home.publish()
+    assert headers(published(slack)[-1]) == [f"*<#{CHANNEL}>*", f"*<#{OTHER_CHANNEL}>*"]
+
+
 async def test_a_thread_whose_root_is_gone_is_left_out_and_asked_once(
     tmp_path: Path, slack: FakeSlack, state: StateStore, roots: dict[str, Any]
 ) -> None:

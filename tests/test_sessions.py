@@ -3343,3 +3343,14 @@ async def test_working_in_does_not_resolve_a_path_on_every_lookup(
         monkeypatch.undo()
     approval_id = next(iter(h.approvals._pending))
     assert h.approvals.resolve(approval_id, CHANNEL, THREAD, Approve()) is not None
+
+
+async def test_the_manager_names_the_threads_with_a_live_session(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    assert h.manager.live_threads() == set()
+    session = h.session()
+    assert h.manager.live_threads() == {(CHANNEL, THREAD)}
+    await session.close()
+    assert h.manager.live_threads() == set()  # a closed one is no longer in the way

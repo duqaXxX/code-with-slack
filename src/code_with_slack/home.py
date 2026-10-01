@@ -554,6 +554,9 @@ class Home:
     async def _channels(self, bound: list[str]) -> dict[str, str]:
         """Every bound channel Slack still has, with its name, in the order they were bound."""
         found: dict[str, str] = {}
+        # A channel forgotten and bound again later is asked about again.
+        for unbound in self._names.keys() - set(bound):
+            del self._names[unbound]
         for channel_id in bound:
             if channel_id not in self._names:
                 try:
