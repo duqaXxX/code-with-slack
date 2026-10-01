@@ -14,7 +14,7 @@ from code_with_slack import texts
 from code_with_slack.home import HOME_OPEN_ACTION, Home
 from code_with_slack.lock import single_instance
 from code_with_slack.state import StateStore
-from tests.fakes import CHANNEL, FakeSlack
+from tests.fakes import CHANNEL, FakeSlack, slack_payload
 from tests.test_sessions import until
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -133,6 +133,10 @@ async def test_run_publishes_the_session_index_once_started_and_after_a_change(
         ]
 
     fake_slack = FakeSlack()
+    # The thread's root as Slack returns it, its last reply now: inside the page's 48 hours.
+    root = {**slack_payload("api-conversations-replies-root")["messages"][0], "ts": thread_ts}
+    root = {**root, "thread_ts": thread_ts, "latest_reply": f"{time.time():.6f}", "reactions": []}
+    fake_slack.responses["conversations.replies"] = {"ok": True, "messages": [root]}
     stores: list[StateStore] = []
 
     def recording_store(path: Path) -> StateStore:

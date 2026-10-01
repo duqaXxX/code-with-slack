@@ -10,7 +10,9 @@ All notable changes to this project are documented here. The format follows
 - Session index: the app's Home tab lists the sessions the threads hold, grouped by channel, the
   channel and the session used last first (new module `code_with_slack.home`). A channel shows
   its five newest sessions and a Show all button; each session is a card with the root's status
-  reaction, the title, an Open button for its thread, the status in a word and the age. New
+  reaction, the title, an Open button for its thread, the status in a word, the thread's number
+  of replies and the time of its last reply, read from Slack (`conversations.replies` on the
+  root), which also orders the cards. New
   thread, beside a channel, opens it. Four controls narrow the page and add up: channel, status,
   period (the last 48 hours to start with) and a search on titles; the choices live in memory. A thread whose root was deleted and a
   channel Slack no longer has are left out. The page is published with `views.publish` whenever
@@ -18,7 +20,7 @@ All notable changes to this project are documented here. The format follows
   (`features.app_home`); an existing app needs **Home Tab** turned on under **App Home**, and
   without it the daemon logs once and publishes nothing. `state.json` gains an additive
   per-thread key, `ended`: the root's reaction name once ✅ or ❌ is requested (`state.json` stays
-  version 2; a thread that ended before this shows no status).
+  version 2; a thread that ended before this shows the reaction read from its root).
 - Session setup before the first prompt (issue #74): a top-level message that opens a session
   first gets a message in its thread with a Model select (the CLI's own list), an Effort select
   (`Default` or the chosen model's levels), a Bypass checkbox and Start. Start applies the choice

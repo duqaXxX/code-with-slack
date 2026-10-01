@@ -30,14 +30,15 @@ from code_with_slack.home import (
     Home,
     HomeFilter,
     HomeRow,
+    ThreadFacts,
     home_view,
     read_filter,
+    thread_facts,
 )
 from code_with_slack.render.status import Status
 from code_with_slack.state import StateStore
 from tests.fakes import FakeSlack, slack_payload
 from tests.test_repair import slack_error
-from tests.test_resume import message, write_transcript
 from tests.test_sessions import until
 
 OWNER = "U000ALICE"
@@ -56,6 +57,7 @@ def row(title: str = "Refactor the feed parser", **fields: Any) -> HomeRow:
         "channel_id": CHANNEL,
         "thread_ts": "1789990000.000100",
         "status": Status.WORKING.value,
+        "replies": 3,
         "last_activity": EPOCH - 120,
         "permalink": LINK,
     }
@@ -131,7 +133,7 @@ def test_a_channel_is_a_header_with_a_new_thread_link_and_a_card_per_session() -
     # Slack's own relative date (formatting-message-text, read 2026-10-01): it stays right while
     # the page sits unpublished.
     assert details["elements"][0]["text"] == (
-        f"working · <!date^{EPOCH - 120}^{{ago}}|2026-09-21 14:11 UTC>"
+        f"working · 3 replies · last reply <!date^{EPOCH - 120}^{{ago}}|2026-09-21 14:11 UTC>"
     )
 
 
@@ -147,13 +149,22 @@ def test_a_channel_is_a_header_with_a_new_thread_link_and_a_card_per_session() -
 def test_each_reaction_has_its_word(status: Status, word: str) -> None:
     page = view([row(status=status.value)])
     assert titles(page) == [f":{status.value}:  *Refactor the feed parser*"]
-    assert any(note.startswith(f"{word} · <!date^") for note in notes(page))
+    assert any(note.startswith(f"{word} · 3 replies · last reply <!date^") for note in notes(page))
 
 
 def test_a_card_with_no_reaction_shows_the_title_and_the_age_alone() -> None:
     page = view([row(status=None)], channels={CHANNEL: "cc-articles"})
     assert titles(page) == ["*Refactor the feed parser*"]
-    assert notes(page)[-1] == f"<!date^{EPOCH - 120}^{{ago}}|2026-09-21 14:11 UTC>"
+    when = f"<!date^{EPOCH - 120}^{{ago}}|2026-09-21 14:11 UTC>"
+    assert notes(page)[-1] == f"3 replies · last reply {when}"
+
+
+def test_a_card_counts_its_replies_and_says_started_when_it_has_none() -> None:
+    when = f"<!date^{EPOCH - 120}^{{ago}}|2026-09-21 14:11 UTC>"
+    one = view([row(status=None, replies=1)], channels={CHANNEL: "cc-articles"})
+    assert notes(one)[-1] == f"1 reply · last reply {when}"
+    none = view([row(status=None, replies=0)], channels={CHANNEL: "cc-articles"})
+    assert notes(none)[-1] == f"started {when}"
 
 
 def test_a_title_is_shown_as_written_on_one_line() -> None:
@@ -296,7 +307,7 @@ def test_many_channels_stop_within_slacks_blocks_too() -> None:
 
 
 def control(page: dict[str, Any], action_id: str) -> dict[str, Any]:
-    (controls,) = [b for b in page["blocks"] if b.get("block_id") == FILTERS_BLOCK]
+    (controls,) = [b for b in page["blocks"] if b.get("block_id", "").startswith(FILTERS_BLOCK)]
     return next(e for e in controls["elements"] if e["action_id"] == action_id)
 
 
@@ -330,7 +341,7 @@ def test_the_controls_start_on_all_and_show_what_is_chosen() -> None:
         LAST_30,
         ALL,
     ]
-    (search,) = [b for b in page["blocks"] if b.get("block_id") == SEARCH_BLOCK]
+    (search,) = [b for b in page["blocks"] if b.get("block_id", "").startswith(SEARCH_BLOCK)]
     assert search["dispatch_action"] is True and "initial_value" not in search["element"]
 
     chosen = HomeFilter(channel=OTHER_CHANNEL, status=Status.ERROR.value, date=LAST_7, search="x")
@@ -338,8 +349,19 @@ def test_the_controls_start_on_all_and_show_what_is_chosen() -> None:
     assert control(page, CHANNEL_ACTION)["initial_option"]["value"] == OTHER_CHANNEL
     assert control(page, STATUS_ACTION)["initial_option"]["value"] == Status.ERROR.value
     assert control(page, DATE_ACTION)["initial_option"]["value"] == LAST_7
-    (search,) = [b for b in page["blocks"] if b.get("block_id") == SEARCH_BLOCK]
+    (search,) = [b for b in page["blocks"] if b.get("block_id", "").startswith(SEARCH_BLOCK)]
     assert search["element"]["initial_value"] == "x"
+
+
+def test_the_controls_blocks_change_their_id_with_the_choice() -> None:
+    # Slack keeps what a control shows while its block keeps its id (seen 2026-10-01: menus
+    # still on the choices of the run before a restart): the id follows the choice.
+    def ids(chosen: HomeFilter) -> list[str]:
+        return [b["block_id"] for b in view([row()], chosen)["blocks"] if "block_id" in b]
+
+    assert ids(HomeFilter()) == ids(HomeFilter())
+    assert set(ids(HomeFilter())).isdisjoint(ids(HomeFilter(channel=CHANNEL)))
+    assert set(ids(HomeFilter(search="a"))).isdisjoint(ids(HomeFilter(search="b")))
 
 
 def option(value: str) -> dict[str, Any]:
@@ -348,13 +370,16 @@ def option(value: str) -> dict[str, Any]:
 
 
 def test_a_filter_is_read_from_the_state_of_every_control() -> None:
+    # Read by action id: the blocks' ids change with the choice.
     values = {
-        FILTERS_BLOCK: {
+        f"{FILTERS_BLOCK}:0a1b2c3d": {
             CHANNEL_ACTION: option(CHANNEL),
             STATUS_ACTION: option(Status.WAITING.value),
             DATE_ACTION: option(YESTERDAY),
         },
-        SEARCH_BLOCK: {SEARCH_ACTION: {"type": "plain_text_input", "value": "  Fix\nthe footer "}},
+        f"{SEARCH_BLOCK}:0a1b2c3d": {
+            SEARCH_ACTION: {"type": "plain_text_input", "value": "  Fix\nthe footer "}
+        },
     }
     assert read_filter(values, HomeFilter()) == HomeFilter(
         channel=CHANNEL, status=Status.WAITING.value, date=YESTERDAY, search="Fix the footer"
@@ -383,15 +408,47 @@ OLD, NEW = "68da9311-0000-4000-8000-00000000000a", "68da9311-0000-4000-8000-0000
 OLD_THREAD, NEW_THREAD, EMPTY_THREAD = "1789000000.000100", "1789000500.000100", "1789000900.0001"
 
 
-def info(sid: str, summary: str, **fields: Any) -> SDKSessionInfo:
-    """Session metadata as `list_sessions` returns it (claude-agent-sdk 0.2.163 SDKSessionInfo),
-    its file an hour old: inside the 48 hours the page starts on."""
-    an_hour_ago = (EPOCH - 3600) * 1000
-    return SDKSessionInfo(session_id=sid, summary=summary, last_modified=an_hour_ago, **fields)
+def info(sid: str, summary: str) -> SDKSessionInfo:
+    """Session metadata as `list_sessions` returns it (claude-agent-sdk 0.2.163 SDKSessionInfo)."""
+    return SDKSessionInfo(session_id=sid, summary=summary, last_modified=1)
+
+
+def root(ts: str, **fields: Any) -> dict[str, Any]:
+    """A thread's root message as `conversations.replies` returns it (measured on a real
+    workspace, 2026-10-01; kept, scrubbed, as api-conversations-replies-root.json), changed by
+    `fields`; a field set to None is left out, as Slack leaves it out of a root with no reply
+    or no reaction."""
+    message = {**slack_payload("api-conversations-replies-root")["messages"][0], "ts": ts}
+    message = {**message, "thread_ts": ts, **fields}
+    return {key: value for key, value in message.items() if value is not None}
+
+
+def reacted(name: str) -> list[dict[str, Any]]:
+    return [{"name": name, "users": ["U000BOT"], "count": 1}]
+
+
+def in_slack(slack: FakeSlack, roots: dict[str, Any]) -> None:
+    """What Slack answers about each thread, by its root's ts: a root, or an exception."""
+
+    def answer(args: dict[str, Any]) -> Any:
+        found = roots[str(args["ts"])]
+        if isinstance(found, BaseException):
+            return found
+        return {"ok": True, "messages": [found], "has_more": False}
+
+    slack.responses["conversations.replies"] = answer
 
 
 @pytest.fixture
-def state(tmp_path: Path) -> StateStore:
+def roots() -> dict[str, Any]:
+    return {
+        OLD_THREAD: root(OLD_THREAD, reply_count=19, latest_reply=f"{EPOCH - 3600}.000200"),
+        NEW_THREAD: root(NEW_THREAD, reply_count=1, latest_reply=f"{EPOCH - 600}.000200"),
+    }
+
+
+@pytest.fixture
+def state(tmp_path: Path, slack: FakeSlack, roots: dict[str, Any]) -> StateStore:
     store = StateStore(tmp_path / "state.json")
     store.bind(CHANNEL, tmp_path / "project")
     store.bind(OTHER_CHANNEL, tmp_path / "other")
@@ -400,6 +457,7 @@ def state(tmp_path: Path) -> StateStore:
     store.open_thread(CHANNEL, EMPTY_THREAD)  # its setup is still open: no session yet
     store.set_status_pending(CHANNEL, OLD_THREAD, None, Status.DONE.value)
     store.set_status_pending(OTHER_CHANNEL, NEW_THREAD, Status.WAITING.value)
+    in_slack(slack, roots)
     return store
 
 
@@ -432,20 +490,21 @@ def published(slack: FakeSlack) -> list[dict[str, Any]]:
     return [args["view"] for args in slack.calls_to("views.publish")]
 
 
-async def test_publish_lists_every_held_session_by_channel_newest_first(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, slack: FakeSlack, state: StateStore
-) -> None:
-    config = tmp_path / "config"
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
-    for directory in ("project", "other"):
-        (tmp_path / directory).mkdir()
-    write_transcript(config, tmp_path / "project", OLD, [
-        message("assistant", "2026-09-20T10:00:00.000Z", OLD, "done"),
-    ])  # fmt: skip
-    write_transcript(config, tmp_path / "other", NEW, [
-        message("assistant", "2026-09-21T10:00:00.000Z", NEW, "which one?"),
-    ])  # fmt: skip
+def test_a_root_is_read_as_slack_returns_it() -> None:
+    recorded = slack_payload("api-conversations-replies-root")["messages"][0]
+    assert thread_facts(recorded) == ThreadFacts(
+        replies=19, latest_reply=1789996400, reaction=Status.DONE.value
+    )
+    # A root nobody replied to and nobody reacted to carries neither field.
+    bare = root(OLD_THREAD, reply_count=None, latest_reply=None, reactions=None)
+    assert thread_facts(bare) == ThreadFacts(replies=0, latest_reply=None, reaction=None)
+    # The owner's own reactions are not a status.
+    assert thread_facts(root(OLD_THREAD, reactions=reacted("eyes"))).reaction is None
 
+
+async def test_publish_lists_every_held_session_by_channel_last_reply_first(
+    tmp_path: Path, slack: FakeSlack, state: StateStore
+) -> None:
     await make_home(slack, state, listing(tmp_path)).publish()
 
     (call,) = slack.calls_to("views.publish")
@@ -456,12 +515,48 @@ async def test_publish_lists_every_held_session_by_channel_newest_first(
         ":raised_hand:  *Add retry to the uploader*",
         ":white_check_mark:  *Fix the footer*",
     ]
-    # Dated by the last message of each transcript, not by the file.
-    assert any(n.startswith("waiting for you · <!date^1789984800^{ago}|") for n in notes(page))
+    # The replies and the last reply are the thread's own, as Slack shows them in the channel.
+    assert f"waiting for you · 1 reply · last reply <!date^{EPOCH - 600}^{{ago}}|" in notes(page)[1]
+    assert f"ended · 19 replies · last reply <!date^{EPOCH - 3600}^{{ago}}|" in notes(page)[2]
     assert all(c["accessory"]["url"] == LINK for c in cards(page))
+    # The root alone is asked for: its own ts, one message.
+    asked = slack.calls_to("conversations.replies")
+    assert [(a["ts"], a["limit"]) for a in asked] == [(OLD_THREAD, 1), (NEW_THREAD, 1)]
     # The channel menu names the channels as Slack does (conversations.info).
     name = slack_payload("api-conversations-info")["channel"]["name"]
     assert [o["text"]["text"] for o in control(page, CHANNEL_ACTION)["options"]][1:] == [name, name]
+
+
+async def test_a_thread_is_read_again_only_once_its_session_moved(
+    tmp_path: Path, slack: FakeSlack, state: StateStore, roots: dict[str, Any]
+) -> None:
+    home = make_home(slack, state, listing(tmp_path))
+    await home.publish()
+    await home.publish()
+    assert len(slack.calls_to("conversations.replies")) == 2  # one per thread, not per publish
+    # A turn starts in one thread: that thread alone is read again.
+    roots[OLD_THREAD] = root(OLD_THREAD, reply_count=20, latest_reply=f"{EPOCH - 5}.000300")
+    state.set_status_pending(CHANNEL, OLD_THREAD, Status.WORKING.value)
+    await home.publish()
+    assert [a["ts"] for a in slack.calls_to("conversations.replies")][2:] == [OLD_THREAD]
+    page = published(slack)[-1]
+    assert titles(page)[0] == ":hourglass_flowing_sand:  *Fix the footer*"  # now the last reply
+    assert notes(page)[1].startswith("working · 20 replies · last reply ")
+
+
+async def test_a_thread_with_no_kept_reaction_shows_the_one_on_its_root(
+    tmp_path: Path, slack: FakeSlack, state: StateStore, roots: dict[str, Any]
+) -> None:
+    # A thread that ended before the daemon kept its last reaction: state.json has none.
+    state.set_status_pending(CHANNEL, OLD_THREAD, None, None)
+    roots[OLD_THREAD] = root(OLD_THREAD, reactions=reacted(Status.ERROR.value))
+    # What the daemon keeps wins over what the root shows (a reaction lands after its request).
+    roots[NEW_THREAD] = root(NEW_THREAD, reactions=reacted(Status.WORKING.value))
+    await make_home(slack, state, listing(tmp_path)).publish()
+    assert sorted(titles(published(slack)[0])) == [
+        ":raised_hand:  *Add retry to the uploader*",
+        ":x:  *Fix the footer*",
+    ]
 
 
 async def test_a_cross_over_a_kept_status_shows_the_cross(
@@ -473,15 +568,24 @@ async def test_a_cross_over_a_kept_status_shows_the_cross(
     assert ":x:  *Fix the footer*" in titles(published(slack)[0])
 
 
-async def test_a_session_claude_code_does_not_list_yet_shows_its_id_and_its_roots_time(
+async def test_a_thread_with_no_reply_is_dated_by_its_root(
+    tmp_path: Path, slack: FakeSlack, state: StateStore, roots: dict[str, Any]
+) -> None:
+    roots[NEW_THREAD] = root(NEW_THREAD, reply_count=None, latest_reply=None)
+    home = make_home(slack, state, listing(tmp_path))
+    await home.choose(HomeFilter(date=None))  # the root is older than the page's 48 hours
+    assert f"waiting for you · started <!date^{int(float(NEW_THREAD))}^{{ago}}|" in "".join(
+        notes(published(slack)[0])
+    )
+
+
+async def test_a_session_claude_code_does_not_list_yet_shows_its_id(
     tmp_path: Path, slack: FakeSlack, state: StateStore
 ) -> None:
-    home = make_home(slack, state, {tmp_path / "project": [], tmp_path / "other": []})
-    await home.choose(HomeFilter(date=None))  # the roots are older than the page's 48 hours
-    page = published(slack)[0]
-    assert titles(page)[0] == f":raised_hand:  *{texts.HOME_UNTITLED.format(id=NEW[:8])}*"
-    assert any(f"<!date^{int(float(NEW_THREAD))}^{{ago}}|" in n for n in notes(page))
-    assert any(f"<!date^{int(float(OLD_THREAD))}^{{ago}}|" in n for n in notes(page))
+    await make_home(slack, state, {tmp_path / "project": [], tmp_path / "other": []}).publish()
+    assert titles(published(slack)[0])[0] == (
+        f":raised_hand:  *{texts.HOME_UNTITLED.format(id=NEW[:8])}*"
+    )
 
 
 async def test_a_folder_that_cannot_be_listed_does_not_stop_the_page(
@@ -499,23 +603,9 @@ async def test_a_folder_that_cannot_be_listed_does_not_stop_the_page(
         clock=lambda: EPOCH,
     )
     with caplog.at_level(logging.WARNING):
-        await home.choose(HomeFilter(date=None))
+        await home.publish()
     assert len(cards(published(slack)[0])) == 2
     assert "OSError" in caplog.text
-
-
-async def test_dates_that_cannot_be_read_keep_the_titles(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, slack: FakeSlack, state: StateStore
-) -> None:
-    def broken(directory: Path, sessions: list[SDKSessionInfo]) -> list[SDKSessionInfo]:
-        raise OSError("unreadable")
-
-    monkeypatch.setattr(home_module, "dated", broken)
-    await make_home(slack, state, listing(tmp_path)).publish()
-    assert sorted(titles(published(slack)[0])) == [
-        ":raised_hand:  *Add retry to the uploader*",
-        ":white_check_mark:  *Fix the footer*",
-    ]
 
 
 async def test_a_channel_slack_no_longer_has_is_left_out_with_its_threads_and_asked_once(
@@ -532,13 +622,49 @@ async def test_a_channel_slack_no_longer_has_is_left_out_with_its_threads_and_as
     assert headers(page) == [f"*<#{CHANNEL}>*"]
     assert titles(page) == [":white_check_mark:  *Fix the footer*"]
     assert len(control(page, CHANNEL_ACTION)["options"]) == 2  # All channels, and the one left
-    # No permalink is asked for a thread of a channel that is gone.
+    # Nothing is asked about a thread of a channel that is gone.
+    assert [a["channel"] for a in slack.calls_to("conversations.replies")] == [CHANNEL]
     assert [a["channel"] for a in slack.calls_to("chat.getPermalink")] == [CHANNEL]
     await home.publish()
     assert len(slack.calls_to("conversations.info")) == 2  # each asked once per run
 
 
-async def test_a_thread_slack_no_longer_has_is_left_out_and_asked_once(
+async def test_a_thread_whose_root_is_gone_is_left_out_and_asked_once(
+    tmp_path: Path, slack: FakeSlack, state: StateStore, roots: dict[str, Any]
+) -> None:
+    # Measured 2026-10-01: a deleted root answers `thread_not_found`.
+    roots[OLD_THREAD] = slack_error("thread_not_found")
+    home = make_home(slack, state, listing(tmp_path))
+    await home.publish()
+    page = published(slack)[0]
+    assert titles(page) == [":raised_hand:  *Add retry to the uploader*"]
+    assert headers(page) == [f"*<#{OTHER_CHANNEL}>*", f"*<#{CHANNEL}>*"]  # the channel stays
+    assert [a["channel"] for a in slack.calls_to("chat.getPermalink")] == [OTHER_CHANNEL]
+    # Slack's refusal stands for the run (a deleted root stays deleted): not asked again.
+    await home.publish()
+    assert len(slack.calls_to("conversations.replies")) == 2
+
+
+async def test_a_thread_slack_did_not_answer_about_keeps_what_was_read(
+    tmp_path: Path, slack: FakeSlack, state: StateStore, roots: dict[str, Any]
+) -> None:
+    home = make_home(slack, state, listing(tmp_path))
+    await home.publish()
+    roots[OLD_THREAD] = OSError("network down")
+    state.set_status_pending(CHANNEL, OLD_THREAD, Status.WORKING.value)
+    await home.publish()
+    page = published(slack)[-1]
+    assert ":hourglass_flowing_sand:  *Fix the footer*" in titles(
+        page
+    )  # the status is the daemon's
+    assert any(n.startswith("working · 19 replies") for n in notes(page))  # as read before
+    # Asked again at the next publish: nothing was learned.
+    roots[OLD_THREAD] = root(OLD_THREAD, reply_count=21, latest_reply=f"{EPOCH - 5}.000300")
+    await home.publish()
+    assert any(n.startswith("working · 21 replies") for n in notes(published(slack)[-1]))
+
+
+async def test_a_permalink_slack_refuses_leaves_the_thread_out_for_the_run(
     tmp_path: Path, slack: FakeSlack, state: StateStore
 ) -> None:
     home = make_home(slack, state, listing(tmp_path))
@@ -550,10 +676,7 @@ async def test_a_thread_slack_no_longer_has_is_left_out_and_asked_once(
     slack.responses["chat.getPermalink"] = slack_error("message_not_found")
     refused = make_home(slack, state, listing(tmp_path))
     await refused.publish()
-    page = published(slack)[0]
-    assert cards(page) == []  # a thread that cannot be opened is not listed
-    assert headers(page) == [f"*<#{CHANNEL}>*", f"*<#{OTHER_CHANNEL}>*"]
-    # Slack's refusal stands for the run (a deleted root stays deleted): not asked again.
+    assert cards(published(slack)[0]) == []  # a thread that cannot be opened is not listed
     await refused.publish()
     assert len(slack.calls_to("chat.getPermalink")) == 2
 

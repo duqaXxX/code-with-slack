@@ -307,12 +307,13 @@ the sessions your threads hold, one group per bound channel, the channel used la
 channel shows its five newest sessions and, when it has more, a **Show all** button. Each
 session is a card: the status reaction of the thread's root message, the title Claude Code gives
 the session, an **Open** button for its thread, and under it the status in a word (`working`,
-`waiting for you`, `ended`, `error`) with the time since the session's last message. **New
+`waiting for you`, `ended`, `error`), the thread's number of replies and the time since its last
+reply, as the channel shows them under the root message. **New
 thread**, beside a channel's name, opens that channel: the message you send there starts a
 session.
 
 Four controls at the top of the page narrow it: a channel, a status, a period (`Last 48 hours`,
-`Today`, `Yesterday`, `Last 7 days`, `Last 30 days`, `Any time`, by the session's last message)
+`Today`, `Yesterday`, `Last 7 days`, `Last 30 days`, `Any time`, by the thread's last reply)
 and a search on the titles (type a word and press Enter). The page starts on `Last 48 hours`.
 The controls add up, and with a channel, a status or a search chosen a channel shows every
 session that matches, not five. **Show all** chooses that channel. The choices last until
@@ -320,9 +321,9 @@ code-with-slack restarts.
 
 The page leaves out a thread whose root message was deleted and a channel Slack no longer has.
 It holds about 45 sessions at once and says so when it stops short. code-with-slack rewrites it
-whenever a session starts, ends or changes status, and nothing notifies you when it does. A
-session that ended before code-with-slack kept its last reaction shows no status until it runs
-again. A link that opens the Home tab from anywhere, for the Dock or a shortcut:
+whenever a session starts, ends or changes status, and nothing notifies you when it does. The
+number of replies is read when a session starts or ends a turn, so a word typed in a thread
+(`!status`) is counted at the thread's next turn. A link that opens the Home tab from anywhere, for the Dock or a shortcut:
 `slack://app?team=<workspace id>&id=<app id>&tab=home`.
 
 Upgrading from an earlier version that held one session per channel: the channel keeps its

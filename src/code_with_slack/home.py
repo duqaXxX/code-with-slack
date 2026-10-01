@@ -4,10 +4,16 @@ button that opens the thread: a channel lists its threads by when they started, 
 Threads view by unread replies (Help Center, "Use threads to organize discussions", read
 2026-10-01), so neither finds the thread worked in last.
 
-A card is built from what the daemon already keeps and what Claude Code already knows: the thread
-and its root's reaction from `state.json`, the title and last message from the session's
-transcript, as `!resume` shows them. Nothing is stored for the page: the filters the owner
-chooses live in memory and start again at their defaults with the daemon.
+A card is built from what the daemon already keeps, what Claude Code knows and what Slack shows:
+the thread and its root's reaction from `state.json`, the title from the session's transcript,
+as `!resume` shows it, and from Slack the thread's number of replies and the time of its last
+one, the same the channel shows under the root. Nothing is stored for the page: the filters the
+owner chooses live in memory and start again at their defaults with the daemon.
+
+`conversations.replies` with the root's `ts` and `limit=1` returns the root alone, carrying
+`reply_count`, `latest_reply` and `reactions` (measured 2026-10-01 on a free workspace with
+`groups:history`, slack-sdk 3.44.1; a deleted root answers `thread_not_found`). The root's own
+reaction fills in the status of a thread that ended before the daemon kept it.
 
 `views.publish` (docs.slack.dev/reference/methods/views.publish, read 2026-10-01) takes no scope
 and may be called at any time, with no event from the owner ("Home tab updates can happen when a
@@ -28,6 +34,7 @@ the owner started and its replies notify.
 import asyncio
 import contextlib
 import dataclasses
+import hashlib
 import logging
 import time
 from collections.abc import Callable
@@ -45,8 +52,8 @@ from code_with_slack.render.escape import shown_as_written
 from code_with_slack.render.renderer import one_line
 from code_with_slack.render.sinks import context_block, describe
 from code_with_slack.render.status import Status
-from code_with_slack.resume import ID_SHOWN, TITLE_LIMIT, dated
-from code_with_slack.state import StateStore
+from code_with_slack.resume import ID_SHOWN, TITLE_LIMIT
+from code_with_slack.state import StateStore, ThreadState
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +65,8 @@ PER_CHANNEL = 5
 DEBOUNCE_SECONDS = 2.0
 # How long a stop waits for its last publish: the page must never hold the daemon's exit.
 CLOSE_SECONDS = 10.0
-# How many permalinks are asked for at once on the first publish of a run.
-PERMALINKS_AT_ONCE = 8
+# How many threads Slack is asked about at once on the first publish of a run.
+THREADS_AT_ONCE = 8
 NOT_ENABLED = "not_enabled"
 RATE_LIMITED = "ratelimited"
 
@@ -105,8 +112,32 @@ class HomeRow:
     # The root's reaction name (`render.status.Status.value`); None for a thread that ended
     # before the daemon kept its last reaction.
     status: str | None
-    last_activity: int  # epoch seconds
+    replies: int
+    # The thread's last reply, or its root while it has none: epoch seconds.
+    last_activity: int
     permalink: str
+
+
+@dataclass(frozen=True)
+class ThreadFacts:
+    """What Slack shows of a thread's root message."""
+
+    replies: int
+    latest_reply: int | None  # epoch seconds
+    # The root's status reaction (`render.status.Status.value`), when it carries one.
+    reaction: str | None
+
+
+def thread_facts(root: dict[str, Any]) -> ThreadFacts:
+    """Read a root message as `conversations.replies` returns it. A root nobody replied to has
+    no `reply_count` and no `latest_reply`."""
+    latest = root.get("latest_reply")
+    names = [str(r.get("name")) for r in root.get("reactions") or [] if isinstance(r, dict)]
+    return ThreadFacts(
+        replies=int(root.get("reply_count") or 0),
+        latest_reply=int(float(latest)) if latest else None,
+        reaction=next((name for name in names if name in _WORDS), None),
+    )
 
 
 @dataclass(frozen=True)
@@ -126,7 +157,7 @@ class HomeFilter:
         return bool(self.channel or self.status or self.search)
 
     def matches(self, row: HomeRow, now: datetime) -> bool:
-        """Whether `row` passes every chosen filter. The date is the session's last message, on
+        """Whether `row` passes every chosen filter. The date is the thread's last reply, on
         `now`'s calendar: `yesterday` is that day alone, the others reach back from now."""
         if self.channel and row.channel_id != self.channel:
             return False
@@ -147,11 +178,14 @@ def read_filter(values: dict[str, Any], current: HomeFilter) -> HomeFilter:
     carries: every control's state rides on it, so nothing is tracked per control. Untrusted
     like every click: a status or a date that is not one of the page's own keeps the current
     one, and the channel is checked by `Home.choose`, which knows the bound ones."""
-    selects = values.get(FILTERS_BLOCK)
-    selects = selects if isinstance(selects, dict) else {}
+    # Found by action id, whatever the block: the blocks' ids change with the choice.
+    controls: dict[str, Any] = {}
+    for block in values.values():
+        if isinstance(block, dict):
+            controls.update(block)
 
     def picked(action_id: str, now_chosen: str | None, known: Any) -> str | None:
-        control = selects.get(action_id)
+        control = controls.get(action_id)
         if not isinstance(control, dict):
             return now_chosen
         value = (control.get("selected_option") or {}).get("value")
@@ -162,7 +196,7 @@ def read_filter(values: dict[str, Any], current: HomeFilter) -> HomeFilter:
         return value
 
     search = current.search
-    box = (values.get(SEARCH_BLOCK) or {}).get(SEARCH_ACTION)
+    box = controls.get(SEARCH_ACTION)
     if isinstance(box, dict):
         typed = box.get("value")
         search = one_line(typed, SEARCH_LIMIT) if isinstance(typed, str) else ""
@@ -204,6 +238,11 @@ def _select(action_id: str, options: list[tuple[str, str]], chosen: str | None) 
 
 
 def _controls(channels: dict[str, str], chosen: HomeFilter) -> list[dict[str, Any]]:
+    # Slack keeps what a control shows for as long as its block keeps its id, whatever
+    # `initial_option` a later page carries (seen 2026-10-01: after a restart the menus still
+    # showed the choices of the run before). An id that follows the choice makes the controls
+    # show what the page was built with: a restart, Show all and a dropped channel included.
+    mark = hashlib.sha256(repr(chosen).encode()).hexdigest()[:8]
     search: dict[str, Any] = {
         "type": "plain_text_input",
         "action_id": SEARCH_ACTION,
@@ -215,7 +254,7 @@ def _controls(channels: dict[str, str], chosen: HomeFilter) -> list[dict[str, An
     return [
         {
             "type": "actions",
-            "block_id": FILTERS_BLOCK,
+            "block_id": f"{FILTERS_BLOCK}:{mark}",
             "elements": [
                 _select(
                     CHANNEL_ACTION,
@@ -242,7 +281,7 @@ def _controls(channels: dict[str, str], chosen: HomeFilter) -> list[dict[str, An
         },
         {
             "type": "input",
-            "block_id": SEARCH_BLOCK,
+            "block_id": f"{SEARCH_BLOCK}:{mark}",
             "dispatch_action": True,
             "label": {"type": "plain_text", "text": texts.HOME_SEARCH_LABEL},
             "element": search,
@@ -265,7 +304,13 @@ def _channel_header(team_id: str, channel_id: str) -> dict[str, Any]:
 def _card(row: HomeRow) -> list[dict[str, Any]]:
     icon = f":{row.status}:  " if row.status else ""
     title = shown_as_written(one_line(row.title, TITLE_LIMIT))
-    details = [_WORDS.get(row.status) if row.status else None, _date(row.last_activity, "ago")]
+    replies = texts.HOME_REPLY if row.replies == 1 else texts.HOME_REPLIES.format(count=row.replies)
+    when = texts.HOME_LAST_REPLY if row.replies else texts.HOME_STARTED
+    details = [
+        _WORDS.get(row.status) if row.status else None,
+        replies if row.replies else None,
+        when.format(when=_date(row.last_activity, "ago")),
+    ]
     return [
         {
             "type": "section",
@@ -376,16 +421,17 @@ class Home:
         # One publish at a time, each built inside the lock: the one that lands last was built
         # last, so a filter just chosen is never overwritten by an older page.
         self._publishing = asyncio.Lock()
-        self._permalinks = asyncio.Semaphore(PERMALINKS_AT_ONCE)
+        self._asking = asyncio.Semaphore(THREADS_AT_ONCE)
         # A thread's permalink never changes: asked once per run. None is Slack's refusal (a
         # deleted root, most likely), which stands for the run too.
         self._links: dict[tuple[str, str], str | None] = {}
+        # What Slack showed of each thread's root, with the thread's session, status and ended
+        # reaction when it was read: read again once one of them changes, which every turn does
+        # at its start and at its end. None is Slack's refusal: the root is gone.
+        self._facts: dict[tuple[str, str], tuple[tuple[str | None, ...], ThreadFacts | None]] = {}
         # A channel's name, asked once per run; None is Slack's refusal (a channel it no longer
         # has, or one the bot left): the channel and its threads are left out of the page.
         self._names: dict[str, str | None] = {}
-        # Per session id, its file's time when its last message was read, and that message's
-        # time: a transcript is read again only once its file has changed.
-        self._stamps: dict[str, tuple[int, int]] = {}
 
     @property
     def chosen(self) -> HomeFilter:
@@ -476,80 +522,99 @@ class Home:
 
     async def _rows(self, channels: dict[str, str]) -> list[HomeRow]:
         """One row per thread that holds a session in one of `channels` and that Slack still
-        has (a thread with no permalink cannot be opened: it is left out), newest first."""
+        has (a thread whose root is gone cannot be opened: it is left out), last reply first."""
         held = [
             (channel_id, thread_ts, thread)
             for channel_id, thread_ts, thread in self._state.threads()
             if thread.session_id is not None and channel_id in channels
         ]
-        wanted: dict[Path, set[str]] = {}
-        for _, _, thread in held:
-            wanted.setdefault(thread.directory, set()).add(str(thread.session_id))
-        infos = await asyncio.to_thread(self._infos, wanted)
-        links = await asyncio.gather(
-            *(self._permalink(channel_id, thread_ts) for channel_id, thread_ts, _ in held)
+        titles = await asyncio.to_thread(self._titles, {thread.directory for _, _, thread in held})
+        seen = await asyncio.gather(
+            *(
+                self._in_slack(channel_id, thread_ts, thread)
+                for channel_id, thread_ts, thread in held
+            )
         )
         rows = []
-        for (channel_id, thread_ts, thread), link in zip(held, links, strict=True):
-            if link is None:
+        for (channel_id, thread_ts, thread), (link, facts) in zip(held, seen, strict=True):
+            if link is None or facts is None:
                 continue
-            info = infos.get(str(thread.session_id))
             rows.append(
                 HomeRow(
                     channel_id=channel_id,
                     thread_ts=thread_ts,
-                    title=(info.summary if info is not None else "")
+                    title=titles.get(str(thread.session_id))
                     or texts.HOME_UNTITLED.format(id=str(thread.session_id)[:ID_SHOWN]),
-                    # ❌ over a kept ⏳ or ✋ (an answer that never reached Slack) shows ❌.
-                    status=thread.ended or thread.status,
-                    # A session Claude Code does not list yet: its root message's time.
-                    last_activity=info.last_modified // 1000
-                    if info is not None
-                    else int(float(thread_ts)),
+                    # ❌ over a kept ⏳ or ✋ (an answer that never reached Slack) shows ❌. A
+                    # thread that ended before the daemon kept its reaction shows the root's.
+                    status=thread.ended or thread.status or facts.reaction,
+                    replies=facts.replies,
+                    last_activity=facts.latest_reply or int(float(thread_ts)),
                     permalink=link,
                 )
             )
         rows.sort(key=lambda row: row.last_activity, reverse=True)
         return rows
 
-    def _infos(self, wanted: dict[Path, set[str]]) -> dict[str, SDKSessionInfo]:
-        """The sessions the threads hold, by id, each dated by its last message. Blocking file
-        reads: runs off the event loop. A folder that cannot be listed is logged and skipped;
-        one whose transcripts cannot be dated keeps its titles, dated by their files."""
-        found: dict[str, SDKSessionInfo] = {}
-        for directory, session_ids in wanted.items():
+    def _titles(self, directories: set[Path]) -> dict[str, str]:
+        """The title Claude Code gives each session of `directories`, by session id. Blocking
+        file reads: runs off the event loop. A folder that cannot be listed is logged and
+        skipped: its sessions show their id."""
+        found: dict[str, str] = {}
+        for directory in directories:
             try:
-                listed = [s for s in self._sessions_of(directory) if s.session_id in session_ids]
+                found.update({s.session_id: s.summary for s in self._sessions_of(directory)})
             except Exception as exc:
                 logger.warning(
                     "could not list a folder's sessions for the session index: %s", describe(exc)
                 )
-                continue
-            changed = [
-                s for s in listed if self._stamps.get(s.session_id, (None, 0))[0] != s.last_modified
-            ]
-            try:
-                for before, after in zip(changed, dated(directory, changed), strict=True):
-                    self._stamps[before.session_id] = (before.last_modified, after.last_modified)
-            except Exception as exc:
-                logger.warning(
-                    "could not date a folder's sessions for the session index: %s", describe(exc)
-                )
-            for session in listed:
-                stamp = self._stamps.get(session.session_id)
-                found[session.session_id] = dataclasses.replace(
-                    session, last_modified=stamp[1] if stamp else session.last_modified
-                )
         return found
+
+    async def _in_slack(
+        self, channel_id: str, thread_ts: str, thread: ThreadState
+    ) -> tuple[str | None, ThreadFacts | None]:
+        """A thread's permalink and what Slack shows of its root; either is None for a thread
+        the page leaves out."""
+        async with self._asking:
+            facts = await self._root(channel_id, thread_ts, thread)
+            if facts is None:
+                return None, None
+            return await self._permalink(channel_id, thread_ts), facts
+
+    async def _root(
+        self, channel_id: str, thread_ts: str, thread: ThreadState
+    ) -> ThreadFacts | None:
+        key = (channel_id, thread_ts)
+        read_at = (thread.session_id, thread.status, thread.ended)
+        known = self._facts.get(key)
+        if known is not None and known[0] == read_at:
+            return known[1]
+        try:
+            answer = await self._slack.conversations_replies(
+                channel=channel_id, ts=thread_ts, limit=1
+            )
+        except Exception as exc:
+            code = describe(exc)
+            logger.warning("could not read thread %s/%s: %s", channel_id, thread_ts, code)
+            if isinstance(exc, SlackApiError) and code != RATE_LIMITED:
+                self._facts[key] = (read_at, None)
+                return None
+            # No answer: what was read before stands until Slack answers again.
+            return known[1] if known is not None else None
+        root = next(
+            (m for m in answer.get("messages") or [] if str(m.get("ts")) == thread_ts), None
+        )
+        facts = thread_facts(root) if root is not None else None
+        self._facts[key] = (read_at, facts)
+        return facts
 
     async def _permalink(self, channel_id: str, thread_ts: str) -> str | None:
         key = (channel_id, thread_ts)
         if key not in self._links:
             try:
-                async with self._permalinks:
-                    answer = await self._slack.chat_getPermalink(
-                        channel=channel_id, message_ts=thread_ts
-                    )
+                answer = await self._slack.chat_getPermalink(
+                    channel=channel_id, message_ts=thread_ts
+                )
             except Exception as exc:
                 code = describe(exc)
                 logger.warning(
