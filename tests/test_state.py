@@ -670,14 +670,15 @@ def test_threads_lists_every_thread_of_every_channel(tmp_path: Path) -> None:
 def test_the_observer_hears_what_the_session_index_shows_and_nothing_else(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "state.json")
     heard: list[str] = []
-    store.bind(CHANNEL, tmp_path / "project")
     store.on_sessions_change = lambda: heard.append("changed")
 
+    store.bind(CHANNEL, tmp_path / "project")  # a new channel is a new group on the page
+    assert store.channels() == [CHANNEL]
     store.open_thread(CHANNEL, THREAD_TS)
     store.set_session(CHANNEL, THREAD_TS, SESSION)
     store.set_status_pending(CHANNEL, THREAD_TS, "hourglass_flowing_sand")
     store.set_status_pending(CHANNEL, THREAD_TS, None, "white_check_mark")
-    assert len(heard) == 4
+    assert len(heard) == 5
 
     # What no row of the index shows: a reply's bookkeeping, a request, bypass, effort, a rebind.
     store.replace_open_reply(CHANNEL, THREAD_TS, None, "1790549807.000001")
@@ -685,10 +686,10 @@ def test_the_observer_hears_what_the_session_index_shows_and_nothing_else(tmp_pa
     store.set_bypass(CHANNEL, THREAD_TS, True)
     store.set_effort(CHANNEL, THREAD_TS, "low")
     store.bind(CHANNEL, tmp_path / "elsewhere")
-    assert len(heard) == 4
+    assert len(heard) == 5
 
     store.remove_thread(CHANNEL, THREAD_TS)
-    assert len(heard) == 5
+    assert len(heard) == 6
 
 
 def test_the_observer_hears_a_prune_that_removed_something(tmp_path: Path) -> None:

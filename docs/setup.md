@@ -302,14 +302,27 @@ thread keeps the folder it was opened in: `!bind` only changes where the *next* 
 thread's Claude Code process closes on its own after an hour with nothing to do; the next message
 sent to it resumes the session, as `claude --resume <id>` would.
 
-To find a session again, open the app from Slack's sidebar and choose its **Home** tab. It lists every session a thread holds, across all your channels, the one with the latest
-message first. Each row shows the status reaction of the thread's root message, the title Claude
-Code gives the session, the channel, the status in a word (`working`, `waiting for you`, `ended`,
-`error`), the time since the session's last message, its git branch, and an **Open thread**
-button. The list holds the newest 97 sessions; `!resume` in a channel lists the rest of its
-folder. code-with-slack rewrites the page whenever a session starts, ends or changes status, and
-nothing notifies you when it does. A session that ended before this version kept its last
-reaction shows no status until it runs again.
+To find a session again, open the app from Slack's sidebar and choose its **Home** tab. It lists
+the sessions your threads hold, one group per bound channel, the channel used last first. A
+channel shows its five newest sessions and, when it has more, a **Show all** button. Each
+session is a card: the status reaction of the thread's root message, the title Claude Code gives
+the session, an **Open** button for its thread, and under it the status in a word (`working`,
+`waiting for you`, `ended`, `error`) with the time since the session's last message. **New
+thread**, beside a channel's name, opens that channel: the message you send there starts a
+session.
+
+Four controls at the top of the page narrow it: a channel, a status, a date (`Today`,
+`Yesterday`, `Last 7 days`, `Last 30 days`, by the session's last message) and a search on the
+titles (type a word and press Enter). They add up, and with any of them chosen a channel shows
+every session that matches, not five. **Show all** chooses that channel. The choices last until
+code-with-slack restarts.
+
+The page leaves out a thread whose root message was deleted and a channel Slack no longer has.
+It holds about 45 sessions at once and says so when it stops short. code-with-slack rewrites it
+whenever a session starts, ends or changes status, and nothing notifies you when it does. A
+session that ended before code-with-slack kept its last reaction shows no status until it runs
+again. A link that opens the Home tab from anywhere, for the Dock or a shortcut:
+`slack://app?team=<workspace id>&id=<app id>&tab=home`.
 
 Upgrading from an earlier version that held one session per channel: the channel keeps its
 directory, loses its old session pointer and bypass switch, and gets this message once, posted

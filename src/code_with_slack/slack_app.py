@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import dataclasses
 import logging
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -66,7 +67,13 @@ from code_with_slack.guards import (
     message_actor,
 )
 from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, Pending, hold_blocks
-from code_with_slack.home import HOME_OPEN_ACTION
+from code_with_slack.home import (
+    FILTER_ACTIONS,
+    LINK_ACTIONS,
+    SHOW_ALL_ACTION,
+    Home,
+    read_filter,
+)
 from code_with_slack.prompt import Prompt
 from code_with_slack.render.escape import markdown_escape, mrkdwn_escape
 from code_with_slack.render.renderer import one_line
@@ -184,6 +191,7 @@ def build_app(
     guard: ChannelGuard,
     state: StateStore,
     uploads: Path,
+    home: Home,
     fetch: Fetch | None = None,
 ) -> AsyncApp:
     async def download_file(*, url: str, mimetype: str, limit: int) -> bytes:
@@ -912,11 +920,45 @@ def build_app(
     async def on_answer(ack: AsyncAck) -> None:
         await ack()  # a menu inside a question: its value is read when Submit is clicked
 
-    @app.action(HOME_OPEN_ACTION)
-    async def on_home_open(ack: AsyncAck) -> None:
-        # A link button: Slack opens the thread itself and still sends the click, which only
-        # needs acknowledging. Nothing is read from it and nothing is done, whoever clicked.
+    async def on_home_link(ack: AsyncAck) -> None:
+        # A link button of the Home tab: Slack follows the link itself and still sends the
+        # click, which only needs acknowledging. Nothing is read from it and nothing is done,
+        # whoever clicked.
         await ack()
+
+    for action_id in LINK_ACTIONS:
+        app.action(action_id)(on_home_link)
+
+    def home_owner(body: dict[str, Any]) -> bool:
+        """Whether a use of a Home tab control is the owner's. The page is published to the
+        owner alone, and each use is still checked on its own, as every inbound path is; a
+        Home tab payload names no channel, so there is none to guard."""
+        user, team = interaction_actor(body)
+        if is_owner(identity, user, team):
+            return True
+        logger.info("ignored an inbound event from someone other than the owner")
+        return False
+
+    async def on_home_filter(ack: AsyncAck, body: dict[str, Any]) -> None:
+        await ack()
+        if not home_owner(body):
+            return
+        # The controls' own state rides on the payload: every filter is read from it at once.
+        values = ((body.get("view") or {}).get("state") or {}).get("values") or {}
+        await home.choose(read_filter(values, home.chosen))
+
+    for action_id in FILTER_ACTIONS:
+        app.action(action_id)(on_home_filter)
+
+    @app.action(SHOW_ALL_ACTION)
+    async def on_home_show_all(ack: AsyncAck, body: dict[str, Any]) -> None:
+        await ack()
+        if not home_owner(body):
+            return
+        # Showing all of a channel is choosing that channel in the filter (`Home.choose` checks
+        # it is a bound one).
+        channel = str(body["actions"][0].get("value"))
+        await home.choose(dataclasses.replace(home.chosen, channel=channel))
 
     async def on_decision(ack: AsyncAck, body: dict[str, Any]) -> None:
         await ack()

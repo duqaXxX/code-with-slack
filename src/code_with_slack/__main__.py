@@ -145,6 +145,13 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
                 client_factory=default_client_factory,
             )
         )
+        home = Home(
+            slack,
+            owner_user_id=identity.owner_user_id,
+            team_id=identity.team_id,
+            state=state,
+            sessions_of=directory_sessions,
+        )
         app = build_app(
             slack=slack,
             config=config,
@@ -155,14 +162,9 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
             guard=ChannelGuard(slack, identity),
             state=state,
             uploads=uploads,
+            home=home,
         )
         handler = AsyncSocketModeHandler(app, config.app_token)
-        home = Home(
-            slack,
-            owner_user_id=identity.owner_user_id,
-            state=state,
-            sessions_of=directory_sessions,
-        )
 
         stop = asyncio.Event()
         received: list[signal.Signals] = []

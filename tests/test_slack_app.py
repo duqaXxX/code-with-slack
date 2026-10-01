@@ -18,7 +18,17 @@ from code_with_slack.config import Config
 from code_with_slack.footer import UsageCache
 from code_with_slack.guards import ChannelGuard, Identity
 from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds
-from code_with_slack.home import HOME_OPEN_ACTION
+from code_with_slack.home import (
+    CHANNEL_ACTION,
+    FILTERS_BLOCK,
+    LINK_ACTIONS,
+    SEARCH_ACTION,
+    SEARCH_BLOCK,
+    SHOW_ALL_ACTION,
+    STATUS_ACTION,
+    Home,
+    HomeFilter,
+)
 from code_with_slack.render.sinks import UpdateLimiter
 from code_with_slack.render.status import Status
 from code_with_slack.sessions import SessionDeps, SessionManager
@@ -129,6 +139,13 @@ class World:
             allowed_root=self.root.resolve(),
             config_dir=tmp_path,
         )
+        self.home = Home(
+            slack,
+            owner_user_id=OWNER,
+            team_id=TEAM,
+            state=self.state,
+            sessions_of=lambda directory: self.stored_sessions,
+        )
         self.app = build_app(
             slack=slack,
             config=config,
@@ -140,6 +157,7 @@ class World:
             state=self.state,
             fetch=self.fetch,
             uploads=self.uploads,
+            home=self.home,
         )
 
     async def fetch(self, *, url: str, mimetype: str, limit: int) -> bytes:
@@ -620,9 +638,10 @@ async def test_bang_from_anyone_else_does_nothing(world: World) -> None:
     assert world.clients == [] and not world.posted_anything()
 
 
-def home_click(user: str = OWNER) -> dict[str, Any]:
-    """A click on a Home tab row's button: no channel and no message, a `view` container (the
-    block_actions payload reference's Home tab example, docs.slack.dev, read 2026-10-01)."""
+def home_action(action: dict[str, Any], user: str = OWNER, **values: Any) -> dict[str, Any]:
+    """A use of a Home tab control: no channel and no message, a `view` container, and the state
+    of the page's controls in `view.state.values` (the block_actions payload reference's Home
+    tab example, docs.slack.dev, read 2026-10-01)."""
     return {
         "type": "block_actions",
         "team": {"id": TEAM, "domain": "example"},
@@ -630,28 +649,75 @@ def home_click(user: str = OWNER) -> dict[str, Any]:
         "api_app_id": "A000APP",
         "container": {"type": "view", "view_id": "V000HOME"},
         "trigger_id": "1.2.abc",
-        "view": {"id": "V000HOME", "team_id": TEAM, "type": "home", "blocks": []},
-        "actions": [
-            {
-                "type": "button",
-                "block_id": "b1",
-                "action_id": HOME_OPEN_ACTION,
-                "text": {"type": "plain_text", "text": "Open thread", "emoji": True},
-                "action_ts": "1790000000.000001",
-            }
-        ],
+        "view": {
+            "id": "V000HOME",
+            "team_id": TEAM,
+            "type": "home",
+            "blocks": [],
+            "state": {"values": values},
+        },
+        "actions": [{"block_id": "b1", "action_ts": "1790000000.000001", **action}],
     }
 
 
+def chosen_option(value: str) -> dict[str, Any]:
+    # A static_select's state, as 001-block_actions.json records its action.
+    option = {"text": {"type": "plain_text", "text": value, "emoji": True}, "value": value}
+    return {"type": "static_select", "selected_option": option}
+
+
+@pytest.mark.parametrize("action_id", LINK_ACTIONS)
 @pytest.mark.parametrize("user", [OWNER, STRANGER])
-async def test_a_click_on_a_home_row_is_acknowledged_and_does_nothing(
-    world: World, user: str
+async def test_a_click_on_a_home_link_is_acknowledged_and_does_nothing(
+    world: World, action_id: str, user: str
 ) -> None:
     # A link button still sends its click to the app, which must acknowledge it (button element
     # reference, read 2026-10-01); Slack itself opens the link.
-    response = await world.dispatch(home_click(user))
+    response = await world.dispatch(home_action({"type": "button", "action_id": action_id}, user))
     assert response.status == 200
     assert world.clients == [] and world.slack.calls == []
+
+
+async def test_a_home_filter_is_read_from_the_pages_state_and_published(world: World) -> None:
+    values = {
+        FILTERS_BLOCK: {
+            CHANNEL_ACTION: chosen_option(CHANNEL),
+            STATUS_ACTION: chosen_option("raised_hand"),
+        },
+        SEARCH_BLOCK: {SEARCH_ACTION: {"type": "plain_text_input", "value": "Footer"}},
+    }
+    action = {"type": "static_select", "action_id": STATUS_ACTION, **chosen_option("raised_hand")}
+    response = await world.dispatch(home_action(action, **values))
+    assert response.status == 200
+    assert world.home.chosen == HomeFilter(channel=CHANNEL, status="raised_hand", search="Footer")
+    (call,) = world.slack.calls_to("views.publish")
+    assert call["user_id"] == OWNER
+
+
+async def test_show_all_chooses_that_channel(world: World) -> None:
+    action = {"type": "button", "action_id": SHOW_ALL_ACTION, "value": CHANNEL}
+    await world.dispatch(home_action(action))
+    assert world.home.chosen == HomeFilter(channel=CHANNEL)
+    # A channel that is not bound is no filter: the value of a click is untrusted.
+    await world.dispatch(home_action({**action, "value": "C000NOPE"}))
+    assert world.home.chosen == HomeFilter()
+
+
+@pytest.mark.parametrize(("user", "team"), [(STRANGER, TEAM), (OWNER, OTHER_TEAM)])
+async def test_a_home_control_used_by_anyone_else_changes_nothing(
+    world: World, user: str, team: str
+) -> None:
+    values = {FILTERS_BLOCK: {STATUS_ACTION: chosen_option("raised_hand")}}
+    for action in (
+        {"type": "static_select", "action_id": STATUS_ACTION, **chosen_option("raised_hand")},
+        {"type": "button", "action_id": SHOW_ALL_ACTION, "value": CHANNEL},
+    ):
+        body = home_action(action, user, **values)
+        body["team"]["id"] = team
+        response = await world.dispatch(body)
+        assert response.status == 200
+    assert world.home.chosen == HomeFilter()
+    assert world.slack.calls_to("views.publish") == []
 
 
 def click(action_id: str, value: str, **user: Any) -> dict[str, Any]:

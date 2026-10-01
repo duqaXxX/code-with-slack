@@ -138,12 +138,17 @@ class StateStore:
     def __init__(self, path: Path) -> None:
         self._path = path
         self._channels = self._load()
-        # Called after a write that changed which threads exist, the session one holds, or a
-        # root's reaction: what the session index is built from. Never while loading.
+        # Called after a write that changed which channels are bound, which threads exist, the
+        # session one holds, or a root's reaction: what the session index is built from. Never
+        # while loading.
         self.on_sessions_change: Callable[[], None] | None = None
 
     def channel(self, channel_id: str) -> ChannelRecord | None:
         return self._channels.get(channel_id)
+
+    def channels(self) -> list[str]:
+        """The id of every bound channel, in the order they were bound."""
+        return list(self._channels)
 
     def thread(self, channel_id: str, thread_ts: str) -> ThreadState | None:
         channel = self._channels.get(channel_id)
@@ -167,6 +172,8 @@ class StateStore:
             threads=current.threads if current is not None else _empty_threads(),
         )
         self._save()
+        if current is None:
+            self._announce()  # a new channel in the session index; a rebind changes no row
 
     def open_thread(
         self, channel_id: str, thread_ts: str, session_id: str | None = None

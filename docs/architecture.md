@@ -584,32 +584,48 @@ Claude Code session id, and `!resume` never touches or waits on any other thread
 
 `code_with_slack.home.Home` publishes the owner's Home tab with `views.publish`, which takes no
 scope and needs no event from the owner. It always publishes to the configured owner's user id.
-The one inbound path the page adds is the click on a row's button: Slack opens the link itself
-and still sends the click, which `slack_app` acknowledges (`home.HOME_OPEN_ACTION`) without
-reading it or doing anything, whoever clicked.
 
-`Home.publish` builds one row per thread in `state.json` that holds a session id
-(`StateStore.threads`), across every channel. The title, the git branch and the time come from
-Claude Code: `sessions.directory_sessions` lists each folder once, and `resume.dated` reads the
-last message of each held session's transcript, again only after the file has changed. A session
-Claude Code does not list yet shows `Session` and the start of its id, dated by its root message.
-The status is the root's reaction name: `ThreadState.ended` when it is set, `ThreadState.status`
-otherwise. Both are set only for an answer that never reached Slack, where the root shows ❌ and
-`status` stays for crash repair. Rows are ordered by last message, newest first, and
-`home.home_view` writes at most `home.HOME_ROWS` of them, since a Home view holds 100 blocks; a
-longer list ends with `texts.HOME_MORE`. Each row's age is Slack's own `{ago}` date token, which
-the client renders, so it stays right between two publishes. The **Open thread** button carries
-the root message's permalink (`chat.getPermalink`, asked once per thread per run); a row whose
-permalink Slack refuses has no button for the rest of the run, and one whose request failed
-without an answer is asked again at the next publish.
+`Home.publish` reads the bound channels (`StateStore.channels`) and asks Slack for each one's
+name once per run (`conversations.info`); a channel Slack refuses is left out with its threads.
+It then builds one row per thread of those channels that holds a session id
+(`StateStore.threads`). The title and the time come from Claude Code: `sessions.directory_sessions`
+lists each folder once, and `resume.dated` reads the last message of each held session's
+transcript, again only after the file has changed. A session Claude Code does not list yet shows
+`Session` and the start of its id, dated by its root message. The status is the root's reaction
+name: `ThreadState.ended` when it is set, `ThreadState.status` otherwise. Both are set only for
+an answer that never reached Slack, where the root shows ❌ and `status` stays for crash repair.
+Each row needs the root message's permalink (`chat.getPermalink`, asked once per thread per run,
+`home.PERMALINKS_AT_ONCE` at a time): a thread whose permalink Slack refuses is left out for the
+rest of the run, and one whose request failed without an answer is asked again at the next
+publish.
+
+`home.home_view` lays the rows out. Under the controls, each channel is a group: a header with
+the channel and a **New thread** link button (the `slack://channel` deep link), then one card
+per session, a section with the title and an **Open** link button and a context line with the
+status word and Slack's own `{ago}` date token, which the client renders, so the age stays right
+between two publishes. With no filter chosen every bound channel is a group, the ones with
+sessions first by their newest, each cut to `home.PER_CHANNEL` cards with a **Show all** button;
+with a filter, only the channels with a match, uncut. A Home view holds 100 blocks: the page
+stops before that and ends with `texts.HOME_MORE`.
+
+The filters are a `home.HomeFilter` kept in memory: channel, status, date and a search on the
+title, each unset by default. Every use of a control reaches `slack_app` as a `block_actions`
+payload, checked on its own for the owner and the workspace (a Home tab payload names no
+channel). A filter's payload carries the state of all four controls in `view.state.values`,
+which `home.read_filter` turns into the filter; a status or a date the page never offered keeps
+the current one. **Show all** carries its channel, and `Home.publish` drops a chosen channel
+that is not one of the page's own. `Home.choose` then publishes at once. The two link buttons
+are followed by Slack itself and still send their click, which is acknowledged and not read.
 
 `StateStore.on_sessions_change` calls `Home.request` after a write that changed what the page
-shows: a thread added or removed, a session id, a root's reaction. A write that changes anything
-else (a reply's bookkeeping, a request, bypass, effort, a rebind) does not. `Home.request` returns
-at once and publishes after `home.DEBOUNCE_SECONDS`, so the burst of reaction changes one turn
-makes costs one publish; a change that lands during a publish is followed by another. On a stop,
-`Home.close` runs after every session has closed and publishes what was still owed, giving up
-after `home.CLOSE_SECONDS`.
+shows: a channel bound for the first time, a thread added or removed, a session id, a root's
+reaction. A write that changes anything else (a reply's bookkeeping, a request, bypass, effort,
+a rebind) does not. `Home.request` returns at once and publishes after `home.DEBOUNCE_SECONDS`,
+so the burst of reaction changes one turn makes costs one publish; a change that lands during a
+publish is followed by another. Publishes run one at a time, each built after the one before it
+landed, so a filter just chosen is never replaced by an older page. On a stop, `Home.close` runs
+after every session has closed and publishes what was still owed, giving up after
+`home.CLOSE_SECONDS`.
 
 `Home.publish` never raises. `not_enabled` (the Home tab is off in the Slack app's settings) is
 logged once and ends the publishing for that run; any other failure is logged by its error code
@@ -618,7 +634,7 @@ and the next change tries again.
 ## Slack handlers
 
 `code_with_slack.slack_app.build_app` registers one listener per inbound path: `message`
-events, the Approve, Deny, Answer and Skip buttons, the setup's Model select and Start, the question form's Next and Submit, and the session index's Open thread button, which is only acknowledged. The app registers no slash command. Each
+events, the Approve, Deny, Answer and Skip buttons, the setup's Model select and Start, the question form's Next and Submit, and the session index's controls (its filters and Show all, and its two link buttons, which are only acknowledged). The app registers no slash command. Each
 acknowledges Slack first, then checks the owner, the workspace and the channel itself. A
 failure after the checks reaches the owner as an ephemeral error line.
 A link Slack made from a typed address (`<url|label>`, `<url>`) reaches Claude Code as typed; a

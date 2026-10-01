@@ -52,8 +52,9 @@ From then on:
   `!stop`, typed in the channel, stops every session; inside a thread it stops that one.
 - `!resume`, typed in the channel, lists the directory's sessions, from the terminal too, with a
   Resume button each; `!resume <id or name>` or a click moves that session into a new thread.
-- The app's **Home** tab lists every session, across all channels, the one used last first, with
-  its status and a button that opens its thread.
+- The app's **Home** tab lists the sessions by channel, the one used last first, each with its
+  status and a button that opens its thread, under filters by channel, status, date and title;
+  a button beside each channel opens it for a new thread.
 - Images and files attached to a message reach Claude: a JPEG, PNG, GIF or WebP image as an
   image; a text, code, PDF, JSON, XML, YAML or notebook file as a path to a copy saved in a
   private temporary folder. Any other file, and any file past a limit, stops the message, with
