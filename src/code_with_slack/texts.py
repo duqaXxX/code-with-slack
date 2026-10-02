@@ -9,6 +9,14 @@ AUTH_FAILED = (
     "Claude Code is not logged in on the host. On that machine, run `claude`, then `/login`. "
     "The login is never done from Slack."
 )
+LOGIN_ON_HOST = (
+    "Log in on the host: on that machine, run `claude`, then `/login`. "
+    "The login is never done from Slack."
+)
+LOGOUT_ON_HOST = (
+    "Log out on the host: on that machine, run `claude`, then `/logout`. "
+    "It is never done from Slack."
+)
 CHANNEL_REFUSED = (
     "code-with-slack does not work in this channel: {reason}. It answers only in a private "
     "channel whose only members are you and the bot."

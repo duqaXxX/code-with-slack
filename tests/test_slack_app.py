@@ -406,6 +406,37 @@ async def test_an_alias_of_clear_is_refused_inside_a_thread(world: World, word: 
     assert world.queries() == ["hi"]
 
 
+@pytest.mark.parametrize(
+    ("word", "answer"),
+    [
+        ("!login", texts.LOGIN_ON_HOST),
+        ("!LOGIN now", texts.LOGIN_ON_HOST),
+        ("!logout", texts.LOGOUT_ON_HOST),
+    ],
+)
+async def test_login_and_logout_never_reach_claude_code_from_the_channel(
+    world: World, word: str, answer: str
+) -> None:
+    # They act on the host's own login, which the daemon and every session run on.
+    await world.dispatch(message(word))
+    assert said(world) == [answer]
+    assert "thread_ts" not in world.slack.calls_to("chat.postMessage")[0]
+    assert world.clients == []  # no session was even started
+
+
+@pytest.mark.parametrize(
+    ("word", "answer"),
+    [("!login", texts.LOGIN_ON_HOST), ("!logout", texts.LOGOUT_ON_HOST)],
+)
+async def test_login_and_logout_never_reach_claude_code_from_a_thread(
+    world: World, word: str, answer: str
+) -> None:
+    await world.dispatch(message("hi", ts=THREAD))
+    await world.dispatch(reply(word, THREAD))
+    assert world.ephemerals() == [answer]
+    assert world.queries() == ["hi"]
+
+
 async def test_bang_clear_at_top_level_opens_a_session_like_any_other_word(world: World) -> None:
     await world.dispatch(message("!clear"))
     assert world.queries() == ["/clear"]

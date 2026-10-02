@@ -767,7 +767,11 @@ ordinary `Passthrough` that `slack_app.is_clear` catches only inside a thread, r
 and `new` (`commands.NEW_SESSION_NAMES`, known before a rebuilt session has connected), and any
 other alias the session's own command list gives `clear`. At the top level it opens a new session
 like any other message, and reaches Claude Code as `/clear` if the freshly connected session
-offers that command. Any other `!name args` is a `Passthrough` too: sent as `/name args` when the
+offers that command. `!login` and `!logout` are `Passthrough`s the daemon never sends
+(`commands.host_only`): they act on the host's own login, which the daemon and every session run
+on, so `handle_message` answers with `texts.LOGIN_ON_HOST` or `texts.LOGOUT_ON_HOST` before any
+session is opened, in the channel or, inside a session's thread, for the owner alone. Any other
+`!name args` is a `Passthrough` too: sent as `/name args` when the
 session (freshly opened, at the top level) offers `name`, as the text itself otherwise. A
 top-level message with no existing thread opens a new session (`SessionManager.open`); a message
 in a thread that holds no session and is not a daemon word gets `texts.NOT_A_SESSION`, with

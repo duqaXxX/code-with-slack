@@ -54,6 +54,7 @@ from code_with_slack.commands import (
     Stop,
     Word,
     help_text,
+    host_only,
     parse_bang,
     refused_in_thread,
 )
@@ -376,6 +377,14 @@ def build_app(
                 handle_word(channel, thread_ts, ts, command, session=session),
                 report=word_report(channel, thread_ts, session),
             )
+            return
+        if isinstance(command, Passthrough) and (answer := host_only(command)) is not None:
+            # Answered where a word is: under the owner's message in a session's thread, for
+            # the owner alone, and as a post in the channel anywhere else. No session starts.
+            if session is not None:
+                await tell_owner(channel, thread_ts, answer)
+            else:
+                await in_channel(channel, answer)
             return
         if session is not None:
             await old_folder_notice(channel, thread_ts, session)

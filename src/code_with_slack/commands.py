@@ -74,6 +74,10 @@ DESCRIPTION_LIMIT = 100
 # is also the only place a session's commands are listed. Named here because a session rebuilt
 # after a restart lists no command until it connects (`refused_in_thread`).
 NEW_SESSION_NAMES = frozenset({"clear", "reset", "new"})
+# Claude Code's `/login` and `/logout` act on the host's own login, which the daemon and every
+# session run on: neither is ever sent to Claude Code, from the channel or from a thread, and
+# each is answered with where it is done instead (`host_only`).
+HOST_ONLY = {"login": texts.LOGIN_ON_HOST, "logout": texts.LOGOUT_ON_HOST}
 
 
 def parse_bang(text: str) -> Command | None:
@@ -129,6 +133,12 @@ def help_text(commands: list[dict[str, Any]] | None, query: str = "") -> str:
     if query and not own and not session:
         lines.append(texts.HELP_NO_MATCH.format(query=query))
     return "\n".join(lines)
+
+
+def host_only(command: Passthrough) -> str | None:
+    """The answer to a command that is only ever run on the host (HOST_ONLY), or None for any
+    other: the caller sends that answer and nothing to Claude Code."""
+    return HOST_ONLY.get(command.text.split(" ", 1)[0].lower())
 
 
 def refused_in_thread(commands: list[dict[str, Any]] | None) -> frozenset[str]:
