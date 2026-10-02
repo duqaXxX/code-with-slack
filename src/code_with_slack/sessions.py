@@ -897,7 +897,7 @@ class ThreadSession:
     async def apply_setup(self, choice: Choice) -> None:
         """Apply the owner's session setup before the first prompt. Start is authoritative: the
         effort and the bypass switch are written from the choice whatever state.json held
-        (a restart or a `!bypass on` typed while the setup waited can have left either), so what
+        (a restart can have left either; `!bypass` is refused until the first prompt), so what
         runs is what the summary line says. An effort the live client was not built with goes
         through a fresh client (the SDK has no runtime effort setter; no query has been sent, so
         no session is lost), then the model on the live client, then the permission mode: when

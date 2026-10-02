@@ -1026,7 +1026,8 @@ async def test_nobody_else_can_submit_the_form(world: World, user: dict[str, str
 
 
 async def test_a_bypass_inside_a_thread_fails_when_the_directory_is_gone(world: World) -> None:
-    world.sessions.open(CHANNEL, THREAD)
+    # A session that ran before: one that never did answers the word without connecting.
+    world.state.open_thread(CHANNEL, THREAD, session_id="68da9311-0000-4000-8000-00000000beef")
     (world.root / "app").rmdir()
     await world.dispatch(reply("!bypass on", THREAD))
     assert world.ephemerals() == [texts.DIRECTORY_MISSING.format(directory=world.root / "app")]
@@ -2811,14 +2812,22 @@ async def test_a_restart_during_start_leaves_nothing_for_the_next_start(manual: 
     )
 
 
-async def test_bypass_typed_while_the_setup_waits_is_overridden_by_start(manual: World) -> None:
+@pytest.mark.parametrize("word", ["!bypass on", "!bypass off"])
+async def test_bypass_typed_while_the_setup_waits_points_at_the_setup(
+    manual: World, word: str
+) -> None:
     await manual.dispatch(message("hello", ts=THREAD))
-    await manual.dispatch(reply("!bypass on", THREAD))
-    assert manual.clients[-1].modes == ["bypassPermissions"]
+    typed = reply(word, THREAD)
+    await manual.dispatch(typed)
+    # Start alone sets bypass before the first prompt: the word changes nothing and says so.
+    assert manual.clients[-1].modes == []
+    assert manual.state.thread(CHANNEL, THREAD).bypass is None
+    assert manual.ephemerals() == [texts.BYPASS_BEFORE_START]
+    assert reactions_on(manual, typed["event"]["ts"]) == []  # nothing took effect: no ✅
     await manual.dispatch(setup_click(manual))  # bypass unticked
     await manual.settle(0.3)
     client = manual.clients[-1]
-    assert client.modes[-1] == "default"  # the live client is back to asking
+    assert client.modes == []  # never left the folder's own mode
     assert manual.state.thread(CHANNEL, THREAD).bypass is False
     assert client.queries == ["hello"]
     assert manual.slack.calls_to("chat.update")[-1]["text"].endswith("Bypass: off")
