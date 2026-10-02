@@ -422,8 +422,8 @@ doing now, and a background task keeps its card open until it ends. An Edit or a
 preview under its card. When the reply ends, a divider and the footer close the same message, and
 each pair of cards gives way to one line (`✓ Ran 2 shell commands · Read 1 file`). A reply still
 running 280 seconds after it started stops being a stream (Slack closes streams at 5 minutes) and
-goes on in the same message, updated instead of streamed; its footer then arrives in a closing
-message. A reply longer than one Slack message (12,000 characters or 50 cards) continues in the next one.
+goes on in the same message, updated instead of streamed; what Claude wrote after its last call
+then arrives in a new message, with the footer under it. A reply longer than one Slack message (12,000 characters or 50 cards) continues in the next one.
 
 An approval request is a message of its own in the thread, below the reply, and rings, as a
 question does; once you decide, it disappears and the tool's line in the reply records the call.
@@ -439,7 +439,8 @@ as `✓ Agent "review" finished · 3m 59s`. While tasks run, the footer counts t
 From the moment you send a message until its turn ends, Slack shows `Working…` under the
 thread's last message. When the turn has ended and a command or an agent it started still
 runs, the same line reads `1 shell still running` and follows the count; the reply gets its
-footer once that task and its report have ended. The line goes while an approval or a question
+footer once that task and its report have ended. If you sent another message meanwhile and its
+reply has ended, that reply's footer says it instead (`⏳ 1 shell`), until the command ends. The line goes while an approval or a question
 waits for you, and after the answer to a word typed in the thread (`!bypass`, `!status`,
 `!stop`) it can take up to a minute to come back.
 
@@ -448,7 +449,8 @@ it is restarting, a refused attachment, an error) shows small and grey, as the f
 reads apart from Claude's replies. `!help`, `!guide`, `!status` and the answer to a resume show at
 full size.
 
-The thread's latest reply ends with a footer, which moves to each new reply in it:
+Every reply ends with a footer, which says how the session stood when its turn ended, and
+keeps it:
 
 ```
 ⚡ bypass · claude-opus-5-5 · effort medium · my-project · main · (+42,-10) · 10.2M tok · ctx 15% · 5h 16% ↻ 43m · 7d 46% ↻ 3d 4h
@@ -482,7 +484,8 @@ setting is:
   Claude's answer as the text. The reply ends once the turn has ended and every task it started,
   and the report for it, are done too.
 - A reply that is still open after about 4 minutes 40 seconds rings when its stream stops, and a
-  second time when it ends, in its closing message.
+  second time when it ends: what Claude wrote after its last call and the footer arrive as a
+  new message, and the notification reads the start of it.
 - An approval request and a question ring.
 - A reply that fails outright rings once, as any reply ending does.
 - `!stop` and a restart end the reply the same way, so each rings once. A reply longer than one

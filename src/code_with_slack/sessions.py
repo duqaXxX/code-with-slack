@@ -538,7 +538,9 @@ class ThreadSession:
         if self.busy or self._taken is not None or not self._queue.empty():
             return texts.THREAD_WORKING, texts.THREAD_WORKING_STATUS
         kinds = self._running_kinds()
-        if not kinds:
+        if not kinds or (self._latest is not None and self._latest.footer_shown):
+            # Nothing runs, or the end of the thread's last reply is on Slack: its footer
+            # counts them, and a second line under a footer would say the same twice.
             return "", ""
         return (
             texts.STILL_RUNNING.format(counts=kinds),
@@ -1377,6 +1379,7 @@ class ThreadSession:
             owed = self._still_owed(holder) or self._injected_expected or not self._settled.is_set()
             if not owed:
                 self._track_landing(await holder.close_out(), holder.sink)
+                self._show_thread_status()  # its footer may be what counts the tasks now
                 # D10: `!stop` already reacted ✅ itself; skipped so a stopped task's end does
                 # not show it a second time.
                 if not stopped:

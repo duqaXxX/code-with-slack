@@ -278,9 +278,18 @@ little earlier itself.
   writes the whole message from the renderer's model as `markdown` blocks and `task_card` blocks
   (a run of calls keeps its two cards until the body ends), with a short `text`, since a
   `chat.update` whose `text` is long fails `msg_too_long`. The end
-  posts a closing message in the thread with the footer (`ReplySink._write_closing`), the second
-  notification. Its `text`, the banner, is the start of Claude's answer as plain text
-  (`sinks.banner_text`), never a line of the daemon's.
+  posts the reply's ending as a new message, the second notification (`ReplySink._end`): the
+  text Claude wrote after its last call, whole, with whatever follows it, and the footer under
+  it. Its `text`, the banner, is the first paragraph of that text as plain text
+  (`sinks.banner_text`), so the notification says how the work ended, the stream's own stop
+  having said how it began. The ending is a whole part of the renderer's model, never a cut
+  inside one (`ReplySink._ending_cursor`), so no list or heading is split. It is posted first,
+  then a silent update takes it out of the message it grew in: a failed or cancelled post
+  leaves the reply as it was, a failed update leaves the text twice, and in both cases the end
+  has not landed and the one retry follows. When the message holds no such text, or nothing of
+  the answer would stay before it (an answer that is text alone), nothing is moved and the new
+  message is the footer alone (`ReplySink._write_closing`), its banner the start of Claude's
+  answer, never a line of the daemon's.
 
 A message holds 12,000 characters and 50 blocks or task cards (measured 2026-09-28); a reply past
 `sinks.MESSAGE_LIMIT` or `sinks.BLOCKS_LIMIT` continues in a new message, a new stream while the
@@ -305,14 +314,14 @@ tasks' replies). A stream whose last append has an unknown outcome (a reset, a t
 nothing more: it is stopped and the message goes on by `chat.update` from the model. An append
 Slack refuses as too long (`msg_too_long`) would be refused again, so `ReplySink._stream_step`
 stops the stream at once, without the footer, and writes the message by `chat.update`; the end
-then posts a closing message, as for a reply past `STREAM_SECONDS`. The text of a message's cards
+then posts the reply's ending, as for a reply past `STREAM_SECONDS`. The text of a message's cards
 counts toward the cap of a streamed message, by a formula Slack does not document (measured
 2026-10-01 in a private test channel, slack-sdk 3.44.1, issue #92), and the plan does not count
 it; the refusal is logged with the sizes the plan knew and no content. If Slack then refuses
 the update of that message too, the change is dropped and the message shows less than the model:
-unless a later update passes, the reply's end counts as not landed and the root shows ❌. Only the
-thread's latest reply shows the footer (`ReplySink.set_latest`), so it stays at the bottom of the
-thread as the terminal's status line. A card left `in_progress` in a stopped message is stored
+unless a later update passes, the reply's end counts as not landed and the root shows ❌. Every
+reply that has ended keeps its footer, the record of how its last turn ended; only the thread's
+latest reply adds the counts of what still runs to it (`ReplySink.set_latest`). A card left `in_progress` in a stopped message is stored
 as an error until it is updated (measured 2026-09-28), so every end closes its cards first.
 
 Slack's push behaviour is what makes this shape: a stream in a thread the owner started notifies
@@ -512,10 +521,10 @@ where the *next* thread starts, and refuses while any of the channel's threads i
 - Each `ThreadSession` keeps one `render.status.StatusReaction` on its own root message (D10),
   which `thread_ts` always is: a top-level owner message, or the owner's own `!resume` message.
   `ThreadSession._react` shows it as a tracked background task, since a reaction must never delay
-  a turn; the one exception is `✅`, awaited right after the closing message it follows, so it
+  a turn; the one exception is `✅`, awaited right after the end of the reply it follows, so it
   never shows first. `⏳` working: a turn is submitted or sent, or a report turn starts. `✋`
   waiting: an approval or a question is open, back to `⏳` once it is answered and the turn
-  continues. `✅` ended: the closing message of the latest prompt posts with nothing else of the
+  continues. `✅` ended: the reply to the latest prompt ends with nothing else of the
   session running, queued or owed (`ThreadSession.idle`); a second prompt queued behind the first
   keeps it `⏳` until everything has ended. `❌` error: a turn fails, a
   restart's drain drops a queued or taken turn, `SessionGone`, or a shutdown's drain cuts short a
@@ -535,9 +544,12 @@ where the *next* thread starts, and refuses while any of the channel's threads i
 - Each `ThreadSession` also keeps one `render.status.ThreadStatus`: Slack's status line under
   the thread's last message (`assistant.threads.setStatus`), which says
   `ThreadSession._thread_line`. `Working…` while a prompt is queued, taken or sent or a turn
-  is active (a report turn included). Once no turn runs, what the session left running,
-  `1 shell still running`, the words the terminal ends such a turn with: a count that
-  changes is a state of the thread and stays out of the reply, whose stream only grows.
+  is active (a report turn included). Once no turn runs and the thread's latest reply is
+  still open, what the session left running, `1 shell still running`, the words the terminal
+  ends such a turn with: a count that changes is a state of the thread and stays out of a
+  reply whose stream only grows. Once the latest reply has ended its footer says it, and the
+  status line says nothing (`ReplySink.footer_shown`: the reply's end has landed on Slack, so
+  a footer that could not be written never silences the line).
   Nothing while an approval, a question or a hold waits on the owner, while `!stop` winds a
   turn down, and once the session is closed. `ThreadSession._show_thread_status` brings the
   status to that line after anything that can change it (every `_react`, the start and the end
@@ -586,8 +598,8 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   reports the task inside it, with no turn of its own (measured on Claude Code 2.1.280), so
   nothing waits.
   If no turn follows within 30 seconds, the queue moves on; a notification for a task no reply
-  tracks is then posted on its own, and one for a task a reply still tracks closes that reply's
-  own closing message instead, since nothing more is coming for it either. When a queued
+  tracks is then posted on its own, and one for a task a reply still tracks ends that reply
+  instead, since nothing more is coming for it either. When a queued
   message and a notification cross, the result's `origin` tells whose turn it was, and the
   queue is put back in order; that one reply can carry the other's label.
 - A task that outlives its turn keeps its line in the reply that started it: the session maps
@@ -596,11 +608,12 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   an ended turn) go under its line the same way and never open a reply. A notification for such
   a task still makes the next queued message wait for the turn Claude Code starts to report it.
 - What is still running is counted by each task's `task_type` (`sessions.TASK_KINDS`; a type
-  not listed counts as a task) in two places. The thread's latest reply, once it has ended,
-  carries the counts at the end of its footer (`⏳ 1 shell · 1 agent`); a new reply takes them
-  over and the previous one drops them. The thread's status line says them whenever no turn
-  runs (`1 shell · 1 agent still running`), which covers a reply kept open for its own task,
-  with no footer yet. Both disappear when nothing runs.
+  not listed counts as a task) and said once, on the last line of the thread. When the
+  thread's latest reply has ended, the counts close its footer (`⏳ 1 shell · 1 agent`); a new
+  reply takes them over and the previous one drops them, keeping its footer. When the latest
+  reply is still open for its own task, and so has no footer yet, the thread's status line
+  says them (`1 shell · 1 agent still running`). The two never show together, and both
+  disappear when nothing runs.
 - When the Claude Code process goes away (shutdown, an idle close, a process that exits), its
   tasks go with it: their lines close with `Stopped` and the list empties. The map lives in
   memory only.

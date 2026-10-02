@@ -110,6 +110,19 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- A reply that outlives its stream ends with what Claude wrote after its last call and the
+  footer in a new message (issue #66): the notification of that message reads how the work
+  ended, where it repeated the reply's first paragraph, and the message holds more than a
+  footer. The text is posted first and then taken out of the message it grew in by a silent
+  edit (`ReplySink._end`, `ReplySink._ending_cursor`); an answer that is text alone keeps it,
+  and the new message is the footer alone, as before.
+- Every reply keeps its footer once it has ended. Only the counts of what still runs
+  (`⏳ 1 shell`) stay with the thread's latest reply, so a reply that ends after a newer one
+  shows its own footer, with the values of its last turn.
+- What still runs is said once, on the last line of the thread: in the footer when the latest
+  reply has ended, in the thread's status line when that reply is still open. The status line
+  no longer repeats a count the footer above it shows.
+
 - Tool calls in a reply (issue #80): a run of calls, the calls between two pieces of text, is two
   task cards in place of one card per call. The first holds the counts of what ended (`Ran 2 shell
   commands · Read 1 file · ✗ Ran 1 shell command`), the second the call running now. A failed call

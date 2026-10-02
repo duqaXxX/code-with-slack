@@ -117,7 +117,7 @@ async def test_a_reply_waits_for_its_background_task_before_it_stops(
     assert {"type": "divider"} in h.slack.message_blocks()[0]
 
 
-async def test_a_reply_that_outlives_the_stream_ends_with_a_closing_message(
+async def test_a_reply_that_outlives_the_stream_ends_with_its_last_words_and_the_footer(
     harness_for: Callable[..., Harness],
 ) -> None:
     ask = CanUseToolCall("Bash", {"command": "ls"})
@@ -132,12 +132,13 @@ async def test_a_reply_that_outlives_the_stream_ends_with_a_closing_message(
     approval_id = next(iter(h.approvals._pending))
     assert h.approvals.resolve(approval_id, CHANNEL, THREAD, Approve()) is not None
     await asyncio.wait_for(turn.done.wait(), 2)
-    closing = h.slack.calls_to("chat.postMessage")[-1]
-    assert closing["blocks"][-1]["type"] == "context"  # the footer
-    [body] = h.slack.stream_texts()
-    first_words = body.split("\n\n")[0]
-    assert closing["text"] == sinks.banner_text(first_words)[: sinks.BANNER_LIMIT]
-    assert h.slack.pushes() == 3  # the approval request, the 280 s stop, the closing message
+    ending = h.slack.calls_to("chat.postMessage")[-1]
+    assert ending["blocks"][-1]["type"] == "context"  # the footer
+    assert ending["blocks"][0]["type"] == "markdown"  # under the answer's last paragraph
+    last_words = ending["blocks"][0]["text"]
+    assert ending["text"] == sinks.banner_text(last_words)[: sinks.BANNER_LIMIT]
+    assert last_words not in h.slack.stream_texts()[0]  # moved, not shown twice
+    assert h.slack.pushes() == 3  # the approval request, the 280 s stop, the ending
 
 
 # `!stop` ends like any other end, and a restart with queued messages says so once.
@@ -605,19 +606,25 @@ async def test_stop_clears_the_thread_status(harness_for: Callable[..., Harness]
     await until(lambda: statuses(h)[-1:] == [""])  # while the interrupt still winds down
 
 
-async def test_the_thread_status_counts_a_task_of_an_earlier_reply_after_a_later_turn(
+async def test_a_later_reply_that_ended_counts_the_task_in_its_footer_not_in_the_status(
     harness_for: Callable[..., Harness],
 ) -> None:
     first, _, _ = split_background()
     h = harness_for({"turns": [first, sdk_messages("tools")]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    still = f"{session.running_kinds} still running"
+    await until(lambda: lines(h)[-1:] == [still])  # the only reply is open: no footer yet
     await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
     await until(lambda: len(h.slack.calls_to("chat.stopStream")) == 1)
-    await until(lambda: lines(h)[-1:] == [f"{session.running_kinds} still running"])
+    # The thread's last reply has ended: its footer says what still runs, and a status line
+    # under that footer would say it twice.
+    await until(lambda: lines(h)[-1:] == [""])
     _, second = h.slack.stream_ts
     footer = h.slack.messages[second].blocks[-1]["elements"][0]["text"]
     assert session.running_kinds and footer.endswith(f"⏳ {session.running_kinds}")
+    await asyncio.sleep(0.05)
+    assert lines(h)[-1] == ""
 
 
 async def test_closing_a_session_clears_the_thread_status(

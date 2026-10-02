@@ -274,7 +274,9 @@ async def test_a_card_running_at_the_switch_is_updated_not_left_as_an_error(
     assert card["status"] == "in_progress"
 
 
-async def test_the_end_after_the_switch_posts_a_closing_message(slack: FakeSlack) -> None:
+async def test_an_answer_that_is_text_alone_ends_on_a_footer_only_message(
+    slack: FakeSlack,
+) -> None:
     clock = FakeClock()
     sink = reply(slack, clock=clock)
     await sink.text("**Bold** answer, with a [link](https://example.com).\n\nSecond paragraph.")
@@ -292,8 +294,138 @@ async def test_the_end_after_the_switch_posts_a_closing_message(slack: FakeSlack
     # Claude's own words, plain: never a line of the daemon's
     assert closing["text"] == "Bold answer, with a link."
     assert slack.pushes() == 2  # the stop at 280 s, and this one
-    # the body message itself carries no footer: it lives in the closing message
+    # nothing is moved (the first message would keep nothing): the footer lives in the closing
+    # message, and the body message carries none
     assert all(b["type"] != "divider" for b in slack.calls_to("chat.update")[-1]["blocks"])
+
+
+async def long_reply(slack: FakeSlack) -> ReplySink:
+    """A reply past the stream's 280 seconds: words, a call, then the answer Claude ends on."""
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("Let me check the build.")
+    await sink.task(tool("t1", "Edit"))
+    await sink.text("The build passed.\n\n- 214 tests\n- no failures")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.finish([])
+    return sink
+
+
+ENDING = {"type": "markdown", "text": "The build passed.\n\n- 214 tests\n- no failures"}
+
+
+def kept(slack: FakeSlack) -> list[str]:
+    """The kinds of block the reply's first message shows last."""
+    return [b["type"] for b in slack.messages[slack.stream_ts[0]].blocks]
+
+
+async def test_the_end_after_the_switch_posts_the_ending_with_the_footer(slack: FakeSlack) -> None:
+    sink = await long_reply(slack)
+    assert await sink.close_out("main · ctx 6%") is True
+    # The text Claude wrote after its last call, whole, and the footer, as the message that
+    # notifies: its text says how the work ended (the stream's own stop said how it began).
+    [ending] = slack.calls_to("chat.postMessage")
+    assert ending["thread_ts"] == THREAD and ending["unfurl_links"] is False
+    assert ending["blocks"] == [ENDING, {"type": "divider"}, sinks.context_block("main · ctx 6%")]
+    assert ending["text"] == "The build passed."
+    assert slack.pushes() == 2  # the stop at 280 s, and this one
+    # The message it grew in keeps the rest, silently: nothing shows twice, and no footer there.
+    assert slack.message_texts() == ["Let me check the build.", ENDING["text"]]
+    assert kept(slack) == ["markdown", "context"]  # its words, and the call as a line of counts
+
+
+async def test_an_ending_takes_what_follows_it(slack: FakeSlack) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.task(tool("t1", "Edit"))
+    await sink.text("The edit is done.")
+    await sink.text("_2 messages were not sent._", notice=True)
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.finish([])
+    assert await sink.close_out("footer") is True
+    [ending] = slack.calls_to("chat.postMessage")
+    assert [b["type"] for b in ending["blocks"]] == ["markdown", "markdown", "divider", "context"]
+    assert ending["blocks"][0]["text"] == "The edit is done."
+    assert ending["text"] == "The edit is done."  # never a line of the daemon's
+    assert "markdown" not in kept(slack)  # the call stays, the words moved
+
+
+async def test_an_ending_that_slack_did_not_take_is_posted_once_by_the_retry(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.02)
+    sink = await long_reply(slack)
+    answer = slack.responses["chat.postMessage"]
+    slack.responses["chat.postMessage"] = [rejected("ratelimited"), answer]
+    assert await sink.close_out("footer") is False
+    # Not posted: the answer stays where it was, never nowhere.
+    assert slack.message_texts() == [f"Let me check the build.\n\n{ENDING['text']}"]
+    assert await sink.wait_landed() is True
+    assert slack.message_texts() == ["Let me check the build.", ENDING["text"]]
+    assert len(slack.posted_ts) == 1 and slack.pushes() == 2
+
+
+async def test_an_ending_left_twice_by_a_failed_edit_has_not_landed_until_the_retry(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.02)
+    sink = await long_reply(slack)
+    slack.responses["chat.update"] = [rejected("ratelimited"), {"ok": True}]
+    assert await sink.close_out("footer") is False  # posted, still shown in the first message
+    assert slack.message_texts()[1] == ENDING["text"] and "markdown" in kept(slack)[2:]
+    assert await sink.wait_landed() is True
+    assert slack.message_texts() == ["Let me check the build.", ENDING["text"]]
+    assert len(slack.posted_ts) == 1
+
+
+async def test_an_ending_cut_off_while_it_is_posted_is_posted_before_anything_is_shortened(
+    slack: FakeSlack,
+) -> None:
+    sink = await long_reply(slack)
+    slack.delay = 0.05
+    closing = asyncio.create_task(sink.close_out("footer"))
+    await asyncio.sleep(0.02)  # the ending's post is out
+    closing.cancel()
+    await asyncio.gather(closing, return_exceptions=True)
+    slack.delay = 0.0
+    assert slack.posted_ts == []  # cut off before Slack took it
+    writes = len(slack.calls)
+    assert await sink.settle() is True  # a shutdown's last pass
+    order = [m for m, _ in slack.calls[writes:] if m in ("chat.postMessage", "chat.update")]
+    assert order[0] == "chat.postMessage"  # posted first: never nowhere
+    assert slack.message_texts() == ["Let me check the build.", ENDING["text"]]
+    assert len(slack.posted_ts) == 1
+
+
+async def test_the_ending_follows_the_running_counts_by_edits(slack: FakeSlack) -> None:
+    sink = await long_reply(slack)
+    await sink.close_out("footer")
+    ts = slack.posted_ts[0]
+    await sink.set_running("⏳ 1 shell")
+    await settled()
+    edit = slack.calls_to("chat.update")[-1]
+    assert edit["ts"] == ts and edit["blocks"][-1] == sinks.context_block("footer · ⏳ 1 shell")
+    await sink.set_running("")
+    await settled()
+    assert slack.calls_to("chat.update")[-1]["blocks"][-1] == sinks.context_block("footer")
+    assert len(slack.posted_ts) == 1 and slack.pushes() == 2  # an edit never pushes
+
+
+async def test_a_reply_says_its_footer_shows_only_once_its_end_has_landed(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.02)
+    sink = reply(slack)
+    await sink.text("Done.")
+    await sink.finish([])
+    assert sink.footer_shown is False
+    slack.responses["chat.stopStream"] = [rejected("ratelimited"), {"ok": True}]
+    assert await sink.close_out("footer") is False
+    assert sink.footer_shown is False  # no footer on Slack yet: the status line still counts
+    assert await sink.wait_landed() is True
+    assert sink.footer_shown is True
 
 
 async def test_the_closing_message_text_skips_the_daemon_s_own_lines(slack: FakeSlack) -> None:
@@ -466,15 +598,25 @@ async def test_unchanged_running_counts_write_nothing(slack: FakeSlack) -> None:
     assert len(slack.calls) == before
 
 
-async def test_a_reply_that_is_no_longer_latest_drops_its_footer(slack: FakeSlack) -> None:
+async def test_a_reply_that_is_no_longer_latest_keeps_its_footer_and_drops_the_counts(
+    slack: FakeSlack,
+) -> None:
     sink = reply(slack)
     await sink.text("Done.")
     await sink.finish([])
     await sink.close_out("footer")
+    await sink.set_running("⏳ 1 shell")
+    await settled()
+    assert slack.calls_to("chat.update")[-1]["blocks"][-1] == sinks.context_block(
+        "footer · ⏳ 1 shell"
+    )
     await sink.set_latest(False)
     await settled()
+    # The footer is the record of how this turn ended; what still runs is said once, at the
+    # bottom of the thread, by the latest reply.
     update = slack.calls_to("chat.update")[-1]
-    assert [b["type"] for b in update["blocks"]] == ["markdown"]
+    assert [b["type"] for b in update["blocks"]] == ["markdown", "divider", "context"]
+    assert update["blocks"][-1] == sinks.context_block("footer")
 
 
 async def test_the_closing_message_follows_running_counts_and_latest(slack: FakeSlack) -> None:
@@ -493,9 +635,10 @@ async def test_the_closing_message_follows_running_counts_and_latest(slack: Fake
     assert edit["text"] == "Done."  # an edit never pushes: the text stays Claude's words
     await sink.set_latest(False)
     await settled()
-    # the message that pushed stays, with nothing to show
+    # no longer the latest: the counts go, the footer stays
     assert slack.calls_to("chat.update")[-1]["blocks"] == [
-        sinks.context_block(sinks.ZERO_WIDTH_SPACE)
+        {"type": "divider"},
+        sinks.context_block("footer"),
     ]
     assert len(slack.posted_ts) == 1 and slack.calls_to("chat.delete") == []
 
@@ -609,14 +752,15 @@ async def test_a_refused_rewrite_never_replaces_a_message_that_shows_its_body(
     slack: FakeSlack,
 ) -> None:
     # A reply that ended inline already shows its whole body. Slack refusing a later rewrite of
-    # it (dropping the footer, say) must leave that body as it is: no plain-text fallback.
+    # it (the counts joining its footer, say) must leave that body as it is: no plain-text
+    # fallback.
     sink = reply(slack)
     await sink.text("line of text\n" * 400)
     await sink.task(tool("t1", "Bash"))
     await sink.finish([])
     assert await sink.close_out("footer")
     slack.responses["chat.update"] = rejected("invalid_blocks")
-    await sink.set_latest(False)
+    await sink.set_running("⏳ 1 shell")
     await settled()
     updates = slack.calls_to("chat.update")
     assert updates and all(u["blocks"] != [] for u in updates)
@@ -624,7 +768,7 @@ async def test_a_refused_rewrite_never_replaces_a_message_that_shows_its_body(
     await settled()
     assert len(slack.calls_to("chat.update")) == tried  # the change is dropped, not retried
     slack.responses["chat.update"] = {"ok": True}
-    await sink.set_latest(True)  # a later change is tried again
+    await sink.set_running("⏳ 2 shells")  # a later change is tried again
     await settled()
     assert len(slack.calls_to("chat.update")) == tried + 1
 
