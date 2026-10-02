@@ -56,6 +56,10 @@ app's **OAuth & Permissions** page add the missing bot scope, then reinstall the
 workspace. Without `files:read`, every attached file is refused with `HTTP 302`; without
 `reactions:write`, the status reaction is silently skipped (logged, never surfaced).
 
+The `Working…` line under a thread is Slack's thread status (`assistant.threads.setStatus`),
+which Slack's reference lists under `chat:write`. When Slack refuses it, the refusal is logged
+and the line is skipped.
+
 An app created before the Home tab was added needs it switched on: on the app's **App Home**
 page, under **Show Tabs**, turn on **Home Tab**, then restart code-with-slack. Without it the
 session list is not published, and the log says so once per start.
@@ -430,7 +434,11 @@ Messages sent to a thread while its turn is running wait their turn; each gets i
 a background task finishes while nothing runs, Claude Code starts a turn of its own to report it,
 as it does in the terminal: that reply opens with Claude Code's own line for the task's end, such
 as `✓ Agent "review" finished · 3m 59s`. While tasks run, the footer counts them, such as
-`⏳ 1 shell · 1 agent`.
+`⏳ 1 shell · 1 agent`. A reply whose turn has ended while such a task still runs has no footer
+yet: it ends on `⏳ 1 shell still running` until the task and its report have ended.
+
+From the moment you send a message until its turn ends, Slack shows `Working…` under the
+thread's last message. It goes while an approval or a question waits for you.
 
 What code-with-slack says on its own (the answer to `!bind`, `!bypass` or `!stop`, a notice that
 it is restarting, a refused attachment, an error) shows small and grey, as the footer does, so it

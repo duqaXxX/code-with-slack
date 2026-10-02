@@ -5,7 +5,8 @@ from collections.abc import Iterator
 import pytest
 from slack_sdk.errors import SlackApiError
 
-from code_with_slack.render.status import Status, StatusReaction
+from code_with_slack import texts
+from code_with_slack.render.status import Status, StatusReaction, ThreadStatus
 from tests.fakes import CHANNEL, THREAD, FakeSlack
 
 
@@ -170,3 +171,144 @@ async def test_missing_scope_is_logged_once_and_stops_further_reactions(
     await second.show(Status.WAITING)
     assert second.current is None  # the process gave up on reactions for this run
     assert len(slack.calls) == before  # no further Slack call, even once add would pass again
+
+
+# The thread's status line (issue #83).
+
+SHOWN = {
+    "channel_id": CHANNEL,
+    "thread_ts": THREAD,
+    "status": texts.THREAD_WORKING_STATUS,
+    "loading_messages": [texts.THREAD_WORKING],
+}
+CLEARED = {"channel_id": CHANNEL, "thread_ts": THREAD, "status": ""}
+
+
+def thread_status(slack: FakeSlack, **timing: float) -> ThreadStatus:
+    return ThreadStatus(slack, channel=CHANNEL, thread_ts=THREAD, **timing)
+
+
+def statuses(slack: FakeSlack) -> list[dict[str, object]]:
+    return slack.calls_to("assistant.threads.setStatus")
+
+
+async def beat() -> None:
+    """Long enough for the status's own task to make a call that is due."""
+    await asyncio.sleep(0.02)
+
+
+async def test_the_thread_status_is_set_with_a_loading_message_then_cleared(
+    slack: FakeSlack,
+) -> None:
+    status = thread_status(slack)
+    status.show(True)
+    await beat()
+    assert statuses(slack) == [SHOWN]
+    status.show(False)
+    await beat()
+    assert statuses(slack) == [SHOWN, CLEARED]
+
+
+async def test_the_same_thread_status_again_makes_no_call(slack: FakeSlack) -> None:
+    status = thread_status(slack)
+    status.show(False)  # never shown: nothing to clear
+    await beat()
+    assert statuses(slack) == []
+    status.show(True)
+    status.show(True)
+    await beat()
+    assert statuses(slack) == [SHOWN]
+
+
+async def test_a_thread_status_asked_for_and_dropped_at_once_makes_no_call(
+    slack: FakeSlack,
+) -> None:
+    status = thread_status(slack)
+    status.show(True)
+    status.show(False)
+    await beat()
+    assert statuses(slack) == []
+
+
+async def test_the_thread_status_is_set_again_before_slack_removes_it(slack: FakeSlack) -> None:
+    status = thread_status(slack, refresh=0.03)
+    status.show(True)
+    await asyncio.sleep(0.1)
+    assert len(statuses(slack)) >= 3 and all(call == SHOWN for call in statuses(slack))
+    await status.close()
+    count = len(statuses(slack))
+    assert statuses(slack)[-1] == CLEARED
+    await asyncio.sleep(0.1)
+    assert len(statuses(slack)) == count  # closed: nothing is left running
+
+
+async def test_a_write_sets_the_thread_status_again_soon_after(slack: FakeSlack) -> None:
+    status = thread_status(slack, after_write=0.05)
+    status.wrote()  # not shown: a write changes nothing
+    await beat()
+    assert statuses(slack) == []
+    status.show(True)
+    await beat()
+    status.wrote()
+    await beat()
+    assert statuses(slack) == [SHOWN]  # not at once: one call covers a burst of writes
+    await asyncio.sleep(0.06)
+    assert statuses(slack) == [SHOWN, SHOWN]
+    await status.close()
+
+
+async def test_writes_that_keep_coming_do_not_put_the_thread_status_off(slack: FakeSlack) -> None:
+    status = thread_status(slack, after_write=0.05)
+    status.show(True)
+    await beat()
+    for _ in range(10):  # a card updated again and again while its turn waits on it
+        status.wrote()
+        await beat()
+    assert len(statuses(slack)) >= 3 and all(call == SHOWN for call in statuses(slack))
+    await status.close()
+
+
+async def test_a_write_right_after_the_thread_status_is_asked_for_does_not_delay_it(
+    slack: FakeSlack,
+) -> None:
+    status = thread_status(slack, after_write=10)
+    status.show(True)
+    status.wrote()
+    await beat()
+    assert statuses(slack) == [SHOWN]
+    await status.close()
+
+
+async def test_a_close_that_cuts_the_clearing_call_short_clears_the_thread_status_itself(
+    slack: FakeSlack,
+) -> None:
+    status = thread_status(slack)
+    status.show(True)
+    await beat()
+    slack.delay = 0.05  # the clearing call is out when the session closes
+    status.show(False)
+    await beat()
+    assert statuses(slack) == [SHOWN]  # still on its way
+    slack.delay = 0.0
+    await status.close()
+    assert statuses(slack) == [SHOWN, CLEARED]
+
+
+async def test_a_thread_status_slack_refuses_is_logged_once_and_never_raises(
+    slack: FakeSlack, caplog: pytest.LogCaptureFixture
+) -> None:
+    slack.responses["assistant.threads.setStatus"] = rejected("ratelimited")
+    status = thread_status(slack, refresh=0.02)
+    with caplog.at_level(logging.WARNING):
+        status.show(True)
+        await asyncio.sleep(0.1)
+        await status.close()
+    assert len(statuses(slack)) >= 3
+    lines = [r.getMessage() for r in caplog.records if "setStatus" in r.getMessage()]
+    assert lines == [f"assistant.threads.setStatus failed on {CHANNEL}/{THREAD}: ratelimited"]
+
+
+async def test_closing_a_thread_status_that_never_showed_makes_no_call(slack: FakeSlack) -> None:
+    status = thread_status(slack)
+    await status.close()
+    assert statuses(slack) == []

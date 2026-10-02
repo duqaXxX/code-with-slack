@@ -1811,3 +1811,164 @@ async def test_a_run_in_a_message_the_reply_has_left_is_folded_at_the_end_too(
     first = slack.message_blocks()[0]
     assert first[0] == context("✓ Ran 1 shell command")
     assert all(block.get("task_id") != "fold:a" for block in first)
+
+
+# The line of what still runs, between the end of the body and the reply's end (issue #95).
+
+STILL = "⏳ 1 shell still running"
+
+
+def stream_text(slack: FakeSlack) -> str:
+    """Everything the first stream was told as text, in order: a stream only grows."""
+    return slack._stream_text(slack.stream_ts[0])
+
+
+async def test_a_body_that_ends_with_a_task_still_running_ends_the_stream_on_that_line(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.text("The watcher is started.")
+    await sink.set_running("⏳ 1 shell")
+    await sink.finish([])
+    await sink.stay_open()
+    assert stream_text(slack).rstrip().endswith(f"The watcher is started.\n\n{STILL}")
+    assert slack.calls_to("chat.stopStream") == [] and slack.pushes() == 0  # the reply is open
+    await sink.set_running("")
+    await sink.close_out("footer")
+    # The stop carries the footer, and the silent update after it takes the line away.
+    [blocks] = slack.message_blocks()
+    assert [b["type"] for b in blocks] == ["markdown", "divider", "context"]
+    assert blocks[0]["text"] == "The watcher is started."
+    assert blocks[-1]["elements"][0]["text"] == "footer"
+    assert slack.pushes() == 1
+
+
+async def test_a_reply_that_ends_at_once_is_never_told_what_still_runs(slack: FakeSlack) -> None:
+    # Another reply's task still runs in the thread, and this one owes nothing: it ends on its
+    # footer, which carries the counts, with no line before it and no write to take one away.
+    sink = reply(slack)
+    await sink.text("Done.")
+    await sink.set_running("⏳ 1 shell")
+    await sink.finish([])
+    await sink.close_out("footer")
+    await sink.stay_open()  # too late: a reply that has ended stays as it is
+    await settled()
+    assert stream_text(slack).strip() == "Done."
+    assert slack.calls_to("chat.appendStream") == [] and slack.calls_to("chat.update") == []
+    [blocks] = slack.message_blocks()
+    assert blocks[-1]["elements"][0]["text"] == "footer · ⏳ 1 shell"
+
+
+async def test_nothing_running_at_the_end_of_the_body_adds_no_line(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.text("Done.")
+    await sink.finish([])
+    await sink.stay_open()
+    assert stream_text(slack).strip() == "Done."
+
+
+async def test_only_the_latest_reply_of_a_thread_says_what_still_runs(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.text("Done.")
+    await sink.set_latest(False)
+    await sink.set_running("⏳ 1 shell")
+    await sink.finish([])
+    await sink.stay_open()
+    assert "still running" not in stream_text(slack)
+
+
+async def test_an_open_stream_says_what_still_runs_once_per_end_of_the_body(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.text("Two watchers are started.")
+    await sink.set_running("⏳ 2 shells")
+    await sink.finish([])
+    await sink.stay_open()
+    # A stream cannot change what it was told: a new count alone adds no second line.
+    await sink.set_running("⏳ 1 shell")
+    await settled()
+    assert stream_text(slack).count("still running") == 1
+    # A report turn writes into the same reply: no line while it writes, one at its own end.
+    await sink.text("\n\nThe first watcher ended.")
+    await settled()
+    assert stream_text(slack).count("still running") == 1
+    await sink.finish([])
+    await sink.stay_open()
+    told = stream_text(slack)
+    assert told.count("still running") == 2 and told.rstrip().endswith(STILL)
+    assert told.index("The first watcher ended.") < told.rindex(STILL)
+
+
+async def test_a_stopped_message_shows_what_still_runs_below_its_body_and_follows_the_counts(
+    slack: FakeSlack,
+) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("Two watchers are started.")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.set_running("⏳ 2 shells")
+    await sink.finish([])
+    await sink.stay_open()
+
+    def shown() -> list[dict[str, Any]]:
+        return list(slack.calls_to("chat.update")[-1]["blocks"])
+
+    body = {"type": "markdown", "text": "Two watchers are started."}
+    assert shown() == [body, {"type": "markdown", "text": "⏳ 2 shells still running"}]
+    await sink.set_running("⏳ 1 shell")
+    await settled()
+    assert shown() == [body, {"type": "markdown", "text": STILL}]
+    await sink.text("\n\nThe first watcher ended.")  # a report turn: no line while it writes
+    await settled()
+    assert [b["text"] for b in shown()] == ["Two watchers are started.\n\nThe first watcher ended."]
+    await sink.finish([])
+    await sink.stay_open()
+    assert shown()[-1] == {"type": "markdown", "text": STILL}
+    await sink.set_running("")
+    await sink.close_out("footer")
+    assert all("still running" not in b.get("text", "") for b in shown())
+    closing = slack.calls_to("chat.postMessage")[-1]
+    assert closing["blocks"][-1]["elements"][0]["text"] == "footer"
+    assert slack.pushes() == 2  # the 280 s stop and the closing message: an edit never pushes
+
+
+async def test_a_stream_told_what_still_runs_is_brought_to_the_model_when_it_stops(
+    slack: FakeSlack,
+) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("The watcher is started.")
+    await sink.set_running("⏳ 1 shell")
+    await sink.finish([])
+    await sink.stay_open()
+    await settled()  # the stream's deadline is waiting on the clock
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    # The line the stream was told is not left twice: the update writes the body and one line.
+    assert slack.calls_to("chat.update")[-1]["blocks"] == [
+        {"type": "markdown", "text": "The watcher is started."},
+        {"type": "markdown", "text": STILL},
+    ]
+
+
+async def test_every_pass_that_may_have_written_tells_the_thread_status(slack: FakeSlack) -> None:
+    passes: list[int] = []
+    sink = ReplySink(
+        slack,
+        channel=CHANNEL,
+        thread_ts=THREAD,
+        team_id=TEAM,
+        user_id=OWNER,
+        bot_user_id=BOT,
+        limiter=UpdateLimiter(),
+        clock=FakeClock(),
+        on_write=lambda: passes.append(len(slack.calls)),
+    )
+    await sink.text("Hello.")
+    await settled()
+    assert passes == [1]  # after the stream's start
+    await sink.finish([])
+    await sink.stay_open()
+    await sink.close_out("footer")
+    assert len(passes) >= 2 and passes[-1] == len(slack.calls)

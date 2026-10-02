@@ -509,3 +509,114 @@ async def test_a_reply_is_written_through_the_client_made_for_replies(
     turn = await h.session().submit("list the files")
     await asyncio.wait_for(turn.done.wait(), 2)
     assert replies.stream_ts and not h.slack.stream_ts  # the reply, not the approvals, uses it
+
+
+# The thread's status line (issue #83) and the line of what still runs (issue #95).
+
+
+def statuses(h: Harness) -> list[str]:
+    """Every status the thread was given, in order: the empty one clears it."""
+    return [str(a["status"]) for a in h.slack.calls_to("assistant.threads.setStatus")]
+
+
+async def test_a_prompt_shows_the_thread_status_before_claude_writes_anything(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({})  # a turn that never answers
+    await h.session().submit("hello")
+    await until(lambda: bool(statuses(h)))
+    [call] = h.slack.calls_to("assistant.threads.setStatus")
+    assert call == {
+        "channel_id": CHANNEL,
+        "thread_ts": THREAD,
+        "status": texts.THREAD_WORKING_STATUS,
+        "loading_messages": [texts.THREAD_WORKING],
+    }
+    assert writes(h) == []  # the status is not a message
+
+
+async def test_the_thread_status_is_cleared_when_the_turn_ends(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    turn = await h.session().submit("list the files")
+    await asyncio.wait_for(turn.done.wait(), 2)
+    await until(lambda: statuses(h)[-1:] == [""])
+    assert statuses(h)[0] == texts.THREAD_WORKING_STATUS
+
+
+async def test_the_thread_status_goes_while_an_approval_waits_and_comes_back_after_it(
+    harness_for: Callable[..., Harness],
+) -> None:
+    ask = CanUseToolCall("Bash", {"command": "ls"})
+    h = harness_for({"turns": [with_ask(ask)]})
+    turn = await h.session().submit("list the files")
+    await until(lambda: bool(h.approvals._pending))
+    await until(lambda: statuses(h)[-1:] == [""])  # ✋: the session waits on the owner
+    waiting = len(statuses(h))
+    # A Slack that takes real time, as it does: a turn that ended at once would take the status
+    # back before it was ever set (`ThreadStatus` ends on the last of two quick changes).
+    h.slack.delay = 0.01
+    approval_id = next(iter(h.approvals._pending))
+    assert h.approvals.resolve(approval_id, CHANNEL, THREAD, Approve()) is not None
+    await asyncio.wait_for(turn.done.wait(), 2)
+    await until(lambda: statuses(h)[-1:] == [""])
+    assert texts.THREAD_WORKING_STATUS in statuses(h)[waiting:]  # shown again after the answer
+
+
+async def test_a_task_that_outlives_its_turn_leaves_the_line_and_no_thread_status(
+    harness_for: Callable[..., Harness],
+) -> None:
+    first, notice, injected = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    await until(lambda: statuses(h)[-1:] == [""])  # the turn ended: the prompt is back
+    line = f"⏳ {session.running_kinds} still running"
+    assert session.running_kinds and line in h.slack.stream_texts()[0]
+    assert open_streams(h) == h.slack.stream_ts and h.slack.pushes() == 0  # the reply is open
+    h.slack.delay = 0.01  # a report turn that takes real time, as it does
+    h.clients[0].inject(notice + injected)
+    await until(lambda: bool(h.slack.calls_to("chat.stopStream")))
+    await until(lambda: h.slack.messages[h.slack.stream_ts[0]].updated)
+    # The report turn showed the status again, and the reply's end took the line away.
+    assert statuses(h).count(texts.THREAD_WORKING_STATUS) >= 2
+    await until(lambda: statuses(h)[-1:] == [""])
+    assert "still running" not in h.slack.stream_texts()[0]
+    assert h.slack.pushes() == 1
+
+
+async def test_stop_clears_the_thread_status(harness_for: Callable[..., Harness]) -> None:
+    h = harness_for({})  # a turn that never answers: nothing waits on the owner
+    session = h.session()
+    await session.submit("hello")
+    await until(lambda: bool(h.clients) and h.clients[-1].queries == ["hello"])
+    await until(lambda: statuses(h) == [texts.THREAD_WORKING_STATUS])
+    assert await session.stop() is True
+    await until(lambda: statuses(h)[-1:] == [""])  # while the interrupt still winds down
+
+
+async def test_a_reply_that_owes_nothing_is_not_told_what_another_reply_still_runs(
+    harness_for: Callable[..., Harness],
+) -> None:
+    first, _, _ = split_background()
+    h = harness_for({"turns": [first, sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
+    await until(lambda: len(h.slack.calls_to("chat.stopStream")) == 1)
+    _, second = h.slack.stream_ts
+    assert "still running" not in h.slack._stream_text(second)
+    footer = h.slack.messages[second].blocks[-1]["elements"][0]["text"]
+    assert session.running_kinds and footer.endswith(f"⏳ {session.running_kinds}")
+
+
+async def test_closing_a_session_clears_the_thread_status(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({})  # a turn that never answers
+    session = h.session()
+    await session.submit("hello")
+    await until(lambda: bool(statuses(h)))
+    await session.close()
+    assert statuses(h)[-1] == ""
