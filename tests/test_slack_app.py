@@ -396,6 +396,16 @@ async def test_bang_clear_is_refused_inside_a_thread(world: World) -> None:
     assert world.queries() == ["hi"]  # the earlier prompt is the only one that reached Claude
 
 
+@pytest.mark.parametrize("word", ["!reset", "!new", "!NEW keep this"])
+async def test_an_alias_of_clear_is_refused_inside_a_thread(world: World, word: str) -> None:
+    # `/reset` and `/new` are `/clear` under other names: commands reference and the recorded
+    # list (SDK 0.2.163) both give them as its aliases.
+    await world.dispatch(message("hi", ts=THREAD))
+    await world.dispatch(reply(word, THREAD))
+    assert world.ephemerals() == [texts.CLEAR_IN_THREAD]
+    assert world.queries() == ["hi"]
+
+
 async def test_bang_clear_at_top_level_opens_a_session_like_any_other_word(world: World) -> None:
     await world.dispatch(message("!clear"))
     assert world.queries() == ["/clear"]
