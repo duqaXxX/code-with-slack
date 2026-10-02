@@ -110,6 +110,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `!bypass on` and `!bypass off` inside a session's thread answer with a line of text (#68):
+  an ephemeral message under the word (`texts.BYPASS_ON_THREAD`, `texts.BYPASS_OFF_THREAD`)
+  that says what changed, and for `on` that it survives a restart. The ✅ on the word stays,
+  since the ephemeral line is gone on reload. Before, the ✅ was the whole answer and read as
+  no answer. Not measured: the ephemeral line when the word is typed from the iPhone app.
 - A restart posts no message in a session thread. What it waits for, when only background tasks
   hold it, is said by the thread's status line
   (`Restart waits for 1 shell · !stop ends it now`, `ThreadSession.show_restart_wait`), which
@@ -184,7 +189,7 @@ All notable changes to this project are documented here. The format follows
   so it stays after a reload): `!help`, `!guide`, `!status`, `!stop`, `!bind` with its list and
   each answer, the `!bypass` refusal, `!resume` with its list and each refusal. A word typed
   inside a session's thread is answered by an ephemeral message under it (Slack shows `Only
-  visible to you`, and it disappears on reload), or by a ✅ on the word for `!bypass`; the D5
+  visible to you`, and it disappears on reload), with a ✅ on the word too for `!bypass`; the D5
   old-folder notice and `Not sent.` are ephemeral too. None of these rings a phone.
 - `!resume`: the Resume button carries the session id and the thread of the owner's `!resume`
   message. A click, or a name, resumes the session in that thread and edits the list to say what

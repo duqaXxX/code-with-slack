@@ -494,19 +494,24 @@ async def test_bang_bypass_on_inside_a_thread_switches_the_live_client(world: Wo
     word = reply("!bypass on", THREAD)
     await world.dispatch(word)
     assert world.clients[0].modes == ["bypassPermissions"]
-    # The answer is a ✅ on the owner's word: no text, nothing that rings.
+    # The answer says what changed, to the owner alone and under their word, and a ✅ stays on
+    # the word after a reload takes the line away. Neither rings.
     assert reactions_on(world, word["event"]["ts"]) == ["white_check_mark"]
+    (answer,) = world.slack.calls_to("chat.postEphemeral")
+    assert answer["text"] == texts.BYPASS_ON_THREAD and answer["thread_ts"] == THREAD
     # No placeholder for the session's reply: nothing is posted until Claude has something to say.
-    assert world.ephemerals() == [] and said(world) == []
+    assert said(world) == []
 
 
-async def test_bang_bypass_off_inside_a_thread_reacts_too(world: World) -> None:
+async def test_bang_bypass_off_inside_a_thread_says_so_too(world: World) -> None:
     await world.dispatch(message("hi", ts=THREAD))
     await world.dispatch(reply("!bypass on", THREAD))
     word = reply("!bypass off", THREAD)
     await world.dispatch(word)
     assert world.clients[0].modes == ["bypassPermissions", "default"]
     assert reactions_on(world, word["event"]["ts"]) == ["white_check_mark"]
+    assert world.ephemerals() == [texts.BYPASS_ON_THREAD, texts.BYPASS_OFF_THREAD]
+    assert said(world) == []
     assert world.state.thread(CHANNEL, THREAD).bypass is False
 
 

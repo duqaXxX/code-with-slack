@@ -146,8 +146,8 @@ level, or in a thread that holds no session, acts as a top-level word: its answe
 in the channel (`in_channel`, or `say` with no thread), which is neither ephemeral nor a thread
 reply, so it stays after a reload and never notifies. A word typed inside a session's thread is
 answered by `tell_owner` or an ephemeral `say` under the owner's message (`chat.postEphemeral`
-with `thread_ts`), which Slack drops on reload, or by `acknowledge`, a ✅ reaction on the word
-(`!bypass`); `!stop` there posts nothing when it stops something, since the session reacts on its own root,
+with `thread_ts`), which Slack drops on reload; `!bypass` adds `acknowledge`, a ✅ reaction on the
+word, which stays; `!stop` there posts nothing when it stops something, since the session reacts on its own root,
 and `texts.NOTHING_TO_STOP_THREAD` (ephemeral) when nothing runs. `word_report` chooses the same
 place for a word's failure, and `reply_on_failure` logs a report that itself fails instead of
 letting it raise, since a raise would reach the message handler's own failure path, which posts
