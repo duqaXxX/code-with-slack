@@ -31,7 +31,6 @@ from code_with_slack.render.sinks import (
     context_block,
     delete_request,
     describe,
-    is_still_running,
 )
 from code_with_slack.render.status import Status, StatusReaction
 from code_with_slack.state import StateStore, ThreadState
@@ -95,10 +94,9 @@ def _safe(write: Callable[..., None], *args: object) -> None:
 async def _repair_reply(
     slack: AsyncWebClient, limiter: UpdateLimiter, channel_id: str, thread_ts: str, message_ts: str
 ) -> None:
-    """Stop the reply's message, then rewrite it: its blocks as Slack keeps them, without a line
-    of what still runs (`is_still_running`), every card left running closed as an error (a
-    stopped message would show it so anyway, until it is updated: measured 2026-09-28), plus
-    the line that says it stopped. Kept within Slack's 50 blocks: at
+    """Stop the reply's message, then rewrite it: its blocks as Slack keeps them, every card left
+    running closed as an error (a stopped message would show it so anyway, until it is updated:
+    measured 2026-09-28), plus the line that says it stopped. Kept within Slack's 50 blocks: at
     the cap the line goes into the last context block (the footer), or is left out if there is
     none; a block that holds content is never replaced. A failed read or a message already gone
     is logged and left alone: never replaced with a shorter form that would lose its content."""
@@ -132,8 +130,6 @@ async def _repair_reply(
         if block.get("type") == "task_card" and block.get("status") in _RUNNING_CARD
         else block
         for block in message.get("blocks") or []
-        # Nothing still runs: the tasks went with the process.
-        if not is_still_running(block)
     ]
     if len(blocks) < SLACK_BLOCKS:
         blocks.append(_STOPPED_BLOCK)

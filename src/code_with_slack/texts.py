@@ -163,14 +163,14 @@ VERSION_PENDING = "started, version shown after the first turn"
 STATUS_BACKGROUND = "Background: `{counts}`"
 STATUS_WORKING = "Working in: `{directory}`"
 RUNNING = "⏳ {counts}"
-# A reply's last line while its body has ended and a task it started still runs (issue #95):
-# the words the terminal ends a turn with (`· 1 shell still running`, Claude Code 2.1.287, read
-# 2026-10-02). `running` is `RUNNING`, already formatted.
-STILL_RUNNING = "{running} still running"
-# Slack's status line under a thread's last message while a prompt is on its way or a turn runs
-# (issue #83). A client shows the loading message, `THREAD_WORKING`; `THREAD_WORKING_STATUS` is
-# what one that draws `<app name> <status>` shows (measured 2026-10-02, desktop and iOS).
+# Slack's status line under a thread's last message (issues #83 and #95). A client shows the
+# loading message: `THREAD_WORKING` while a prompt is on its way or a turn runs, and
+# `STILL_RUNNING` once the turn has ended and a task it started still runs, the words the
+# terminal ends such a turn with (`· 1 shell still running`, Claude Code 2.1.287, read
+# 2026-10-02; `running` is `RUNNING`, already formatted). `THREAD_WORKING_STATUS` is what a
+# client that draws `<app name> <status>` shows (measured 2026-10-02, desktop and iOS).
 THREAD_WORKING = "Working…"
+STILL_RUNNING = "{running} still running"
 THREAD_WORKING_STATUS = "is working…"
 ACTIVITY_BUSY = "running a turn, {queued} queued"
 # `!status` sent to the channel (top-level, or a thread that holds no session): the channel's

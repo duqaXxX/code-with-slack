@@ -56,9 +56,9 @@ app's **OAuth & Permissions** page add the missing bot scope, then reinstall the
 workspace. Without `files:read`, every attached file is refused with `HTTP 302`; without
 `reactions:write`, the status reaction is silently skipped (logged, never surfaced).
 
-The `Working…` line under a thread is Slack's thread status (`assistant.threads.setStatus`),
-which Slack's reference lists under `chat:write`. When Slack refuses it, the refusal is logged
-and the line is skipped.
+The line under a thread (`Working…`, `⏳ 1 shell still running`) is Slack's thread status
+(`assistant.threads.setStatus`), which Slack's reference lists under `chat:write`. When Slack
+refuses it, the refusal is logged and the line is skipped.
 
 An app created before the Home tab was added needs it switched on: on the app's **App Home**
 page, under **Show Tabs**, turn on **Home Tab**, then restart code-with-slack. Without it the
@@ -434,15 +434,14 @@ Messages sent to a thread while its turn is running wait their turn; each gets i
 a background task finishes while nothing runs, Claude Code starts a turn of its own to report it,
 as it does in the terminal: that reply opens with Claude Code's own line for the task's end, such
 as `✓ Agent "review" finished · 3m 59s`. While tasks run, the footer counts them, such as
-`⏳ 1 shell · 1 agent`. A reply whose turn has ended while such a task still runs has no footer
-yet: it ends on `⏳ 1 shell still running` until the task and its report have ended. While that
-reply is still a stream (the first 280 seconds), the line stays as it was written: a count that
-changes, or a report Claude Code writes below it, shows only once the stream has stopped.
+`⏳ 1 shell · 1 agent`.
 
 From the moment you send a message until its turn ends, Slack shows `Working…` under the
-thread's last message. It goes while an approval or a question waits for you, and after `!stop`.
-The answer to a word you type in the thread while a turn runs (`!bypass`, say) can take it away
-for up to a minute.
+thread's last message. When the turn has ended and a command or an agent it started still
+runs, the same line reads `⏳ 1 shell still running` and follows the count; the reply gets its
+footer once that task and its report have ended. The line goes while an approval or a question
+waits for you, and after the answer to a word typed in the thread (`!bypass`, `!status`,
+`!stop`) it can take up to a minute to come back.
 
 What code-with-slack says on its own (the answer to `!bind`, `!bypass` or `!stop`, a notice that
 it is restarting, a refused attachment, an error) shows small and grey, as the footer does, so it

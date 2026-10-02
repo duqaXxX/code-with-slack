@@ -83,34 +83,6 @@ async def test_an_open_reply_is_stopped_then_rewritten_closing_its_running_cards
     assert state.thread(CHANNEL, THREAD).open_replies == ()
 
 
-async def test_a_crashed_reply_loses_its_line_of_what_still_runs(
-    tmp_path: Path, slack: FakeSlack
-) -> None:
-    # The line as Slack reads it back from a stream (measured 2026-10-02, slack-sdk 3.44.1): a
-    # context block with an id of Slack's own, the hourglass as its name.
-    state = make_state(tmp_path)
-    body_blocks = [{"type": "rich_text", "block_id": "auto1", "elements": []}]
-    line = {
-        "type": "context",
-        "block_id": "auto2",
-        "elements": [
-            {
-                "type": "mrkdwn",
-                "text": ":hourglass_flowing_sand: 1 shell still running",
-                "verbatim": False,
-            }
-        ],
-    }
-    slack.responses["conversations.replies"] = {
-        "ok": True,
-        "messages": [{"ts": "1790000000.000001", "blocks": [*body_blocks, line]}],
-    }
-    state.replace_open_reply(CHANNEL, THREAD, None, "1790000000.000001")
-    await repair_crash(slack, state, UpdateLimiter())
-    [update] = slack.calls_to("chat.update")
-    assert update["blocks"] == [*body_blocks, STOPPED_BLOCK]  # the tasks went with the process
-
-
 async def test_a_stream_that_slack_already_closed_is_rewritten_all_the_same(
     tmp_path: Path, slack: FakeSlack
 ) -> None:

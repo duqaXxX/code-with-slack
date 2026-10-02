@@ -24,7 +24,6 @@ from slack_sdk.http_retry.request import HttpRequest
 from slack_sdk.http_retry.state import RetryState
 from slack_sdk.web.async_client import AsyncWebClient
 
-from code_with_slack import texts
 from code_with_slack.render.escape import mrkdwn_escape
 from code_with_slack.render.fold import Fold
 from code_with_slack.render.renderer import STOPPED, TaskUpdate
@@ -155,16 +154,6 @@ def context_block(text: str) -> dict[str, Any]:
 
 
 # A text object's limit, as a context block's mrkdwn element holds one (Block Kit reference).
-def is_still_running(block: dict[str, Any]) -> bool:
-    """Whether a block read back from Slack is a reply's line of what still runs
-    (`ReplySink._tail`): told by its words, the only identity Slack keeps of it (an emoji can
-    read back as its name)."""
-    if block.get("type") != "context" or len(block.get("elements") or []) != 1:
-        return False
-    text = str(block["elements"][0].get("text", ""))
-    return text.endswith(texts.STILL_RUNNING.format(running=""))
-
-
 CONTEXT_LIMIT = 3000
 
 
@@ -466,8 +455,6 @@ class _Plan:
     pieces: set[tuple[int, int]] = field(default_factory=set)
     cards: dict[str, dict[str, Any]] = field(default_factory=dict)
     counted: set[int] = field(default_factory=set)
-    grew: bool = False  # it adds text, a card or a preview piece below what was sent
-    tail: str | None = None  # the line of what still runs, when these chunks end on it
 
 
 def plan_card_text(plan: _Plan) -> int:
@@ -495,12 +482,6 @@ class _Message:
     size: int = 0
     count: int = 0
     counted: set[int] = field(default_factory=set)
-    # The line of what still runs (`ReplySink._tail`) the stream was told, while nothing was
-    # added below it: a stream cannot change or remove it, so it says it once per end of the
-    # body. `tailed`: it was told one at all, so the stream as sent never shows the model,
-    # until an update writes the message from it.
-    tail_sent: str | None = None
-    tailed: bool = False
     # Stopped: whether what it shows is its stream as sent, which needs no write while the
     # model still says the same; else `shown` is the blocks of its last post or update.
     exact: bool = False
@@ -535,10 +516,8 @@ class ReplySink:
     the same message grows by `chat.update`, and the end posts a closing message with the footer.
     A reply past MESSAGE_LIMIT or BLOCKS_LIMIT continues in a new message (a new stream while
     the message still streams, else a post). `finish` ends the body only: a task that outlives
-    the turn keeps updating its own card after that, in place, and the thread's latest reply
-    ends on a line of what still runs (`texts.STILL_RUNNING`) until `close_out`. Never raises:
-    a write that fails is sent again with the next one, the final one once more after
-    FINAL_RETRY_SECONDS."""
+    the turn keeps updating its own card after that, in place. Never raises: a write that fails
+    is sent again with the next one, the final one once more after FINAL_RETRY_SECONDS."""
 
     def __init__(
         self,
@@ -587,9 +566,6 @@ class ReplySink:
         self._retry: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
         self._finished = False
-        # `stay_open`: the body has ended, the reply waits for a task, and no turn has written
-        # into it since (a report turn does, and ends it again).
-        self._waits = False
         self._footer: str | None = None
         self._running = ""
         self._latest = True
@@ -670,7 +646,6 @@ class ReplySink:
 
     async def text(self, markdown: str, *, notice: bool = False) -> None:
         """Claude's words, or with `notice` a line of the daemon's own (never a banner)."""
-        self._waits = False
         if markdown.strip():
             self._fold.text()
         last = self._parts[-1] if self._parts else None
@@ -701,13 +676,12 @@ class ReplySink:
         return self._rev
 
     async def set_running(self, counts: str) -> None:
-        """Show what still runs in this thread (`⏳ 1 shell · 1 agent`): after the footer once the
-        reply has ended, and before that as the reply's last line while it waits for a task
-        (`_tail`); empty removes it. Only the thread's latest reply shows one."""
+        """Show what still runs in this thread (`⏳ 1 shell · 1 agent`) after the footer, or on a
+        line of its own; empty removes it. Only the thread's latest reply shows one."""
         if counts == self._running:
             return
         self._running = counts
-        if self._closed_out or self._waits:
+        if self._closed_out:
             await self._changed()
 
     async def set_latest(self, latest: bool) -> None:
@@ -716,7 +690,7 @@ class ReplySink:
         if latest == self._latest:
             return
         self._latest = latest
-        if self._closed_out or self._waits:
+        if self._closed_out:
             await self._changed()
 
     async def finish(self, closing: list[TaskUpdate]) -> None:
@@ -737,15 +711,6 @@ class ReplySink:
         for tool in self._tools.values():
             if tool.update.folded is not None:
                 tool.rev = self._next_rev()
-        await self._flush()
-
-    async def stay_open(self) -> None:
-        """The body has ended and the reply is kept open for a task it started (`close_out`
-        comes with that task's end): until then, or until a report turn writes into it, the
-        thread's latest reply ends on the line of what still runs (`_tail`), written now."""
-        if self._closed_out or self._waits:
-            return
-        self._waits = True
         await self._flush()
 
     async def close_out(self, footer: str | None) -> bool:
@@ -866,24 +831,12 @@ class ReplySink:
             return []
         return [{"type": "divider"}, context_block(last_line)]
 
-    def _tail(self) -> str:
-        """The reply's last line while it waits for a task after the end of its body
-        (`stay_open`): what its thread still runs (`⏳ 1 shell still running`), as the terminal
-        ends a turn. Only the thread's latest reply, and not while a report turn writes into
-        it. A message that still streams keeps what it was told until its stream stops."""
-        if self._running and self._latest and self._waits and not self._closed_out:
-            return texts.STILL_RUNNING.format(running=self._running)
-        return ""
-
     def _footer_of(self, message: _Message) -> list[dict[str, Any]]:
-        """What a stopped message shows below its body, the reply's last only: the footer when
-        it rode on its stream's stop; before the reply's end, the line of what still runs."""
-        if message is not self._messages[-1]:
-            return []
-        if self._end_mode == "inline":
+        """The footer a stopped message shows: only the reply's last, and only when the footer
+        rode on its stream's stop."""
+        if self._end_mode == "inline" and message is self._messages[-1]:
             return self._closing_blocks()
-        tail = self._tail()
-        return [context_block(tail)] if tail else []
+        return []
 
     def _banner(self, span: list[tuple[int, _Text | _Tool, int, int | None]] | None = None) -> str:
         """The notification's text, plain: the first paragraph of Claude's own words in the
@@ -920,26 +873,7 @@ class ReplySink:
                 more = self._plan_tool(message, plan, index, part, floor)
             if not more:
                 break
-        else:
-            self._plan_tail(message, plan)
         return plan
-
-    def _plan_tail(self, message: _Message, plan: _Plan) -> None:
-        """End the plan on the line of what still runs, once everything else is in: only the
-        reply's last message, only while that line is not already the stream's last word, and
-        only if it fits (it is never worth a message of its own)."""
-        tail = self._tail()
-        if not tail or message is not self._messages[-1]:
-            return
-        if message.tail_sent is not None and not plan.grew:
-            return
-        if plan.count >= BLOCKS_LIMIT or plan.size + len(tail) > MESSAGE_LIMIT:
-            return
-        # Small and grey, as the footer that takes its place: a `blocks` chunk, as a preview is.
-        plan.chunks.append({"type": "blocks", "blocks": [context_block(tail)]})
-        plan.tail = tail
-        plan.size += len(tail)
-        plan.count += 1
 
     def _plan_text(
         self, message: _Message, plan: _Plan, index: int, part: _Text, floor: int
@@ -973,7 +907,6 @@ class ReplySink:
             plan.overflow = (index, plan.text[index])
         if piece.strip():
             plan.chunks.append({"type": "markdown_text", "text": piece})
-            plan.grew = True
             plan.size += len(piece)
             if new:
                 plan.count += 1
@@ -993,7 +926,6 @@ class ReplySink:
                 return False
             plan.cards[update.id] = card_chunk(update)
             plan.chunks.append(plan.cards[update.id])
-            plan.grew = True
             plan.count += 1
         for piece in pieces:
             if (index, piece) in message.pieces_sent:
@@ -1003,7 +935,6 @@ class ReplySink:
                 plan.overflow = (index, piece)
                 return False
             plan.chunks.append(piece_chunk(tool, piece))
-            plan.grew = True
             plan.pieces.add((index, piece))
             plan.size += size
             plan.count += 1
@@ -1017,20 +948,13 @@ class ReplySink:
         message.card_text += plan_card_text(plan)
         message.size, message.count = plan.size, plan.count
         message.counted |= plan.counted
-        if plan.tail is not None:
-            message.tail_sent, message.tailed = plan.tail, True
-        elif plan.grew:
-            message.tail_sent = None  # no longer the stream's last word
 
     def _stream_shows(self, message: _Message, end: Cursor | None) -> bool:
         """Whether the message's stream, as sent, shows what the model says for its span: every
         card as it is now, and ended (a card left in progress in a stopped stream is stored as
         an error until it is updated: measured 2026-09-28), every preview piece, all the text.
         Never once the body has ended, for a message with cards of a run of calls: the model
-        then says the folded line, which a stream cannot show. Never for a stream that was told
-        a line of what still runs: the model holds none, it is drawn below the body."""
-        if message.tailed:
-            return False
+        then says the folded line, which a stream cannot show."""
         for tool_id, sent in message.cards.items():
             update = self._tools[tool_id].update
             if self._finished and update.folded is not None:
@@ -1198,13 +1122,11 @@ class ReplySink:
                 # The change is dropped; the next one is tried. After a refused append nothing
                 # else would say the message is short of the model, so that is kept.
                 message.shown, message.exact, message.footer = blocks, False, footer
-                # Short of the model too while it still shows a line its stream was told.
-                message.short = message.refused or message.tailed
+                message.short = message.refused
                 return True, overflow
             return False, None
         message.shown, message.exact, message.footer = blocks, False, footer
         message.short = False
-        message.tailed = False  # written from the model: the stream's own line is gone
         return True, overflow
 
     def _current(
@@ -1556,10 +1478,6 @@ class ReplySink:
             # The reply has ended whatever becomes of that write: one that fails is tried once
             # more with the next pass, and the cards stay if that fails too.
             if not (await self._update_step(message, None))[0]:
-                if message.tailed:
-                    # The stream was told a line of what still runs, and only this update takes
-                    # it away: a reply that still says so has not ended.
-                    return False
                 self._version += 1
                 self._schedule()
             if result == "stopped":

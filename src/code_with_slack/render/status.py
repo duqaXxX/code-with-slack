@@ -155,14 +155,16 @@ class StatusReaction:
 
 
 class ThreadStatus:
-    """Slack's status line under a thread's last message, `Working…`, while `show(True)` stands:
-    the sign that a prompt was received and that its turn runs, at the bottom of the thread,
-    where a reply that has written nothing yet, or nothing for a while, gives none (issue #83).
+    """Slack's status line under a thread's last message, saying what `show` was last given:
+    `Working…` as the sign that a prompt was received and that its turn runs, where a reply
+    that has written nothing yet, or nothing for a while, gives none (issue #83), then what
+    still runs once the turn has ended (`⏳ 1 shell still running`, issue #95). A state that
+    changes belongs here and not in a reply: a stream cannot change what it was told.
     It notifies nobody (measured 2026-09-28) and shows on desktop and on iOS once it carries
     `loading_messages` (measured 2026-10-02). `show` and `wrote` never wait on Slack: one task
     of this instance's own makes the calls, in order, so two quick changes end on the last one.
     It sets the status at once, again within THREAD_STATUS_AFTER_WRITE_SECONDS of a `wrote`,
-    and every THREAD_STATUS_REFRESH_SECONDS; `show(False)` clears it, only if it was set. A
+    and every THREAD_STATUS_REFRESH_SECONDS; `show("")` clears it, only if it was set. A
     failure is logged (channel, ts and the error code only, once per code in a row) and
     swallowed, since a status line must never break a turn. A refusal no retry can change
     (`THREAD_STATUS_REFUSED`: the token cannot call the method) stops every instance from
@@ -185,18 +187,19 @@ class ThreadStatus:
         self._thread_ts = thread_ts
         self._refresh = refresh
         self._after_write = after_write
-        self._on = False
+        self._text = ""  # what it says; empty: nothing is shown
         self._shown = False  # whether Slack was last asked to show it
         self._due = 0.0  # when it is next set, by the loop's clock
         self._wake = asyncio.Event()
         self._keeper: asyncio.Task[None] | None = None
         self._failed: str | None = None
 
-    def show(self, on: bool) -> None:
-        """Show the status from now on, or stop showing it. The same state again is a no-op."""
-        if on == self._on:
+    def show(self, text: str) -> None:
+        """Say `text` from now on, or with an empty one stop showing the status. The same text
+        again is a no-op."""
+        if text == self._text:
             return
-        self._on = on
+        self._text = text
         self._due = asyncio.get_running_loop().time()
         self._kick()
 
@@ -204,13 +207,13 @@ class ThreadStatus:
         """Something of the app's was written in this thread, which may have cleared the
         status: it is set again within THREAD_STATUS_AFTER_WRITE_SECONDS, never later than it
         was already due (writes that keep coming must not put off the refresh)."""
-        if self._on:
+        if self._text:
             self._due = min(self._due, asyncio.get_running_loop().time() + self._after_write)
             self._kick()
 
     async def close(self) -> None:
         """Stop for good: the status is cleared if it shows, and nothing is left running."""
-        self._on = False
+        self._text = ""
         keeper, self._keeper = self._keeper, None
         if keeper is not None and not keeper.done():
             keeper.cancel()
@@ -227,7 +230,7 @@ class ThreadStatus:
     async def _keep(self) -> None:
         while True:
             self._wake.clear()
-            if not self._on:
+            if not self._text:
                 if self._shown:
                     # Cleared only once the call is back: a `close` that cancels it meanwhile
                     # still reads the status as shown, and clears it itself.
@@ -255,7 +258,7 @@ class ThreadStatus:
                     channel_id=self._channel,
                     thread_ts=self._thread_ts,
                     status=texts.THREAD_WORKING_STATUS,
-                    loading_messages=[texts.THREAD_WORKING],
+                    loading_messages=[self._text],
                 )
             else:
                 # An empty status clears it (the method's reference).

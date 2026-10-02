@@ -360,7 +360,7 @@ class ThreadSession:
         # D10: one reaction on the session's root message, which `thread_ts` always is (a
         # top-level owner message, or the root of a `!resume` thread, the owner's own message).
         self._status = StatusReaction(deps.slack, channel=channel_id, root_ts=thread_ts)
-        # Issue #83: Slack's status line at the bottom of the thread, while `_working` holds.
+        # Issues #83 and #95: Slack's status line at the bottom of the thread (`_thread_line`).
         self._thread_status = ThreadStatus(deps.slack, channel=channel_id, thread_ts=thread_ts)
         # D10: set by `stop()` while it denies pending approvals, so `_can_use_tool`'s own
         # finally does not race its closing ✅ back to working; `_finish` and `_abandon`
@@ -526,20 +526,23 @@ class ThreadSession:
         """An approval or a question is open in this thread, waiting on the owner's answer."""
         return bool(self._waiting)
 
-    def _working(self) -> bool:
-        """Whether a prompt is on its way to Claude Code or a turn runs, and nothing waits on
-        the owner: what the thread's status line says (issue #83). A task that outlived its turn
-        is not this: the terminal's prompt is back by then, and the reply's own last line says
-        what still runs (`texts.STILL_RUNNING`)."""
-        pending = self.busy or self._taken is not None or not self._queue.empty()
-        return (
-            pending and not self.waiting_for_owner and not self._interrupting and not self._closed
-        )
+    def _thread_line(self) -> str:
+        """What the thread's status line says, empty for nothing. `Working…` while a prompt is
+        on its way to Claude Code or a turn runs (issue #83). Once the turn has ended, what it
+        left running (`⏳ 1 shell still running`, issue #95): a count that changes cannot live in
+        a reply, whose stream only grows. Nothing while an approval, a question or a hold waits
+        on the owner, while `!stop` winds a turn down, and once the session is closed."""
+        if self._closed or self.waiting_for_owner or self._interrupting:
+            return ""
+        if self.busy or self._taken is not None or not self._queue.empty():
+            return texts.THREAD_WORKING
+        running = self._running_counts()
+        return texts.STILL_RUNNING.format(running=running) if running else ""
 
-    def _show_working(self) -> None:
-        """Bring the thread's status line to `_working`, after anything that can change it: it
-        never waits on Slack (`ThreadStatus.show`)."""
-        self._thread_status.show(self._working())
+    def _show_thread_status(self) -> None:
+        """Bring the thread's status line to `_thread_line`, after anything that can change it:
+        it never waits on Slack (`ThreadStatus.show`)."""
+        self._thread_status.show(self._thread_line())
 
     @property
     def running_kinds(self) -> str:
@@ -700,7 +703,7 @@ class ThreadSession:
         finally:
             for turn in turns:
                 turn.done.set()
-            self._show_working()
+            self._show_thread_status()
 
     async def _feed_end_notes(self, renderer: TurnRenderer) -> None:
         """Say, at the end of the reply that just ran, what a restart dropped meanwhile."""
@@ -1407,8 +1410,8 @@ class ThreadSession:
                 if not isinstance(message, TURN_MESSAGES):
                     return
             self._active = await self._start_turn()
-            # A report turn has no prompt behind it: only now does `_working` read it.
-            self._show_working()
+            # A report turn has no prompt behind it: only now does `_thread_line` read it.
+            self._show_thread_status()
         active = self._active
         await active.renderer.feed(message)
         if isinstance(message, ResultMessage):
@@ -1419,7 +1422,7 @@ class ThreadSession:
                 stopped = await self._finish(active, message)
             finally:
                 self._active = None
-                self._show_working()  # whichever way it ended, `!stop` included
+                self._show_thread_status()  # whichever way it ended, `!stop` included
             # D10: checked only now, with `_active` cleared: `_finish` alone still reads busy.
             if not stopped:
                 await self._react_done_if_idle()
@@ -1506,7 +1509,7 @@ class ThreadSession:
         only once Slack has answered."""
         self._error_standing = state is Status.ERROR
         self._note_status(state)
-        self._show_working()
+        self._show_thread_status()
         task = asyncio.create_task(self._status.show(state))
         self._background.add(task)
         task.add_done_callback(self._background.discard)
@@ -1554,7 +1557,7 @@ class ThreadSession:
         decides the session reads idle again. Gated on `_error_standing`, not
         `StatusReaction.current`: the reaction only updates once its own `reactions.add`
         returns, which a quick turn can easily outrun."""
-        self._show_working()
+        self._show_thread_status()
         if (
             not self.waiting_for_owner
             and self.idle
@@ -1680,9 +1683,6 @@ class ThreadSession:
         # `force` is a stop, an error or a restart, which never waits for one.
         if force or not self._still_owed(renderer):
             self._track_landing(await renderer.close_out(), renderer.sink)
-        elif isinstance(renderer.sink, ReplySink):
-            # Issue #95: the reply waits for a task it started, and says so on its last line.
-            await renderer.sink.stay_open()
 
     async def _stop_task_replies(self) -> None:
         """The Claude Code process is going away with its tasks: no reply keeps showing one, and
@@ -1779,6 +1779,7 @@ class ThreadSession:
         return " · ".join(f"{n} {kind}{'s' if n > 1 else ''}" for kind, n in counts.items())
 
     async def _show_running(self) -> None:
+        self._show_thread_status()  # the thread's status line counts them too, once the turn ended
         if self._latest is not None:
             await self._latest.set_running(self._running_counts())
 
@@ -1921,7 +1922,7 @@ class ThreadSession:
         waiting = ([active.turn] if active and active.turn else []) + dropped
         self._injected_expected = False
         self._interrupting = False  # D10: whatever it was waiting on, this ends it
-        self._show_working()
+        self._show_thread_status()
         if error:
             self._react_error()
         try:
@@ -2067,7 +2068,7 @@ class ThreadSession:
                 self._react_error()
         finally:
             turn.done.set()
-            self._show_working()
+            self._show_thread_status()
 
     async def _post(self, text: str) -> None:
         """A notice of the daemon's own, small and grey as the footer."""
