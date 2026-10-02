@@ -36,7 +36,7 @@ from code_with_slack.approvals import Answer, Approvals, Approve
 from code_with_slack.footer import UsageCache
 from code_with_slack.guards import Identity
 from code_with_slack.render.sinks import UpdateLimiter
-from code_with_slack.render.status import Status
+from code_with_slack.render.status import Status, ThreadStatus
 from code_with_slack.sessions import SessionDeps, SessionManager, resolve_directory
 from code_with_slack.state import StateStore
 from tests.fakes import (
@@ -3364,3 +3364,33 @@ async def test_the_manager_names_the_threads_with_a_live_session(
     assert h.manager.live_threads() == {(CHANNEL, THREAD)}
     await session.close()
     assert h.manager.live_threads() == set()  # a closed one is no longer in the way
+
+
+async def test_a_stop_says_what_it_waits_for_in_a_message_where_slack_refuses_a_status(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "DRAIN_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(ThreadStatus, "_refused", True)  # the token cannot set a thread status
+    first, _, _ = split_background()
+    h = harness_for({"turns": [first]})
+    await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
+    drained = asyncio.create_task(h.manager.drain(asyncio.Event()))
+    await asyncio.sleep(0.1)
+    assert not drained.done()
+    posted = [p["text"] for p in h.slack.calls_to("chat.postMessage")]
+    assert posted == [texts.RESTART_WAITS_MESSAGE.format(counts="1 shell")]  # once, however long
+    assert h.slack.calls_to("assistant.threads.setStatus") == []
+    drained.cancel()
+
+
+async def test_a_post_outside_the_session_sets_its_thread_status_again(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({})  # a turn that never answers: `Working…` shows
+    session = h.session()
+    await session.submit("hello")
+    told: list[bool] = []
+    session._thread_status.wrote = lambda: told.append(True)  # type: ignore[method-assign]
+    h.manager.wrote(CHANNEL, THREAD)
+    h.manager.wrote(CHANNEL, "1790000000.999999")  # no live session there: nothing to set
+    assert told == [True]

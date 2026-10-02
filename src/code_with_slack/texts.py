@@ -130,6 +130,11 @@ STOPPED_CHANNEL = "Stopped what was running in this channel."
 # the app's name. Never a message: it would notify and stay in the thread after the restart.
 RESTART_WAITS = "Restart waits for {counts} · !stop ends {them} now"
 RESTART_WAITS_STATUS = "is waiting to restart: {counts} still running"
+# The same as a message, only where Slack refuses the app a thread status.
+RESTART_WAITS_MESSAGE = (
+    "code-with-slack is restarting once these background tasks end: {counts}. "
+    "`!stop` ends them now."
+)
 NOTHING_TO_STOP = "Nothing is running in this channel."
 NOTHING_TO_STOP_THREAD = "Nothing is running in this session."
 # D8: two sessions in one folder at once.

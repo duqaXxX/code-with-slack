@@ -473,6 +473,9 @@ class ThreadSession:
         self.session_tokens: int | None = None
         # Set when the daemon stops: the turns already sent finish, no other one starts.
         self.draining = False
+        # Whether this stop has said, in a message, which background tasks it waits for: only
+        # where the thread's status line cannot (`show_restart_wait`).
+        self._told_waiting = False
         # Set when a stop begins while this session has a turn running. The signal names no
         # sender, and the session that sent it has its turn running then; a background task it
         # starts from that point is often its own wait for the new process, which cannot end
@@ -962,12 +965,24 @@ class ThreadSession:
             if client is not None:
                 await self._disconnect(client)
 
-    def show_restart_wait(self) -> None:
+    async def show_restart_wait(self) -> None:
         """During a stop: bring the thread's status line up to date. Once only background tasks
         are left it says which ones the restart waits for (`_thread_line`), since only the
         owner knows whether a task (a dev server, a watcher) ever ends. A status line and not a
-        message: a message would notify, and would stay in the thread after the restart."""
+        message: a message would notify, and would stay in the thread after the restart. Where
+        Slack refuses this app a thread status, a message says it, once: a restart that waits
+        without a word is worse than one notification."""
         self._show_thread_status()
+        if not ThreadStatus.refused() or self._told_waiting or self.busy:
+            return
+        if held := self._running_kinds(awaited_only=True):
+            self._told_waiting = True
+            await self._post(texts.RESTART_WAITS_MESSAGE.format(counts=held))
+
+    def thread_written(self) -> None:
+        """A message of the app's was posted in this thread outside the session: Slack clears a
+        thread's status line when the app replies, so it is set again."""
+        self._thread_status.wrote()
 
     async def stop(self) -> bool | None:
         """Interrupt the running turn, deny its pending approvals and stop this thread's
@@ -2132,6 +2147,14 @@ class SessionManager:
         thread = self._deps.state.open_thread(channel_id, thread_ts)
         return self._session(channel_id, thread_ts, thread.directory)
 
+    def wrote(self, channel_id: str, thread_ts: str) -> None:
+        """Something of the app's was posted in this thread outside its session (the answer to a
+        word, a notice): the live session's status line, which that post cleared, is set again.
+        Nothing for a thread with no live session: it shows no status."""
+        session = self._sessions.get((channel_id, thread_ts))
+        if session is not None:
+            session.thread_written()
+
     def get(self, channel_id: str, thread_ts: str) -> ThreadSession | None:
         """The live session of a thread, or one rebuilt from its stored entry (after a restart,
         D9's idle close, or a resume whose session turned out gone); None when the thread is not
@@ -2285,7 +2308,8 @@ class SessionManager:
             if all(s.restart_ready and not s.reporting for s in self._sessions.values()):
                 return
             for session in list(self._sessions.values()):
-                session.show_restart_wait()
+                with contextlib.suppress(Exception):  # a failed post must not end the wait
+                    await session.show_restart_wait()
             # Polled: a turn ends in several places, and a stop needs no finer timing.
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(cut_short.wait(), DRAIN_POLL_SECONDS)

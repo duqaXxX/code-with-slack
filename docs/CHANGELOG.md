@@ -16,10 +16,10 @@ All notable changes to this project are documented here. The format follows
   (`ThreadSession._thread_line`). The count is a state of the thread and is kept out of the
   reply, whose stream cannot change what it was sent. The status is set again within 2 seconds
   of a write of a reply or of a notice of the session's and every 60 seconds, since Slack
-  clears a status when the app replies and removes it after two minutes. An answer to a word
-  typed in the thread (`!bypass`, say) is posted outside the session, so the status it clears
-  comes back with the 60 second refresh. It goes while an approval or a question waits for the
-  owner, on `!stop`, on an error and when the session closes. A clearing call that fails is
+  clears a status when the app replies and removes it after two minutes. The answer to a word
+  typed in the thread (`!bypass`, say) is such a write too (`SessionManager.wrote`). It goes
+  while an approval or a question waits for the owner, on `!stop`, on an error and when the
+  session closes. A clearing call that fails is
   tried once more, and again when the session closes. A refusal from Slack is logged
   and the line is skipped; `missing_scope` or `not_allowed_token_type` ends the attempts for
   the rest of the run. It never notifies and stores nothing.
@@ -115,7 +115,8 @@ All notable changes to this project are documented here. The format follows
   (`Restart waits for 1 shell · !stop ends it now`, `ThreadSession.show_restart_wait`), which
   does not notify and goes with the restart: the message it replaces rang and stayed in the
   thread. The notice that bypass stays on across a restart is gone, since bypass always
-  outlives one.
+  outlives one. Where Slack refuses the app a thread status, one message still says what the
+  restart waits for.
 
 - A reply that outlives its stream ends with what Claude wrote after its last call and the
   footer in a new message (issue #66): the notification of that message reads how the work

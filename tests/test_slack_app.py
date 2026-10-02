@@ -596,6 +596,16 @@ async def test_bang_status_inside_a_thread_shows_that_session(world: World) -> N
     assert "\nContext: `7%`" in text
 
 
+async def test_an_answer_in_a_session_thread_sets_its_status_line_again(world: World) -> None:
+    await world.dispatch(message("hi", ts=THREAD))
+    told: list[tuple[str, str]] = []
+    world.sessions.wrote = lambda channel, thread: told.append((channel, thread))  # type: ignore[method-assign]
+    await world.dispatch(reply("!status", THREAD))
+    assert told == [(CHANNEL, THREAD)]  # the answer cleared the status: it is set again
+    await world.dispatch(message("!status"))  # top-level: no thread, no status line
+    assert told == [(CHANNEL, THREAD)]
+
+
 async def test_bang_stop_inside_a_thread_stops_only_that_session(world: World) -> None:
     await world.dispatch(message("hello", ts=THREAD))  # never ends
     await world.dispatch(message("hello", ts=OTHER_THREAD))  # D8: THREAD's session is busy

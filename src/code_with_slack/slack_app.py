@@ -256,6 +256,10 @@ def build_app(
                 unfurl_media=False,
                 **where,
             )
+        if thread_ts is not None:
+            # Slack clears a thread's status line when the app replies: the session's is set
+            # again, so `Working…` does not go for a minute after the answer to a word.
+            sessions.wrote(channel, thread_ts)
 
     async def notice(
         channel: str, thread_ts: str | None, text: str, *, ephemeral: bool = False

@@ -196,6 +196,12 @@ class ThreadStatus:
         self._keeper: asyncio.Task[None] | None = None
         self._failed: str | None = None
 
+    @classmethod
+    def refused(cls) -> bool:
+        """Whether Slack has said this app's token cannot set a thread status at all: what a
+        caller with something the owner must be told reads before it falls back on a message."""
+        return cls._refused
+
     def show(self, text: str, fallback: str = texts.THREAD_WORKING_STATUS) -> None:
         """Say `text` from now on, or with an empty one stop showing the status. The same text
         again is a no-op. `fallback` says the same after the app's name, for a client that
