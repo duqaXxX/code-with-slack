@@ -243,6 +243,10 @@ All notable changes to this project are documented here. The format follows
   `commands.refused_in_thread` returns `commands.NEW_SESSION_NAMES` (`clear`, `reset`, `new`),
   known before a session rebuilt after a restart has connected, with any other alias the
   session's own command list gives `clear`.
+- `!login` and `!logout` are never sent to Claude Code, from the channel or from a thread. They
+  act on the host's own login, which the daemon and every session run on, and they went through
+  as `/login` and `/logout`. `commands.host_only` gives each its answer, `texts.LOGIN_ON_HOST`
+  or `texts.LOGOUT_ON_HOST`, which says to run it in `claude` on the host; no session starts.
 - A streamed reply whose append Slack refuses with `msg_too_long` no longer loses its end and no
   longer leaves ❌ on a thread whose turn ended well (issues #92 and #96). The same append was
   sent again on every write and refused each time, the end and its one retry included, so the
