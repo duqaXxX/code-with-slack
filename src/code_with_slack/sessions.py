@@ -531,12 +531,7 @@ class ThreadSession:
         the owner: what the thread's status line says (issue #83). A task that outlived its turn
         is not this: the terminal's prompt is back by then, and the reply's own last line says
         what still runs (`texts.STILL_RUNNING`)."""
-        pending = (
-            self._active is not None
-            or bool(self._sent)
-            or self._taken is not None
-            or not self._queue.empty()
-        )
+        pending = self.busy or self._taken is not None or not self._queue.empty()
         return (
             pending and not self.waiting_for_owner and not self._interrupting and not self._closed
         )

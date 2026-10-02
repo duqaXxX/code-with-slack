@@ -155,6 +155,16 @@ def context_block(text: str) -> dict[str, Any]:
 
 
 # A text object's limit, as a context block's mrkdwn element holds one (Block Kit reference).
+def is_still_running(block: dict[str, Any]) -> bool:
+    """Whether a block read back from Slack is a reply's line of what still runs
+    (`ReplySink._tail`): told by its words, the only identity Slack keeps of it (an emoji can
+    read back as its name)."""
+    if block.get("type") != "context" or len(block.get("elements") or []) != 1:
+        return False
+    text = str(block["elements"][0].get("text", ""))
+    return text.endswith(texts.STILL_RUNNING.format(running=""))
+
+
 CONTEXT_LIMIT = 3000
 
 
@@ -487,7 +497,8 @@ class _Message:
     counted: set[int] = field(default_factory=set)
     # The line of what still runs (`ReplySink._tail`) the stream was told, while nothing was
     # added below it: a stream cannot change or remove it, so it says it once per end of the
-    # body. `tailed`: it was told one at all, so the stream as sent never shows the model.
+    # body. `tailed`: it was told one at all, so the stream as sent never shows the model,
+    # until an update writes the message from it.
     tail_sent: str | None = None
     tailed: bool = False
     # Stopped: whether what it shows is its stream as sent, which needs no write while the
@@ -559,9 +570,10 @@ class ReplySink:
         # entry and must never touch another's). A plain sync callback (`StateStore`'s setters
         # are sync file writes), never awaited here.
         self._on_open_reply = on_open_reply
-        # Called after every pass that may have written this reply: Slack clears a thread's
+        # Called after every pass that wrote this reply, or tried to: Slack clears a thread's
         # status line when the app replies (`ThreadStatus.wrote`). Sync, never awaited here.
         self._on_write = on_write
+        self._wrote = False  # a Slack write was attempted since `on_write` was last called
         # This sink's own entries in that list: the messages a crash would leave unfinished.
         self._tracked: set[str] = set()
         self._ended = False  # the end landed: nothing is left for a repair to close
@@ -1168,6 +1180,7 @@ class ReplySink:
                 await self._limiter.refund()  # caught up: no write follows
                 return True, overflow
             blocks = fresh
+            self._wrote = True
             await self._slack.chat_update(
                 channel=self._channel,
                 ts=message.ts,
@@ -1185,11 +1198,13 @@ class ReplySink:
                 # The change is dropped; the next one is tried. After a refused append nothing
                 # else would say the message is short of the model, so that is kept.
                 message.shown, message.exact, message.footer = blocks, False, footer
-                message.short = message.refused
+                # Short of the model too while it still shows a line its stream was told.
+                message.short = message.refused or message.tailed
                 return True, overflow
             return False, None
         message.shown, message.exact, message.footer = blocks, False, footer
         message.short = False
+        message.tailed = False  # written from the model: the stream's own line is gone
         return True, overflow
 
     def _current(
@@ -1209,6 +1224,7 @@ class ReplySink:
         never show, so it is posted as text alone. Never used on a message that shows something
         already, which a plainer form would replace."""
         try:
+            self._wrote = True
             posted = await self._slack.chat_postMessage(
                 channel=self._channel,
                 thread_ts=self._thread_ts,
@@ -1236,6 +1252,7 @@ class ReplySink:
         try:
             # Claude's text can carry a link built to leak data when Slack fetches it for a
             # preview: no previews for anything the daemon posts.
+            self._wrote = True
             posted = await self._slack.chat_postMessage(
                 channel=self._channel,
                 thread_ts=self._thread_ts,
@@ -1308,6 +1325,7 @@ class ReplySink:
         if message.ts is None:
             attempted = self._clock.time()
             try:
+                self._wrote = True
                 started = await self._slack.chat_startStream(
                     channel=self._channel,
                     thread_ts=self._thread_ts,
@@ -1346,6 +1364,7 @@ class ReplySink:
             if not plan.chunks:
                 await self._limiter.refund()  # caught up: no write follows
                 return True, plan.overflow
+            self._wrote = True
             await self._slack.chat_appendStream(
                 channel=self._channel, ts=message.ts, chunks=plan.chunks
             )
@@ -1407,6 +1426,7 @@ class ReplySink:
             args["blocks"] = blocks
         result = "stopped"
         try:
+            self._wrote = True
             await self._slack.chat_stopStream(**args)
         except Exception as exc:
             if describe(exc) != NOT_STREAMING:
@@ -1463,8 +1483,10 @@ class ReplySink:
             return await self._sync_messages()
         finally:
             self._retrack()
-            if self._on_write is not None:
-                self._on_write()
+            if self._wrote:
+                self._wrote = False
+                if self._on_write is not None:
+                    self._on_write()
 
     async def _sync_messages(self) -> bool:
         if not self._messages:
@@ -1534,6 +1556,10 @@ class ReplySink:
             # The reply has ended whatever becomes of that write: one that fails is tried once
             # more with the next pass, and the cards stay if that fails too.
             if not (await self._update_step(message, None))[0]:
+                if message.tailed:
+                    # The stream was told a line of what still runs, and only this update takes
+                    # it away: a reply that still says so has not ended.
+                    return False
                 self._version += 1
                 self._schedule()
             if result == "stopped":
@@ -1550,6 +1576,7 @@ class ReplySink:
         attempted = self._clock.time()
         try:
             if self._closing is None:
+                self._wrote = True
                 posted = await self._slack.chat_postMessage(
                     channel=self._channel,
                     thread_ts=self._thread_ts,
@@ -1562,6 +1589,7 @@ class ReplySink:
             elif blocks != self._closing_shown:
                 # An edit never notifies (measured 2026-09-27): the text stays as posted.
                 await self._limiter.acquire()
+                self._wrote = True
                 await self._slack.chat_update(
                     channel=self._channel, ts=self._closing, text=self._banner(), blocks=blocks
                 )

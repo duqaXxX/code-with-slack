@@ -1961,7 +1961,7 @@ async def test_a_stream_told_what_still_runs_is_brought_to_the_model_when_it_sto
     ]
 
 
-async def test_every_pass_that_may_have_written_tells_the_thread_status(slack: FakeSlack) -> None:
+async def test_every_pass_that_wrote_tells_the_thread_status(slack: FakeSlack) -> None:
     passes: list[int] = []
     sink = ReplySink(
         slack,
@@ -1977,7 +1977,56 @@ async def test_every_pass_that_may_have_written_tells_the_thread_status(slack: F
     await sink.text("Hello.")
     await settled()
     assert passes == [1]  # after the stream's start
+    assert await sink.settle()  # a pass with nothing to write: the status was not cleared
+    assert passes == [1]
     await sink.finish([])
     await sink.stay_open()
     await sink.close_out("footer")
     assert len(passes) >= 2 and passes[-1] == len(slack.calls)
+
+
+async def test_a_reply_whose_stream_still_says_what_runs_ends_only_once_the_update_lands(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.02)
+    sink = reply(slack)
+    await sink.text("The watcher is started.")
+    await sink.set_running("⏳ 1 shell")
+    await sink.finish([])
+    await sink.stay_open()
+    # The stop lands, the update that takes the line away does not: the reply has not ended.
+    slack.responses["chat.update"] = [rejected("ratelimited"), {"ok": True}]
+    await sink.set_running("")
+    assert await sink.close_out("footer") is False
+    assert await sink.wait_landed() is True  # the retry
+    [blocks] = slack.message_blocks()
+    assert "still running" not in sinks.plain_text(blocks)
+    assert blocks[-1]["elements"][0]["text"] == "footer"
+    assert slack.pushes() == 1
+
+
+async def test_a_reply_left_saying_what_runs_by_a_refused_update_did_not_land(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.02)
+    sink = reply(slack)
+    await sink.text("The watcher is started.")
+    await sink.set_running("⏳ 1 shell")
+    await sink.finish([])
+    await sink.stay_open()
+    slack.responses["chat.update"] = rejected("invalid_blocks")
+    await sink.set_running("")
+    assert await sink.close_out("footer") is False
+    assert await sink.wait_landed() is False  # the session shows it: no checkmark
+
+
+def test_the_line_of_what_still_runs_is_told_by_its_words_as_slack_reads_it_back() -> None:
+    read_back = {
+        "type": "context",
+        "block_id": "auto",
+        "elements": [{"type": "mrkdwn", "text": ":hourglass_flowing_sand: 2 shells still running"}],
+    }
+    assert sinks.is_still_running(read_back)
+    assert sinks.is_still_running(sinks.context_block(STILL))
+    assert not sinks.is_still_running(sinks.context_block("main · ctx 6% · ⏳ 1 shell"))
+    assert not sinks.is_still_running({"type": "markdown", "text": STILL})

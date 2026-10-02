@@ -30,6 +30,8 @@ THREAD_STATUS_REFRESH_SECONDS = 60.0
 # most one call every two seconds per thread while its replies are written (the method allows
 # 600 a minute for the app), whichever way Slack treats them.
 THREAD_STATUS_AFTER_WRITE_SECONDS = 2.0
+# Answers that say the app's token cannot call the method at all (its reference's error list).
+THREAD_STATUS_REFUSED = ("missing_scope", "not_allowed_token_type")
 
 
 class Status(enum.Enum):
@@ -162,7 +164,12 @@ class ThreadStatus:
     It sets the status at once, again within THREAD_STATUS_AFTER_WRITE_SECONDS of a `wrote`,
     and every THREAD_STATUS_REFRESH_SECONDS; `show(False)` clears it, only if it was set. A
     failure is logged (channel, ts and the error code only, once per code in a row) and
-    swallowed, since a status line must never break a turn."""
+    swallowed, since a status line must never break a turn. A refusal no retry can change
+    (`THREAD_STATUS_REFUSED`: the token cannot call the method) stops every instance from
+    calling Slack for the rest of the run, as `StatusReaction` does for `missing_scope`."""
+
+    # Process-wide, once true: no instance calls Slack for a thread status again this run.
+    _refused = False
 
     def __init__(
         self,
@@ -240,6 +247,8 @@ class ThreadStatus:
                 await asyncio.wait_for(self._wake.wait(), delay)
 
     async def _set(self, on: bool) -> None:
+        if ThreadStatus._refused:
+            return
         try:
             if on:
                 await self._slack.assistant_threads_setStatus(
@@ -263,5 +272,7 @@ class ThreadStatus:
                     code,
                 )
             self._failed = code
+            if code in THREAD_STATUS_REFUSED:
+                ThreadStatus._refused = True
         else:
             self._failed = None

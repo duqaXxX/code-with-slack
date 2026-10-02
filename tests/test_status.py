@@ -15,8 +15,10 @@ def _reset_missing_scope() -> Iterator[None]:
     """`_missing_scope` is process-wide by design (D10): reset around each test so one test's
     `missing_scope` never leaks into the next."""
     StatusReaction._missing_scope = False
+    ThreadStatus._refused = False
     yield
     StatusReaction._missing_scope = False
+    ThreadStatus._refused = False
 
 
 def reaction(slack: FakeSlack) -> StatusReaction:
@@ -312,3 +314,18 @@ async def test_closing_a_thread_status_that_never_showed_makes_no_call(slack: Fa
     status = thread_status(slack)
     await status.close()
     assert statuses(slack) == []
+
+
+async def test_a_token_that_cannot_set_a_thread_status_stops_every_instance(
+    slack: FakeSlack,
+) -> None:
+    slack.responses["assistant.threads.setStatus"] = rejected("missing_scope")
+    first = thread_status(slack, refresh=0.02)
+    first.show(True)
+    await asyncio.sleep(0.1)
+    other = ThreadStatus(slack, channel=CHANNEL, thread_ts="1790000000.000002")
+    other.show(True)
+    await beat()
+    assert len(statuses(slack)) == 1  # asked once, by the first: no retry can change the answer
+    await first.close()
+    await other.close()

@@ -307,8 +307,11 @@ below its body and follows the counts and the latest reply by `chat.update`. An 
 told the line as its last chunk, once per end of the body, since a stream only grows: a count
 that changes, a newer reply or a report turn written below it leave the line as sent until the
 stream stops, and the update that follows a stop writes the message from the model, with the
-line once or, at the reply's end, without it. A report turn that writes into the reply takes
-the line away until its own end.
+line once or, at the reply's end, without it. That reply has ended only once this update has
+landed: `ReplySink.close_out` answers false while the message still shows the line, the one
+retry follows, and a reply left showing it gets no `✅`. A report turn that writes into the
+reply takes the line away until its own end. Crash repair drops the line from a reply it
+closes (`sinks.is_still_running`, told by its words as Slack reads the block back).
 
 `!stop`, a restart, an error that cuts a turn, an idle close and `SessionGone` end the reply
 through the same path, at once: the stream stops with the footer and, for `!stop`, the stopped
@@ -559,11 +562,13 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   after it was set and clears it when the app replies (the method's reference, read
   2026-10-02), so it is set again every `status.THREAD_STATUS_REFRESH_SECONDS` and within
   `status.THREAD_STATUS_AFTER_WRITE_SECONDS` of a write (`ThreadStatus.wrote`, called through
-  `ReplySink`'s `on_write` after every pass of a reply and by `ThreadSession._post`), at most
-  one call per that interval. An answer to a word typed in the thread (`!status`, `!bypass`) is
+  `ReplySink`'s `on_write` after every pass of a reply that made a Slack call and by
+  `ThreadSession._post`), at most one call per that interval. An answer to a word typed in the thread (`!status`, `!bypass`) is
   posted outside the session and is covered by the refresh alone. `ThreadSession.close` clears
   the status after it has cancelled its tasks. A refusal is logged once per error code in a row
-  and swallowed. Nothing about it is stored, and a crash leaves at most a status Slack removes
+  and swallowed; one that says the token cannot call the method
+  (`status.THREAD_STATUS_REFUSED`) stops every `ThreadStatus` from calling Slack for the rest
+  of the run. Nothing about it is stored, and a crash leaves at most a status Slack removes
   by itself.
 - One reader task follows the SDK's message stream for the life of the client. A turn starts
   at its first text or tool message, or earlier at a `TaskStartedMessage` with no

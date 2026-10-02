@@ -11,19 +11,23 @@ All notable changes to this project are documented here. The format follows
   `Working…` from the moment a prompt is received until its turn ends, and again while a turn
   Claude Code starts to report a task runs (`render.status.ThreadStatus`,
   `assistant.threads.setStatus` with a loading message, which is what makes it show on iOS). It
-  is set again within 2 seconds of a write of the app's in the thread and every 60 seconds,
-  since Slack clears a status when the app replies and removes it after two minutes. It goes while an approval or a question waits for the owner, on
-  `!stop`, on an error and when the session closes. A refusal from Slack is logged and the line
-  is skipped. It never notifies and stores nothing.
+  is set again within 2 seconds of a write of a reply or of a notice of the session's and every
+  60 seconds, since Slack clears a status when the app replies and removes it after two
+  minutes. An answer to a word typed in the thread (`!bypass`, say) is posted outside the
+  session, so the status it clears comes back with the 60 second refresh. It goes while an
+  approval or a question waits for the owner, on `!stop`, on an error and when the session
+  closes. A refusal from Slack is logged and the line is skipped; `missing_scope` or
+  `not_allowed_token_type` ends the attempts for the rest of the run. It never notifies and
+  stores nothing.
 - A reply whose turn has ended while a command or an agent it started still runs ends on a line
   of its own, small and grey as the footer, `⏳ 1 shell still running`, the words the terminal
-  ends such a turn with (issue
-  #95; `texts.STILL_RUNNING`, `ReplySink.stay_open`). It shows on the thread's latest reply
-  only, and only when that reply is kept open for a task it started, until the reply's end,
-  when the footer takes its place. In a message that is no longer a stream it follows the
-  counts by a silent edit; an open stream is told the line once per end of the body and keeps
-  it until the stream stops, since a stream cannot change what it was sent.
-
+  ends such a turn with (issue #95; `texts.STILL_RUNNING`, `ReplySink.stay_open`). It shows on
+  the thread's latest reply only, and only when that reply is kept open for a task it started,
+  until the reply's end, when the footer takes its place. In a message that is no longer a
+  stream it follows the counts by a silent edit; an open stream is told the line once per end
+  of the body and keeps it until the stream stops, since a stream cannot change what it was
+  sent. A reply whose stream was told the line has ended only once the update that takes it
+  away has landed, and crash repair drops the line from a reply it closes.
 - Cleanup of `state.json` (new module `code_with_slack.cleanup`): on start and then every 6
   hours, a bound channel Slack answers `channel_not_found` about is forgotten with its threads
   (`StateStore.remove_channel`), and the pruning of threads whose session is gone, which ran on
