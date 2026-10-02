@@ -68,6 +68,9 @@ class Invalid:
 Word = Help | Guide | Bind | Bypass | Status | Stop | Resume | Invalid
 Command = Word | Passthrough
 DESCRIPTION_LIMIT = 100
+# Claude Code's `/clear` starts a new session, and one thread is one session: the daemon refuses
+# `!clear` inside a thread, which is also the only place a session's commands are listed.
+REFUSED_IN_THREAD = "clear"
 
 
 def parse_bang(text: str) -> Command | None:
@@ -100,16 +103,18 @@ def parse_bang(text: str) -> Command | None:
 
 
 def help_text(commands: list[dict[str, Any]] | None, query: str = "") -> str:
-    """The daemon's words, then every command the session offers now (None: not bound yet),
-    keeping only the lines whose name or description contains `query`, ignoring case."""
+    """The daemon's words, then every command the session offers now (None: not bound yet)
+    except the one its thread refuses (`REFUSED_IN_THREAD`), keeping only the lines whose name
+    or description contains `query`, ignoring case."""
 
     def keep(line: str) -> bool:
         return query.lower() in line.lower()
 
     own = [line for line in texts.HELP_WORDS if keep(line)]
+    offered = [c for c in commands or [] if command_name(c).lower() != REFUSED_IN_THREAD]
     session = [
         f"{usage} {markdown_escape(description)}".rstrip()
-        for usage, description in map(command_parts, sorted(commands or [], key=command_name))
+        for usage, description in map(command_parts, sorted(offered, key=command_name))
         if keep(f"{usage} {description}")
     ]
     lines = [texts.HELP_OWN, *own]

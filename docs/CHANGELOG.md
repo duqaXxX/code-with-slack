@@ -227,6 +227,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A restart that lands at the end of a turn no longer leaves both ⏳ and ✅ on the thread's root
+  message (issue #104). `StatusReaction.show` changes the reaction with two calls, and the
+  session read idle between them, so the drain closed it and the close cancelled the reader
+  before `reactions.remove`. A `StatusReaction` whose change is cancelled now reads as a fresh
+  instance, so its next change strips every other name, and it records the state asked for
+  last: `ThreadSession.close` calls `StatusReaction.settle` for a session it closes idle, which
+  makes that change and makes no call when the root already shows it. A close that cuts a
+  prompt short in the same window ends on ❌ alone.
+- `!help` inside a session's thread no longer lists `!clear`, which a thread refuses (issue
+  #76). `commands.help_text` leaves out `commands.REFUSED_IN_THREAD`, the name
+  `slack_app.is_clear` refuses.
 - A streamed reply whose append Slack refuses with `msg_too_long` no longer loses its end and no
   longer leaves ❌ on a thread whose turn ended well (issues #92 and #96). The same append was
   sent again on every write and refused each time, the end and its one retry included, so the
