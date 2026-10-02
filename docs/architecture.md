@@ -759,11 +759,13 @@ refused inside a thread (`texts.WORD_IN_THREAD`); `!bypass` only inside a thread
 top level (`texts.BYPASS_TOP_LEVEL`); `!guide` answers the same either way; `!help`, `!status`
 and `!stop` answer both, but with different content: `!help` lists only the daemon's words at the
 top level and a session's own commands too inside its thread, except `clear`, which a thread
-refuses (`commands.REFUSED_IN_THREAD`); `!status` lists the channel's live
+refuses (`commands.refused_in_thread`); `!status` lists the channel's live
 sessions at the top level and one session's own values inside its thread; `!stop` stops every
 session of the channel at the top level and one session inside its thread. `!clear` is not a word of its own: it is an
 ordinary `Passthrough` that `slack_app.is_clear` catches only inside a thread, refused there
-(`texts.CLEAR_IN_THREAD`, one thread is one session); at the top level it opens a new session
+(`texts.CLEAR_IN_THREAD`, one thread is one session), under each of its names: `clear`, `reset`
+and `new` (`commands.NEW_SESSION_NAMES`, known before a rebuilt session has connected), and any
+other alias the session's own command list gives `clear`. At the top level it opens a new session
 like any other message, and reaches Claude Code as `/clear` if the freshly connected session
 offers that command. Any other `!name args` is a `Passthrough` too: sent as `/name args` when the
 session (freshly opened, at the top level) offers `name`, as the text itself otherwise. A

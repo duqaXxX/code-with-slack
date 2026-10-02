@@ -236,8 +236,13 @@ All notable changes to this project are documented here. The format follows
   makes that change and makes no call when the root already shows it. A close that cuts a
   prompt short in the same window ends on ❌ alone.
 - `!help` inside a session's thread no longer lists `!clear`, which a thread refuses (issue
-  #76). `commands.help_text` leaves out `commands.REFUSED_IN_THREAD`, the name
+  #76). `commands.help_text` leaves out what `commands.refused_in_thread` returns, the names
   `slack_app.is_clear` refuses.
+- `!reset` and `!new` are refused inside a session's thread as `!clear` is: Claude Code gives
+  them as aliases of `/clear`, which starts a new session, and they reached it from a thread.
+  `commands.refused_in_thread` returns `commands.NEW_SESSION_NAMES` (`clear`, `reset`, `new`),
+  known before a session rebuilt after a restart has connected, with any other alias the
+  session's own command list gives `clear`.
 - A streamed reply whose append Slack refuses with `msg_too_long` no longer loses its end and no
   longer leaves ❌ on a thread whose turn ended well (issues #92 and #96). The same append was
   sent again on every write and refused each time, the end and its one retry included, so the

@@ -310,8 +310,8 @@ message with those choices, and `!stop` cancels it instead.
 Claude Code's commands start with `!` instead of `/`: `!compact`, `!model opus`. They run inside \
 a session's thread, where `!help` lists every command that session offers, and `!help <text>` \
 filters the list; typed in the channel, `!help` lists code-with-slack's own words instead. \
-`!clear` is refused inside a thread (one thread is one session): start a fresh session with a \
-new top-level message instead.
+`!clear` (`!reset`, `!new`) is refused inside a thread (one thread is one session): start a \
+fresh session with a new top-level message instead.
 
 **Approvals and questions**
 When Claude Code asks permission, the request shows what will run, with **Approve** and \

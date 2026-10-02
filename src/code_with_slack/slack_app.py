@@ -43,7 +43,6 @@ from code_with_slack.attachments import (
     save,
 )
 from code_with_slack.commands import (
-    REFUSED_IN_THREAD,
     Bind,
     Bypass,
     Guide,
@@ -56,6 +55,7 @@ from code_with_slack.commands import (
     Word,
     help_text,
     parse_bang,
+    refused_in_thread,
 )
 from code_with_slack.config import Config
 from code_with_slack.folders import BIND_ACTION, bind_blocks
@@ -168,10 +168,11 @@ def click_thread(body: dict[str, Any]) -> str:
     return str(thread_ts)
 
 
-def is_clear(command: Passthrough) -> bool:
-    """Whether a passthrough is `!clear`: refused inside a thread (one thread is one session),
-    left as an ordinary passthrough everywhere else."""
-    return command.text.split(" ", 1)[0].lower() == REFUSED_IN_THREAD
+def is_clear(command: Passthrough, commands: list[dict[str, Any]]) -> bool:
+    """Whether a passthrough is `!clear` under any of its names (`refused_in_thread`, given the
+    session's `commands`): refused inside a thread (one thread is one session), left as an
+    ordinary passthrough everywhere else."""
+    return command.text.split(" ", 1)[0].lower() in refused_in_thread(commands)
 
 
 class Fetch(Protocol):
@@ -439,7 +440,7 @@ def build_app(
         *,
         in_thread: bool,
     ) -> None:
-        if in_thread and isinstance(command, Passthrough) and is_clear(command):
+        if in_thread and isinstance(command, Passthrough) and is_clear(command, session.commands):
             await tell_owner(channel, thread_ts, texts.CLEAR_IN_THREAD)
             return
         # Prompts and commands for Claude Code enter the queue in the order they were sent,

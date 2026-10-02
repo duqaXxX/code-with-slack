@@ -13,6 +13,7 @@ from code_with_slack.commands import (
     Stop,
     help_text,
     parse_bang,
+    refused_in_thread,
 )
 from tests.fakes import sdk_json
 
@@ -59,6 +60,22 @@ def test_help_leaves_out_clear_which_a_thread_refuses() -> None:
     assert any(c["name"] == "clear" for c in commands)
     assert "`!clear" not in help_text(commands)
     assert "`!compact" in help_text(commands)
+
+
+def test_a_thread_refuses_clear_and_its_aliases_before_the_session_lists_them() -> None:
+    # A session rebuilt after a restart has listed no command until it connects.
+    assert {"clear", "reset", "new"} <= refused_in_thread([])
+    assert {"clear", "reset", "new"} <= refused_in_thread(None)
+
+
+def test_a_thread_refuses_an_alias_of_clear_the_session_adds() -> None:
+    commands = [
+        {"name": "clear", "description": "d", "aliases": ["reset", "new", "wipe"]},
+        {"name": "rename", "description": "d", "aliases": ["name"]},
+    ]
+    refused = refused_in_thread(commands)
+    assert "wipe" in refused
+    assert "name" not in refused and "rename" not in refused
 
 
 def test_help_before_binding_says_where_the_commands_come_from() -> None:

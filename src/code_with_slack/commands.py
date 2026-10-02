@@ -68,9 +68,12 @@ class Invalid:
 Word = Help | Guide | Bind | Bypass | Status | Stop | Resume | Invalid
 Command = Word | Passthrough
 DESCRIPTION_LIMIT = 100
-# Claude Code's `/clear` starts a new session, and one thread is one session: the daemon refuses
-# `!clear` inside a thread, which is also the only place a session's commands are listed.
-REFUSED_IN_THREAD = "clear"
+# Claude Code's `/clear` starts a new session under any of its names (aliases `/reset` and `/new`:
+# commands reference, code.claude.com/docs/en/commands, read 2026-10-02, and the list SDK 0.2.163
+# reports), and one thread is one session: the daemon refuses each of them inside a thread, which
+# is also the only place a session's commands are listed. Named here because a session rebuilt
+# after a restart lists no command until it connects (`refused_in_thread`).
+NEW_SESSION_NAMES = frozenset({"clear", "reset", "new"})
 
 
 def parse_bang(text: str) -> Command | None:
@@ -104,14 +107,15 @@ def parse_bang(text: str) -> Command | None:
 
 def help_text(commands: list[dict[str, Any]] | None, query: str = "") -> str:
     """The daemon's words, then every command the session offers now (None: not bound yet)
-    except the one its thread refuses (`REFUSED_IN_THREAD`), keeping only the lines whose name
-    or description contains `query`, ignoring case."""
+    except those its thread refuses (`refused_in_thread`), keeping only the lines whose name or
+    description contains `query`, ignoring case."""
 
     def keep(line: str) -> bool:
         return query.lower() in line.lower()
 
     own = [line for line in texts.HELP_WORDS if keep(line)]
-    offered = [c for c in commands or [] if command_name(c).lower() != REFUSED_IN_THREAD]
+    refused = refused_in_thread(commands)
+    offered = [c for c in commands or [] if command_name(c).lower() not in refused]
     session = [
         f"{usage} {markdown_escape(description)}".rstrip()
         for usage, description in map(command_parts, sorted(offered, key=command_name))
@@ -125,6 +129,18 @@ def help_text(commands: list[dict[str, Any]] | None, query: str = "") -> str:
     if query and not own and not session:
         lines.append(texts.HELP_NO_MATCH.format(query=query))
     return "\n".join(lines)
+
+
+def refused_in_thread(commands: list[dict[str, Any]] | None) -> frozenset[str]:
+    """The command names a thread refuses, lowercase: NEW_SESSION_NAMES, with every alias the
+    session's own list (`commands`, None or empty before it connects) gives one of them."""
+    aliases = {
+        str(alias).lower()
+        for command in commands or []
+        if command_name(command).lower() in NEW_SESSION_NAMES
+        for alias in command.get("aliases") or []
+    }
+    return NEW_SESSION_NAMES | aliases
 
 
 def command_name(command: dict[str, Any]) -> str:
