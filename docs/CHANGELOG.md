@@ -16,7 +16,8 @@ All notable changes to this project are documented here. The format follows
   `!stop`, on an error and when the session closes. A refusal from Slack is logged and the line
   is skipped. It never notifies and stores nothing.
 - A reply whose turn has ended while a command or an agent it started still runs ends on a line
-  of its own, `⏳ 1 shell still running`, the words the terminal ends such a turn with (issue
+  of its own, small and grey as the footer, `⏳ 1 shell still running`, the words the terminal
+  ends such a turn with (issue
   #95; `texts.STILL_RUNNING`, `ReplySink.stay_open`). It shows on the thread's latest reply
   only, and only when that reply is kept open for a task it started, until the reply's end,
   when the footer takes its place. In a message that is no longer a stream it follows the

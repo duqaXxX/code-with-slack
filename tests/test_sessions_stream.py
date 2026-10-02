@@ -16,6 +16,7 @@ from code_with_slack.render import sinks
 from code_with_slack.render.status import Status
 from tests.fakes import CHANNEL, THREAD, CanUseToolCall, FakeClock, sdk_messages, split_turns
 from tests.test_sessions import Harness, is_report, split_background, until
+from tests.test_sinks import stream_text
 
 WRITES = ("chat.postMessage", "chat.startStream", "chat.appendStream", "chat.stopStream")
 
@@ -573,7 +574,7 @@ async def test_a_task_that_outlives_its_turn_leaves_the_line_and_no_thread_statu
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
     await until(lambda: statuses(h)[-1:] == [""])  # the turn ended: the prompt is back
     line = f"⏳ {session.running_kinds} still running"
-    assert session.running_kinds and line in h.slack.stream_texts()[0]
+    assert session.running_kinds and line in stream_text(h.slack)
     assert open_streams(h) == h.slack.stream_ts and h.slack.pushes() == 0  # the reply is open
     h.slack.delay = 0.01  # a report turn that takes real time, as it does
     h.clients[0].inject(notice + injected)
@@ -582,7 +583,8 @@ async def test_a_task_that_outlives_its_turn_leaves_the_line_and_no_thread_statu
     # The report turn showed the status again, and the reply's end took the line away.
     assert statuses(h).count(texts.THREAD_WORKING_STATUS) >= 2
     await until(lambda: statuses(h)[-1:] == [""])
-    assert "still running" not in h.slack.stream_texts()[0]
+    shown = h.slack.messages[h.slack.stream_ts[0]].blocks
+    assert shown and "still running" not in sinks.plain_text(shown)
     assert h.slack.pushes() == 1
 
 
@@ -606,7 +608,7 @@ async def test_a_reply_that_owes_nothing_is_not_told_what_another_reply_still_ru
     await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
     await until(lambda: len(h.slack.calls_to("chat.stopStream")) == 1)
     _, second = h.slack.stream_ts
-    assert "still running" not in h.slack._stream_text(second)
+    assert "still running" not in stream_text(h.slack, 1)
     footer = h.slack.messages[second].blocks[-1]["elements"][0]["text"]
     assert session.running_kinds and footer.endswith(f"⏳ {session.running_kinds}")
 

@@ -1818,9 +1818,16 @@ async def test_a_run_in_a_message_the_reply_has_left_is_folded_at_the_end_too(
 STILL = "⏳ 1 shell still running"
 
 
-def stream_text(slack: FakeSlack) -> str:
-    """Everything the first stream was told as text, in order: a stream only grows."""
-    return slack._stream_text(slack.stream_ts[0])
+def stream_text(slack: FakeSlack, index: int = 0) -> str:
+    """Everything a stream was told, in order, a stream only growing: its text chunks, and the
+    text of each context block (the line of what still runs is one)."""
+    told: list[str] = []
+    for chunk in slack.messages[slack.stream_ts[index]].chunks:
+        if chunk["type"] == "markdown_text":
+            told.append(chunk["text"])
+        elif chunk["type"] == "blocks":
+            told += [b["elements"][0]["text"] for b in chunk["blocks"] if b["type"] == "context"]
+    return "\n".join(told)
 
 
 async def test_a_body_that_ends_with_a_task_still_running_ends_the_stream_on_that_line(
@@ -1831,7 +1838,9 @@ async def test_a_body_that_ends_with_a_task_still_running_ends_the_stream_on_tha
     await sink.set_running("⏳ 1 shell")
     await sink.finish([])
     await sink.stay_open()
-    assert stream_text(slack).rstrip().endswith(f"The watcher is started.\n\n{STILL}")
+    assert stream_text(slack) == f"The watcher is started.\n{STILL}"
+    last = slack.calls_to("chat.appendStream")[-1]["chunks"][-1]
+    assert last == {"type": "blocks", "blocks": [sinks.context_block(STILL)]}  # small and grey
     assert slack.calls_to("chat.stopStream") == [] and slack.pushes() == 0  # the reply is open
     await sink.set_running("")
     await sink.close_out("footer")
@@ -1916,19 +1925,19 @@ async def test_a_stopped_message_shows_what_still_runs_below_its_body_and_follow
         return list(slack.calls_to("chat.update")[-1]["blocks"])
 
     body = {"type": "markdown", "text": "Two watchers are started."}
-    assert shown() == [body, {"type": "markdown", "text": "⏳ 2 shells still running"}]
+    assert shown() == [body, sinks.context_block("⏳ 2 shells still running")]
     await sink.set_running("⏳ 1 shell")
     await settled()
-    assert shown() == [body, {"type": "markdown", "text": STILL}]
+    assert shown() == [body, sinks.context_block(STILL)]
     await sink.text("\n\nThe first watcher ended.")  # a report turn: no line while it writes
     await settled()
     assert [b["text"] for b in shown()] == ["Two watchers are started.\n\nThe first watcher ended."]
     await sink.finish([])
     await sink.stay_open()
-    assert shown()[-1] == {"type": "markdown", "text": STILL}
+    assert shown()[-1] == sinks.context_block(STILL)
     await sink.set_running("")
     await sink.close_out("footer")
-    assert all("still running" not in b.get("text", "") for b in shown())
+    assert "still running" not in sinks.plain_text(shown())
     closing = slack.calls_to("chat.postMessage")[-1]
     assert closing["blocks"][-1]["elements"][0]["text"] == "footer"
     assert slack.pushes() == 2  # the 280 s stop and the closing message: an edit never pushes
@@ -1948,7 +1957,7 @@ async def test_a_stream_told_what_still_runs_is_brought_to_the_model_when_it_sto
     # The line the stream was told is not left twice: the update writes the body and one line.
     assert slack.calls_to("chat.update")[-1]["blocks"] == [
         {"type": "markdown", "text": "The watcher is started."},
-        {"type": "markdown", "text": STILL},
+        sinks.context_block(STILL),
     ]
 
 

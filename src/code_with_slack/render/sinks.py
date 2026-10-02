@@ -871,7 +871,7 @@ class ReplySink:
         if self._end_mode == "inline":
             return self._closing_blocks()
         tail = self._tail()
-        return [{"type": "markdown", "text": tail}] if tail else []
+        return [context_block(tail)] if tail else []
 
     def _banner(self, span: list[tuple[int, _Text | _Tool, int, int | None]] | None = None) -> str:
         """The notification's text, plain: the first paragraph of Claude's own words in the
@@ -923,7 +923,8 @@ class ReplySink:
             return
         if plan.count >= BLOCKS_LIMIT or plan.size + len(tail) > MESSAGE_LIMIT:
             return
-        plan.chunks.append({"type": "markdown_text", "text": f"\n\n{tail}\n\n"})
+        # Small and grey, as the footer that takes its place: a `blocks` chunk, as a preview is.
+        plan.chunks.append({"type": "blocks", "blocks": [context_block(tail)]})
         plan.tail = tail
         plan.size += len(tail)
         plan.count += 1
