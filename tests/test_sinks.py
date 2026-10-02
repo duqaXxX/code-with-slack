@@ -1811,3 +1811,26 @@ async def test_a_run_in_a_message_the_reply_has_left_is_folded_at_the_end_too(
     first = slack.message_blocks()[0]
     assert first[0] == context("✓ Ran 1 shell command")
     assert all(block.get("task_id") != "fold:a" for block in first)
+
+
+async def test_every_pass_that_wrote_tells_the_thread_status(slack: FakeSlack) -> None:
+    passes: list[int] = []
+    sink = ReplySink(
+        slack,
+        channel=CHANNEL,
+        thread_ts=THREAD,
+        team_id=TEAM,
+        user_id=OWNER,
+        bot_user_id=BOT,
+        limiter=UpdateLimiter(),
+        clock=FakeClock(),
+        on_write=lambda: passes.append(len(slack.calls)),
+    )
+    await sink.text("Hello.")
+    await settled()
+    assert passes == [1]  # after the stream's start
+    assert await sink.settle()  # a pass with nothing to write: the status was not cleared
+    assert passes == [1]
+    await sink.finish([])
+    await sink.close_out("footer")
+    assert len(passes) >= 2 and passes[-1] == len(slack.calls)

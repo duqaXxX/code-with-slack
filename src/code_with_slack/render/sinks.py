@@ -531,6 +531,7 @@ class ReplySink:
         limiter: UpdateLimiter,
         clock: Clock | None = None,
         on_open_reply: Callable[[str | None, str | None], None] | None = None,
+        on_write: Callable[[], None] | None = None,
     ) -> None:
         self._slack = slack
         self._channel = channel
@@ -548,6 +549,10 @@ class ReplySink:
         # entry and must never touch another's). A plain sync callback (`StateStore`'s setters
         # are sync file writes), never awaited here.
         self._on_open_reply = on_open_reply
+        # Called after every pass that wrote this reply, or tried to: Slack clears a thread's
+        # status line when the app replies (`ThreadStatus.wrote`). Sync, never awaited here.
+        self._on_write = on_write
+        self._wrote = False  # a Slack write was attempted since `on_write` was last called
         # This sink's own entries in that list: the messages a crash would leave unfinished.
         self._tracked: set[str] = set()
         self._ended = False  # the end landed: nothing is left for a repair to close
@@ -1099,6 +1104,7 @@ class ReplySink:
                 await self._limiter.refund()  # caught up: no write follows
                 return True, overflow
             blocks = fresh
+            self._wrote = True
             await self._slack.chat_update(
                 channel=self._channel,
                 ts=message.ts,
@@ -1140,6 +1146,7 @@ class ReplySink:
         never show, so it is posted as text alone. Never used on a message that shows something
         already, which a plainer form would replace."""
         try:
+            self._wrote = True
             posted = await self._slack.chat_postMessage(
                 channel=self._channel,
                 thread_ts=self._thread_ts,
@@ -1167,6 +1174,7 @@ class ReplySink:
         try:
             # Claude's text can carry a link built to leak data when Slack fetches it for a
             # preview: no previews for anything the daemon posts.
+            self._wrote = True
             posted = await self._slack.chat_postMessage(
                 channel=self._channel,
                 thread_ts=self._thread_ts,
@@ -1239,6 +1247,7 @@ class ReplySink:
         if message.ts is None:
             attempted = self._clock.time()
             try:
+                self._wrote = True
                 started = await self._slack.chat_startStream(
                     channel=self._channel,
                     thread_ts=self._thread_ts,
@@ -1277,6 +1286,7 @@ class ReplySink:
             if not plan.chunks:
                 await self._limiter.refund()  # caught up: no write follows
                 return True, plan.overflow
+            self._wrote = True
             await self._slack.chat_appendStream(
                 channel=self._channel, ts=message.ts, chunks=plan.chunks
             )
@@ -1338,6 +1348,7 @@ class ReplySink:
             args["blocks"] = blocks
         result = "stopped"
         try:
+            self._wrote = True
             await self._slack.chat_stopStream(**args)
         except Exception as exc:
             if describe(exc) != NOT_STREAMING:
@@ -1394,6 +1405,10 @@ class ReplySink:
             return await self._sync_messages()
         finally:
             self._retrack()
+            if self._wrote:
+                self._wrote = False
+                if self._on_write is not None:
+                    self._on_write()
 
     async def _sync_messages(self) -> bool:
         if not self._messages:
@@ -1479,6 +1494,7 @@ class ReplySink:
         attempted = self._clock.time()
         try:
             if self._closing is None:
+                self._wrote = True
                 posted = await self._slack.chat_postMessage(
                     channel=self._channel,
                     thread_ts=self._thread_ts,
@@ -1491,6 +1507,7 @@ class ReplySink:
             elif blocks != self._closing_shown:
                 # An edit never notifies (measured 2026-09-27): the text stays as posted.
                 await self._limiter.acquire()
+                self._wrote = True
                 await self._slack.chat_update(
                     channel=self._channel, ts=self._closing, text=self._banner(), blocks=blocks
                 )

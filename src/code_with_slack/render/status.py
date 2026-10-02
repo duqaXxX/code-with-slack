@@ -3,16 +3,35 @@ everything ended, error, or stopped/restarted. Adding or removing a reaction on 
 message notifies nobody and only shows in the channel list on iOS (measured 2026-09-28, Slack
 free plan). Arguments and error codes read from docs.slack.dev/reference/methods/reactions.add
 and .../reactions.remove, 2026-09-28.
+
+And Slack's own status line under a thread's last message (`ThreadStatus`), for as long as a
+prompt is on its way or a turn runs. Arguments, the two minute timeout and the rate limit (600
+calls a minute for the app) read from
+docs.slack.dev/reference/methods/assistant.threads.setStatus, 2026-10-02.
 """
 
 import asyncio
+import contextlib
 import enum
 import logging
 
 from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
+from code_with_slack import texts
+
 logger = logging.getLogger(__name__)
+
+# Slack removes a status two minutes after it was set (the method's reference): set again well
+# before that.
+THREAD_STATUS_REFRESH_SECONDS = 60.0
+# The reference says a status is cleared "when the app sends a reply". Whether a stream append
+# or an edit counts was not measured, so the status is set again this long after a write: at
+# most one call every two seconds per thread while its replies are written (the method allows
+# 600 a minute for the app), whichever way Slack treats them.
+THREAD_STATUS_AFTER_WRITE_SECONDS = 2.0
+# Answers that say the app's token cannot call the method at all (its reference's error list).
+THREAD_STATUS_REFUSED = ("missing_scope", "not_allowed_token_type")
 
 
 class Status(enum.Enum):
@@ -133,3 +152,145 @@ class StatusReaction:
                 self._root_ts,
             )
         StatusReaction._missing_scope = True
+
+
+class ThreadStatus:
+    """Slack's status line under a thread's last message, saying what `show` was last given:
+    `Working…` as the sign that a prompt was received and that its turn runs, where a reply
+    that has written nothing yet, or nothing for a while, gives none (issue #83), then what
+    still runs once the turn has ended (`1 shell still running`, issue #95). A state that
+    changes belongs here and not in a reply: a stream cannot change what it was told.
+    It notifies nobody (measured 2026-09-28) and shows on desktop and on iOS once it carries
+    `loading_messages` (measured 2026-10-02). `show` and `wrote` never wait on Slack: one task
+    of this instance's own makes the calls, in order, so two quick changes end on the last one.
+    It sets the status at once, again within THREAD_STATUS_AFTER_WRITE_SECONDS of a `wrote`,
+    and every THREAD_STATUS_REFRESH_SECONDS; `show("")` clears it, only if it was set, and a
+    clearing call that fails is tried once more. A
+    failure is logged (channel, ts and the error code only, once per code in a row) and
+    swallowed, since a status line must never break a turn. A refusal no retry can change
+    (`THREAD_STATUS_REFUSED`: the token cannot call the method) stops every instance from
+    calling Slack for the rest of the run, as `StatusReaction` does for `missing_scope`."""
+
+    # Process-wide, once true: no instance calls Slack for a thread status again this run.
+    _refused = False
+
+    def __init__(
+        self,
+        slack: AsyncWebClient,
+        *,
+        channel: str,
+        thread_ts: str,
+        refresh: float = THREAD_STATUS_REFRESH_SECONDS,
+        after_write: float = THREAD_STATUS_AFTER_WRITE_SECONDS,
+    ) -> None:
+        self._slack = slack
+        self._channel = channel
+        self._thread_ts = thread_ts
+        self._refresh = refresh
+        self._after_write = after_write
+        self._text = ""  # what it says; empty: nothing is shown
+        self._fallback = texts.THREAD_WORKING_STATUS
+        self._shown = False  # whether Slack was last asked to show it
+        self._due = 0.0  # when it is next set, by the loop's clock
+        self._wake = asyncio.Event()
+        self._keeper: asyncio.Task[None] | None = None
+        self._failed: str | None = None
+
+    def show(self, text: str, fallback: str = texts.THREAD_WORKING_STATUS) -> None:
+        """Say `text` from now on, or with an empty one stop showing the status. The same text
+        again is a no-op. `fallback` says the same after the app's name, for a client that
+        draws `<app name> <status>` instead of the loading message."""
+        if text == self._text:
+            return
+        self._text, self._fallback = text, fallback
+        self._due = asyncio.get_running_loop().time()
+        self._kick()
+
+    def wrote(self) -> None:
+        """Something of the app's was written in this thread, which may have cleared the
+        status: it is set again within THREAD_STATUS_AFTER_WRITE_SECONDS, never later than it
+        was already due (writes that keep coming must not put off the refresh)."""
+        if self._text:
+            self._due = min(self._due, asyncio.get_running_loop().time() + self._after_write)
+            self._kick()
+
+    async def close(self) -> None:
+        """Stop for good: the status is cleared if it shows, and nothing is left running."""
+        self._text = ""
+        keeper, self._keeper = self._keeper, None
+        if keeper is not None and not keeper.done():
+            keeper.cancel()
+            await asyncio.gather(keeper, return_exceptions=True)
+        if self._shown:
+            self._shown = False
+            await self._set(False)
+
+    def _kick(self) -> None:
+        self._wake.set()
+        if self._keeper is None or self._keeper.done():
+            self._keeper = asyncio.create_task(self._keep())
+
+    async def _keep(self) -> None:
+        retried = False
+        while True:
+            self._wake.clear()
+            if not self._text:
+                if self._shown:
+                    # Cleared only once the call is back and went through: a `close` that
+                    # cancels it meanwhile, or that follows a failed one, still reads the
+                    # status as shown and clears it itself.
+                    if await self._set(False):
+                        self._shown = False
+                    elif not retried:
+                        # Once more after a moment: a status left standing says a session
+                        # works that does not, until Slack removes it by itself.
+                        retried = True
+                        with contextlib.suppress(TimeoutError):
+                            await asyncio.wait_for(self._wake.wait(), self._after_write)
+                        continue
+                if self._wake.is_set():
+                    continue  # asked for again while that call was out
+                return
+            retried = False
+            delay = self._due - asyncio.get_running_loop().time()
+            if delay <= 0:
+                # Before the call, so a `wrote` that arrives while it is out still moves it.
+                self._due = asyncio.get_running_loop().time() + self._refresh
+                self._shown = True
+                await self._set(True)
+                continue
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._wake.wait(), delay)
+
+    async def _set(self, on: bool) -> bool:
+        """Tell Slack; whether it went through, or nothing is left to try (`_refused`)."""
+        if ThreadStatus._refused:
+            return True
+        try:
+            if on:
+                await self._slack.assistant_threads_setStatus(
+                    channel_id=self._channel,
+                    thread_ts=self._thread_ts,
+                    status=self._fallback,
+                    loading_messages=[self._text],
+                )
+            else:
+                # An empty status clears it (the method's reference).
+                await self._slack.assistant_threads_setStatus(
+                    channel_id=self._channel, thread_ts=self._thread_ts, status=""
+                )
+        except Exception as exc:
+            code = _describe(exc)
+            if code != self._failed:
+                logger.warning(
+                    "assistant.threads.setStatus failed on %s/%s: %s",
+                    self._channel,
+                    self._thread_ts,
+                    code,
+                )
+            self._failed = code
+            if code in THREAD_STATUS_REFUSED:
+                ThreadStatus._refused = True
+            return ThreadStatus._refused
+        self._failed = None
+        return True

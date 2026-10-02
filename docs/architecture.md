@@ -532,6 +532,35 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   logged once for the whole process; every `StatusReaction` instance stops calling Slack for
   reactions for the rest of the run. A top-level word (`!status`, `!stop`, `!bind`) is not a
   session and gets no reaction of its own.
+- Each `ThreadSession` also keeps one `render.status.ThreadStatus`: Slack's status line under
+  the thread's last message (`assistant.threads.setStatus`), which says
+  `ThreadSession._thread_line`. `Working…` while a prompt is queued, taken or sent or a turn
+  is active (a report turn included). Once no turn runs, what the session left running,
+  `1 shell still running`, the words the terminal ends such a turn with: a count that
+  changes is a state of the thread and stays out of the reply, whose stream only grows.
+  Nothing while an approval, a question or a hold waits on the owner, while `!stop` winds a
+  turn down, and once the session is closed. `ThreadSession._show_thread_status` brings the
+  status to that line after anything that can change it (every `_react`, the start and the end
+  of a turn, a failed or dropped prompt, `_abandon`, every change of the running tasks through
+  `_show_running`). `ThreadStatus.show` never waits on Slack: one task per instance makes the
+  calls in order, so two quick changes end on the last one and a turn that ends at once sets
+  nothing. The line is sent as the one loading message, which is what a client shows, with a
+  `status` that says the same after the app's name (`is working…`,
+  `has 1 shell still running`) for a client that draws that instead (with `status` alone, iOS
+  showed nothing: measured 2026-10-02, Slack iOS and desktop, free plan,
+  slack-sdk 3.44.1, an app holding `assistant:write`). Slack removes a status two minutes
+  after it was set and clears it when the app replies (the method's reference, read
+  2026-10-02), so it is set again every `status.THREAD_STATUS_REFRESH_SECONDS` and within
+  `status.THREAD_STATUS_AFTER_WRITE_SECONDS` of a write (`ThreadStatus.wrote`, called through
+  `ReplySink`'s `on_write` after every pass of a reply that made a Slack call and by
+  `ThreadSession._post`), at most one call per that interval. An answer to a word typed in the
+  thread (`!status`, `!bypass`) is posted outside the session and is covered by the refresh
+  alone. `ThreadSession.close` clears the status after it has cancelled its tasks. A clearing call
+  that fails is tried once more, and again at the close. A refusal is
+  logged once per error code in a row and swallowed; one that says the token cannot call the
+  method (`status.THREAD_STATUS_REFUSED`) stops every `ThreadStatus` from calling Slack for
+  the rest of the run. Nothing about it is stored, and a crash leaves at most a status Slack
+  removes by itself.
 - One reader task follows the SDK's message stream for the life of the client. A turn starts
   at its first text or tool message, or earlier at a `TaskStartedMessage` with no
   `tool_use_id` that comes while a message is sent and no report turn is expected: a skill with
@@ -566,10 +595,12 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   another reply. A background subagent's own calls (`parent_tool_use_id` pointing at a line of
   an ended turn) go under its line the same way and never open a reply. A notification for such
   a task still makes the next queued message wait for the turn Claude Code starts to report it.
-- The thread's latest reply counts what is still running at the end of its footer, or of its
-  status line while Claude writes: `⏳ 1 shell · 1 agent`, by each task's `task_type`
-  (`sessions.TASK_KINDS`; a type not listed counts as a task). A new reply takes the counts
-  over and the previous one drops them; they disappear when nothing runs.
+- What is still running is counted by each task's `task_type` (`sessions.TASK_KINDS`; a type
+  not listed counts as a task) in two places. The thread's latest reply, once it has ended,
+  carries the counts at the end of its footer (`⏳ 1 shell · 1 agent`); a new reply takes them
+  over and the previous one drops them. The thread's status line says them whenever no turn
+  runs (`1 shell · 1 agent still running`), which covers a reply kept open for its own task,
+  with no footer yet. Both disappear when nothing runs.
 - When the Claude Code process goes away (shutdown, an idle close, a process that exits), its
   tasks go with it: their lines close with `Stopped` and the list empties. The map lives in
   memory only.
