@@ -473,8 +473,6 @@ class ThreadSession:
         self.session_tokens: int | None = None
         # Set when the daemon stops: the turns already sent finish, no other one starts.
         self.draining = False
-        # Whether this stop has said which background tasks it waits for.
-        self._told_waiting = False
         # Set when a stop begins while this session has a turn running. The signal names no
         # sender, and the session that sent it has its turn running then; a background task it
         # starts from that point is often its own wait for the new process, which cannot end
@@ -537,6 +535,14 @@ class ThreadSession:
             return "", ""
         if self.busy or self._taken is not None or not self._queue.empty():
             return texts.THREAD_WORKING, texts.THREAD_WORKING_STATUS
+        if self.draining and (held := self._running_kinds(awaited_only=True)):
+            # A stop that only background tasks hold: said here whatever the footer shows,
+            # since `!stop` is what ends the wait.
+            them = "it" if held.startswith("1 ") and " · " not in held else "them"
+            return (
+                texts.RESTART_WAITS.format(counts=held, them=them),
+                texts.RESTART_WAITS_STATUS.format(counts=held),
+            )
         kinds = self._running_kinds()
         if not kinds or (self._latest is not None and self._latest.footer_shown):
             # Nothing runs, or the end of the thread's last reply is on Slack: its footer
@@ -956,21 +962,12 @@ class ThreadSession:
             if client is not None:
                 await self._disconnect(client)
 
-    async def announce_restart(self) -> None:
-        """Say in the thread that bypass outlives the restart, when the owner turned it on. Not
-        for a thread with no session id: it never ran, its next message asks the setup again, and
-        Start decides."""
-        stored = self._deps.state.thread(self.channel_id, self.thread_ts)
-        if self.bypass_choice is True and stored is not None and stored.session_id is not None:
-            await self._post(texts.BYPASS_RESTARTING)
-
-    async def announce_waiting(self) -> None:
-        """Once per stop, when only background tasks are left: say which ones the restart waits
-        for, since only the owner knows whether a task (a dev server, a watcher) ever ends."""
-        if self._told_waiting or self.busy or not (kinds := self._running_kinds(awaited_only=True)):
-            return
-        self._told_waiting = True
-        await self._post(texts.RESTART_WAITS.format(counts=kinds))
+    def show_restart_wait(self) -> None:
+        """During a stop: bring the thread's status line up to date. Once only background tasks
+        are left it says which ones the restart waits for (`_thread_line`), since only the
+        owner knows whether a task (a dev server, a watcher) ever ends. A status line and not a
+        message: a message would notify, and would stay in the thread after the restart."""
+        self._show_thread_status()
 
     async def stop(self) -> bool | None:
         """Interrupt the running turn, deny its pending approvals and stop this thread's
@@ -2282,16 +2279,13 @@ class SessionManager:
             session.may_have_ordered_restart = session.busy
         for session in sessions:
             await session.cancel_hold()
-            # D10: a queued turn genuinely dropped by the drain reacts ❌ (the restart itself is
-            # announced separately, right below).
+            # D10: a queued turn genuinely dropped by the drain reacts ❌.
             await session.drop_queued(error=True)
-            await session.announce_restart()
         while not cut_short.is_set():
             if all(s.restart_ready and not s.reporting for s in self._sessions.values()):
                 return
             for session in list(self._sessions.values()):
-                with contextlib.suppress(Exception):  # a failed post must not end the wait
-                    await session.announce_waiting()
+                session.show_restart_wait()
             # Polled: a turn ends in several places, and a stop needs no finer timing.
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(cut_short.wait(), DRAIN_POLL_SECONDS)

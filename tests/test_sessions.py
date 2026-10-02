@@ -2076,18 +2076,22 @@ async def test_a_stop_waits_for_the_reply_s_final_write(
 
 
 @pytest.mark.parametrize("bypass", [True, False])
-async def test_a_stop_says_bypass_ends_only_where_it_is_on(
+async def test_a_stop_posts_nothing_in_a_thread_that_has_nothing_running(
     harness_for: Callable[..., Harness], bypass: bool
 ) -> None:
+    # Bypass outlives a restart (D3), so nothing is said about it: a message would only notify.
     h = harness_for({})
     await h.session().set_bypass(bypass)
-    h.state.set_session(
-        CHANNEL, THREAD, "sess-ran"
-    )  # a thread that ran: bypass outlives the restart
+    h.state.set_session(CHANNEL, THREAD, "sess-ran")
     await asyncio.wait_for(h.manager.drain(asyncio.Event()), 2)
-    posted = h.slack.calls_to("chat.postMessage")
-    assert [p["text"] for p in posted] == ([texts.BYPASS_RESTARTING] if bypass else [])
-    assert all(p["blocks"][0]["type"] == "context" for p in posted)
+    assert h.slack.calls_to("chat.postMessage") == []
+    assert h.slack.calls_to("assistant.threads.setStatus") == []
+
+
+def status_lines(h: Harness) -> list[str]:
+    """What the thread's status line said, in order; an empty string where it was cleared."""
+    calls = h.slack.calls_to("assistant.threads.setStatus")
+    return [(a.get("loading_messages") or [""])[0] for a in calls]
 
 
 async def test_an_approval_asked_during_a_stop_stays_open_and_the_turn_finishes(
@@ -2207,8 +2211,8 @@ async def test_a_stop_does_not_wait_for_a_task_its_running_turn_starts_afterward
     await asyncio.wait_for(drained, 1)
     assert turn.done.is_set()
     assert session._running_task_ids()  # still running: the shutdown ends it
-    posted = [p["text"] for p in h.slack.calls_to("chat.postMessage")]
-    assert not any(t.startswith(texts.RESTART_WAITS.split("{")[0]) for t in posted)
+    await asyncio.sleep(0.05)
+    assert not any(line.startswith("Restart waits") for line in status_lines(h))
     await asyncio.wait_for(h.manager.close_all(), 2)  # the shutdown that follows
     stored = h.state.thread(CHANNEL, THREAD)
     assert stored is not None and not stored.open_replies and stored.status is None
@@ -2233,8 +2237,11 @@ async def test_a_stop_still_waits_for_a_task_the_running_turn_started_before_it(
     await asyncio.wait_for(turn.done.wait(), 2)
     await asyncio.sleep(0.1)
     assert not drained.done()  # the task began before the signal: it is waited for
-    posted = [p["text"] for p in h.slack.calls_to("chat.postMessage")]
-    assert posted.count(texts.RESTART_WAITS.format(counts="1 shell")) == 1
+    # Said by the thread's status line, never by a message: no push, and nothing left behind.
+    waits = texts.RESTART_WAITS.format(counts="1 shell", them="it")
+    await until(lambda: status_lines(h)[-1:] == [waits])
+    assert waits == "Restart waits for 1 shell · !stop ends it now"
+    assert h.slack.calls_to("chat.postMessage") == []
     drained.cancel()
 
 
@@ -2264,8 +2271,11 @@ async def test_a_stop_held_by_a_background_task_says_so_and_bang_stop_ends_it(
     drained = asyncio.create_task(h.manager.drain(asyncio.Event()))
     await asyncio.sleep(0.1)
     assert not drained.done()
-    posted = [p["text"] for p in h.slack.calls_to("chat.postMessage")]
-    assert posted.count(texts.RESTART_WAITS.format(counts="1 shell")) == 1
+    # Said by the thread's status line, never by a message: no push, and nothing left behind.
+    waits = texts.RESTART_WAITS.format(counts="1 shell", them="it")
+    await until(lambda: status_lines(h)[-1:] == [waits])
+    assert waits == "Restart waits for 1 shell · !stop ends it now"
+    assert h.slack.calls_to("chat.postMessage") == []
     assert await session.stop()
     assert h.clients[0].stopped_tasks == [task_id]
     assert h.clients[0].interrupts == 0  # no turn was running

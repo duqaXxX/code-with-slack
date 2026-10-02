@@ -233,10 +233,12 @@ which Claude reports each one. Then it exits, and `KeepAlive` starts it again. M
 message gets `code-with-slack is restarting; send this again in a moment.`, a queued one ends with
 the same request. An approval or a question Claude asks meanwhile stays open and can be answered, so
 a session that restarts the daemon can still finish its turn. The daemon's `!words` keep working:
-`!stop` ends a long turn so the restart goes on. A channel left with only background tasks gets one
-message naming them (`code-with-slack is restarting once these background tasks end: 1 shell.`),
-since code-with-slack cannot tell whether a task such as a dev server ever ends; `!stop` there stops
-them and the restart goes on. The signal does not say who sent it, and a session that sends it
+`!stop` ends a long turn so the restart goes on. A thread left with only background tasks says so
+in the line under its last message (`Restart waits for 1 shell · !stop ends it now`), since
+code-with-slack cannot tell whether a task such as a dev server ever ends; `!stop` there stops
+them and the restart goes on. That line is no message: it does not ring, and it goes with the
+restart. A restart posts nothing in a thread that has nothing running, bypass on or not, since
+bypass outlives it. The signal does not say who sent it, and a session that sends it
 has a turn running at that moment: for every session with a turn running when the signal arrives,
 code-with-slack waits for the turn but not for a background task the session starts after the
 signal, such as a loop waiting for the new process, which could only end once this one has exited.

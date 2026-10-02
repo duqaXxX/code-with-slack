@@ -25,9 +25,11 @@ sends no other: a new prompt gets `texts.RESTARTING`, a queued turn is dropped w
 (`sessions.not_sent`, `N messages were not sent because code-with-slack restarted: send them
 again.`, with the start of each) is added to the end of the thread's running reply, or posted as a
 message of its own when nothing runs. Approvals and questions stay open: the Socket Mode connection closes only
-after the drain. A thread left with only background tasks gets `texts.RESTART_WAITS` once, naming
-them by the footer's counts, since the daemon cannot tell whether a task (a dev server, a watcher)
-ever ends; `!stop` ends them with `ClaudeSDKClient.stop_task`. Claude Code starts no turn to report a
+after the drain. A thread left with only background tasks says `texts.RESTART_WAITS` in its status
+line (`ThreadSession._thread_line`, brought up to date by `ThreadSession.show_restart_wait` at
+every poll of the drain), naming them by the footer's counts, since the daemon cannot tell
+whether a task (a dev server, a watcher) ever ends; a status line does not notify and goes with
+the restart, where a message would do both; `!stop` ends them with `ClaudeSDKClient.stop_task`. Claude Code starts no turn to report a
 task stopped this way (measured on 2.1.283), so neither the drain nor the thread's next prompt waits
 `sessions.INJECTED_TURN_WAIT` for one. The signal names no sender, and the session that sent it
 has a turn running when it arrives: every session with a turn running then gets

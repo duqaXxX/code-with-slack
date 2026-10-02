@@ -119,7 +119,6 @@ BIND_BUSY = (
     "Sessions are running in this channel: binding another folder now would cut their work. "
     "Let them finish or send `!stop`, then bind again."
 )
-BYPASS_RESTARTING = "code-with-slack is restarting: bypass stays on in this session."
 BYPASS_TOP_LEVEL = "Bypass belongs to one session: send `!bypass on` inside its thread."
 STOPPED = "Stopped the current turn."
 # An answered question, as the terminal keeps it in the transcript.
@@ -127,10 +126,10 @@ ANSWERED = "User answered Claude's questions:"
 # Slack drops plain spaces at the start of a line; no-break spaces stay and make the indent.
 NESTED = "\u00a0" * 4 + "⎿ "
 STOPPED_CHANNEL = "Stopped what was running in this channel."
-RESTART_WAITS = (
-    "code-with-slack is restarting once these background tasks end: {counts}. "
-    "`!stop` ends them now."
-)
+# The thread's status line while a restart waits for background tasks only, and the same after
+# the app's name. Never a message: it would notify and stay in the thread after the restart.
+RESTART_WAITS = "Restart waits for {counts} · !stop ends {them} now"
+RESTART_WAITS_STATUS = "is waiting to restart: {counts} still running"
 NOTHING_TO_STOP = "Nothing is running in this channel."
 NOTHING_TO_STOP_THREAD = "Nothing is running in this session."
 # D8: two sessions in one folder at once.

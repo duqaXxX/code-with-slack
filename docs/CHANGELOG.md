@@ -110,6 +110,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- A restart posts no message in a session thread. What it waits for, when only background tasks
+  hold it, is said by the thread's status line
+  (`Restart waits for 1 shell · !stop ends it now`, `ThreadSession.show_restart_wait`), which
+  does not notify and goes with the restart: the message it replaces rang and stayed in the
+  thread. The notice that bypass stays on across a restart is gone, since bypass always
+  outlives one.
+
 - A reply that outlives its stream ends with what Claude wrote after its last call and the
   footer in a new message (issue #66): the notification of that message reads how the work
   ended, where it repeated the reply's first paragraph, and the message holds more than a
