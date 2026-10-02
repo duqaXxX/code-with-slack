@@ -56,7 +56,10 @@ class StatusReaction:
     the root's own reaction for nothing. A fresh instance (a new session's reaction, next to
     whatever an earlier one already left on the same root) also strips the other three names on
     its own first successful add, so the root never carries more than one. Calls are serialized
-    per instance (an asyncio.Lock): two quick changes end on the last one. `already_reacted` on
+    per instance (an asyncio.Lock): two quick changes end on the last one. A change is two calls,
+    so a caller cancelled between them leaves both reactions on the root: the instance then
+    reads as a fresh one, whose next change strips the other names, and `settle` makes that
+    change, to the state asked for last, for whoever cancelled it. `already_reacted` on
     add and `no_reaction` on remove count as done. `missing_scope` (the workspace has not
     reinstalled the app for `reactions:write`) is logged once for the whole process, and every
     instance stops calling Slack for reactions from then on; any other failure is logged
@@ -72,40 +75,61 @@ class StatusReaction:
         self._root_ts = root_ts
         self._lock = asyncio.Lock()
         self._current: Status | None = None
+        # What `show` or `clear` was asked for last, set before any call: it differs from
+        # `_current` while a change is on its way, and after one that never finished.
+        self._wanted: Status | None = None
 
     @property
     def current(self) -> Status | None:
-        """The reaction this instance last showed successfully; `None` before that."""
+        """The reaction this instance last showed successfully; `None` before that, and after a
+        change that was cancelled on its way."""
         return self._current
 
     async def show(self, state: Status) -> None:
         if StatusReaction._missing_scope:
             return
+        self._wanted = state
         async with self._lock:
             if state is self._current:
                 return
             previous = self._current
-            if not await self._add(state):
-                return  # `_current` stays as it was: the next `show` retries the add
-            if previous is not None:
-                await self._remove(previous)
-            else:
-                # A fresh instance: an earlier session's reaction may still sit on this root
-                # (an idle close's DONE, a restart's ERROR). Strip every other name so the root
-                # carries exactly this one (D10).
-                for other in Status:
-                    if other is not state:
-                        await self._remove(other)
+            try:
+                if not await self._add(state):
+                    return  # `_current` stays as it was: the next `show` retries the add
+                if previous is not None:
+                    await self._remove(previous)
+                else:
+                    # A fresh instance: an earlier session's reaction may still sit on this
+                    # root (an idle close's DONE, a restart's ERROR). Strip every other name so
+                    # the root carries exactly this one (D10).
+                    for other in Status:
+                        if other is not state:
+                            await self._remove(other)
+            except asyncio.CancelledError:
+                # Issue #104: the root may carry the new name, the previous one or both. Read
+                # as a fresh instance from here, so the next change strips every other name.
+                self._current = None
+                raise
             self._current = state
 
     async def clear(self) -> None:
         """Remove the current reaction, leaving the root bare: for a caller with nothing to
         revert to (D8's Cancel on a session that had shown no reaction yet)."""
+        self._wanted = None
         async with self._lock:
             if self._current is None:
                 return
             await self._remove(self._current)
             self._current = None
+
+    async def settle(self) -> None:
+        """Bring the root to the state asked for last, making no call when it already shows it.
+        For the caller that cancelled a task in the middle of a change (a session's close, issue
+        #104), which is the only one left to finish it."""
+        if self._wanted is None:
+            await self.clear()
+        else:
+            await self.show(self._wanted)
 
     async def _add(self, state: Status) -> bool:
         """Whether the root now carries `state`: true on success or `already_reacted`."""

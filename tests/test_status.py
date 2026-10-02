@@ -113,6 +113,65 @@ async def test_concurrent_show_calls_end_on_the_last_state(slack: FakeSlack) -> 
     assert removed == ["white_check_mark", "hourglass_flowing_sand"]
 
 
+async def test_settle_finishes_a_change_whose_caller_was_cancelled_between_its_two_calls(
+    slack: FakeSlack,
+) -> None:
+    # Issue #104: the new reaction is on the root, the previous one still is, and the caller
+    # (a session's reader, cancelled by a close) is gone.
+    sr = reaction(slack)
+    await sr.show(Status.WORKING)
+    slack.calls.clear()
+    slack.delay = 0.05
+    change = asyncio.create_task(sr.show(Status.DONE))
+    while not slack.calls:  # noqa: ASYNC110 (the fake exposes no event to wait on)
+        await asyncio.sleep(0.005)
+    change.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await change
+    assert [(method, args["name"]) for method, args in slack.calls] == [
+        ("reactions.add", "white_check_mark")
+    ]
+    slack.delay = 0.0
+    await sr.settle()
+    assert (
+        "reactions.remove",
+        {"channel": CHANNEL, "name": "hourglass_flowing_sand", "timestamp": THREAD},
+    ) in slack.calls
+    assert sr.current is Status.DONE
+
+
+async def test_a_change_after_a_cancelled_one_leaves_neither_of_its_two_reactions(
+    slack: FakeSlack,
+) -> None:
+    # The cancelled change left ⏳ and ✅ on the root, and the next state is neither: a close
+    # that cuts a new prompt short shows ❌, which must stand alone.
+    sr = reaction(slack)
+    await sr.show(Status.WORKING)
+    slack.delay = 0.05
+    change = asyncio.create_task(sr.show(Status.DONE))
+    while slack.calls[-1][0] != "reactions.add":  # noqa: ASYNC110
+        await asyncio.sleep(0.005)
+    change.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await change
+    slack.delay = 0.0
+    slack.calls.clear()
+    await sr.show(Status.ERROR)
+    removed = {args["name"] for method, args in slack.calls if method == "reactions.remove"}
+    assert {"hourglass_flowing_sand", "white_check_mark"} <= removed
+    assert "x" not in removed
+
+
+async def test_settle_makes_no_call_when_the_last_change_landed(slack: FakeSlack) -> None:
+    sr = reaction(slack)
+    await sr.settle()  # nothing was ever asked for
+    await sr.show(Status.WORKING)
+    await sr.show(Status.DONE)
+    before = len(slack.calls)
+    await sr.settle()
+    assert len(slack.calls) == before
+
+
 async def test_a_fresh_instance_strips_a_leftover_reaction_from_a_previous_session(
     slack: FakeSlack,
 ) -> None:

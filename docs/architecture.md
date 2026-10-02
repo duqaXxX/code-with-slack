@@ -536,7 +536,12 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   clear `ThreadSession._error_standing`), never flipped back to `✅` by some unrelated task's own
   idle sweep in between (`ThreadSession._react_done_if_idle` reads that flag, not
   `StatusReaction.current`, which only updates once its own `reactions.add` call returns and can
-  lag a quick turn); D9's own idle close never touches the reaction at all, whatever it reads. A
+  lag a quick turn). A change of the reaction is two calls, `reactions.add` then
+  `reactions.remove`, and a session reads idle before the second has returned: a close of an
+  idle session (D9's idle close, a restart's drain) cancels the reader there. A
+  `StatusReaction` whose change was cancelled reads as a fresh instance, so its next change
+  strips every other name, and `ThreadSession.close` calls `StatusReaction.settle`, which makes
+  the change asked for last and makes no call when the root already shows it. A
   session rebuilt on the same root (a restart, a resumed thread) starts a fresh
   `StatusReaction`, whose first successful `show` strips every other reaction name already on
   the root, so an earlier session's leftover `✅` or `❌` never sits next to the new one. A
@@ -753,7 +758,8 @@ whether the lookup above found a session: `!bind` and `!resume` work only at the
 refused inside a thread (`texts.WORD_IN_THREAD`); `!bypass` only inside a thread, refused at the
 top level (`texts.BYPASS_TOP_LEVEL`); `!guide` answers the same either way; `!help`, `!status`
 and `!stop` answer both, but with different content: `!help` lists only the daemon's words at the
-top level and a session's own commands too inside its thread; `!status` lists the channel's live
+top level and a session's own commands too inside its thread, except `clear`, which a thread
+refuses (`commands.REFUSED_IN_THREAD`); `!status` lists the channel's live
 sessions at the top level and one session's own values inside its thread; `!stop` stops every
 session of the channel at the top level and one session inside its thread. `!clear` is not a word of its own: it is an
 ordinary `Passthrough` that `slack_app.is_clear` catches only inside a thread, refused there

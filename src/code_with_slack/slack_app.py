@@ -43,6 +43,7 @@ from code_with_slack.attachments import (
     save,
 )
 from code_with_slack.commands import (
+    REFUSED_IN_THREAD,
     Bind,
     Bypass,
     Guide,
@@ -170,7 +171,7 @@ def click_thread(body: dict[str, Any]) -> str:
 def is_clear(command: Passthrough) -> bool:
     """Whether a passthrough is `!clear`: refused inside a thread (one thread is one session),
     left as an ordinary passthrough everywhere else."""
-    return command.text.split(" ", 1)[0].lower() == "clear"
+    return command.text.split(" ", 1)[0].lower() == REFUSED_IN_THREAD
 
 
 class Fetch(Protocol):

@@ -1093,8 +1093,8 @@ class ThreadSession:
         # D10: read before anything below settles it back to idle. A close that cuts anything
         # short (a shutdown or a restart's drain, most likely: `busy` alone misses a queued or
         # taken turn and a task that outlived its own turn, which `idle` already accounts for)
-        # gets ❌; D9's idle close, always called on an idle session, never does, and leaves the
-        # reaction exactly as it reads.
+        # gets ❌; D9's idle close, always called on an idle session, never does, and only
+        # finishes a change of the reaction still on its way (`StatusReaction.settle`).
         cut_short = not self.idle
         # Issue #87: at the end of a stop, a session whose only unfinished work is a background
         # task the stop does not wait for (`may_have_ordered_restart`) ended its turn well; the
@@ -1173,6 +1173,11 @@ class ThreadSession:
                 if not lost:
                     self._note_status(Status.ERROR)
                 await self._status.show(Status.ERROR)
+            else:
+                # Issue #104: a session reads idle as soon as its turn ends, while its reader
+                # may still be between the two calls that move ⏳ to ✅, and `_cancel_tasks`
+                # above stops it there. No call when the reaction already reads as asked.
+                await self._status.settle()
             # Crash repair (issue #19): a graceful close is not what repair is for, whatever is
             # still live in Slack when it ends (an approval message `_cancel_tasks` cut off
             # mid-await, most likely: `_can_use_tool`'s own finally never reached the point that

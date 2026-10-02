@@ -3255,6 +3255,29 @@ async def test_a_turn_that_finishes_after_a_restart_drain_dropped_a_queued_one_e
     assert h.reactions()[-1] == Status.DONE.value
 
 
+async def test_a_close_right_after_a_turn_ends_leaves_done_alone_on_the_root(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # Issue #104: the session reads idle while its reader is still between the two calls that
+    # move ⏳ to ✅. A restart's drain closes it there, and the close cancels the reader.
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    session = h.session()
+    remove = h.slack.reactions_remove
+
+    async def slow_for_working(**kwargs: Any) -> Any:
+        if kwargs["name"] == Status.WORKING.value:
+            await asyncio.sleep(0.3)
+        return await remove(**kwargs)
+
+    h.slack.reactions_remove = slow_for_working  # type: ignore[method-assign]
+    await session.submit("list the files")
+    await until(lambda: Status.DONE.value in h.reactions() and session.restart_ready)
+    await session.close()
+    removed = [args["name"] for args in h.slack.calls_to("reactions.remove")]
+    assert Status.WORKING.value in removed
+    assert Status.DONE.value not in removed[removed.index(Status.WORKING.value) :]
+
+
 # --- D8: hold reactions (Phase 3 final fix wave) ---
 
 
