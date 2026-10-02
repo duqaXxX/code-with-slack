@@ -894,10 +894,16 @@ class ThreadSession:
         stored = self._deps.state.thread(self.channel_id, self.thread_ts)
         return not self._submitted and (stored is None or stored.session_id is None)
 
+    @property
+    def before_start(self) -> bool:
+        """No first prompt was sent and no Start applied: the setup's Bypass box is what sets
+        bypass, and `apply_setup` writes it over anything set before."""
+        return self.never_ran and not self._setup_applied
+
     async def apply_setup(self, choice: Choice) -> None:
         """Apply the owner's session setup before the first prompt. Start is authoritative: the
         effort and the bypass switch are written from the choice whatever state.json held
-        (a restart can have left either; `!bypass` is refused until the first prompt), so what
+        (a restart can have left either; `!bypass` is refused before Start), so what
         runs is what the summary line says. An effort the live client was not built with goes
         through a fresh client (the SDK has no runtime effort setter; no query has been sent, so
         no session is lost), then the model on the live client, then the permission mode: when

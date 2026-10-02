@@ -1975,6 +1975,23 @@ async def test_continue_sends_the_held_message(world: World) -> None:
     assert world.state.thread(CHANNEL, THREAD).requests == ()
 
 
+async def test_bypass_typed_after_start_while_held_switches_the_session(world: World) -> None:
+    # Start was applied (the world's setup starts on its own), then D8 asks: the setup's box is
+    # gone, so the word works as in a session that ran, and holds after Continue.
+    await start_a_hold(world)
+    question_ts = world.slack.posted_ts[-1]
+    word = reply("!bypass on", THREAD)
+    await world.dispatch(word)
+    assert world.ephemerals() == [texts.BYPASS_ON_THREAD]
+    assert reactions_on(world, word["event"]["ts"]) == ["white_check_mark"]
+    hold_id = button_value(posted_blocks(world, -1), HOLD_CONTINUE)
+    await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, THREAD, message_ts=question_ts))
+    client = world.clients[-1]
+    assert client.queries == ["hello"]
+    assert client.modes == ["bypassPermissions"]
+    assert world.state.thread(CHANNEL, THREAD).bypass is True
+
+
 async def test_cancel_drops_the_message_and_says_so(world: World) -> None:
     await start_a_hold(world)
     question_ts = world.slack.posted_ts[-1]

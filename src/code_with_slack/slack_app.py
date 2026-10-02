@@ -825,9 +825,9 @@ def build_app(
             case Bypass(on=on):
                 if session is None:
                     await in_channel(channel, texts.BYPASS_TOP_LEVEL)
-                elif session.never_ran:
-                    # Start alone sets bypass before the first prompt (`apply_setup`): a
-                    # switch flipped here would not hold, so the word changes nothing.
+                elif session.before_start:
+                    # Start writes the setup's box over the switch (`apply_setup`): one
+                    # flipped before it would not hold, so the word changes nothing.
                     await tell_owner(channel, thread_ts, texts.BYPASS_BEFORE_START)
                 else:
                     await session.set_bypass(on)

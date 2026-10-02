@@ -504,7 +504,7 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   model's levels. Start reads every control from the click's `state.values`
   (`setup.read_choice`), and `ThreadSession.apply_setup` applies it, and Start is authoritative: effort and bypass are written
   from the choice whatever `state.json` held (a restart can have left either; `!bypass` in
-  the thread is refused until the first prompt is sent, `texts.BYPASS_BEFORE_START`), so what runs is what the summary says. An effort the live client was not
+  the thread is refused before Start, `ThreadSession.before_start` and `texts.BYPASS_BEFORE_START`), so what runs is what the summary says. An effort the live client was not
   built with is stored and the client reconnected (the SDK has no runtime effort setter and no query has been
   sent, so no session is lost), a non-default model is `set_model()` on the live client (not
   stored: it survives a resume and leaves the owner's default alone, measured 2026-09-30, CLI

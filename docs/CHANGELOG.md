@@ -115,11 +115,13 @@ All notable changes to this project are documented here. The format follows
   that says what changed, and for `on` that it survives a restart. The ✅ on the word stays,
   since the ephemeral line is gone on reload. Before, the ✅ was the whole answer and read as
   no answer. Not measured: the ephemeral line when the word is typed from the iPhone app.
-- `!bypass on` and `!bypass off` typed in a thread whose session has not sent its first prompt
-  (its setup waits, or was cancelled) change nothing and answer
+- `!bypass on` and `!bypass off` typed in a thread before its setup's Start was applied (the
+  setup waits, or was cancelled) change nothing and answer
   `This session has not started yet: tick Bypass in its setup and press Start.`
   (`texts.BYPASS_BEFORE_START`, ephemeral, no ✅). Before, the word switched the session and
-  Start then wrote the checkbox over it, so the switch did not hold.
+  Start then wrote the checkbox over it, so the switch did not hold. After Start, while the
+  first prompt waits on the question about another session in the folder, the word works
+  (`ThreadSession.before_start`); a Cancel there drops the whole setup, bypass included.
 - A restart posts no message in a session thread. What it waits for, when only background tasks
   hold it, is said by the thread's status line
   (`Restart waits for 1 shell · !stop ends it now`, `ThreadSession.show_restart_wait`), which
