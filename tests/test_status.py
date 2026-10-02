@@ -337,14 +337,14 @@ async def test_a_thread_status_that_changes_its_words_says_the_new_ones_at_once(
     status = thread_status(slack)
     status.show(texts.THREAD_WORKING)
     await beat()
-    status.show("⏳ 2 shells still running")
+    status.show("2 shells still running")
     await beat()
-    status.show("⏳ 1 shell still running")
+    status.show("1 shell still running")
     await beat()
     assert [call["loading_messages"] for call in statuses(slack)] == [
         [texts.THREAD_WORKING],
-        ["⏳ 2 shells still running"],
-        ["⏳ 1 shell still running"],
+        ["2 shells still running"],
+        ["1 shell still running"],
     ]
     await status.close()
     assert statuses(slack)[-1] == CLEARED

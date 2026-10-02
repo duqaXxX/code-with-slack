@@ -578,7 +578,7 @@ async def test_a_task_that_outlives_its_turn_is_counted_by_the_thread_status(
     h = harness_for({"turns": [first]})
     session = h.session()
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    still = f"⏳ {session.running_kinds} still running"
+    still = f"{session.running_kinds} still running"
     await until(lambda: lines(h)[-1:] == [still])  # the turn ended: the prompt is back
     assert lines(h)[0] == texts.THREAD_WORKING and session.running_kinds
     # The count is a state of the thread, never a line of the reply: a stream only grows.
@@ -613,7 +613,7 @@ async def test_the_thread_status_counts_a_task_of_an_earlier_reply_after_a_later
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
     await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
     await until(lambda: len(h.slack.calls_to("chat.stopStream")) == 1)
-    await until(lambda: lines(h)[-1:] == [f"⏳ {session.running_kinds} still running"])
+    await until(lambda: lines(h)[-1:] == [f"{session.running_kinds} still running"])
     _, second = h.slack.stream_ts
     footer = h.slack.messages[second].blocks[-1]["elements"][0]["text"]
     assert session.running_kinds and footer.endswith(f"⏳ {session.running_kinds}")

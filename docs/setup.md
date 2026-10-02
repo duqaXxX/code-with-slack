@@ -56,7 +56,7 @@ app's **OAuth & Permissions** page add the missing bot scope, then reinstall the
 workspace. Without `files:read`, every attached file is refused with `HTTP 302`; without
 `reactions:write`, the status reaction is silently skipped (logged, never surfaced).
 
-The line under a thread (`Working…`, `⏳ 1 shell still running`) is Slack's thread status
+The line under a thread (`Working…`, `1 shell still running`) is Slack's thread status
 (`assistant.threads.setStatus`), which Slack's reference lists under `chat:write`. When Slack
 refuses it, the refusal is logged and the line is skipped.
 
@@ -438,7 +438,7 @@ as `✓ Agent "review" finished · 3m 59s`. While tasks run, the footer counts t
 
 From the moment you send a message until its turn ends, Slack shows `Working…` under the
 thread's last message. When the turn has ended and a command or an agent it started still
-runs, the same line reads `⏳ 1 shell still running` and follows the count; the reply gets its
+runs, the same line reads `1 shell still running` and follows the count; the reply gets its
 footer once that task and its report have ended. The line goes while an approval or a question
 waits for you, and after the answer to a word typed in the thread (`!bypass`, `!status`,
 `!stop`) it can take up to a minute to come back.

@@ -529,15 +529,15 @@ class ThreadSession:
     def _thread_line(self) -> str:
         """What the thread's status line says, empty for nothing. `Working…` while a prompt is
         on its way to Claude Code or a turn runs (issue #83). Once the turn has ended, what it
-        left running (`⏳ 1 shell still running`, issue #95): a count that changes cannot live in
+        left running (`1 shell still running`, issue #95): a count that changes cannot live in
         a reply, whose stream only grows. Nothing while an approval, a question or a hold waits
         on the owner, while `!stop` winds a turn down, and once the session is closed."""
         if self._closed or self.waiting_for_owner or self._interrupting:
             return ""
         if self.busy or self._taken is not None or not self._queue.empty():
             return texts.THREAD_WORKING
-        running = self._running_counts()
-        return texts.STILL_RUNNING.format(running=running) if running else ""
+        kinds = self._running_kinds()
+        return texts.STILL_RUNNING.format(counts=kinds) if kinds else ""
 
     def _show_thread_status(self) -> None:
         """Bring the thread's status line to `_thread_line`, after anything that can change it:

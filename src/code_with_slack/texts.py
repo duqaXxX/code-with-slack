@@ -167,10 +167,11 @@ RUNNING = "⏳ {counts}"
 # loading message: `THREAD_WORKING` while a prompt is on its way or a turn runs, and
 # `STILL_RUNNING` once the turn has ended and a task it started still runs, the words the
 # terminal ends such a turn with (`· 1 shell still running`, Claude Code 2.1.287, read
-# 2026-10-02; `running` is `RUNNING`, already formatted). `THREAD_WORKING_STATUS` is what a
+# 2026-10-02), with no hourglass: an emoji draws large and grey in a status line (seen on
+# desktop, 2026-10-02). `THREAD_WORKING_STATUS` is what a
 # client that draws `<app name> <status>` shows (measured 2026-10-02, desktop and iOS).
 THREAD_WORKING = "Working…"
-STILL_RUNNING = "{running} still running"
+STILL_RUNNING = "{counts} still running"
 THREAD_WORKING_STATUS = "is working…"
 ACTIVITY_BUSY = "running a turn, {queued} queued"
 # `!status` sent to the channel (top-level, or a thread that holds no session): the channel's

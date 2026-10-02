@@ -11,7 +11,7 @@ All notable changes to this project are documented here. The format follows
   (`render.status.ThreadStatus`, `assistant.threads.setStatus` with a loading message, which is
   what makes it show on iOS). It reads `Working…` from the moment a prompt is received until
   its turn ends, and while a turn Claude Code starts to report a task runs. Once the turn has
-  ended it reads what the turn left running, `⏳ 1 shell still running`, the words the terminal
+  ended it reads what the turn left running, `1 shell still running`, the words the terminal
   ends such a turn with, and follows the count until nothing runs
   (`ThreadSession._thread_line`). The count is a state of the thread and is kept out of the
   reply, whose stream cannot change what it was sent. The status is set again within 2 seconds

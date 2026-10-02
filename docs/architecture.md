@@ -536,7 +536,7 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   the thread's last message (`assistant.threads.setStatus`), which says
   `ThreadSession._thread_line`. `Working…` while a prompt is queued, taken or sent or a turn
   is active (a report turn included). Once no turn runs, what the session left running,
-  `⏳ 1 shell still running`, the words the terminal ends such a turn with: a count that
+  `1 shell still running`, the words the terminal ends such a turn with: a count that
   changes is a state of the thread and stays out of the reply, whose stream only grows.
   Nothing while an approval, a question or a hold waits on the owner, while `!stop` winds a
   turn down, and once the session is closed. `ThreadSession._show_thread_status` brings the
@@ -596,7 +596,7 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   not listed counts as a task) in two places. The thread's latest reply, once it has ended,
   carries the counts at the end of its footer (`⏳ 1 shell · 1 agent`); a new reply takes them
   over and the previous one drops them. The thread's status line says them whenever no turn
-  runs (`⏳ 1 shell · 1 agent still running`), which covers a reply kept open for its own task,
+  runs (`1 shell · 1 agent still running`), which covers a reply kept open for its own task,
   with no footer yet. Both disappear when nothing runs.
 - When the Claude Code process goes away (shutdown, an idle close, a process that exits), its
   tasks go with it: their lines close with `Stopped` and the list empties. The map lives in

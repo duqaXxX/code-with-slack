@@ -158,7 +158,7 @@ class ThreadStatus:
     """Slack's status line under a thread's last message, saying what `show` was last given:
     `Working…` as the sign that a prompt was received and that its turn runs, where a reply
     that has written nothing yet, or nothing for a while, gives none (issue #83), then what
-    still runs once the turn has ended (`⏳ 1 shell still running`, issue #95). A state that
+    still runs once the turn has ended (`1 shell still running`, issue #95). A state that
     changes belongs here and not in a reply: a stream cannot change what it was told.
     It notifies nobody (measured 2026-09-28) and shows on desktop and on iOS once it carries
     `loading_messages` (measured 2026-10-02). `show` and `wrote` never wait on Slack: one task
