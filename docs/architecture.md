@@ -82,7 +82,8 @@ On start, before the Socket Mode connection opens, `code_with_slack.repair.repai
 every thread `state.json` still shows as left open. For each open reply it stops the message's
 stream (`chat.stopStream`; `message_not_in_streaming_state` means Slack closed it already, at 5
 minutes, and is fine), reads the message back by its own ts (`conversations.replies` with `ts`
-and `limit=1`) and edits it with `chat.update`: its blocks as Slack keeps them, every card left
+and `limit=1`) and edits it with `chat.update`: its blocks as Slack keeps them, without a line of what
+still runs (`sinks.is_still_running`), every card left
 `in_progress` closed as an error (a stopped stream stores it as one anyway), and
 `texts.STOPPED_BEFORE_ANSWER` appended as a context block, or, at Slack's 50-block cap, added to
 the last context block. The stream's own stop is the one notification the reply owes, and the
