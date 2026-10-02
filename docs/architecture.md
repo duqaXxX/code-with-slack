@@ -25,9 +25,12 @@ sends no other: a new prompt gets `texts.RESTARTING`, a queued turn is dropped w
 (`sessions.not_sent`, `N messages were not sent because code-with-slack restarted: send them
 again.`, with the start of each) is added to the end of the thread's running reply, or posted as a
 message of its own when nothing runs. Approvals and questions stay open: the Socket Mode connection closes only
-after the drain. A thread left with only background tasks gets `texts.RESTART_WAITS` once, naming
-them by the footer's counts, since the daemon cannot tell whether a task (a dev server, a watcher)
-ever ends; `!stop` ends them with `ClaudeSDKClient.stop_task`. Claude Code starts no turn to report a
+after the drain. A thread left with only background tasks says `texts.RESTART_WAITS` in its status
+line (`ThreadSession._thread_line`, brought up to date by `ThreadSession.show_restart_wait` at
+every poll of the drain), naming them by the footer's counts, since the daemon cannot tell
+whether a task (a dev server, a watcher) ever ends; a status line does not notify and goes with
+the restart, where a message would do both (where Slack refuses the app a thread status,
+`ThreadStatus.refused`, one message says it, `texts.RESTART_WAITS_MESSAGE`); `!stop` ends them with `ClaudeSDKClient.stop_task`. Claude Code starts no turn to report a
 task stopped this way (measured on 2.1.283), so neither the drain nor the thread's next prompt waits
 `sessions.INJECTED_TURN_WAIT` for one. The signal names no sender, and the session that sent it
 has a turn running when it arrives: every session with a turn running then gets
@@ -549,7 +552,8 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   ends such a turn with: a count that changes is a state of the thread and stays out of a
   reply whose stream only grows. Once the latest reply has ended its footer says it, and the
   status line says nothing (`ReplySink.footer_shown`: the reply's end has landed on Slack, so
-  a footer that could not be written never silences the line).
+  a footer that could not be written never silences the line). During a stop that only
+  background tasks hold, the line says `texts.RESTART_WAITS` whatever the footer shows.
   Nothing while an approval, a question or a hold waits on the owner, while `!stop` winds a
   turn down, and once the session is closed. `ThreadSession._show_thread_status` brings the
   status to that line after anything that can change it (every `_react`, the start and the end
@@ -566,8 +570,9 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   `status.THREAD_STATUS_AFTER_WRITE_SECONDS` of a write (`ThreadStatus.wrote`, called through
   `ReplySink`'s `on_write` after every pass of a reply that made a Slack call and by
   `ThreadSession._post`), at most one call per that interval. An answer to a word typed in the
-  thread (`!status`, `!bypass`) is posted outside the session and is covered by the refresh
-  alone. `ThreadSession.close` clears the status after it has cancelled its tasks. A clearing call
+  thread (`!status`, `!bypass`) is posted outside the session: `slack_app`'s `deliver`, the one
+  function those posts go through, tells `SessionManager.wrote`, which reaches the live
+  session's status the same way. `ThreadSession.close` clears the status after it has cancelled its tasks. A clearing call
   that fails is tried once more, and again at the close. A refusal is
   logged once per error code in a row and swallowed; one that says the token cannot call the
   method (`status.THREAD_STATUS_REFUSED`) stops every `ThreadStatus` from calling Slack for
@@ -650,9 +655,7 @@ cause, keep it, and the next Claude Code process in that thread gets it back fro
 `ensure_connected`, through `set_permission_mode`: on sets `bypassPermissions`; an explicit off in
 a folder whose own settings start in bypass sets `default`, so the folder's bypass does not return
 silently; never chosen leaves Claude Code's own mode. This is needed since Claude Code's own `--resume` never restores `bypassPermissions` (sessions reference, read
-2026-09-26). At the start of `SessionManager.drain`, every thread whose owner turned bypass on gets
-`texts.BYPASS_RESTARTING` (a thread with no session id never ran: its next message asks the setup
-again, so it is not told). A session `!resume` opens starts in its new thread with bypass never chosen (it follows the folder's own mode) and
+2026-09-26). A restart says nothing about bypass in a thread: it outlives one. A session `!resume` opens starts in its new thread with bypass never chosen (it follows the folder's own mode) and
 no `/effort` level set, whatever the session had before: both belong to the thread, not to the
 Claude Code session id, and `!resume` never touches or waits on any other thread.
 

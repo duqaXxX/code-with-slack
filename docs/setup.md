@@ -233,10 +233,13 @@ which Claude reports each one. Then it exits, and `KeepAlive` starts it again. M
 message gets `code-with-slack is restarting; send this again in a moment.`, a queued one ends with
 the same request. An approval or a question Claude asks meanwhile stays open and can be answered, so
 a session that restarts the daemon can still finish its turn. The daemon's `!words` keep working:
-`!stop` ends a long turn so the restart goes on. A channel left with only background tasks gets one
-message naming them (`code-with-slack is restarting once these background tasks end: 1 shell.`),
-since code-with-slack cannot tell whether a task such as a dev server ever ends; `!stop` there stops
-them and the restart goes on. The signal does not say who sent it, and a session that sends it
+`!stop` ends a long turn so the restart goes on. A thread left with only background tasks says so
+in the line under its last message (`Restart waits for 1 shell · !stop ends it now`), since
+code-with-slack cannot tell whether a task such as a dev server ever ends; `!stop` there stops
+them and the restart goes on. That line is no message: it does not ring, and it goes with the
+restart. A restart posts nothing in a thread that has nothing running, bypass on or not, since
+bypass outlives it. If Slack refuses the app that line, one message says what the restart waits
+for instead. The signal does not say who sent it, and a session that sends it
 has a turn running at that moment: for every session with a turn running when the signal arrives,
 code-with-slack waits for the turn but not for a background task the session starts after the
 signal, such as a loop waiting for the new process, which could only end once this one has exited.
@@ -440,9 +443,8 @@ From the moment you send a message until its turn ends, Slack shows `Working…`
 thread's last message. When the turn has ended and a command or an agent it started still
 runs, the same line reads `1 shell still running` and follows the count; the reply gets its
 footer once that task and its report have ended. If you sent another message meanwhile and its
-reply has ended, that reply's footer says it instead (`⏳ 1 shell`), until the command ends. The line goes while an approval or a question
-waits for you, and after the answer to a word typed in the thread (`!bypass`, `!status`,
-`!stop`) it can take up to a minute to come back.
+reply has ended, that reply's footer says it instead (`⏳ 1 shell`), until the command ends.
+The line goes while an approval or a question waits for you.
 
 What code-with-slack says on its own (the answer to `!bind`, `!bypass` or `!stop`, a notice that
 it is restarting, a refused attachment, an error) shows small and grey, as the footer does, so it

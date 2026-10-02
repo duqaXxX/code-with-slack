@@ -596,6 +596,16 @@ async def test_bang_status_inside_a_thread_shows_that_session(world: World) -> N
     assert "\nContext: `7%`" in text
 
 
+async def test_an_answer_in_a_session_thread_sets_its_status_line_again(world: World) -> None:
+    await world.dispatch(message("hi", ts=THREAD))
+    told: list[tuple[str, str]] = []
+    world.sessions.wrote = lambda channel, thread: told.append((channel, thread))  # type: ignore[method-assign]
+    await world.dispatch(reply("!status", THREAD))
+    assert told == [(CHANNEL, THREAD)]  # the answer cleared the status: it is set again
+    await world.dispatch(message("!status"))  # top-level: no thread, no status line
+    assert told == [(CHANNEL, THREAD)]
+
+
 async def test_bang_stop_inside_a_thread_stops_only_that_session(world: World) -> None:
     await world.dispatch(message("hello", ts=THREAD))  # never ends
     await world.dispatch(message("hello", ts=OTHER_THREAD))  # D8: THREAD's session is busy
@@ -2885,16 +2895,6 @@ async def test_a_connect_racing_start_does_not_record_bypass_as_off(
     assert client.modes[-1] == "default"  # what Start said, not the client's first mode
 
 
-async def test_a_thread_that_never_ran_does_not_announce_bypass_at_restart(manual: World) -> None:
-    await manual.dispatch(message("hello", ts=THREAD))
-    await manual.dispatch(reply("!bypass on", THREAD))  # typed while the setup waits
-    session = manual.sessions.get(CHANNEL, THREAD)
-    assert session is not None
-    await session.announce_restart()
-    await asyncio.sleep(0.05)
-    assert texts.BYPASS_RESTARTING not in said(manual)
-
-
 async def test_a_native_bypass_folder_asks_again_with_the_box_ticked_after_a_stop(
     manual: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2985,17 +2985,6 @@ async def test_the_channel_status_row_reads_the_effective_bypass(
     manual.state.set_bypass(CHANNEL, THREAD, None)  # never chosen: the folder's bypass runs
     await manual.dispatch(message("!status"))
     assert texts.STATUS_CHANNEL_BYPASS in said(manual)[-1]
-
-
-async def test_a_failed_first_turn_does_not_announce_bypass_at_restart(manual: World) -> None:
-    await manual.dispatch(message("hello", ts=THREAD))
-    await manual.dispatch(setup_click(manual, bypass=True))
-    await manual.settle(0.3)
-    session = manual.sessions.get(CHANNEL, THREAD)
-    assert session is not None and manual.state.thread(CHANNEL, THREAD).session_id is None
-    await session.announce_restart()
-    await asyncio.sleep(0.05)
-    assert texts.BYPASS_RESTARTING not in said(manual)
 
 
 async def test_a_model_change_keeps_a_supported_effort_and_the_tick(manual: World) -> None:
