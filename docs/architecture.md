@@ -279,16 +279,17 @@ little earlier itself.
   (a run of calls keeps its two cards until the body ends), with a short `text`, since a
   `chat.update` whose `text` is long fails `msg_too_long`. The end
   posts the reply's ending as a new message, the second notification (`ReplySink._end`): the
-  last paragraph of Claude's own words with whatever follows it, and the footer under it. Its
-  `text`, the banner, is that paragraph as plain text (`sinks.banner_text`), so the
-  notification says how the work ended, the stream's own stop having said how it began. The
-  ending is posted first, then a silent update takes it out of the message it grew in
-  (`ReplySink._ending_cursor`; `sinks.last_paragraph` never cuts inside a fenced block): a
-  failed post leaves the reply as it was, a failed update leaves the paragraph twice, and in
-  both cases the end has not landed and the one retry follows. When nothing of the answer
-  would stay before that paragraph (an answer of one paragraph with no card), nothing is
-  moved and the new message is the footer alone (`ReplySink._write_closing`), with the same
-  banner, never a line of the daemon's.
+  text Claude wrote after its last call, whole, with whatever follows it, and the footer under
+  it. Its `text`, the banner, is the first paragraph of that text as plain text
+  (`sinks.banner_text`), so the notification says how the work ended, the stream's own stop
+  having said how it began. The ending is a whole part of the renderer's model, never a cut
+  inside one (`ReplySink._ending_cursor`), so no list or heading is split. It is posted first,
+  then a silent update takes it out of the message it grew in: a failed or cancelled post
+  leaves the reply as it was, a failed update leaves the text twice, and in both cases the end
+  has not landed and the one retry follows. When the message holds no such text, or nothing of
+  the answer would stay before it (an answer that is text alone), nothing is moved and the new
+  message is the footer alone (`ReplySink._write_closing`), its banner the start of Claude's
+  answer, never a line of the daemon's.
 
 A message holds 12,000 characters and 50 blocks or task cards (measured 2026-09-28); a reply past
 `sinks.MESSAGE_LIMIT` or `sinks.BLOCKS_LIMIT` continues in a new message, a new stream while the
@@ -313,7 +314,7 @@ tasks' replies). A stream whose last append has an unknown outcome (a reset, a t
 nothing more: it is stopped and the message goes on by `chat.update` from the model. An append
 Slack refuses as too long (`msg_too_long`) would be refused again, so `ReplySink._stream_step`
 stops the stream at once, without the footer, and writes the message by `chat.update`; the end
-then posts a closing message, as for a reply past `STREAM_SECONDS`. The text of a message's cards
+then posts the reply's ending, as for a reply past `STREAM_SECONDS`. The text of a message's cards
 counts toward the cap of a streamed message, by a formula Slack does not document (measured
 2026-10-01 in a private test channel, slack-sdk 3.44.1, issue #92), and the plan does not count
 it; the refusal is logged with the sizes the plan knew and no content. If Slack then refuses
@@ -520,10 +521,10 @@ where the *next* thread starts, and refuses while any of the channel's threads i
 - Each `ThreadSession` keeps one `render.status.StatusReaction` on its own root message (D10),
   which `thread_ts` always is: a top-level owner message, or the owner's own `!resume` message.
   `ThreadSession._react` shows it as a tracked background task, since a reaction must never delay
-  a turn; the one exception is `✅`, awaited right after the closing message it follows, so it
+  a turn; the one exception is `✅`, awaited right after the end of the reply it follows, so it
   never shows first. `⏳` working: a turn is submitted or sent, or a report turn starts. `✋`
   waiting: an approval or a question is open, back to `⏳` once it is answered and the turn
-  continues. `✅` ended: the closing message of the latest prompt posts with nothing else of the
+  continues. `✅` ended: the reply to the latest prompt ends with nothing else of the
   session running, queued or owed (`ThreadSession.idle`); a second prompt queued behind the first
   keeps it `⏳` until everything has ended. `❌` error: a turn fails, a
   restart's drain drops a queued or taken turn, `SessionGone`, or a shutdown's drain cuts short a
@@ -547,7 +548,8 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   still open, what the session left running, `1 shell still running`, the words the terminal
   ends such a turn with: a count that changes is a state of the thread and stays out of a
   reply whose stream only grows. Once the latest reply has ended its footer says it, and the
-  status line says nothing.
+  status line says nothing (`ReplySink.footer_shown`: the reply's end has landed on Slack, so
+  a footer that could not be written never silences the line).
   Nothing while an approval, a question or a hold waits on the owner, while `!stop` winds a
   turn down, and once the session is closed. `ThreadSession._show_thread_status` brings the
   status to that line after anything that can change it (every `_react`, the start and the end
@@ -596,8 +598,8 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   reports the task inside it, with no turn of its own (measured on Claude Code 2.1.280), so
   nothing waits.
   If no turn follows within 30 seconds, the queue moves on; a notification for a task no reply
-  tracks is then posted on its own, and one for a task a reply still tracks closes that reply's
-  own closing message instead, since nothing more is coming for it either. When a queued
+  tracks is then posted on its own, and one for a task a reply still tracks ends that reply
+  instead, since nothing more is coming for it either. When a queued
   message and a notification cross, the result's `origin` tells whose turn it was, and the
   queue is put back in order; that one reply can carry the other's label.
 - A task that outlives its turn keeps its line in the reply that started it: the session maps

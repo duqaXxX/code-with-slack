@@ -110,12 +110,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
-- A reply that outlives its stream ends with its last paragraph and the footer in a new
-  message (issue #66): the notification of that message reads how the work ended, where it
-  repeated the reply's first paragraph, and the message holds more than a footer. The paragraph
-  is posted first and then taken out of the message it grew in by a silent edit
-  (`ReplySink._end`, `ReplySink._ending_cursor`); an answer of one paragraph with no card keeps
-  it, and the new message is the footer alone.
+- A reply that outlives its stream ends with what Claude wrote after its last call and the
+  footer in a new message (issue #66): the notification of that message reads how the work
+  ended, where it repeated the reply's first paragraph, and the message holds more than a
+  footer. The text is posted first and then taken out of the message it grew in by a silent
+  edit (`ReplySink._end`, `ReplySink._ending_cursor`); an answer that is text alone keeps it,
+  and the new message is the footer alone, as before.
 - Every reply keeps its footer once it has ended. Only the counts of what still runs
   (`⏳ 1 shell`) stay with the thread's latest reply, so a reply that ends after a newer one
   shows its own footer, with the values of its last turn.

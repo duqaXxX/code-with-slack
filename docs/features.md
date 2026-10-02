@@ -17,7 +17,7 @@ how a reply looks on desktop and on mobile is checked by hand.
 | Channel guard: a private channel holding the owner and the bot only | `test_guards`, `test_slack_app` | none | none |
 | One session per thread: a top-level message opens a new thread with its own session; a reply inside a thread continues that session | `test_sessions`, `test_state`, `test_slack_app` | none | Send two top-level messages in the same channel: each opens its own thread and its own session |
 | `!bind` and the folder list, only folders Claude Code trusts; refused inside a session's thread; the answer names each existing thread's own folder when it differs from the new one (D5), and every prompt sent in such a thread after that gets the same notice, shown to you alone | `test_folders`, `test_trust`, `test_slack_app`, `test_state` | none | Bind a folder you trusted in the terminal the same day |
-| A prompt gets one reply, a native Slack stream that starts with Claude's first content and grows as it is written; past 280 seconds, or once Slack refuses to grow the stream (`msg_too_long`), the same message goes on by edit; split past Slack's limits (12,000 characters, 50 cards) | `test_sessions`, `test_sessions_stream`, `test_sinks` | P1, P3 | A reply that runs past 5 minutes keeps growing in the same message and ends with a closing message; how a long reply reads on desktop and on mobile |
+| A prompt gets one reply, a native Slack stream that starts with Claude's first content and grows as it is written; past 280 seconds, or once Slack refuses to grow the stream (`msg_too_long`), the same message goes on by edit; split past Slack's limits (12,000 characters, 50 cards) | `test_sessions`, `test_sessions_stream`, `test_sinks` | P1, P3 | A reply that runs past 5 minutes keeps growing in the same message and ends with a new message that holds what Claude wrote after its last call and the footer, its push reading the start of that text; an older reply keeps its footer when a newer one ends; how a long reply reads on desktop and on mobile |
 | A run of tool calls (the calls between two pieces of text) is two task cards: the first counts what ended in the terminal's words (`Ran 2 shell commands · Read 1 file · ✗ Ran 1 shell command`), the second shows the call running now (of calls running together, the last one started), or the last one that ended; a single call is one card. When the reply ends, a silent edit turns each run into one line (`✓ Ran 2 shell commands · Read 1 file`). An Edit or a Write that ended well, a subagent, a background task and a stopped call keep a card of their own | `test_fold`, `test_sinks`, `test_previews`, `test_sessions_stream` | P10 | Ask for three shell commands in a row: the first card turns into the counts when the second command starts, the second card names the command that runs; when the reply ends the cards give way to one line, with no second notification |
 | Edit and Write previews under the tool's card: sentence, diff or new file's lines | `test_previews`, `test_sinks` | P13 | A diff opens and closes on desktop and mobile; it colours on desktop, the squares on mobile |
 | Notifications: one when a reply ends (its stream stops), a second for a reply that runs past 280 seconds or whose stream Slack refused to grow, one per approval or question, none while Claude writes | `test_sinks`, `test_sessions`, `test_sessions_stream` | none | In a thread you started, away from Slack: a reply rings once, a reply past 5 minutes rings twice, `!stop` rings once |
@@ -87,12 +87,12 @@ So, inside a thread:
   card, until the task and its report are done. The banner is the start of Claude's answer.
 - A reply still open 280 seconds after it started stops its stream then (Slack would close it at
   300 seconds), which rings, and goes on in the same message by `chat.update`, silently. Its end
-  posts the last paragraph of the answer and the footer as a new message, which rings a second
-  time with that paragraph as its text, and takes the paragraph out of the first message. An
-  answer of one paragraph with no card keeps it, and the new message is the footer alone.
+  posts the text Claude wrote after its last call and the footer as a new message, which rings
+  a second time with the start of that text, and takes the text out of the first message. An
+  answer that is text alone keeps it, and the new message is the footer alone.
 - A reply whose stream Slack refuses to grow (`msg_too_long`, which the text of many cards can
   reach below the limits the daemon counts) stops its stream at that moment, which rings, and
-  goes on the same way: by `chat.update`, with a closing message at its end. If Slack refuses
+  goes on the same way: by `chat.update`, with its ending in a new message. If Slack refuses
   that edit too and no later one passes, the reply is short of what Claude wrote and the root
   shows ❌.
 - A reply longer than one message (12,000 characters or 50 cards) continues in a new message, and
