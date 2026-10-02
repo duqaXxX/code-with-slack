@@ -168,11 +168,13 @@ RUNNING = "⏳ {counts}"
 # `STILL_RUNNING` once the turn has ended and a task it started still runs, the words the
 # terminal ends such a turn with (`· 1 shell still running`, Claude Code 2.1.287, read
 # 2026-10-02), with no hourglass: an emoji draws large and grey in a status line (seen on
-# desktop, 2026-10-02). `THREAD_WORKING_STATUS` is what a
+# desktop, 2026-10-02). `THREAD_WORKING_STATUS` and
+# `STILL_RUNNING_STATUS` say the same after the app's name, which is what a
 # client that draws `<app name> <status>` shows (measured 2026-10-02, desktop and iOS).
 THREAD_WORKING = "Working…"
 STILL_RUNNING = "{counts} still running"
 THREAD_WORKING_STATUS = "is working…"
+STILL_RUNNING_STATUS = "has {counts} still running"
 ACTIVITY_BUSY = "running a turn, {queued} queued"
 # `!status` sent to the channel (top-level, or a thread that holds no session): the channel's
 # folder, then one line per live session, each with a link to its thread.

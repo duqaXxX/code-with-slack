@@ -544,8 +544,10 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   of a turn, a failed or dropped prompt, `_abandon`, every change of the running tasks through
   `_show_running`). `ThreadStatus.show` never waits on Slack: one task per instance makes the
   calls in order, so two quick changes end on the last one and a turn that ends at once sets
-  nothing. The line is sent as the one loading message, which is what a client shows (with
-  `status` alone, iOS showed nothing: measured 2026-10-02, Slack iOS and desktop, free plan,
+  nothing. The line is sent as the one loading message, which is what a client shows, with a
+  `status` that says the same after the app's name (`is working…`,
+  `has 1 shell still running`) for a client that draws that instead (with `status` alone, iOS
+  showed nothing: measured 2026-10-02, Slack iOS and desktop, free plan,
   slack-sdk 3.44.1, an app holding `assistant:write`). Slack removes a status two minutes
   after it was set and clears it when the app replies (the method's reference, read
   2026-10-02), so it is set again every `status.THREAD_STATUS_REFRESH_SECONDS` and within
@@ -553,7 +555,8 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   `ReplySink`'s `on_write` after every pass of a reply that made a Slack call and by
   `ThreadSession._post`), at most one call per that interval. An answer to a word typed in the
   thread (`!status`, `!bypass`) is posted outside the session and is covered by the refresh
-  alone. `ThreadSession.close` clears the status after it has cancelled its tasks. A refusal is
+  alone. `ThreadSession.close` clears the status after it has cancelled its tasks. A clearing call
+  that fails is tried once more, and again at the close. A refusal is
   logged once per error code in a row and swallowed; one that says the token cannot call the
   method (`status.THREAD_STATUS_REFUSED`) stops every `ThreadStatus` from calling Slack for
   the rest of the run. Nothing about it is stored, and a crash leaves at most a status Slack

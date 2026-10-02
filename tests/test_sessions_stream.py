@@ -580,6 +580,7 @@ async def test_a_task_that_outlives_its_turn_is_counted_by_the_thread_status(
     await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
     still = f"{session.running_kinds} still running"
     await until(lambda: lines(h)[-1:] == [still])  # the turn ended: the prompt is back
+    assert statuses(h)[-1] == f"has {session.running_kinds} still running"
     assert lines(h)[0] == texts.THREAD_WORKING and session.running_kinds
     # The count is a state of the thread, never a line of the reply: a stream only grows.
     told = [c for _, a in h.slack.calls for c in a.get("chunks", [])]

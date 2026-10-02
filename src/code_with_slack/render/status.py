@@ -164,7 +164,8 @@ class ThreadStatus:
     `loading_messages` (measured 2026-10-02). `show` and `wrote` never wait on Slack: one task
     of this instance's own makes the calls, in order, so two quick changes end on the last one.
     It sets the status at once, again within THREAD_STATUS_AFTER_WRITE_SECONDS of a `wrote`,
-    and every THREAD_STATUS_REFRESH_SECONDS; `show("")` clears it, only if it was set. A
+    and every THREAD_STATUS_REFRESH_SECONDS; `show("")` clears it, only if it was set, and a
+    clearing call that fails is tried once more. A
     failure is logged (channel, ts and the error code only, once per code in a row) and
     swallowed, since a status line must never break a turn. A refusal no retry can change
     (`THREAD_STATUS_REFUSED`: the token cannot call the method) stops every instance from
@@ -188,18 +189,20 @@ class ThreadStatus:
         self._refresh = refresh
         self._after_write = after_write
         self._text = ""  # what it says; empty: nothing is shown
+        self._fallback = texts.THREAD_WORKING_STATUS
         self._shown = False  # whether Slack was last asked to show it
         self._due = 0.0  # when it is next set, by the loop's clock
         self._wake = asyncio.Event()
         self._keeper: asyncio.Task[None] | None = None
         self._failed: str | None = None
 
-    def show(self, text: str) -> None:
+    def show(self, text: str, fallback: str = texts.THREAD_WORKING_STATUS) -> None:
         """Say `text` from now on, or with an empty one stop showing the status. The same text
-        again is a no-op."""
+        again is a no-op. `fallback` says the same after the app's name, for a client that
+        draws `<app name> <status>` instead of the loading message."""
         if text == self._text:
             return
-        self._text = text
+        self._text, self._fallback = text, fallback
         self._due = asyncio.get_running_loop().time()
         self._kick()
 
@@ -228,17 +231,27 @@ class ThreadStatus:
             self._keeper = asyncio.create_task(self._keep())
 
     async def _keep(self) -> None:
+        retried = False
         while True:
             self._wake.clear()
             if not self._text:
                 if self._shown:
-                    # Cleared only once the call is back: a `close` that cancels it meanwhile
-                    # still reads the status as shown, and clears it itself.
-                    await self._set(False)
-                    self._shown = False
+                    # Cleared only once the call is back and went through: a `close` that
+                    # cancels it meanwhile, or that follows a failed one, still reads the
+                    # status as shown and clears it itself.
+                    if await self._set(False):
+                        self._shown = False
+                    elif not retried:
+                        # Once more after a moment: a status left standing says a session
+                        # works that does not, until Slack removes it by itself.
+                        retried = True
+                        with contextlib.suppress(TimeoutError):
+                            await asyncio.wait_for(self._wake.wait(), self._after_write)
+                        continue
                 if self._wake.is_set():
                     continue  # asked for again while that call was out
                 return
+            retried = False
             delay = self._due - asyncio.get_running_loop().time()
             if delay <= 0:
                 # Before the call, so a `wrote` that arrives while it is out still moves it.
@@ -249,15 +262,16 @@ class ThreadStatus:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._wake.wait(), delay)
 
-    async def _set(self, on: bool) -> None:
+    async def _set(self, on: bool) -> bool:
+        """Tell Slack; whether it went through, or nothing is left to try (`_refused`)."""
         if ThreadStatus._refused:
-            return
+            return True
         try:
             if on:
                 await self._slack.assistant_threads_setStatus(
                     channel_id=self._channel,
                     thread_ts=self._thread_ts,
-                    status=texts.THREAD_WORKING_STATUS,
+                    status=self._fallback,
                     loading_messages=[self._text],
                 )
             else:
@@ -277,5 +291,6 @@ class ThreadStatus:
             self._failed = code
             if code in THREAD_STATUS_REFUSED:
                 ThreadStatus._refused = True
-        else:
-            self._failed = None
+            return ThreadStatus._refused
+        self._failed = None
+        return True

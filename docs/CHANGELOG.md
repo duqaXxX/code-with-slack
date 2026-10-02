@@ -19,7 +19,8 @@ All notable changes to this project are documented here. The format follows
   clears a status when the app replies and removes it after two minutes. An answer to a word
   typed in the thread (`!bypass`, say) is posted outside the session, so the status it clears
   comes back with the 60 second refresh. It goes while an approval or a question waits for the
-  owner, on `!stop`, on an error and when the session closes. A refusal from Slack is logged
+  owner, on `!stop`, on an error and when the session closes. A clearing call that fails is
+  tried once more, and again when the session closes. A refusal from Slack is logged
   and the line is skipped; `missing_scope` or `not_allowed_token_type` ends the attempts for
   the rest of the run. It never notifies and stores nothing.
 - Cleanup of `state.json` (new module `code_with_slack.cleanup`): on start and then every 6

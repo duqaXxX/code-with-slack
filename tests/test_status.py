@@ -348,3 +348,42 @@ async def test_a_thread_status_that_changes_its_words_says_the_new_ones_at_once(
     ]
     await status.close()
     assert statuses(slack)[-1] == CLEARED
+
+
+async def test_a_clearing_call_that_fails_is_tried_once_more(slack: FakeSlack) -> None:
+    status = thread_status(slack, after_write=0.03)
+    status.show(texts.THREAD_WORKING)
+    await beat()
+    slack.responses["assistant.threads.setStatus"] = [rejected("ratelimited"), {"ok": True}]
+    status.show("")
+    await beat()
+    assert statuses(slack) == [SHOWN, CLEARED]  # refused: the status still stands
+    await asyncio.sleep(0.06)
+    assert statuses(slack) == [SHOWN, CLEARED, CLEARED]
+    await status.close()
+    assert len(statuses(slack)) == 3  # it went through: nothing is left to clear
+
+
+async def test_a_status_that_could_not_be_cleared_is_cleared_when_it_closes(
+    slack: FakeSlack,
+) -> None:
+    status = thread_status(slack, after_write=0.01)
+    status.show(texts.THREAD_WORKING)
+    await beat()
+    slack.responses["assistant.threads.setStatus"] = rejected("ratelimited")
+    status.show("")
+    await asyncio.sleep(0.06)  # the call and its one retry both fail
+    assert statuses(slack) == [SHOWN, CLEARED, CLEARED]
+    slack.responses["assistant.threads.setStatus"] = {"ok": True}
+    await status.close()
+    assert statuses(slack) == [SHOWN, CLEARED, CLEARED, CLEARED]
+
+
+async def test_the_fallback_status_says_the_same_as_the_line(slack: FakeSlack) -> None:
+    status = thread_status(slack)
+    status.show("1 shell still running", "has 1 shell still running")
+    await beat()
+    [call] = statuses(slack)
+    assert call["status"] == "has 1 shell still running"
+    assert call["loading_messages"] == ["1 shell still running"]
+    await status.close()
