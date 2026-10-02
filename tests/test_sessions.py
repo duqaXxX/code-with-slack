@@ -1108,9 +1108,9 @@ async def test_two_prompts_in_a_row_each_reply_ends_with_its_own_stop(
     assert {"type": "divider"} in h.slack.message_blocks()[-1]
     h.clients[0].inject(notice + injected)
     await until(lambda: len(h.slack.calls_to("chat.stopStream")) == 2)
-    # the first reply stops now, once its task has fully ended: no longer the latest, it shows no
-    # footer of its own. The second's stop is untouched.
-    assert "blocks" not in h.slack.calls_to("chat.stopStream")[-1]
+    # the first reply stops now, once its task has fully ended, with a footer of its own: no
+    # longer the latest, it still says how its last turn ended. The second's stop is untouched.
+    assert {"type": "divider"} in h.slack.calls_to("chat.stopStream")[-1]["blocks"]
     assert h.slack.pushes() == 2
 
 

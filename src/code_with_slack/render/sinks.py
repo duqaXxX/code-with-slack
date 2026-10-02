@@ -295,6 +295,19 @@ def split(body: str) -> list[str]:
     return chunks
 
 
+def last_paragraph(text: str, floor: int = 0) -> int:
+    """Where the last paragraph of `text` starts, never before `floor`: after its last blank
+    line that is outside a fenced block, since a cut inside a fence breaks both halves."""
+    body = text.rstrip()
+    cut = len(body)
+    while True:
+        cut = body.rfind("\n\n", floor, cut)
+        if cut < 0:
+            return floor
+        if body.count("```", 0, cut) % 2 == 0:
+            return cut + 2
+
+
 class UpdateLimiter:
     """One instance shared by every `ReplySink` in the process, so their chat.update writes stay
     under Slack's app-wide budget: a token bucket refilling at `limit` tokens per `window`
@@ -574,6 +587,9 @@ class ReplySink:
         # on the message's updates after it), or "post", in a closing message of its own.
         self._end_mode: str | None = None
         self._closing: str | None = None  # ts of the closing message, once posted
+        # The reply's ending was moved into a last message of its own (`_end`), which carries
+        # the footer: no closing message then.
+        self._moved = False
         self._closing_shown: list[dict[str, Any]] = []
         # Resolves once the reply is known to have ended on Slack (True) or its one retry
         # failed too (False): what the session waits on before it shows a checkmark.
@@ -684,9 +700,14 @@ class ReplySink:
         if self._closed_out:
             await self._changed()
 
+    @property
+    def closed_out(self) -> bool:
+        """Whether the reply has ended: its footer is what shows the running counts then."""
+        return self._closed_out
+
     async def set_latest(self, latest: bool) -> None:
-        """Only the thread's latest reply shows the footer and the running counts, at the
-        bottom of the thread as the terminal's status line; an older one drops them."""
+        """Only the thread's latest reply shows the running counts, at the bottom of the
+        thread; an older one drops them and keeps its footer, a record of how its turn ended."""
         if latest == self._latest:
             return
         self._latest = latest
@@ -823,20 +844,58 @@ class ReplySink:
         return floor == 0 and top > 0, range(max(floor, 1), top)
 
     def _closing_blocks(self) -> list[dict[str, Any]]:
-        """The footer and what still runs, below a divider. Only the thread's latest reply shows
-        them; empty when there is nothing to show."""
-        footer = (self._footer, self._running) if self._latest else ()
-        last_line = " · ".join(filter(None, footer))
+        """The footer below a divider, and after it, on the thread's latest reply only, what
+        still runs; empty when there is nothing to show."""
+        last_line = " · ".join(filter(None, (self._footer, self._running if self._latest else "")))
         if not last_line:
             return []
         return [{"type": "divider"}, context_block(last_line)]
 
     def _footer_of(self, message: _Message) -> list[dict[str, Any]]:
-        """The footer a stopped message shows: only the reply's last, and only when the footer
-        rode on its stream's stop."""
-        if self._end_mode == "inline" and message is self._messages[-1]:
+        """The footer a message shows: only the reply's last, when the footer rode on its
+        stream's stop or when it is the ending posted as a message of its own (`_end`)."""
+        if message is self._messages[-1] and (self._end_mode == "inline" or self._moved):
             return self._closing_blocks()
         return []
+
+    def _last_words(self) -> tuple[int, int] | None:
+        """The last paragraph of Claude's own words in the reply: (part, offset)."""
+        for index in range(len(self._parts) - 1, -1, -1):
+            part = self._parts[index]
+            if isinstance(part, _Text) and not part.notice and part.text.strip():
+                return index, last_paragraph(part.text)
+        return None
+
+    def _ending_cursor(self, message: _Message) -> Cursor | None:
+        """Where the reply's ending starts in its last message: the last paragraph of Claude's
+        own words, with whatever follows it. None when the message would keep nothing before
+        it, or holds no such words: the ending is then the footer alone."""
+        found = self._last_words()
+        if found is None or found < message.start:
+            return None
+        index, offset = found
+        if index == message.start[0]:
+            offset = last_paragraph(self._parts[index].text, message.start[1])  # type: ignore[union-attr]
+        cursor = (index, offset)
+        # Something of the answer must stay before it: a card, or words of Claude's. A message
+        # left with a line of the daemon's alone, or with nothing, is no answer.
+        for _, part, floor, ceil in self._span(message.start, cursor):
+            if isinstance(part, _Tool):
+                if self._tool_elements(part, floor, ceil)[0]:
+                    return cursor
+            elif not part.notice and part.text[floor:ceil].strip():
+                return cursor
+        return None
+
+    def _ending_banner(self) -> str:
+        """The text of the notification that says the reply has ended: how it ended, its last
+        paragraph, not how it began (which the stream's own stop already said)."""
+        found = self._last_words()
+        if found is None:
+            return self._banner()
+        index, offset = found
+        words = self._parts[index].text[offset:].strip()  # type: ignore[union-attr]
+        return banner_text(words, limit=BANNER_LIMIT) or "…"
 
     def _banner(self, span: list[tuple[int, _Text | _Tool, int, int | None]] | None = None) -> str:
         """The notification's text, plain: the first paragraph of Claude's own words in the
@@ -1482,14 +1541,34 @@ class ReplySink:
                 self._schedule()
             if result == "stopped":
                 return True
+        if self._moved:
+            return True  # the ending is the reply's last message: `_sync_messages` writes it
+        if self._end_mode != "post" and self._closing is None:
+            cursor = self._ending_cursor(message)
+            if cursor is not None:
+                # The reply's ending, with the footer, as a new message: the one that notifies,
+                # so the notification says how the work ended. Posted first, then taken out
+                # of the message it grew in: for a moment it shows twice, never nowhere.
+                ending = _Message(cursor, "post")
+                self._messages.append(ending)
+                self._moved = True
+                posted, _ = await self._post_step(ending)
+                if not posted or ending.ts is None:
+                    self._messages.pop()
+                    self._moved = False
+                    return False
+                self._end_mode = "post"
+                message.exact, message.checked = False, None  # its stream said more than its span
+                return (await self._update_step(message, cursor))[0]
         self._end_mode = "post"
         self._body_landed = True  # every message is written: only the closing message is owed
         return await self._write_closing()
 
     async def _write_closing(self) -> bool:
-        """Post the closing message of a reply whose stream stopped early, or bring it to the
-        footer as it stands: it stays once posted, since it is what notified. Its text is
-        Claude's own words, as a banner: never a line of the daemon's."""
+        """Post the closing message of a reply whose stream stopped early and whose ending could
+        not be moved into a message of its own (`_end`), or bring it to the footer as it stands:
+        it stays once posted, since it is what notified. Its text is Claude's own words, as a
+        banner, the last of them: never a line of the daemon's."""
         blocks = self._closing_blocks() or [context_block(ZERO_WIDTH_SPACE)]
         attempted = self._clock.time()
         try:
@@ -1498,7 +1577,7 @@ class ReplySink:
                 posted = await self._slack.chat_postMessage(
                     channel=self._channel,
                     thread_ts=self._thread_ts,
-                    text=self._banner(),
+                    text=self._ending_banner(),
                     blocks=blocks,
                     unfurl_links=False,
                     unfurl_media=False,
@@ -1509,13 +1588,16 @@ class ReplySink:
                 await self._limiter.acquire()
                 self._wrote = True
                 await self._slack.chat_update(
-                    channel=self._channel, ts=self._closing, text=self._banner(), blocks=blocks
+                    channel=self._channel,
+                    ts=self._closing,
+                    text=self._ending_banner(),
+                    blocks=blocks,
                 )
         except Exception as exc:
             logger.warning("could not write a reply's closing message: %s", describe(exc))
             if self._closing is None and unknown_outcome(exc):
                 self._closing = await self._adopt(
-                    attempted, stream=False, probe=plain_words(self._banner())[:ADOPT_WORDS]
+                    attempted, stream=False, probe=plain_words(self._ending_banner())[:ADOPT_WORDS]
                 )
                 if self._closing is not None:
                     self._closing_shown = blocks

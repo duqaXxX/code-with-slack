@@ -538,7 +538,9 @@ class ThreadSession:
         if self.busy or self._taken is not None or not self._queue.empty():
             return texts.THREAD_WORKING, texts.THREAD_WORKING_STATUS
         kinds = self._running_kinds()
-        if not kinds:
+        if not kinds or (self._latest is not None and self._latest.closed_out):
+            # Nothing runs, or the thread's last reply has ended: its footer counts them, and
+            # a second line under a footer would say the same twice.
             return "", ""
         return (
             texts.STILL_RUNNING.format(counts=kinds),

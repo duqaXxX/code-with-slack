@@ -439,7 +439,8 @@ as `✓ Agent "review" finished · 3m 59s`. While tasks run, the footer counts t
 From the moment you send a message until its turn ends, Slack shows `Working…` under the
 thread's last message. When the turn has ended and a command or an agent it started still
 runs, the same line reads `1 shell still running` and follows the count; the reply gets its
-footer once that task and its report have ended. The line goes while an approval or a question
+footer once that task and its report have ended. If you sent another message meanwhile and its
+reply has ended, that reply's footer says it instead (`⏳ 1 shell`), until the command ends. The line goes while an approval or a question
 waits for you, and after the answer to a word typed in the thread (`!bypass`, `!status`,
 `!stop`) it can take up to a minute to come back.
 
@@ -448,7 +449,8 @@ it is restarting, a refused attachment, an error) shows small and grey, as the f
 reads apart from Claude's replies. `!help`, `!guide`, `!status` and the answer to a resume show at
 full size.
 
-The thread's latest reply ends with a footer, which moves to each new reply in it:
+Every reply ends with a footer, which says how the session stood when its turn ended, and
+keeps it:
 
 ```
 ⚡ bypass · claude-opus-5-5 · effort medium · my-project · main · (+42,-10) · 10.2M tok · ctx 15% · 5h 16% ↻ 43m · 7d 46% ↻ 3d 4h
@@ -482,7 +484,8 @@ setting is:
   Claude's answer as the text. The reply ends once the turn has ended and every task it started,
   and the report for it, are done too.
 - A reply that is still open after about 4 minutes 40 seconds rings when its stream stops, and a
-  second time when it ends, in its closing message.
+  second time when it ends: the last paragraph of the answer and the footer arrive as a new
+  message, and the notification reads that paragraph.
 - An approval request and a question ring.
 - A reply that fails outright rings once, as any reply ending does.
 - `!stop` and a restart end the reply the same way, so each rings once. A reply longer than one
