@@ -352,6 +352,13 @@ def _cut(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def _preview(option: dict[str, Any]) -> str:
+    """An option's preview as it is shown: its own lines, with no blank line around them; empty
+    when it holds nothing to read."""
+    preview = str(option.get("preview") or "")
+    return preview.strip("\n") if preview.strip() else ""
+
+
 def _says_more(question: dict[str, Any]) -> bool:
     """Whether an option says more than a choice holds: Slack caps an option object's `text`
     and `description` at 75 characters each (option object reference, read 2026-10-03), and it
@@ -359,7 +366,7 @@ def _says_more(question: dict[str, Any]) -> bool:
     return any(
         len(" ".join(option["label"].split())) > OPTION_TEXT_LIMIT
         or len(" ".join((option.get("description") or "").split())) > OPTION_TEXT_LIMIT
-        or bool(option.get("preview"))
+        or bool(_preview(option))
         for option in question["options"]
     )
 
@@ -369,11 +376,10 @@ def _option(index: int, option: dict[str, Any], *, described: bool) -> dict[str,
         "text": {"type": "plain_text", "text": one_line(option["label"], OPTION_TEXT_LIMIT)},
         "value": str(index),
     }
-    if described and option.get("description"):
-        entry["description"] = {
-            "type": "plain_text",
-            "text": one_line(option["description"], OPTION_TEXT_LIMIT),
-        }
+    # Slack refuses an empty text: a description of blanks alone is none.
+    description = one_line(option.get("description") or "", OPTION_TEXT_LIMIT)
+    if described and description:
+        entry["description"] = {"type": "plain_text", "text": description}
     return entry
 
 
@@ -392,7 +398,7 @@ def _option_whole(option: dict[str, Any]) -> dict[str, Any]:
     if description:
         words.append({"type": "text", "text": "\n" + _cut(description, SECTION_LIMIT)})
     elements: list[dict[str, Any]] = [{"type": "rich_text_section", "elements": words}]
-    preview = str(option.get("preview") or "").strip("\n")
+    preview = _preview(option)
     if preview:
         shown = {"type": "text", "text": _cut(preview, SECTION_LIMIT)}
         elements.append({"type": "rich_text_preformatted", "elements": [shown]})
@@ -411,7 +417,7 @@ def question_view(draft: Draft, questions: list[dict[str, Any]]) -> dict[str, An
     blocks: list[dict[str, Any]] = []
     count = len(questions)
     if count > 1:
-        header = shown_as_written(questions[draft.active].get("header") or "")
+        header = shown_as_written((questions[draft.active].get("header") or "").strip())
         where = texts.QUESTION_WHERE.format(number=draft.active + 1, count=count)
         line = f"{header} · {where}" if header else where
         blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": line}]})
@@ -423,7 +429,9 @@ def question_view(draft: Draft, questions: list[dict[str, Any]]) -> dict[str, An
         asked = {"type": "rich_text_section", "elements": [_bold(label)]}
         blocks.append({"type": "rich_text", "elements": [asked]})
         blocks += [_option_whole(option) for option in question["options"]]
-        label = one_line(question.get("header") or texts.QUESTION_ANSWER, LABEL_LIMIT)
+        # A header of blanks alone would leave the choice an empty label, which Slack refuses.
+        header = (question.get("header") or "").strip()
+        label = one_line(header or texts.QUESTION_ANSWER, LABEL_LIMIT)
     options = [_option(i, o, described=not whole) for i, o in enumerate(question["options"])]
     element: dict[str, Any] = {
         "type": "checkboxes" if question.get("multiSelect") else "radio_buttons",

@@ -1,6 +1,7 @@
 import json
 from typing import Any
 
+import pytest
 from claude_agent_sdk.types import (
     PermissionResultAllow,
     PermissionResultDeny,
@@ -250,6 +251,40 @@ def test_a_question_of_several_keeps_its_counter_above_the_options_shown_whole()
         "input",
     ]
     assert view["blocks"][0]["elements"][0]["text"] == "Why · 1 of 2"
+
+
+def test_a_header_of_blanks_alone_never_leaves_the_choice_an_empty_label() -> None:
+    question = {
+        "question": "Why?",
+        "header": "  ",
+        "options": [{"label": "a", "description": "d" * 76}],
+    }
+    view = question_view(Draft("abc", "C1", THREAD), [question, TWO[0]])
+    assert view["blocks"][0]["elements"][0]["text"] == "1 of 2"
+    [choice, _] = [b for b in view["blocks"] if b["type"] == "input"]
+    assert choice["label"]["text"] == "Answer"
+
+
+@pytest.mark.parametrize("blank", [" ", "\n", " \n\t"])
+def test_a_preview_or_a_description_of_blanks_alone_counts_as_none(blank: str) -> None:
+    question = {
+        "question": "Colour?",
+        "options": [{"label": "red", "description": blank, "preview": blank}, {"label": "blue"}],
+    }
+    view = question_view(Draft("abc", "C1", THREAD), [question])
+    # Nothing more to show than the choices hold: the form it always had, and no empty text.
+    [choice, _] = view["blocks"]
+    assert choice["label"]["text"] == "Colour?"
+    assert choice["element"]["options"][0] == {
+        "text": {"type": "plain_text", "text": "red"},
+        "value": "0",
+    }
+
+
+def test_a_preview_keeps_the_spaces_that_draw_it() -> None:
+    question = {"question": "Layout?", "options": [{"label": "one", "preview": "\n  a |\n  b |\n"}]}
+    _, option, _, _ = question_view(Draft("abc", "C1", THREAD), [question])["blocks"]
+    assert option["elements"][1]["elements"][0]["text"] == "  a |\n  b |"
 
 
 def test_absorb_keeps_what_the_question_on_screen_shows() -> None:
