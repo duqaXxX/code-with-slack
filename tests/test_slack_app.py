@@ -1728,6 +1728,93 @@ async def test_a_prompt_while_the_daemon_stops_is_refused_and_words_still_work(
     assert world.queries() == []
 
 
+async def test_a_refusal_during_a_stop_names_the_thread_the_stop_waits_for(world: World) -> None:
+    await world.dispatch(message("hello", ts=THREAD))  # never ends: it holds the stop
+    cut_short = asyncio.Event()
+    draining = asyncio.create_task(world.sessions.drain(cut_short))
+    await asyncio.sleep(0.05)
+    await world.dispatch(message("list the files", ts=OTHER_THREAD))
+    cut_short.set()
+    await draining
+    assert world.ephemerals()[-1] == "\n".join(
+        [
+            texts.RESTARTING,
+            texts.RESTART_WAITS_FOR,
+            texts.RESTART_WAIT_ROW.format(
+                channel=CHANNEL,
+                link=f"<{PERMALINK}|{texts.RESTART_WAIT_SESSION}>",
+                hold=texts.RESTART_HOLD_TURN,
+            ),
+            texts.RESTART_WAIT_STOP,
+        ]
+    )
+    assert world.queries() == ["hello"]
+
+
+async def test_a_channel_status_during_a_stop_lists_what_the_stop_waits_for(world: World) -> None:
+    await world.dispatch(message("hello", ts=THREAD))  # never ends: it holds the stop
+    cut_short = asyncio.Event()
+    draining = asyncio.create_task(world.sessions.drain(cut_short))
+    await asyncio.sleep(0.05)
+    await world.dispatch(message("!status"))
+    cut_short.set()
+    await draining
+    waits = said(world)[-1]
+    assert waits.startswith(texts.RESTART_WAITS_HEADER + "\n• ")
+    assert texts.RESTART_HOLD_TURN in waits and waits.endswith(texts.RESTART_WAIT_STOP)
+
+
+async def test_a_channel_status_during_a_stop_counts_other_channels_without_naming_them(
+    world: World,
+) -> None:
+    (world.root / "other").mkdir()  # another folder: no D8 hold between the two sessions
+    world.state.bind(OTHER_CHANNEL, world.root / "other")
+    await world.dispatch(message("hello", ts=THREAD))
+    await world.dispatch(message("busy elsewhere", ts=OTHER_THREAD, channel=OTHER_CHANNEL))
+    assert world.queries() == ["hello", "busy elsewhere"]
+    cut_short = asyncio.Event()
+    draining = asyncio.create_task(world.sessions.drain(cut_short))
+    await asyncio.sleep(0.05)
+    await world.dispatch(message("!status"))
+    cut_short.set()
+    await draining
+    waits = said(world)[-1]
+    # A post the channel's members read: the other channel's thread is counted, never named.
+    assert OTHER_CHANNEL not in waits and waits.count("• ") == 1
+    assert texts.RESTART_WAITS_ELSEWHERE.format(count=1) in waits
+
+
+async def test_a_thread_that_only_waits_for_a_report_gets_no_stop_advice(world: World) -> None:
+    await world.dispatch(message("hello", ts=THREAD))
+    session = world.sessions.get(CHANNEL, THREAD)
+    world.sessions.restart_holds = lambda: [(session, texts.RESTART_HOLD_REPORT)]  # type: ignore[method-assign]
+    world.sessions.draining = True
+    await world.dispatch(message("list the files", ts=OTHER_THREAD))
+    refusal = world.ephemerals()[-1]
+    assert texts.RESTART_HOLD_REPORT in refusal and texts.RESTART_WAIT_STOP not in refusal
+    world.sessions.draining = False
+
+
+async def test_a_long_list_of_waits_is_cut_between_rows(world: World) -> None:
+    await world.dispatch(message("hello", ts=THREAD))
+    session = world.sessions.get(CHANNEL, THREAD)
+    world.sessions.restart_holds = lambda: [(session, texts.RESTART_HOLD_TURN)] * 11  # type: ignore[method-assign]
+    world.sessions.draining = True
+    await world.dispatch(message("list the files", ts=OTHER_THREAD))
+    lines = world.ephemerals()[-1].split("\n")
+    assert sum(line.startswith("• ") for line in lines) == 8
+    assert lines[-2:] == [texts.RESTART_WAITS_MORE.format(count=3), texts.RESTART_WAIT_STOP]
+    world.sessions.draining = False
+
+
+async def test_a_channel_status_with_no_stop_under_way_says_nothing_of_a_restart(
+    world: World,
+) -> None:
+    await world.dispatch(message("hello", ts=THREAD))
+    await world.dispatch(message("!status"))
+    assert not any(texts.RESTART_WAITS_FOR in text for text in said(world))
+
+
 async def test_a_stop_during_the_downloads_sends_the_prompt_nowhere(world: World) -> None:
     body = shared_file("snippet")
     world.downloads[body["event"]["files"][0]["url_private_download"]] = b"hello\n"
@@ -2244,7 +2331,8 @@ async def test_a_message_during_a_drain_is_refused_not_held(world: World) -> Non
     drain = asyncio.create_task(world.sessions.drain(cut_short))
     await asyncio.sleep(0.02)  # the drain has set its flags before this message arrives
     await world.dispatch(message("hello", ts=THREAD))
-    assert world.ephemerals()[-1] == texts.RESTARTING
+    # The busy session of the other thread holds the stop: the refusal names it (issue #119).
+    assert world.ephemerals()[-1].startswith(texts.RESTARTING + "\n" + texts.RESTART_WAITS_FOR)
     assert _hold_questions(world) == []  # never held: a hold opened now would wait forever
     cut_short.set()
     await asyncio.wait_for(drain, 2)
@@ -2262,7 +2350,8 @@ async def test_a_message_queued_behind_a_drain_cancelled_hold_is_also_refused(
     await asyncio.wait_for(queued, 2)
     assert_held_unsent(world)  # neither "hello" nor "again" was ever sent
     assert texts.NOT_SENT in world.ephemerals()  # "hello", cancelled by the drain
-    assert world.ephemerals()[-1] == texts.RESTARTING  # "again", refused once draining had begun
+    # "again", refused once draining had begun; the session busy elsewhere still holds the stop.
+    assert world.ephemerals()[-1].startswith(texts.RESTARTING)
 
 
 async def test_a_cancelled_wait_does_not_leak_the_hold(world: World) -> None:

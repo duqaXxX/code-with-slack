@@ -118,6 +118,9 @@ logger = logging.getLogger(__name__)
 # How a failure reaches the owner: the text of one line, delivered where the failed act answers.
 Report = Callable[[str], Awaitable[None]]
 DECISION_ACTIONS = ("approval_allow", "approval_deny", "question_skip")
+# Rows of threads a stop waits for in one notice: a row is under 300 characters (a permalink,
+# a title of TITLE_LIMIT), so the list stays inside a context element's 3,000.
+RESTART_WAIT_ROWS = 8
 
 
 # Slack sends a link as <url|label> or <url> (message formatting reference, read 2026-09-25).
@@ -463,7 +466,7 @@ def build_app(
             # (SessionManager.drain) and will never cancel one opened after, so a message that
             # arrives once draining has begun must never open a new one (it would wait forever).
             if sessions.draining:
-                await tell_owner(channel, thread_ts, texts.RESTARTING)
+                await refuse_restarting(channel, thread_ts)
                 return
             # D8: this message would wake `session` (busy just queues behind what is already
             # running); ask first when another live session, of any channel, is already busy in
@@ -508,7 +511,7 @@ def build_app(
                         # download. The daemon's words still work meanwhile (`!stop` shortens the
                         # wait); a new turn would not finish, and Slack does not resend this event.
                         if sessions.draining:
-                            await tell_owner(channel, thread_ts, texts.RESTARTING)
+                            await refuse_restarting(channel, thread_ts)
                             return
                         await session.submit(prompt)
                         submitted = True
@@ -639,7 +642,7 @@ def build_app(
         (`Pending.cancelled`: nothing is sent, the message is removed, `Not sent.`). When it
         raises, the message is removed, the hold ends as a cancel would and the error goes on."""
         if sessions.draining:  # a restart could have started during an await before this
-            await tell_owner(channel, thread_ts, texts.RESTARTING)
+            await refuse_restarting(channel, thread_ts)
             return None
         hold_id, pending = holds.open(channel, thread_ts, context)
         try:
@@ -890,6 +893,55 @@ def build_app(
         except Exception as exc:
             logger.warning("could not react to a word in %s: %s", channel, describe(exc))
 
+    async def restart_waits(only: str | None = None) -> str:
+        """The threads a stop still waits for, one mrkdwn row each: its channel, a link to it
+        labelled with its session's title, as the Home tab names it, and what holds the restart
+        there. Then the word that ends the wait, when it ends any of them. Empty when nothing
+        holds it. With `only`, the threads of that channel are named and the others counted:
+        the answer is a post the channel's members read. At most RESTART_WAIT_ROWS rows, so the
+        whole fits a notice and is never cut inside a link. Never raises: a title or a link
+        that cannot be read falls back to a plain label."""
+        every = sessions.restart_holds()
+        named = [(s, hold) for s, hold in every if only is None or s.channel_id == only]
+        if not every:
+            return ""
+        shown = named[:RESTART_WAIT_ROWS]
+        known: dict[str, str] = {}
+        for directory in {session.directory for session, _ in shown}:
+            try:
+                listed = await sessions.sessions_in(directory)
+            except Exception as exc:
+                logger.warning("could not list a folder's sessions: %s", describe(exc))
+                continue
+            known.update({s.session_id: s.summary or "" for s in listed})
+
+        async def row(session: ThreadSession, hold: str) -> str:
+            stored = state.thread(session.channel_id, session.thread_ts)
+            title = known.get(str(stored.session_id), "") if stored is not None else ""
+            label = mrkdwn_escape(one_line(title, TITLE_LIMIT)) or texts.RESTART_WAIT_SESSION
+            link = await thread_mrkdwn_link(session.channel_id, session.thread_ts, label)
+            return texts.RESTART_WAIT_ROW.format(channel=session.channel_id, link=link, hold=hold)
+
+        lines = list(await asyncio.gather(*(row(session, hold) for session, hold in shown)))
+        if len(named) > len(shown):
+            lines.append(texts.RESTART_WAITS_MORE.format(count=len(named) - len(shown)))
+        if len(every) > len(named):
+            lines.append(texts.RESTART_WAITS_ELSEWHERE.format(count=len(every) - len(named)))
+        if any(hold != texts.RESTART_HOLD_REPORT for _, hold in every):
+            # A thread that only waits for a task's report ends by itself: `!stop` stops
+            # nothing there, so the line is left out when no other thread holds the stop.
+            lines.append(texts.RESTART_WAIT_STOP)
+        return "\n".join(lines)
+
+    async def refuse_restarting(channel: str, thread_ts: str) -> None:
+        """Tell the owner their message was not taken because the daemon is stopping, and which
+        threads the stop waits for (issue #119): only they can answer or `!stop` those."""
+        waits = await restart_waits()
+        text = texts.RESTARTING
+        if waits:
+            text = "\n".join([text, texts.RESTART_WAITS_FOR, waits])
+        await tell_owner(channel, thread_ts, text)
+
     async def channel_status(channel: str) -> None:
         record = state.channel(channel)
         if record is None:
@@ -909,6 +961,9 @@ def build_app(
                 )
             )
         await say(channel, None, "\n".join(lines))
+        if waits := await restart_waits(only=channel):
+            # A notice of its own: the rows are mrkdwn, and the status above is a markdown block.
+            await in_channel(channel, "\n".join([texts.RESTART_WAITS_HEADER, waits]))
 
     async def channel_status_row(
         channel: str, channel_directory: Path, session: ThreadSession

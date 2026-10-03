@@ -449,6 +449,27 @@ async def test_queue_waits_while_approval_pending(harness_for: Callable[..., Har
     assert isinstance(h.clients[0].permission_results[0], PermissionResultAllow)
 
 
+async def test_restart_hold_says_what_a_stop_waits_for_in_the_thread(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for(
+        {
+            "turns": [
+                [CanUseToolCall("Bash", {"command": "rm -rf build"}), *sdk_messages("interrupt")]
+            ]
+        }
+    )
+    session = h.session()
+    assert session.restart_hold == ""  # nothing runs: the thread holds no stop
+    turn = await session.submit("clean")
+    await until(lambda: bool(h.approvals._pending))
+    assert session.restart_hold == texts.RESTART_HOLD_OWNER
+    assert h.manager.restart_holds() == []  # no stop under way
+    await session.stop()
+    await asyncio.wait_for(turn.done.wait(), 2)
+    assert session.restart_hold == ""
+
+
 async def test_stop_landed_gives_up_when_the_stopped_turn_never_ends(
     harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
 ) -> None:

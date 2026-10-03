@@ -110,6 +110,23 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- A message refused while the daemon stops names what the stop waits for (issue #119). Under
+  `code-with-slack is restarting; send this again in a moment.` the refusal lists each thread
+  that still holds the restart, of any channel: its channel, a link to the thread labelled with
+  the session's title as the Home tab names it (`Session` when it has none, or when the
+  folder's sessions cannot be listed), and what holds it there
+  (`ThreadSession.restart_hold`: a turn running, an approval or a question waiting for the
+  owner, the background tasks still running, a task about to report). The last line says
+  `!stop` in a thread ends the wait there; it is left out when every thread only waits for a
+  task's report, which ends by itself within 30 seconds and which `!stop` does not shorten.
+  The list holds eight rows at most (`RESTART_WAIT_ROWS`) and counts the rest, so a notice is
+  never cut inside a link. `!status` typed in a channel adds, as a notice of its own while a
+  stop waits, the rows of that channel's threads and a count of those in other channels: its
+  answer is a post the channel's members read, so another channel's thread is never named
+  there. Before, nothing in Slack said which thread held a
+  restart, and the owner could only wait out the 29 minutes or send a second signal. The
+  refusal stays ephemeral and the list is built from what the daemon holds in memory, one
+  `chat.getPermalink` call per listed thread and one listing of each folder's sessions.
 - `!stop` typed inside a session's thread is answered by a message that stays in the thread
   (issue #85): `Stopped.` (`texts.STOPPED_THREAD`) when it stopped a turn or a background task,
   `Nothing is running in this session.` when nothing ran. Before, a stop that stopped something
