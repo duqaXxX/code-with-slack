@@ -256,6 +256,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A reply that has ended never opens a message below its footer or its closing message (issue
+  #51). A preview, a card or words that arrived late used to open a new message when the last
+  one was full. Once the end has landed on Slack (the last stream stopped with the footer, the
+  ending was posted, or the closing message was posted) the reply's messages are a fixed set and
+  a late update only edits them. Late content is all or nothing: when the last message holds it
+  with everything it showed, it is shown as before; when it does not, the message goes back to
+  what it showed when the end landed (`ReplySink._hold`, `_blocks`) and none of the late
+  content appears, not even the part that would fit. A card that only changes state or title
+  still updates in place, and a late preview of a card that was shown is replaced by the
+  existing `Preview left out` note when a block is free for it. A close whose write failed (a
+  stream stop, a post, the closing message) has not landed, so its retry, and any update before
+  it, still opens the messages the reply needs.
 - The Answer form shows every word of an option (issue #47). Slack caps an option object's text
   and description at 75 characters each, so a longer description ended in `…` mid-sentence, and
   an option's `preview` was never shown. When an option of a question says more than a choice

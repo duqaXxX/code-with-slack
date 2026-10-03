@@ -2067,3 +2067,332 @@ async def test_every_pass_that_wrote_tells_the_thread_status(slack: FakeSlack) -
     await sink.finish([])
     await sink.close_out("footer")
     assert len(passes) >= 2 and passes[-1] == len(slack.calls)
+
+
+# A reply that has ended never opens a message below its footer or its closing message.
+
+
+def late_preview(lines: int = 40) -> Preview:
+    body = "\n".join(f"{i:>4} {'x' * 90}" for i in range(lines))
+    return Preview("Write(big.txt)", f"Wrote {lines} lines to big.txt", body)
+
+
+def preview_of(lines: int) -> Preview:
+    body = "\n".join(f"{i:>4} {'x' * 90}" for i in range(lines))
+    return Preview("Write(big.txt)", f"Wrote {lines} lines to big.txt", body)
+
+
+def marker(line: int) -> str:
+    """The text of one line of `preview_of`: what tells that a preview is on the page."""
+    return f"{line:>4} {'x' * 90}"
+
+
+def shows(blocks: list[dict[str, Any]], needle: str) -> bool:
+    return any(needle in sinks.block_text(b) for b in blocks)
+
+
+def cards_of(blocks: list[dict[str, Any]]) -> dict[str, str]:
+    return {b["task_id"]: b["status"] for b in blocks if b["type"] == "task_card"}
+
+
+CUT_NOTE = sinks.context_block(sinks.PREVIEW_CUT)
+
+
+async def test_a_late_preview_never_opens_a_message_after_the_footer(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.text("w" * (sinks.MESSAGE_LIMIT - 200))
+    await sink.task(tool("t1", "Write", "in_progress", task=True))
+    await settled()
+    await sink.finish([])
+    await sink.close_out("footer")
+    posted = len(slack.calls_to("chat.postMessage"))
+    await sink.task(tool("t1", "Write", preview=late_preview()))
+    await settled()
+    assert len(slack.calls_to("chat.postMessage")) == posted
+    update = slack.calls_to("chat.update")[-1]
+    assert update["ts"] == slack.stream_ts[0]
+    blocks = update["blocks"]
+    assert blocks[-1] == sinks.context_block("footer")  # the footer stays last
+    assert shows(blocks, "w" * (sinks.MESSAGE_LIMIT - 200))  # what was shown stays
+    assert cards_of(blocks) == {"t1": "complete"}  # the card took the update in place
+    assert CUT_NOTE in blocks and not shows(blocks, marker(0))  # the preview did not fit
+
+
+async def test_a_late_preview_never_opens_a_message_after_the_closing_message(
+    slack: FakeSlack,
+) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("w" * (sinks.MESSAGE_LIMIT - 200))
+    await sink.task(tool("t1", "Write", "in_progress", task=True))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.finish([])
+    await sink.close_out("footer")
+    [closing] = slack.calls_to("chat.postMessage")  # an answer of text alone: a footer message
+    await sink.task(tool("t1", "Write", preview=late_preview()))
+    await settled()
+    assert slack.calls_to("chat.postMessage") == [closing]
+    update = slack.calls_to("chat.update")[-1]
+    assert update["ts"] == slack.stream_ts[0]
+    blocks = update["blocks"]
+    assert shows(blocks, "w" * (sinks.MESSAGE_LIMIT - 200))
+    assert cards_of(blocks) == {"t1": "complete"}
+    assert CUT_NOTE in blocks and not shows(blocks, marker(0))
+
+
+async def test_a_late_preview_never_opens_a_message_after_the_ending(slack: FakeSlack) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.task(tool("t1", "Read"))
+    await sink.text("w" * (sinks.MESSAGE_LIMIT - 200))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.finish([])
+    await sink.close_out("footer")
+    [ending] = slack.calls_to("chat.postMessage")
+    updates = len(slack.calls_to("chat.update"))
+    await sink.task(tool("late", "Write", preview=late_preview()))
+    await settled()
+    assert slack.calls_to("chat.postMessage") == [ending]
+    # A late card with its preview does not fit the ending: left out whole, no note, and the
+    # ending message already shows what it should.
+    assert len(slack.calls_to("chat.update")) == updates
+    assert ending["blocks"][-1] == sinks.context_block("footer")
+    assert shows(ending["blocks"], "w" * (sinks.MESSAGE_LIMIT - 200))
+
+
+async def test_a_late_card_never_opens_a_message_past_the_blocks_limit(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    for i in range(sinks.BLOCKS_LIMIT):
+        await sink.task(tool(f"t{i}", "Agent", "in_progress", task=True))
+    await settled()
+    await sink.finish([])
+    await sink.close_out("footer")
+    posted = len(slack.calls_to("chat.postMessage"))
+    await sink.task(tool("late", "Agent", "in_progress", task=True))
+    await sink.set_running("1 agent")
+    await settled()
+    assert len(slack.calls_to("chat.postMessage")) == posted
+    blocks = slack.calls_to("chat.update")[-1]["blocks"]
+    assert sorted(cards_of(blocks)) == sorted(f"t{i}" for i in range(sinks.BLOCKS_LIMIT))
+    assert blocks[-1] == sinks.context_block("footer · 1 agent")
+
+
+# What the last message showed when the end was written stays; late content takes the room left.
+
+
+async def test_late_words_never_remove_a_preview_that_was_shown(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.text("w" * 6000)
+    await sink.task(tool("t1", "Write", preview=preview_of(42)))  # about 4,000 characters
+    await settled()
+    await sink.finish([])
+    await sink.close_out("footer")
+    await sink.text("late " * 600)  # 3,000 characters, with room for about a third: none shows
+    await settled()
+    assert len(slack.created_ts) == 1
+    blocks = slack.calls_to("chat.update")[-1]["blocks"]
+    assert shows(blocks, marker(0)) and shows(blocks, marker(41))
+    assert shows(blocks, "w" * 6000)
+    assert CUT_NOTE not in blocks  # late words get no note
+    assert not shows(blocks, "late")
+
+
+async def test_late_cards_never_remove_a_preview_that_was_shown(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    for i in range(22):  # a card and a preview each: 44 blocks
+        await sink.task(tool(f"w{i}", "Write", preview=preview_of(1)))
+    await settled()
+    await sink.finish([])
+    await sink.close_out("footer")
+    for i in range(3):
+        await sink.task(tool(f"late{i}", "Agent", "in_progress", task=True))
+    await settled()
+    assert len(slack.created_ts) == 1
+    blocks = slack.calls_to("chat.update")[-1]["blocks"]
+    assert len([b for b in blocks if marker(0) in sinks.block_text(b)]) == 22
+    assert CUT_NOTE not in blocks
+    assert sorted(cards_of(blocks)) == sorted(f"w{i}" for i in range(22))  # none of the late
+
+
+async def test_a_late_preview_never_removes_the_one_a_later_call_showed(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.task(tool("a", "Write", "in_progress", task=True))
+    await sink.task(tool("b", "Write", preview=preview_of(95)))  # about 9,000 characters
+    await settled()
+    await sink.finish([])
+    await sink.close_out("footer")
+    await sink.task(tool("a", "Write", preview=preview_of(32)))  # about 3,000: no room left
+    await settled()
+    assert len(slack.created_ts) == 1
+    blocks = slack.calls_to("chat.update")[-1]["blocks"]
+    assert shows(blocks, marker(94))  # b's preview, whole
+    assert cards_of(blocks) == {"a": "complete", "b": "complete"}
+    assert CUT_NOTE in blocks
+    assert sum(len(sinks.block_text(b)) for b in blocks) <= sinks.MESSAGE_LIMIT + 100
+
+
+async def test_a_failed_closing_post_is_not_a_written_end(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 30)  # the late update comes first
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("w" * (sinks.MESSAGE_LIMIT - 200))
+    await sink.task(tool("t1", "Write", "in_progress", task=True))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.finish([])
+    taken = slack.responses["chat.postMessage"]
+    slack.responses["chat.postMessage"] = rejected("ratelimited")
+    assert await sink.close_out("footer") is False  # no closing message exists
+    slack.responses["chat.postMessage"] = taken
+    await sink.task(tool("t1", "Write", preview=late_preview()))
+    await settled()
+    posts = slack.calls_to("chat.postMessage")
+    # The preview goes on in a message of its own, and the closing message comes last.
+    assert shows(posts[-2]["blocks"], marker(0))
+    assert posts[-1]["blocks"][-1] == sinks.context_block("footer")
+    assert not any(CUT_NOTE in b["blocks"] for b in slack.calls_to("chat.update"))
+    await sink.settle()
+
+
+async def test_a_late_card_that_is_dropped_leaves_the_sink_caught_up(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    for i in range(sinks.BLOCKS_LIMIT):
+        await sink.task(tool(f"t{i}", "Agent", "in_progress", task=True))
+    await settled()
+    await sink.finish([])
+    assert await sink.close_out("footer") is True
+    await sink.task(tool("late", "Agent", "in_progress", task=True))
+    assert await sink.settle() is True  # nothing failed: no retry, no error
+    calls = len(slack.calls)
+    assert await sink.settle() is True
+    await settled()
+    assert len(slack.calls) == calls  # caught up: the same pass writes nothing more
+
+
+async def test_late_text_past_the_limit_is_cut_and_never_opens_a_message(
+    slack: FakeSlack,
+) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("w" * (sinks.MESSAGE_LIMIT - 200))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.finish([])
+    await sink.close_out("footer")
+    posted = len(slack.calls_to("chat.postMessage"))
+    await sink.text("\n\n" + "late words " * 100)
+    await settled()
+    assert len(slack.calls_to("chat.postMessage")) == posted
+    for update in slack.calls_to("chat.update"):
+        assert sum(len(sinks.block_text(b)) for b in update["blocks"]) <= sinks.MESSAGE_LIMIT
+
+
+async def test_the_running_counts_after_the_end_edit_the_message_that_carries_the_footer(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.text("w" * (sinks.MESSAGE_LIMIT - 200))
+    await sink.task(tool("t1", "Write", "in_progress", task=True))
+    await settled()
+    await sink.finish([])
+    await sink.close_out("footer")
+    posted = len(slack.calls_to("chat.postMessage"))
+    await sink.set_running("1 agent")
+    await settled()
+    assert slack.calls_to("chat.update")[-1]["blocks"][-1] == sinks.context_block(
+        "footer · 1 agent"
+    )
+    await sink.set_latest(False)
+    await settled()
+    assert slack.calls_to("chat.update")[-1]["blocks"][-1] == sinks.context_block("footer")
+    assert len(slack.calls_to("chat.postMessage")) == posted
+
+
+async def test_a_reply_still_open_splits_into_a_new_message_as_before(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.text("w" * (sinks.MESSAGE_LIMIT - 200))
+    await sink.task(tool("t1", "Write", "in_progress", task=True))
+    await settled()
+    await sink.task(tool("t1", "Write", preview=late_preview()))
+    await settled()
+    assert len(slack.created_ts) == 2  # the preview went on in a message of its own
+
+
+async def test_a_close_whose_first_write_failed_still_opens_the_messages_it_needs(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.02)
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("Start.\n")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)  # from here the message goes on by update
+    lines = sinks.MESSAGE_LIMIT * 5 // 2 // 100
+    await sink.text("x" * 99 + "\n")
+    await sink.text(("x" * 99 + "\n") * (lines - 1))
+    slack.responses["chat.update"] = rejected("ratelimited")
+    await sink.finish([])
+    assert await sink.close_out("footer") is False
+    del slack.responses["chat.update"]  # Slack takes the retry
+    assert await sink.wait_landed() is True
+    shown = "".join(slack.message_texts())
+    assert shown.count("x") == 99 * lines  # nothing cut
+    assert len(slack.message_texts()) >= 3
+
+
+async def test_late_content_that_fits_is_shown_as_the_open_path_computes_it(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.text("Start.")
+    await sink.task(tool("t1", "Write", "in_progress", task=True))
+    await settled()
+    await sink.finish([])
+    await sink.close_out("footer")
+    await sink.task(tool("t1", "Write", preview=preview_of(3)))
+    await sink.text("And a late word.")
+    await sink.task(tool("t2", "Read", task=True))
+    await settled()
+    assert len(slack.created_ts) == 1
+    blocks = slack.calls_to("chat.update")[-1]["blocks"]
+    last = sink._messages[-1]
+    assert blocks == sink._render(last, None, None)[0] + sink._closing_blocks()
+    assert shows(blocks, marker(2)) and shows(blocks, "And a late word.")
+    assert cards_of(blocks) == {"t1": "complete", "t2": "complete"}
+    assert CUT_NOTE not in blocks
+
+
+async def test_words_that_reach_the_model_while_the_end_is_written_open_no_message(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.text("Hello.")
+    await settled()
+    await sink.finish([])
+    slack.delay = 0.02  # the stream's stop takes a while
+
+    async def late() -> None:
+        await asyncio.sleep(0.005)
+        await sink.text("\n\n" + "z" * 20_000)  # past one message, and held without being shown
+
+    arriving = asyncio.create_task(late())
+    await sink.close_out("footer")
+    await arriving
+    slack.delay = 0
+    await settled()
+    assert await sink.settle() is True
+    assert len(slack.created_ts) == 1
+    assert slack.calls_to("chat.postMessage") == []
+    # Only what fits the message is held: a later edit stays inside the limit Slack enforces,
+    # so the footer still changes.
+    await sink.set_running("1 agent")
+    await settled()
+    edit = slack.calls_to("chat.update")[-1]["blocks"]
+    assert sum(len(b["text"]) for b in edit if b["type"] == "markdown") <= sinks.MESSAGE_LIMIT
+    assert shows(edit, "footer · 1 agent")
