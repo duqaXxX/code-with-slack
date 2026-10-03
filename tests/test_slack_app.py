@@ -11,6 +11,7 @@ import pytest
 from claude_agent_sdk import ClaudeAgentOptions, ResultError, SDKSessionInfo
 from slack_bolt.request.async_request import AsyncBoltRequest
 
+from code_with_slack import sessions as sessions_module
 from code_with_slack import texts
 from code_with_slack.approvals import Answer, Approvals, Draft
 from code_with_slack.attachments import DownloadFailed
@@ -652,15 +653,21 @@ async def test_an_answer_in_a_session_thread_sets_its_status_line_again(world: W
     assert told == [(CHANNEL, THREAD)]
 
 
-async def test_bang_stop_inside_a_thread_stops_only_that_session(world: World) -> None:
+async def test_bang_stop_inside_a_thread_stops_only_that_session(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The fake client's turn never ends, so the answer goes out once its wait is over.
+    monkeypatch.setattr(sessions_module, "STOP_TAIL_WAIT", 0.05)
     await world.dispatch(message("hello", ts=THREAD))  # never ends
     await world.dispatch(message("hello", ts=OTHER_THREAD))  # D8: THREAD's session is busy
     hold_id = button_value(world.slack.calls_to("chat.postMessage")[-1]["blocks"], HOLD_CONTINUE)
     await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, OTHER_THREAD))
     posted = len(world.slack.calls_to("chat.postMessage"))
     await world.dispatch(reply("!stop", THREAD))
-    # Nothing is posted or shown for the owner: the session reacts on its own root.
-    assert len(world.slack.calls_to("chat.postMessage")) == posted and not world.ephemerals()
+    # One line that stays in the thread: an ephemeral one is gone on reload (issue #85).
+    (answer,) = world.slack.calls_to("chat.postMessage")[posted:]
+    assert answer["text"] == texts.STOPPED_THREAD and answer["thread_ts"] == THREAD
+    assert not world.ephemerals()
     assert world.clients[0].interrupts == 1
     assert world.clients[1].interrupts == 0
 
@@ -668,8 +675,10 @@ async def test_bang_stop_inside_a_thread_stops_only_that_session(world: World) -
 async def test_bang_stop_inside_an_idle_thread_says_nothing_is_running(world: World) -> None:
     await _idle_message(world, "hi", ts=THREAD)
     await world.dispatch(reply("!stop", THREAD))
-    assert world.ephemerals() == [texts.NOTHING_TO_STOP_THREAD]
-    assert texts.NOTHING_TO_STOP_THREAD not in said(world)  # for the owner alone
+    # A post in the thread, which stays: the owner can tell the stop was received (issue #85).
+    answer = world.slack.calls_to("chat.postMessage")[-1]
+    assert answer["text"] == texts.NOTHING_TO_STOP_THREAD and answer["thread_ts"] == THREAD
+    assert not world.ephemerals()
 
 
 async def test_a_malformed_daemon_word_at_top_level_shows_only_the_daemon_words(
@@ -2125,6 +2134,19 @@ async def test_a_session_closed_at_continue_time_retries_and_sends_without_react
         # even when an assertion fails, or the fixture's own `close_all` hangs behind this
         # object's never-cancelled background tasks.
         await session.close()
+
+
+async def test_a_stop_answer_that_cannot_be_posted_is_not_the_word_s_failure(
+    world: World,
+) -> None:
+    await _idle_message(world, "hi", ts=THREAD)
+    world.slack.responses["chat.postMessage"] = RuntimeError("network down")
+    await world.dispatch(reply("!stop", THREAD))
+    # One attempt at the answer, and no `ERROR_REPLY` for a stop that did what it was asked.
+    assert [p["text"] for p in world.slack.calls_to("chat.postMessage")][-1] == (
+        texts.NOTHING_TO_STOP_THREAD
+    )
+    assert not world.ephemerals()
 
 
 async def test_stop_in_the_held_thread_cancels_it(world: World) -> None:

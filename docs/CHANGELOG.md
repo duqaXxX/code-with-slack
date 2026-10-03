@@ -110,6 +110,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `!stop` typed inside a session's thread is answered by a message that stays in the thread
+  (issue #85): `Stopped.` (`texts.STOPPED_THREAD`) when it stopped a turn or a background task,
+  `Nothing is running in this session.` when nothing ran. Before, a stop that stopped something
+  posted nothing, and the other answer was ephemeral, gone on reload and shown on one client
+  only, so the owner could not tell whether the stop was received. The message is the app's in
+  a thread the owner started, so it can notify. A `!stop` that only cancels a held message
+  still answers `Not sent.` alone. `Stopped.` is posted once the reply the stop cut short has
+  ended (`ThreadSession.stop_landed`, at most 15 seconds), so it sits under that reply's
+  ending and footer when those are a message of their own. An answer that cannot be posted is
+  logged and is not reported as the word's failure.
 - A failed `chat.update` or `chat.postMessage` of a reply is logged as `chat.update failed` or
   `chat.postMessage failed` with the error code or the exception type, the characters of text,
   the blocks and the task cards it sent, never content, in the shape of the

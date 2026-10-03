@@ -109,6 +109,10 @@ QUESTION_TOOL = "AskUserQuestion"
 # After a background task's notification, the CLI starts a turn of its own to report it
 # (measured on Claude Code 2.1.280). If that turn never comes, the owner's queue moves on.
 INJECTED_TURN_WAIT = 30.0
+# How long the answer to `!stop` waits for the reply it cut short to end. An interrupted turn
+# ends within a second or two; a final write that is retried takes ten. Read at call time, so a
+# test can lower it with monkeypatch.
+STOP_TAIL_WAIT = 15.0
 # Each task_type (measured on Claude Code 2.1.280: `local_bash` for a background command,
 # `local_agent` for a subagent) as the footer counts it and as its end line names it, the way
 # the terminal prints `Agent "..." finished`. A type not listed counts and reads as a task, so a
@@ -369,6 +373,8 @@ class ThreadSession:
         # finally does not race its closing ✅ back to working; `_finish` and `_abandon`
         # clear it, once that turn's own tail ends, whichever way.
         self._interrupting = False
+        # Set once the turn `stop()` interrupted has closed its reply (`stop_landed`).
+        self._stop_tail: asyncio.Event | None = None
         # D10: true from `_react_error` until new work starts (`submit`, `_start_turn`), so a
         # standing ❌ is never mistaken for idle-and-done. `StatusReaction.current` cannot serve
         # this alone: it only updates once its own `reactions.add` returns, which a quick turn
@@ -1027,6 +1033,7 @@ class ThreadSession:
             # flag makes it skip that instead. `_finish` or `_abandon` clears it once this
             # turn's own tail ends.
             self._interrupting = True
+            self._stop_tail = self._stop_tail or asyncio.Event()
             for pending in self._deps.approvals.deny_all(self.channel_id, self.thread_ts):
                 await self._delete_request(pending.message_ts)
             await self._client.interrupt()
@@ -1045,6 +1052,20 @@ class ThreadSession:
         # later idle sweep shows the same ✅ and `_note_status` drops the persisted ⏳.
         self._react(Status.DONE)
         return True
+
+    async def stop_landed(self) -> None:
+        """Return once the reply `stop()` cut short has ended, so what is posted next sits under
+        its ending and its footer. Waits at most STOP_TAIL_WAIT, and not at all when the stop
+        interrupted no turn (it stopped background tasks only)."""
+        tail = self._stop_tail
+        if tail is not None:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(tail.wait(), STOP_TAIL_WAIT)
+
+    def _stop_tail_ended(self) -> None:
+        tail, self._stop_tail = self._stop_tail, None
+        if tail is not None:
+            tail.set()
 
     async def status(self) -> str:
         """The channel's directory, session and mode, then the footer's values one per line, or
@@ -1969,6 +1990,7 @@ class ThreadSession:
             # D1: a report turn's own reply is `_close_reply`'s
             # concern above; this catches every other reply a joint one left stranded.
             await self._sweep_closed_out()
+            self._stop_tail_ended()
         return stopped
 
     async def _settle(self, turn: Turn | None, result: ResultMessage) -> None:
@@ -2041,6 +2063,7 @@ class ThreadSession:
             for turn in waiting:
                 turn.done.set()
             self._settled.set()
+            self._stop_tail_ended()
 
     async def _footer(self, tokens: int | None) -> str | None:
         data = await self._footer_data(tokens)

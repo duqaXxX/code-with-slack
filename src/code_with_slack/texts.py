@@ -156,6 +156,8 @@ RESTART_WAITS_MESSAGE = (
     "`!stop` ends them now."
 )
 NOTHING_TO_STOP = "Nothing is running in this channel."
+# Both answers to `!stop` in a thread are posts that stay: an ephemeral line is gone on reload.
+STOPPED_THREAD = "Stopped."
 NOTHING_TO_STOP_THREAD = "Nothing is running in this session."
 # D8: two sessions in one folder at once.
 HOLD_QUESTION = "Another session is working in this folder: {link}. Send anyway?"
