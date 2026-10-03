@@ -459,6 +459,20 @@ class _Plan:
     counted: set[int] = field(default_factory=set)
 
 
+@dataclass
+class _Held:
+    """What the reply's last message showed when its end was written: nothing of it is removed
+    by a late update."""
+
+    text: dict[int, int] = field(default_factory=dict)  # part -> length of its text shown
+    cards: set[str] = field(default_factory=set)
+    pieces: set[tuple[int, int]] = field(default_factory=set)
+
+    def blocks(self) -> int:
+        """The blocks they take, a card or a piece counting one."""
+        return len(self.text) + len(self.cards) + len(self.pieces)
+
+
 def plan_card_text(plan: _Plan) -> int:
     """The characters of card text a plan's chunks carry."""
     return sum(len(chunk.get(key, "")) for chunk in plan.cards.values() for key in CARD_TEXT_FIELDS)
@@ -577,6 +591,11 @@ class ReplySink:
         # on the message's updates after it); "moved", under the reply's ending, posted as its
         # last message; or "post", in a closing message that holds nothing else.
         self._end_mode: str | None = None
+        # Set once the end has landed on Slack (`_end_landed`): the reply's messages are then a
+        # fixed set, and a late update only edits them, keeping what its last message showed
+        # (`_blocks`). Not `_closed_out`, nor `_end_mode` alone: a close whose write
+        # failed still owes messages, and its retry must open them.
+        self._held: _Held | None = None
         self._closing: str | None = None  # ts of the closing message, once posted
         self._closing_shown: list[dict[str, Any]] = []
         # Resolves once the reply is known to have ended on Slack (True) or its one retry
@@ -1022,27 +1041,44 @@ class ReplySink:
         """The blocks of the message's span: Claude's text as markdown, the tools' task cards
         (`_card_blocks`), the preview blocks after a card. With no `end` (the reply's last
         message) only as many as fit MESSAGE_LIMIT and BLOCKS_LIMIT, and where the reply goes on
-        if it does not all fit."""
+        if it does not all fit. Once the reply's end has landed nothing opens a message after
+        it: what arrives late is shown when it all fits, and else not at all, the last message
+        keeping what it showed (`_Held`) and no cursor being returned."""
+        blocks, overflow = self._render(message, end, None)
+        if overflow is None or end is not None or self._held is None:
+            return blocks, overflow
+        return self._render(message, None, self._held)[0], None
+
+    def _render(
+        self, message: _Message, end: Cursor | None, held: _Held | None
+    ) -> tuple[list[dict[str, Any]], Cursor | None]:
+        """`_blocks` for one reading of the span: with `held`, only what the message showed when
+        the reply's end landed, as the span is now, and the note for a preview of a card of it
+        that was left out, if a block is free for it."""
         blocks: list[dict[str, Any]] = []
         size = 0
+        fixed = end is not None or held is not None
         # A message whose span is fixed: what its cards and text take, and what previews took.
         base_blocks, base_size = self._base(message, end) if end is not None else (0, 0)
         left_out = (
             self._cut_pieces(message, end, base_blocks, base_size) if end is not None else set()
         )
+        note_room = held is not None and held.blocks() < BLOCKS_LIMIT
         noted = False
         for index, part, floor, ceil in self._span(message.start, end):
             if isinstance(part, _Text):
+                if held is not None:
+                    ceil = held.text.get(index, floor)
                 raw = part.text[floor:ceil]
                 lead = len(raw) - len(raw.lstrip("\n"))
                 tail = raw[lead:]
                 words = tail.strip("\n")
                 if not words:
                     continue
-                if end is None and len(blocks) >= BLOCKS_LIMIT:
+                if not fixed and len(blocks) >= BLOCKS_LIMIT:
                     return blocks, (index, floor + lead)
                 room = MESSAGE_LIMIT - size
-                if end is None and len(words) > room:
+                if not fixed and len(words) > room:
                     cut = words.rfind("\n", 0, room) if room > 0 else -1
                     stop = room if cut <= 0 else cut
                     if stop > 0:
@@ -1052,13 +1088,19 @@ class ReplySink:
                 size += len(words)
             else:
                 has_card, pieces = self._tool_elements(part, floor, ceil)
-                if has_card:
-                    if end is None and len(blocks) >= BLOCKS_LIMIT:
+                if has_card and (held is None or part.update.id in held.cards):
+                    if not fixed and len(blocks) >= BLOCKS_LIMIT:
                         return blocks, (index, 0)
                     blocks += self._card_blocks(part.update)
                 for piece in pieces:
                     length = len(part.pieces()[piece - 1])
-                    if end is None:
+                    if held is not None and (index, piece) not in held.pieces:
+                        # Late: left out, with the note when its card was shown, once.
+                        if note_room and not noted and part.update.id in held.cards:
+                            blocks.append(context_block(PREVIEW_CUT))
+                            noted = True
+                        continue
+                    if not fixed:
                         if len(blocks) + 1 > BLOCKS_LIMIT or size + length > MESSAGE_LIMIT:
                             return blocks, (index, piece)
                     elif (index, piece) in left_out:
@@ -1070,7 +1112,7 @@ class ReplySink:
                             noted = True
                         continue
                     shown = piece_blocks(part, piece)
-                    if end is None and len(blocks) + len(shown) > BLOCKS_LIMIT:
+                    if not fixed and len(blocks) + len(shown) > BLOCKS_LIMIT:
                         return blocks, (index, piece)
                     blocks += shown
                     size += length
@@ -1082,6 +1124,23 @@ class ReplySink:
         if not self._finished or update.folded is None:
             return [card_block(update)]
         return [context_block(mrkdwn_escape(update.folded))] if update.folded else []
+
+    def _hold(self, message: _Message) -> _Held:
+        """What the message shows of the model as it is now: as much of it as fits. Words can
+        reach the model while the end is being written; past the limits they were never shown,
+        and holding them would have every later edit of the message refused."""
+        held = _Held()
+        fits = self._render(message, None, None)[1]
+        for index, part, floor, ceil in self._span(message.start, fits):
+            if isinstance(part, _Text):
+                if part.text[floor:ceil].strip("\n"):
+                    held.text[index] = len(part.text) if ceil is None else ceil
+            else:
+                has_card, pieces = self._tool_elements(part, floor, ceil)
+                if has_card:
+                    held.cards.add(part.update.id)
+                held.pieces |= {(index, piece) for piece in pieces}
+        return held
 
     def _cut_pieces(
         self, message: _Message, end: Cursor, base_blocks: int, base_size: int
@@ -1498,7 +1557,10 @@ class ReplySink:
             return True
         # The end is written either way; a message left short of the model makes it one that
         # did not land, which the session shows.
-        return await self._end() and not any(m.short for m in self._messages)
+        ended = await self._end()
+        if self._held is None and self._end_landed():
+            self._held = self._hold(self._messages[-1])
+        return ended and not any(m.short for m in self._messages)
 
     async def _end(self) -> bool:
         """The reply's end, on Slack: the footer on the last stream's stop; once the stream is
@@ -1549,6 +1611,13 @@ class ReplySink:
         self._end_mode = "post"
         self._body_landed = True  # every message is written: only the closing message is owed
         return await self._write_closing()
+
+    def _end_landed(self) -> bool:
+        """Whether the reply's end is on Slack: the footer rode on the last stream's stop
+        ("inline", set after a stop that landed) or sits in the ending posted as the last
+        message ("moved", reset when that post fails), or the closing message was posted. Not
+        `_end_mode == "post"`, which `_end` sets before the closing message is written."""
+        return self._end_mode in ("inline", "moved") or self._closing is not None
 
     async def _write_closing(self) -> bool:
         """Post the closing message of a reply whose stream stopped early and that has no ending
