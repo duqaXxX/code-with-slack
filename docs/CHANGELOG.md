@@ -277,6 +277,15 @@ All notable changes to this project are documented here. The format follows
   as a running shell, reached by `!stop`, kept in the reply's footer and awaited by a restart
   (`TurnRenderer.take_promoted`). A task of a call no tracked reply holds (a restart dropped it)
   is still treated as any other task.
+- A task notification that arrives while `ThreadSession._expire_injected_turn` is writing (a
+  background update for held task frames, or the sweep that ends replies) gets its own wait
+  for a report turn once that work ends. `_expect_injected_turn` found the working task still
+  running and armed no timer, then the task's end marked the session settled: the owner's next
+  prompt was sent to Claude Code while a report turn was still expected, ✅ showed, and (when the
+  notification arrived during the sweep) nothing would ever clear the expectation, which held
+  every later prompt. The session stays unsettled, the sweep stops ahead of the replies the
+  report may render into, and a fresh timer is armed, whatever the sweep does and unless the
+  session is closing; a close cancels it like the first.
 
 - An end of a reply that began always resolves (`ReplySink.close_out`, `wait_landed`). A caller
   cancelled while the end's write was out (a report turn starting while

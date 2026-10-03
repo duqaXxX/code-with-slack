@@ -1563,15 +1563,29 @@ class ThreadSession:
                 describe(exc),
             )
         finally:
-            self._settled.set()
-            # D1: catches `target` (nothing more coming for it either,
-            # when `held` was empty) and any other reply a joint report turn left stranded, since
-            # a report only ever renders into the first of the tasks it covers.
-            await self._sweep_closed_out()
-            await self._react_done_if_idle()
-            # Runs outside `_read`'s loop (its own INJECTED_TURN_WAIT timer), so nothing else
-            # re-checks idleness for this transition: it may need to arm the timer itself (D9).
-            self._idle_timer_check()
+            # A notification that arrived while this wrote is expected on a wait of its own, armed
+            # below: `_expect_injected_turn` found this task still running and started none, and
+            # it cleared `_settled`, which stays so. (`_start_turn` cancelling this task leaves
+            # `_injected_expected` False.)
+            if not self._injected_expected:
+                self._settled.set()
+            try:
+                # D1: catches `target` (nothing more coming for it either,
+                # when `held` was empty) and any other reply a joint report turn left stranded,
+                # since a report only ever renders into the first of the tasks it covers.
+                await self._sweep_closed_out()
+                await self._react_done_if_idle()
+            finally:
+                # Whatever the sweep did: a notification that arrived during its own writes is
+                # waiting on a timer this task alone can arm, since nothing awaits between here
+                # and its end. None once the session is closed: `close` has cancelled this task
+                # and a timer made now would outlive `_cancel_tasks`.
+                if self._injected_expected and not self._closed:
+                    self._expiry = asyncio.create_task(self._expire_injected_turn())
+                # Runs outside `_read`'s loop (its own INJECTED_TURN_WAIT timer), so nothing else
+                # re-checks idleness for this transition: it may need to arm the timer itself
+                # (D9).
+                self._idle_timer_check()
 
     def _react(self, state: Status) -> None:
         """Show `state` on the root message reaction as a task this session tracks (D10): a
@@ -1822,10 +1836,10 @@ class ThreadSession:
         `_close_reply` already handles the renderer whose own turn or report just ended, and a
         currently active one is skipped outright, whatever it reads:
         its own turn has not closed it yet, so nothing here is its call to make."""
-        if self._injected_expected or not self._settled.is_set():
-            return
         active = self._active.renderer if self._active is not None else None
         for renderer in set(self._task_replies.values()):
+            if self._injected_expected or not self._settled.is_set():
+                return  # a notification arrived meanwhile: its report may render into this reply
             if renderer is not active and not self._still_owed(renderer):
                 self._track_landing(await renderer.close_out(), renderer.sink)
 
