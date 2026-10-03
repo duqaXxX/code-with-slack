@@ -1306,6 +1306,174 @@ async def test_a_close_during_the_expiry_s_work_ends_promptly_and_leaks_no_task(
     assert await asyncio.wait_for(a.sink.wait_landed(), 1.0) is True
 
 
+async def two_replies_with_a_gate(
+    h: Harness, session: Any
+) -> tuple[list[Any], list[Any], list[Any], Any, asyncio.Event]:
+    """Two replies, each holding a background task, and the Slack gate armed on the first
+    notification's expiry (the end of a reply is where it holds). Returns the frames of the
+    first notification, those of the second, the report turn, the second reply and the gate."""
+    _, notice, injected = split_background()
+    _, notice_b, _ = renamed_background()
+    await asyncio.wait_for((await session.submit("start A")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("start B")).done.wait(), 2)
+    gate = h.slack.gate = asyncio.Event()
+    h.slack.gated.clear()
+    return notice, notice_b, injected, session._task_replies["bc41other"], gate
+
+
+async def test_a_notification_during_the_expiry_s_standalone_write_waits_for_its_own_turn(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The expiry posts a background update (a task of no tracked reply) and a second notification
+    # arrives while that write is out. Its wait starts when the write ends, not never: the session
+    # keeps reading as waiting for the report turn, and the owner's prompt stays behind it.
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.05)
+    first, _, _ = split_background()
+    first_b, _, _ = renamed_background()
+    h = harness_for({"turns": [first, first_b]})
+    session = h.session()
+    notice, notice_b, injected, b, gate = await two_replies_with_a_gate(h, session)
+    del session._task_replies["bny2rux7d"]  # A's reply is gone: its frames are held
+    h.clients[0].inject(notice)
+    await asyncio.wait_for(h.slack.gated.wait(), 1.0)  # the expiry's standalone is in its write
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 30)  # the next wait outlives the test
+    h.clients[0].inject(notice_b)
+    await until(lambda: session._injected_expected)
+    working = session._expiry
+    h.slack.gate = None
+    gate.set()
+    await until(lambda: session._expiry is not working)  # the wait of the second notification
+    assert len(h.slack.created_ts) == 3  # the expiry posted the held update, a reply of its own
+    assert not session._expiry.done()
+    assert session._injected_expected and not session._settled.is_set() and not session.idle
+    await session.submit("and now?")
+    await asyncio.sleep(0.1)
+    assert h.clients[0].queries == ["start A", "start B"]  # held behind the report turn
+    assert Status.DONE.value not in h.reactions()[2:]
+    h.clients[0].inject(injected)
+    await until(lambda: b.closed_out and session._settled.is_set(), limit=3.0)
+    assert not session._injected_expected
+
+
+async def test_a_notification_during_the_expiry_s_sweep_gets_its_wait_started_after_it(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The sweep ends A's reply while the second notification arrives: with nothing armed for it
+    # the session would read as waiting for ever, holding every prompt behind a turn that may
+    # never come. Its own wait runs out, and the session reads idle again.
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.05)
+    first, _, _ = split_background()
+    first_b, _, _ = renamed_background()
+    h = harness_for({"turns": [first, first_b]})
+    session = h.session()
+    notice, notice_b, _, b, gate = await two_replies_with_a_gate(h, session)
+    a = session._task_replies["bny2rux7d"]
+    h.clients[0].inject(notice)
+    await asyncio.wait_for(h.slack.gated.wait(), 1.0)  # the sweep is in the end of A
+    h.clients[0].inject(notice_b)
+    await until(lambda: session._injected_expected)
+    h.slack.gate = None
+    gate.set()
+    await until(lambda: a.closed_out and b.closed_out, limit=3.0)
+    await until(lambda: h.reactions()[-1:] == [Status.DONE.value] and session.idle, limit=3.0)
+    assert not session._injected_expected and session._settled.is_set()
+    assert session._unlanded == set()
+
+
+async def test_a_close_while_a_notification_waits_after_the_expiry_s_work_leaks_no_task(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.05)
+    first, _, _ = split_background()
+    first_b, _, _ = renamed_background()
+    h = harness_for({"turns": [first, first_b]})
+    session = h.session()
+    notice, notice_b, _, _, gate = await two_replies_with_a_gate(h, session)
+    h.clients[0].inject(notice)
+    await asyncio.wait_for(h.slack.gated.wait(), 1.0)
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 30)
+    h.clients[0].inject(notice_b)
+    await until(lambda: session._injected_expected)
+    working = session._expiry
+    h.slack.gate = None
+    gate.set()
+    await until(lambda: session._expiry is not working)
+    waiting = session._expiry
+    assert waiting is not None and not waiting.done()
+    await asyncio.wait_for(session.close(), 2)
+    assert waiting.done()
+    assert not [t for t in asyncio.all_tasks() if "_expire_injected_turn" in repr(t)]
+
+
+async def test_a_close_during_the_expiry_s_write_with_a_notification_pending_arms_no_timer(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The expiry task `close` is cancelling must not arm the wait of the notification that came
+    # during its write: `close` cancels twice, which is all that would catch such a timer.
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.05)
+    created = 0
+    original = sessions.ThreadSession._expire_injected_turn
+
+    def counting(self: Any) -> Any:  # counts at creation: a timer cancelled unstarted counts too
+        nonlocal created
+        created += 1
+        return original(self)
+
+    monkeypatch.setattr(sessions.ThreadSession, "_expire_injected_turn", counting)
+    first, _, _ = split_background()
+    first_b, _, _ = renamed_background()
+    h = harness_for({"turns": [first, first_b]})
+    session = h.session()
+    notice, notice_b, _, _, gate = await two_replies_with_a_gate(h, session)
+    del session._task_replies["bny2rux7d"]  # A's frames are held: the expiry posts them
+    h.clients[0].inject(notice)
+    await asyncio.wait_for(h.slack.gated.wait(), 1.0)  # the standalone is in its write
+    h.clients[0].inject(notice_b)
+    await until(lambda: session._injected_expected)
+    closing = asyncio.create_task(session.close())
+    await until(lambda: session.closed)
+    h.slack.gate = None
+    gate.set()
+    await asyncio.wait_for(closing, 2)
+    calls = len(h.slack.calls)
+    await asyncio.sleep(0.2)
+    assert created == 1  # the one that is writing, and no other
+    assert not [t for t in asyncio.all_tasks() if "_expire_injected_turn" in repr(t)]
+    assert len(h.slack.calls) == calls  # nothing writes to Slack after the close
+
+
+async def test_a_sweep_that_fails_still_arms_the_wait_of_a_notification_that_came_during_it(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.05)
+    first, _, _ = split_background()
+    first_b, _, _ = renamed_background()
+    h = harness_for({"turns": [first, first_b]})
+    session = h.session()
+    notice, notice_b, *_ = await two_replies_with_a_gate(h, session)
+    h.slack.gate = None
+    sweeps = 0
+
+    async def failing(self: Any) -> None:
+        nonlocal sweeps
+        if asyncio.current_task() is not session._expiry:
+            return  # `_expire_unreported` sweeps too: only the expiry's own sweep fails
+        sweeps += 1
+        if sweeps == 1:
+            h.clients[0].inject(notice_b)  # a notification arrives during the sweep's writes
+            await until(lambda: session._injected_expected)
+            monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 30)
+            raise RuntimeError("the sweep failed")
+
+    monkeypatch.setattr(sessions.ThreadSession, "_sweep_closed_out", failing)
+    h.clients[0].inject(notice)
+    await until(lambda: sweeps == 1)
+    working = session._expiry
+    await until(lambda: session._expiry is not working)
+    assert not session._expiry.done()
+    assert session._injected_expected and not session._settled.is_set()
+
+
 async def test_owner_query_waits_for_an_expected_background_turn(
     harness_for: Callable[..., Harness],
 ) -> None:
