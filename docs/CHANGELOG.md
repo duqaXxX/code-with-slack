@@ -110,6 +110,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- A failed `chat.update` or `chat.postMessage` of a reply is logged as `chat.update failed` or
+  `chat.postMessage failed` with the error code or the exception type, the characters of text,
+  the blocks and the task cards it sent, never content, in the shape of the
+  `chat.appendStream refused` line (issue #92). The log can tell the two methods apart; what is
+  retried, dropped or adopted is unchanged.
 - The answers to a question show in the reply, where the question was asked (#82). The call's
   card reads `User answered Claude's questions:` and a small line per question follows it,
   `⎿ · question → answer` (`render.previews.answered`, `Preview.plain`). The session hands

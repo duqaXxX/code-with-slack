@@ -2396,3 +2396,44 @@ async def test_words_that_reach_the_model_while_the_end_is_written_open_no_messa
     edit = slack.calls_to("chat.update")[-1]["blocks"]
     assert sum(len(b["text"]) for b in edit if b["type"] == "markdown") <= sinks.MESSAGE_LIMIT
     assert shows(edit, "footer · 1 agent")
+
+
+# A refused edit or post logs its method and the sizes it sent, never its content.
+
+
+async def test_a_refused_update_logs_the_method_and_the_sizes_without_content(
+    slack: FakeSlack, caplog: pytest.LogCaptureFixture
+) -> None:
+    sink = reply(slack)
+    await sink.text("Hello.")
+    await sink.task(tool("t1", "Agent", task=True))
+    await sink.finish([])
+    assert await sink.close_out("footer")
+    slack.responses["chat.update"] = rejected("msg_too_long")
+    await sink.set_running("1 agent")
+    await settled()
+    [line] = [r.getMessage() for r in caplog.records if "chat.update failed" in r.message]
+    assert "msg_too_long" in line
+    # the message sent: its words, the card, and the footer under a divider
+    assert "text 22, elements 4, cards 1" in line
+    assert "Agent" not in caplog.text and "Hello" not in caplog.text
+
+
+async def test_a_refused_post_logs_the_method_and_the_sizes_without_content(
+    slack: FakeSlack, caplog: pytest.LogCaptureFixture
+) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("start\n")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    slack.responses["chat.postMessage"] = rejected("msg_too_long")
+    await sink.text("secret line\n" * 1_500)  # past one message: the rest is posted
+    await settled()
+    [line] = [r.getMessage() for r in caplog.records if "chat.postMessage failed" in r.message]
+    assert "msg_too_long" in line
+    [attempt] = slack.calls_to("chat.postMessage")
+    sent = sum(len(b["text"]) for b in attempt["blocks"])
+    assert 0 < sent < sinks.MESSAGE_LIMIT
+    assert f"text {sent}, elements 1, cards 0" in line
+    assert "secret" not in caplog.text and "start" not in caplog.text
