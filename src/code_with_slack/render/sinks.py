@@ -588,6 +588,7 @@ class ReplySink:
         self._messages: list[_Message] = []
         self._pending: asyncio.Task[None] | None = None
         self._retry: asyncio.Task[None] | None = None
+        self._ending: asyncio.Task[bool] | None = None
         self._lock = asyncio.Lock()
         self._finished = False
         self._footer: str | None = None
@@ -759,10 +760,25 @@ class ReplySink:
             return self._landed.done() and self._landed.result()
         self._closed_out = True
         self._footer = footer
-        if await self._flush():
+        # The end is its own task, shielded from the caller: a caller cancelled while Slack
+        # takes the write (a timer, a turn starting, a shutdown) must not leave `_landed`
+        # unresolved with no retry, which no later `close_out` could repair.
+        self._ending = asyncio.create_task(self._end_out())
+        return await asyncio.shield(self._ending)
+
+    async def _end_out(self) -> bool:
+        """The end's first flush: whatever happens, `_landed` resolves (an end that began always
+        does), with the retry when Slack refused the write."""
+        try:
+            ok = await self._flush()
+        except BaseException:
+            self._resolve(False)
+            raise
+        if ok:
             self._resolve(True)
             return True
-        self._retry = asyncio.create_task(self._retry_final())
+        if not self._landed.done():  # `settle` may have decided it already
+            self._retry = asyncio.create_task(self._retry_final())
         return False
 
     def _resolve(self, landed: bool) -> None:
@@ -790,6 +806,11 @@ class ReplySink:
         if self._pending is not None:
             self._pending.cancel()
             self._pending = None
+        if self._ending is not None and not self._ending.done():
+            # The end in flight may still schedule its retry: let it, so the cancel below sees it.
+            # `wait` hands back neither its exception nor its cancellation: only a cancel of
+            # this very call ends the wait early.
+            await asyncio.wait([self._ending])
         if self._retry is not None and not self._retry.done():
             self._retry.cancel()
         ok = await self._flush()

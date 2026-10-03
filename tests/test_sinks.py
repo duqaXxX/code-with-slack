@@ -382,6 +382,93 @@ async def test_an_ending_left_twice_by_a_failed_edit_has_not_landed_until_the_re
     assert len(slack.posted_ts) == 1
 
 
+async def cancelled_inside_the_end(slack: FakeSlack) -> tuple[ReplySink, asyncio.Event]:
+    """A reply whose `close_out` caller is cancelled while Slack holds the end's write open
+    (released by setting the returned event)."""
+    sink = reply(slack)
+    await sink.text("Hello.")
+    await settled()
+    await sink.finish([])
+    gate = slack.gate = asyncio.Event()
+    slack.gated.clear()
+    closing = asyncio.create_task(sink.close_out("footer"))
+    await slack.gated.wait()
+    closing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+    return sink, gate
+
+
+async def test_a_close_out_whose_caller_is_cancelled_still_lands_and_resolves(
+    slack: FakeSlack,
+) -> None:
+    sink, gate = await cancelled_inside_the_end(slack)
+    slack.gate = None
+    gate.set()
+    assert await asyncio.wait_for(sink.wait_landed(), 1.0) is True
+    assert await sink.close_out("footer") is True
+
+
+async def test_a_close_out_cancelled_over_a_write_slack_refused_still_gets_its_retry(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.02)
+    slack.responses["chat.stopStream"] = [rejected("ratelimited"), {"ok": True}]
+    sink, gate = await cancelled_inside_the_end(slack)
+    slack.gate = None
+    gate.set()
+    assert await asyncio.wait_for(sink.wait_landed(), 1.0) is True
+    assert len(slack.calls_to("chat.stopStream")) == 2  # the refused write, then the retry
+
+
+async def test_a_settle_behind_a_refused_end_leaves_no_retry_alive(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.02)
+    # Slack refuses the end and then the shutdown's own write: that shutdown has lost the reply
+    # and nothing may write it afterwards.
+    slack.responses["chat.stopStream"] = [rejected("ratelimited"), rejected("ratelimited")]
+    sink, gate = await cancelled_inside_the_end(slack)
+    settling = asyncio.create_task(sink.settle())  # queues behind the end's write
+    await asyncio.sleep(0)
+    slack.gate = None
+    gate.set()
+    assert await asyncio.wait_for(settling, 1.0) is False
+    writes = len(slack.calls)
+    await asyncio.sleep(0.1)  # well past FINAL_RETRY_SECONDS
+    assert len(slack.calls) == writes  # nothing goes out after `settle` returned
+
+
+async def test_a_settle_behind_an_end_cancelled_itself_does_not_raise(slack: FakeSlack) -> None:
+    sink, gate = await cancelled_inside_the_end(slack)
+    settling = asyncio.create_task(sink.settle())  # waits for the end in flight
+    await asyncio.sleep(0)
+    assert sink._ending is not None
+    sink._ending.cancel()  # a loop's teardown: `settle` itself was not cancelled
+    slack.gate = None
+    gate.set()
+    await asyncio.wait_for(settling, 1.0)  # no CancelledError reaches the caller of `settle`
+    assert await asyncio.wait_for(sink.wait_landed(), 1.0) is False
+
+
+async def test_an_end_that_raises_still_resolves_landed(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sink = reply(slack)
+    await sink.text("Hello.")
+    await settled()
+    await sink.finish([])
+
+    async def broken() -> bool:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(sink, "_flush", broken)
+    with pytest.raises(RuntimeError):
+        await sink.close_out("footer")
+    assert await asyncio.wait_for(sink.wait_landed(), 1.0) is False
+    assert await sink.close_out("footer") is False
+
+
 async def test_an_ending_cut_off_while_it_is_posted_is_posted_before_anything_is_shortened(
     slack: FakeSlack,
 ) -> None:
