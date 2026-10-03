@@ -226,6 +226,13 @@ def block_text(block: dict[str, Any]) -> str:
     return "".join(str(e.get("text", "")) for e in block.get("elements") or [])
 
 
+def blocks_sizes(blocks: list[dict[str, Any]]) -> tuple[int, int, int]:
+    """What a refused write sent, for the log, never its content: the characters of text, the
+    blocks, and how many of them are task cards."""
+    cards = sum(1 for b in blocks if b["type"] == "task_card")
+    return sum(len(block_text(b)) for b in blocks), len(blocks), cards
+
+
 def plain_text(blocks: list[dict[str, Any]]) -> str:
     """A message's text with no block: what a refused final write is retried with. Slack caps a
     text-only message at 4,000 characters (chat.update reference, 2026-09-25)."""
@@ -1211,8 +1218,12 @@ class ReplySink:
                 blocks=blocks,
             )
         except Exception as exc:
-            logger.warning("could not write a reply to Slack: %s", describe(exc))
             code = describe(exc)
+            logger.warning(
+                "chat.update failed (%s) with text %d, elements %d, cards %d",
+                code,
+                *blocks_sizes(blocks),
+            )
             if code == STILL_STREAMING:
                 # The daemon's stop never reached Slack: stopped now, the next write passes.
                 await self._stop(message, None, end)
@@ -1283,7 +1294,11 @@ class ReplySink:
                 unfurl_media=False,
             )
         except Exception as exc:
-            logger.warning("could not write a reply to Slack: %s", describe(exc))
+            logger.warning(
+                "chat.postMessage failed (%s) with text %d, elements %d, cards %d",
+                describe(exc),
+                *blocks_sizes(blocks),
+            )
             if unknown_outcome(exc):
                 ts = await self._adopt(
                     attempted, stream=False, probe=plain_words(banner)[:ADOPT_WORDS]
