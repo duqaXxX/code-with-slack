@@ -659,8 +659,10 @@ async def test_bang_stop_inside_a_thread_stops_only_that_session(world: World) -
     await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, OTHER_THREAD))
     posted = len(world.slack.calls_to("chat.postMessage"))
     await world.dispatch(reply("!stop", THREAD))
-    # Nothing is posted or shown for the owner: the session reacts on its own root.
-    assert len(world.slack.calls_to("chat.postMessage")) == posted and not world.ephemerals()
+    # One line that stays in the thread: an ephemeral one is gone on reload (issue #85).
+    (answer,) = world.slack.calls_to("chat.postMessage")[posted:]
+    assert answer["text"] == texts.STOPPED_THREAD and answer["thread_ts"] == THREAD
+    assert not world.ephemerals()
     assert world.clients[0].interrupts == 1
     assert world.clients[1].interrupts == 0
 
@@ -668,8 +670,10 @@ async def test_bang_stop_inside_a_thread_stops_only_that_session(world: World) -
 async def test_bang_stop_inside_an_idle_thread_says_nothing_is_running(world: World) -> None:
     await _idle_message(world, "hi", ts=THREAD)
     await world.dispatch(reply("!stop", THREAD))
-    assert world.ephemerals() == [texts.NOTHING_TO_STOP_THREAD]
-    assert texts.NOTHING_TO_STOP_THREAD not in said(world)  # for the owner alone
+    # A post in the thread, which stays: the owner can tell the stop was received (issue #85).
+    answer = world.slack.calls_to("chat.postMessage")[-1]
+    assert answer["text"] == texts.NOTHING_TO_STOP_THREAD and answer["thread_ts"] == THREAD
+    assert not world.ephemerals()
 
 
 async def test_a_malformed_daemon_word_at_top_level_shows_only_the_daemon_words(

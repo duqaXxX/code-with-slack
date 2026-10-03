@@ -852,11 +852,17 @@ def build_app(
                             channel, texts.STOPPED_CHANNEL if stopped else texts.NOTHING_TO_STOP
                         )
                 else:
-                    # A stop that stopped something posts nothing: the session reacts on its
-                    # own root (`ThreadSession.stop`). None: only a D8 hold was cancelled, which
-                    # already said `Not sent.` from its own waiter.
-                    if await session.stop() is False:
-                        await tell_owner(channel, thread_ts, texts.NOTHING_TO_STOP_THREAD)
+                    # Either answer is a post that stays in the thread: an ephemeral line is
+                    # gone on reload, and the root's ✅ alone does not say a stop was received.
+                    # None: only a D8 hold was cancelled, which already said `Not sent.` from
+                    # its own waiter.
+                    stopped = await session.stop()
+                    if stopped is not None:
+                        await notice(
+                            channel,
+                            thread_ts,
+                            texts.STOPPED_THREAD if stopped else texts.NOTHING_TO_STOP_THREAD,
+                        )
             case Resume(target=target):
                 if session is not None:
                     await tell_owner(
