@@ -450,7 +450,11 @@ thread's last message. When the turn has ended and a command or an agent it star
 runs, the same line reads `1 shell still running` and follows the count; the reply gets its
 footer once that task and its report have ended. If you sent another message meanwhile and its
 reply has ended, that reply's footer says it instead (`⏳ 1 shell`), until the command ends.
-The line goes while an approval or a question waits for you.
+The line goes while an approval or a question waits for you. Slack's clients draw it, and the
+iOS app can show none for a thread that Slack on desktop already has open: with desktop closed,
+or with the thread opened on iOS first, it shows on both (seen on 2026-10-04, five runs read by
+eye, one per condition; the method's reference does not describe it). The reply's cards and
+its footer do not depend on it.
 
 What code-with-slack says on its own (the answer to `!bind`, `!bypass` or `!stop`, a notice that
 it is restarting, a refused attachment, an error) shows small and grey, as the footer does, so it
