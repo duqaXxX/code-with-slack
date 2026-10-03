@@ -27,6 +27,7 @@ from claude_agent_sdk import (
     ToolPermissionContext,
 )
 
+from code_with_slack import texts
 from code_with_slack.approvals import Approvals, Approve, Deny, Pending
 from code_with_slack.attachments import prompt_for
 from code_with_slack.footer import UsageCache
@@ -401,19 +402,18 @@ async def resume(s: Stage, word: str) -> dict[str, Observation]:
     if session_id is None:
         return {"P6": Observation(False, False, "no session id stored")}
     listed = await asyncio.to_thread(directory_sessions, s.workdir)
-    # The daemon's own `held` test: the first turn's thread holds this session, so its row shows
-    # no Resume button, but the session is still listed.
+    # The picker as the daemon builds it (`handle_resume`): the first turn's thread holds this
+    # session, so it takes no row and is counted in the line under the list.
+    free = [i for i in listed if s.state.holder(i.session_id) is None]
+    held = len(listed) - len(free)
     picker = json.dumps(
-        resume_blocks(
-            s.workdir,
-            listed,
-            lambda sid: s.state.holder(sid) is not None,
-            datetime.now(UTC),
-            RESUME_THREAD,
-        )
+        resume_blocks(s.workdir, free, held, datetime.now(UTC), RESUME_THREAD),
+        ensure_ascii=False,
     )
-    in_list = any(i.session_id == session_id for i in listed) and session_id[:8] in picker
-    seen = {"P6": Observation(True, in_list)}
+    counted_line = texts.RESUME_OPEN_ONE if held == 1 else texts.RESUME_OPEN_MANY.format(count=held)
+    known = any(i.session_id == session_id for i in listed)
+    in_picker = held >= 1 and counted_line in picker and session_id[:8] not in picker
+    seen = {"P6": Observation(True, known and in_picker)}
     # A background command an earlier scene failed to stop keeps the channel busy.
     if not await until(lambda: s.session.idle, 30):
         return seen | {"P7": Observation(False, False, "the channel never became idle")}

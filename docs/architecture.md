@@ -443,9 +443,10 @@ every bound channel. A top-level message opens one in the channel's current fold
 (`SessionManager.open`); a reply inside a thread hands back its existing one, rebuilding it first
 if a restart, an idle close or a gone resume dropped it (`SessionManager.get`); a Resume click or
 `!resume <id or title>` opens one already set to a chosen session id, in the thread of the owner's
-`!resume` message (`SessionManager.resume`); `slack_app.resume_into_thread` posts the confirmation, then edits the list the click
-came from whether or not the confirmation posted, so buttons never outlive a resume and a failed
-edit never blocks the confirmation.
+`!resume` message (`SessionManager.resume`); `slack_app.resume_into_thread` posts the confirmation, then deletes the list the click
+came from (`show_resumed`); when the confirmation did not post, or the delete fails, the list is
+edited into a line that says what was resumed, so buttons never outlive a resume and a failure
+there never blocks the confirmation.
 Each thread keeps the folder it was opened in for as long as it exists: `!bind` changes only
 where the *next* thread starts, and refuses while any of the channel's threads is not idle
 (`SessionManager.bind`).

@@ -98,9 +98,9 @@ CLAIMS = [
     Claim(
         "P6",
         "gesture",
-        "the session is listed for `!resume`",
+        "`!resume` knows the session: held by its thread, it is counted under the list",
         "code_with_slack.sessions.directory_sessions",
-        "send `!resume`; the session is in the list",
+        "send `!resume`; the line under the list counts the session open in its own thread",
     ),
     Claim(
         "P7",

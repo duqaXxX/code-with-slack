@@ -1075,12 +1075,24 @@ async def test_the_owner_resumes_from_the_list(world: World) -> None:
     assert world.state.thread(CHANNEL, CLICK_THREAD) is None
     (resumed,) = world.slack.calls_to("chat.postMessage")
     assert resumed["thread_ts"] == THREAD and "Trust gate" in resumed["text"]
-    # The picker stays and becomes the record of what was resumed and where (an edit: silent).
+    # The picker has done its job: it is deleted, and the thread holds the one record (#70).
+    (deleted,) = world.slack.calls_to("chat.delete")
+    assert (deleted["channel"], deleted["ts"]) == (CHANNEL, body["message"]["ts"])
+    assert world.slack.calls_to("chat.update") == [] and not world.ephemerals()
+
+
+async def test_a_list_that_cannot_be_deleted_is_rewritten_without_its_buttons(
+    world: World,
+) -> None:
+    two_sessions(world)
+    world.slack.responses["chat.delete"] = RuntimeError("network down")
+    body = resume_click(SESSION_B, THREAD)
+    await world.dispatch(body)
+    assert world.state.thread(CHANNEL, THREAD).session_id == SESSION_B
     (edited,) = world.slack.calls_to("chat.update")
     assert edited["ts"] == body["message"]["ts"]
     assert "Trust gate" in edited["text"] and PERMALINK in edited["text"]
     assert all("accessory" not in b for b in edited["blocks"])
-    assert world.slack.calls_to("chat.delete") == [] and not world.ephemerals()
 
 
 async def test_a_resume_click_with_a_malformed_thread_changes_nothing(world: World) -> None:
@@ -1162,18 +1174,15 @@ async def test_a_held_session_s_link_falls_back_when_the_permalink_fails(world: 
     assert texts.RESUME_ELSEWHERE.format(link=fallback) in said(world)
 
 
-async def test_the_list_marks_a_session_held_elsewhere_with_its_permalink(world: World) -> None:
+async def test_the_list_counts_a_session_held_elsewhere_and_gives_it_no_row(world: World) -> None:
     two_sessions(world)
     await world.dispatch(message(f"!resume {SESSION_B}", ts=OTHER_THREAD))
     await world.dispatch(message("!resume"))
-    post = world.slack.calls_to("chat.postMessage")[-1]
-    held_row = next(b for b in post["blocks"] if b.get("block_id") == f"session-{SESSION_B}")
-    free_row = next(b for b in post["blocks"] if b.get("block_id") == f"session-{SESSION_A}")
-    assert "accessory" not in held_row and "accessory" in free_row
-    link = f"<{PERMALINK}|open elsewhere>"
-    assert held_row["text"]["text"].endswith(texts.RESUME_ELSEWHERE_ROW.format(link=link))
-    permalinks = world.slack.calls_to("chat.getPermalink")
-    assert [(c["channel"], c["message_ts"]) for c in permalinks] == [(CHANNEL, OTHER_THREAD)]
+    blocks = world.slack.calls_to("chat.postMessage")[-1]["blocks"]
+    listed = [b["block_id"] for b in blocks if b.get("block_id")]
+    assert listed == [f"session-{SESSION_A}"]  # the rows are the sessions that can be resumed
+    assert blocks[-1]["elements"][0]["text"] == texts.RESUME_OPEN_ONE
+    assert world.slack.calls_to("chat.getPermalink") == []  # no row links to a thread
 
 
 async def test_a_still_running_first_turn_already_holds_its_session_id(world: World) -> None:
@@ -1459,6 +1468,7 @@ async def test_a_resumed_title_keeps_its_characters_inside_the_bold(
 async def test_the_resumed_list_keeps_a_title_with_underscores_readable(world: World) -> None:
     title = "fix_the_parser"
     world.stored_sessions = [SDKSessionInfo(SESSION_A, title, 0, 1, title)]
+    world.slack.responses["chat.delete"] = RuntimeError("network down")  # the list is rewritten
     body = resume_click(SESSION_A, THREAD)
     await world.dispatch(body)
     (edited,) = world.slack.calls_to("chat.update")
@@ -1474,8 +1484,10 @@ async def test_a_failing_confirmation_still_updates_the_list(world: World) -> No
     ]
     await world.dispatch(resume_click(SESSION_B, THREAD))
     assert world.state.thread(CHANNEL, THREAD).session_id == SESSION_B
+    # No confirmation reached the thread: the list is kept, rewritten, as the record.
     (edited,) = world.slack.calls_to("chat.update")
     assert all("accessory" not in b for b in edited["blocks"])
+    assert world.slack.calls_to("chat.delete") == []
 
 
 async def test_a_failing_list_edit_does_not_block_the_confirmation(world: World) -> None:
