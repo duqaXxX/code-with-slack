@@ -35,6 +35,7 @@ from code_with_slack import sessions, texts
 from code_with_slack.approvals import Answer, Approvals, Approve
 from code_with_slack.footer import UsageCache
 from code_with_slack.guards import Identity
+from code_with_slack.render.renderer import TurnRenderer
 from code_with_slack.render.sinks import UpdateLimiter
 from code_with_slack.render.status import Status, ThreadStatus
 from code_with_slack.sessions import SessionDeps, SessionManager, resolve_directory
@@ -1132,6 +1133,150 @@ def renamed_background() -> tuple[list[Any], list[Any], list[Any]]:
         i for i, m in enumerate(later) if isinstance(m, SystemMessage) and m.subtype == "init"
     )
     return first, later[:start], later[start:]
+
+
+async def test_a_report_turn_starting_over_the_expiry_s_write_leaves_the_root_on_done(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The report turn starts after INJECTED_TURN_WAIT, while `_expire_injected_turn` already
+    # writes the end of the reply that started the task: `_start_turn` cancels that write, which
+    # must not leave the reply's end unresolved (and ⏳ on the root for good).
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.05)
+    first, notice, injected = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    a = session._task_replies["bny2rux7d"]
+    gate = h.slack.gate = asyncio.Event()
+    h.slack.gated.clear()
+    h.clients[0].inject(notice)
+    await asyncio.wait_for(h.slack.gated.wait(), 1.0)  # the expiry's end is inside its write
+    h.clients[0].inject(injected)  # the report turn starts over that write
+    await until(lambda: session._active is not None, limit=1.0)
+    h.slack.gate = None
+    gate.set()
+    await until(lambda: h.reactions()[-1:] == [Status.DONE.value] and session.idle, limit=3.0)
+    assert session._unlanded == set()
+    assert await asyncio.wait_for(a.sink.wait_landed(), 1.0) is True
+
+
+async def test_two_notifications_a_moment_apart_end_both_replies_and_show_done(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.05)
+    first, notice, injected = split_background()
+    first_b, notice_b, _ = renamed_background()
+    h = harness_for({"turns": [first, first_b]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start A")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("start B")).done.wait(), 2)
+    a = session._task_replies["bny2rux7d"]
+    b = session._task_replies["bc41other"]
+    gate = h.slack.gate = asyncio.Event()
+    h.slack.gated.clear()
+    h.clients[0].inject(notice)
+    await asyncio.wait_for(h.slack.gated.wait(), 1.0)  # the expiry's end of A is in its write
+    h.clients[0].inject(notice_b + injected)  # the report turn starts over it
+    await until(lambda: session._active is not None, limit=1.0)
+    h.slack.gate = None
+    gate.set()
+    await until(lambda: a.closed_out and b.closed_out, limit=2.0)
+    await until(lambda: h.reactions()[-1:] == [Status.DONE.value] and session.idle, limit=3.0)
+    assert session._unlanded == set() and not session._injected_expected
+    assert await asyncio.wait_for(a.sink.wait_landed(), 1.0) is True
+    assert await asyncio.wait_for(b.sink.wait_landed(), 1.0) is True
+    assert not any(m.streaming for m in h.slack.messages.values())
+
+
+async def test_a_report_turn_keeps_the_reply_it_renders_into_open_while_the_expiry_sweeps(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Guard against letting the expiry's work run beside a turn (`_start_turn`'s cancel is the
+    # exclusion). Replies A and B each hold a task. The first notification's wait passes and the
+    # expiry's sweep stops on the end of that reply; the second notification arrives and the
+    # report turn starts, rendering into the second reply. A sweep that resumed under the turn
+    # would close that reply with its snapshot of `active` (None). `_sweep_closed_out` walks a
+    # set, whose order follows the renderers' hashes; the order it needs (A first) is fixed below.
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.05)
+    first, notice, injected = split_background()
+    first_b, notice_b, _ = renamed_background()
+    h = harness_for({"turns": [first, first_b]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start A")).done.wait(), 2)
+    await asyncio.wait_for((await session.submit("start B")).done.wait(), 2)
+    first_reply = session._task_replies["bny2rux7d"]
+    target = session._task_replies["bc41other"]  # the second notified: the turn renders there
+    rank = {id(first_reply): 1, id(target): 2}
+    monkeypatch.setattr(
+        TurnRenderer, "__hash__", lambda self: rank.get(id(self), object.__hash__(self))
+    )
+    gate = h.slack.gate = asyncio.Event()
+    h.slack.gated.clear()
+    h.clients[0].inject(notice)
+    await asyncio.wait_for(h.slack.gated.wait(), 1.0)
+    h.clients[0].inject(notice_b + injected[:3])  # the turn's first message starts it
+    await until(lambda: session._active is not None, limit=1.0)
+    h.slack.gate = None
+    gate.set()
+    await asyncio.sleep(0.05)  # whatever the sweep still does, it has done by now
+    assert not target.closed_out
+    h.clients[0].inject(injected[3:])
+    await until(lambda: target.closed_out, limit=3.0)
+    await until(lambda: not any(m.streaming for m in h.slack.messages.values()), limit=2.0)
+    shown = h.slack.message_blocks()[1]
+    assert "49.2k" in shown[-1]["elements"][0]["text"]  # the report turn's footer, not the first's
+
+
+async def test_an_owner_prompt_sent_during_the_expiry_s_work_runs_after_it(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.05)
+    first, notice, _ = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    a = session._task_replies["bny2rux7d"]
+    gate = h.slack.gate = asyncio.Event()
+    h.slack.gated.clear()
+    h.clients[0].inject(notice)
+    await asyncio.wait_for(h.slack.gated.wait(), 1.0)  # the expiry's end is inside its write
+    turn = await asyncio.wait_for(session.submit("and now?"), 2)
+    h.clients[0].inject(sdk_messages("tools"))  # its turn starts over that write
+    await until(lambda: session._active is not None, limit=1.0)
+    h.slack.gate = None
+    gate.set()
+    await asyncio.wait_for(turn.done.wait(), 2)
+    await until(lambda: h.reactions()[-1:] == [Status.DONE.value] and session.idle, limit=2.0)
+    assert session._unlanded == set()
+    assert await asyncio.wait_for(a.sink.wait_landed(), 1.0) is True
+
+
+async def test_a_close_during_the_expiry_s_work_ends_promptly_and_leaks_no_task(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.05)
+    first, notice, _ = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    a = session._task_replies["bny2rux7d"]
+    # A delay, not the gate: `close` settles every reply, which waits for the write in flight,
+    # so a held write would hold the close too.
+    h.slack.delay = 0.1
+    h.clients[0].inject(notice)
+    await until(lambda: a.closed_out, limit=1.0)  # the expiry is writing
+    started = asyncio.get_running_loop().time()
+    await asyncio.wait_for(session.close(), 2)
+    assert asyncio.get_running_loop().time() - started < 1.0
+    h.slack.delay = 0
+    await asyncio.sleep(0.2)  # the write Slack still held answers, then nothing is left
+    leaked = [
+        t.get_name()
+        for t in asyncio.all_tasks()
+        if any(name in repr(t) for name in ("_expire_injected_turn", "_end_out"))
+    ]
+    assert leaked == []
+    assert await asyncio.wait_for(a.sink.wait_landed(), 1.0) is True
 
 
 async def test_owner_query_waits_for_an_expected_background_turn(
@@ -2599,6 +2744,9 @@ async def test_an_idle_session_closes_itself_after_the_delay_and_posts_nothing(
     h = harness_for({"turns": [sdk_messages("tools")]})
     session = h.session()
     await asyncio.wait_for((await session.submit("hi")).done.wait(), 2)
+    # `done` is set before the thread status's last write (the end now runs in its own task):
+    # let it land, well inside the 0.05 s delay, so only the close itself is counted.
+    await asyncio.sleep(0.02)
     calls_before = len(h.slack.calls)  # every kind: postMessage, update, delete
     await until(lambda: not h.clients[0].connected, limit=1)
     assert session.closed

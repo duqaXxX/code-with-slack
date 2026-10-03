@@ -261,6 +261,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- An end of a reply that began always resolves (`ReplySink.close_out`, `wait_landed`). A caller
+  cancelled while the end's write was out (a report turn starting while
+  `ThreadSession._expire_injected_turn` was writing, a close) left the reply neither landed nor
+  scheduled for its retry: the session kept it in `_unlanded` for good, so ✅ was never shown
+  and the root of an idle session stayed on ⏳ until the session closed. The end now runs as a
+  task the caller's cancellation does not stop, which resolves `wait_landed` (with the one
+  retry when Slack refused the write, or `False` when the end raised), and `settle` waits for
+  it before cancelling the retry, so no write goes out after a shutdown's last pass.
+
 - A reply that has ended never opens a message below its footer or its closing message (issue
   #51). A preview, a card or words that arrived late used to open a new message when the last
   one was full. Once the end has landed on Slack (the last stream stopped with the footer, the

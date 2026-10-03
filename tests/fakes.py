@@ -250,6 +250,12 @@ class FakeSlack(AsyncWebClient):
         self.stream_ends = 0  # streams that stopped, by the daemon's stop or by `expire`
         # Every call waits this long before answering, as a slow Slack API round trip would.
         self.delay = 0.0
+        # While set, a call to `gate_method` waits here until the event is set, after `gated`
+        # says one arrived: a test holds a write open and acts inside it, with no race against
+        # a timer.
+        self.gate: asyncio.Event | None = None
+        self.gate_method = "chat.stopStream"
+        self.gated = asyncio.Event()
         # A response may be an exception: the call raises it, as a network failure would. It may
         # be a function of the call's arguments, which returns the answer (or the exception).
         self.responses: dict[str, Any] = {
@@ -325,6 +331,9 @@ class FakeSlack(AsyncWebClient):
     ) -> AsyncSlackResponse:
         if self.delay:
             await asyncio.sleep(self.delay)
+        if self.gate is not None and api_method == self.gate_method:
+            self.gated.set()
+            await self.gate.wait()
         args = {**(params or {}), **(json or {}), **(data if isinstance(data, dict) else {})}
         self.calls.append((api_method, args))
         answer = self.responses.get(api_method, {"ok": True})
