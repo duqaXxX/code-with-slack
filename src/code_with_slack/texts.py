@@ -270,6 +270,11 @@ APPROVAL_UNPOSTED = "code-with-slack could not show this request in Slack, so no
 APPROVAL_GONE = "This request is no longer pending: the turn ended or code-with-slack restarted."
 RESUME_LIST = "Sessions in `{directory}`, newest first:"
 RESUME_EMPTY = "No sessions in `{directory}` yet."
+# Every session of the folder is already open in a thread: the list has no row to offer.
+RESUME_NONE_LEFT = "No session to resume in `{directory}`."
+# Under the list: the sessions a thread already holds (D6), counted and not listed (issue #69).
+RESUME_OPEN_ONE = "1 more is open in its own thread."
+RESUME_OPEN_MANY = "{count} more are open in their own threads."
 RESUME_BUTTON = "Resume"
 RESUME_MORE = (
     "Only the newest {rows} are shown: `!resume <id>`, or `!resume <title>` for a session that "
@@ -289,11 +294,11 @@ RESUME_GONE = "That session is not in this channel's directory any more: `!resum
 RESUME_HELD = (
     "This thread already holds a session: send `!resume` again in the channel to pick another."
 )
+# What the list is rewritten to after a Resume click, only when it cannot be deleted.
 RESUME_LISTED = "Resumed {title} in {link}."
 # D6: a session held by any thread of any channel is never resumed a second time; `{link}` is the
 # holding thread's permalink (a plain fallback when Slack would not give one).
 RESUME_ELSEWHERE = "This session is already open in another thread: {link}."
-RESUME_ELSEWHERE_ROW = " · {link}"
 # The app's Home tab: the sessions the threads hold, by channel, newest activity first, under
 # four filters. `{time}` is Slack's own date token, shown in the reader's time zone.
 HOME_HEADER = "Sessions by channel, newest first · updated {time}"

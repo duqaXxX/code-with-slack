@@ -88,7 +88,6 @@ from code_with_slack.render.sinks import (
 )
 from code_with_slack.resume import (
     RESUME_ACTION,
-    RESUME_ROWS,
     TITLE_LIMIT,
     matching,
     parse_resume_value,
@@ -1211,28 +1210,16 @@ def build_app(
             await in_channel(channel, texts.UNBOUND.format(root=config.allowed_root))
             return
         directory = record.directory
-        # Only the list shows dates: matching a target needs none, and dating reads every file.
-        stored = await sessions.sessions_in(directory, dated=not target)
+        stored = await sessions.sessions_in(directory)
         if not target:
-            # A permalink is a Slack round trip: fetched only for the held rows the list shows.
-            candidates = [(s.session_id, state.holder(s.session_id)) for s in stored[:RESUME_ROWS]]
-            held = [(sid, holder) for sid, holder in candidates if holder is not None]
-            links = dict(
-                zip(
-                    (sid for sid, _ in held),
-                    await asyncio.gather(
-                        *(
-                            thread_mrkdwn_link(holder[0], holder[1], "open elsewhere")
-                            for _, holder in held
-                        )
-                    ),
-                    strict=True,
-                )
-            )
+            # A session a thread already holds cannot be resumed (D6): it takes no row, so the
+            # rows are the ones the owner can pick (issue #69). Only the list shows dates, and
+            # dating reads files: the sessions left out are not dated.
+            free = [s for s in stored if state.holder(s.session_id) is None]
             blocks = resume_blocks(
                 directory,
-                stored,
-                lambda sid: links.get(sid),
+                await sessions.dated(directory, free),
+                len(stored) - len(free),
                 datetime.now().astimezone(),
                 thread_ts,
             )
@@ -1269,7 +1256,7 @@ def build_app(
         other thread (D6: one session lives in one thread), or the channel was bound to another
         folder while `chosen` was read from `directory`. Every check runs with no `await` before
         the `resume` they guard, so nothing can change between the checks and the call they
-        protect. `list_ts`: the picker a click came from, edited once the confirmation is posted or
+        protect. `list_ts`: the picker a click came from, removed once the confirmation is posted or
         has failed, so buttons never outlive a resume."""
         if sessions.get(channel, thread_ts) is not None:
             await in_channel(channel, texts.RESUME_HELD)
@@ -1287,12 +1274,15 @@ def build_app(
         assert session is not None  # just confirmed the channel is bound to `directory`
         # A markdown block, not mrkdwn: the title is escaped so it cannot close or open the bold.
         title = markdown_escape(one_line(chosen.summary, TITLE_LIMIT)) or chosen.session_id
+        confirmed = False
         try:
             await say(channel, thread_ts, texts.RESUME_OK.format(title=title))
+            confirmed = True
         finally:
-            # Independent of the confirmation: a failing one still leaves a list that says what
-            # was resumed, and a failing edit (swallowed in `show_resumed`) never blocks it.
-            await show_resumed(channel, thread_ts, list_ts, chosen)
+            # Independent of the confirmation: a failing one still takes the list's buttons
+            # away, and a failure there (swallowed in `show_resumed`) never blocks it. With no
+            # confirmation in the thread the list is kept, rewritten, as the record.
+            await show_resumed(channel, thread_ts, list_ts, chosen, delete=confirmed)
         return True
 
     @app.action(RESUME_ACTION)
@@ -1334,11 +1324,21 @@ def build_app(
         )
 
     async def show_resumed(
-        channel: str, thread_ts: str, list_ts: str | None, chosen: SDKSessionInfo
+        channel: str, thread_ts: str, list_ts: str | None, chosen: SDKSessionInfo, *, delete: bool
     ) -> None:
-        """The picker becomes the record of what was resumed and where (an edit: silent)."""
+        """The picker has done its job once a session is resumed from it. With `delete`, the
+        confirmation is in the thread and is the one record of what was resumed: the picker is
+        deleted (issue #70). Without it, or when the delete fails, the picker is rewritten into
+        a line that says what was resumed and where (an edit: silent), so its buttons never
+        stay live."""
         if list_ts is None:
             return
+        if delete:
+            try:
+                await slack.chat_delete(channel=channel, ts=list_ts)
+                return
+            except Exception as exc:
+                logger.warning("could not delete the resume list in %s: %s", channel, describe(exc))
         title = mrkdwn_escape(one_line(chosen.summary, TITLE_LIMIT)) or chosen.session_id
         link = await thread_mrkdwn_link(channel, thread_ts, "this thread")
         text = texts.RESUME_LISTED.format(title=title, link=link)

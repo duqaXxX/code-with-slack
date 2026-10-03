@@ -110,6 +110,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The `!resume` list shows only sessions that can be resumed (issue #69). A session a thread
+  already holds (D6) takes no row and is not dated; one line under the list counts them
+  (`texts.RESUME_OPEN_ONE`, `texts.RESUME_OPEN_MANY`), and a folder whose sessions are all open
+  says `No session to resume in <folder>.` Before, each held session took one of the twenty
+  rows with an `open elsewhere` link, so in an active folder the list could offer nothing to
+  resume. The list no longer asks Slack for a permalink per held row.
+- After a Resume click the list is deleted (issue #70): the owner's `!resume` stays as the
+  thread's root and the confirmation in the thread is the record. When the confirmation did
+  not post, or `chat.delete` fails, the list is rewritten into `Resumed <title> in this
+  thread.` as before, so its buttons never stay live. The `chat.delete` reference (read
+  2026-10-03) does not say whether a delete notifies; a bot deleting its own message in a
+  thread was silent when measured on 2026-09-29, and the top-level case is a check by hand.
 - A message refused while the daemon stops names what the stop waits for (issue #119). Under
   `code-with-slack is restarting; send this again in a moment.` the refusal lists each thread
   that still holds the restart, of any channel: its channel, a link to the thread labelled with

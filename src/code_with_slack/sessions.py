@@ -2441,9 +2441,12 @@ class SessionManager:
         """Every session of `directory`, the one the caller read for its channel; `dated`, by
         their last message, newest first, as the terminal's picker shows them."""
         found = await asyncio.to_thread(self._deps.sessions_of, directory)
-        if dated:
-            found = await asyncio.to_thread(by_last_activity, directory, found)
-        return found
+        return await self.dated(directory, found) if dated else found
+
+    async def dated(self, directory: Path, found: list[SDKSessionInfo]) -> list[SDKSessionInfo]:
+        """`found`, sessions of `directory`, by their last message, newest first. Dating reads
+        files, so a caller that shows only some of a folder's sessions passes those alone."""
+        return await asyncio.to_thread(by_last_activity, directory, found)
 
     async def unavailable(self, directory: Path) -> DirectoryUnavailable | None:
         """What would keep a session from starting in `directory`, by the checks a start makes;

@@ -13,7 +13,6 @@ import heapq
 import json
 import logging
 import re
-from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -141,9 +140,7 @@ def _size(size: int | None) -> str | None:
     return f"{size / (1024 * 1024):.1f}MB"
 
 
-def _row(
-    session: SDKSessionInfo, held: str | None, now: datetime, thread_ts: str
-) -> dict[str, Any]:
+def _row(session: SDKSessionInfo, now: datetime, thread_ts: str) -> dict[str, Any]:
     # Shown as the terminal's picker shows it, HEAD outside a repository included.
     branch = shown_as_written(session.git_branch) if session.git_branch else None
     title = shown_as_written(one_line(session.summary, TITLE_LIMIT))
@@ -156,45 +153,47 @@ def _row(
         _size(session.file_size),
         session.session_id[:ID_SHOWN],
     ]
-    suffix = texts.RESUME_ELSEWHERE_ROW.format(link=held) if held is not None else ""
-    line = " · ".join(p for p in parts if p) + suffix
-    block: dict[str, Any] = {
+    return {
         "type": "section",
         "block_id": f"session-{session.session_id}",
-        "text": {"type": "mrkdwn", "text": line},
-    }
-    if held is None:
-        block["accessory"] = {
+        "text": {"type": "mrkdwn", "text": " · ".join(p for p in parts if p)},
+        "accessory": {
             "type": "button",
             "action_id": RESUME_ACTION,
             "value": resume_value(session.session_id, thread_ts),
             "text": {"type": "plain_text", "text": texts.RESUME_BUTTON},
-        }
-    return block
+        },
+    }
 
 
 def resume_blocks(
     directory: Path,
     sessions: list[SDKSessionInfo],
-    held: Callable[[str], str | None],
+    open_elsewhere: int,
     now: datetime,
     thread_ts: str,
 ) -> list[dict[str, Any]]:
-    """The picker: the newest RESUME_ROWS sessions of `directory`. `held` gives the mrkdwn link
-    to the thread already holding a session id (D6: one session lives in one thread), or None for
-    a session no thread of any channel holds; a held row shows that link and no Resume button,
-    since resuming it there is refused anyway. Each Resume button carries `thread_ts`, the thread
-    of the owner's `!resume` message, where the session is resumed."""
+    """The picker: the newest RESUME_ROWS of `sessions`, the ones of `directory` that can be
+    resumed. `open_elsewhere` counts the sessions a thread already holds (D6: one session lives
+    in one thread): they are left out of the rows, since resuming one is refused anyway, and
+    named by one line under the list, so the limit applies to what the owner can act on. Each
+    Resume button carries `thread_ts`, the thread of the owner's `!resume` message, where the
+    session is resumed."""
     # The list's own lines are the daemon's notices, small and grey; the rows keep their button.
     shown = shown_as_written(str(directory))
+    if open_elsewhere == 1:
+        held = [context_block(texts.RESUME_OPEN_ONE)]
+    elif open_elsewhere:
+        held = [context_block(texts.RESUME_OPEN_MANY.format(count=open_elsewhere))]
+    else:
+        held = []
     if not sessions:
-        return [context_block(texts.RESUME_EMPTY.format(directory=shown))]
-    header = texts.RESUME_LIST.format(directory=shown)
+        empty = texts.RESUME_NONE_LEFT if held else texts.RESUME_EMPTY
+        return [context_block(empty.format(directory=shown)), *held]
     blocks = [
-        context_block(header),
-        *(_row(s, held(s.session_id), now, thread_ts) for s in sessions[:RESUME_ROWS]),
+        context_block(texts.RESUME_LIST.format(directory=shown)),
+        *(_row(s, now, thread_ts) for s in sessions[:RESUME_ROWS]),
     ]
     if len(sessions) > RESUME_ROWS:
-        more = texts.RESUME_MORE.format(rows=RESUME_ROWS)
-        blocks.append(context_block(more))
-    return blocks
+        blocks.append(context_block(texts.RESUME_MORE.format(rows=RESUME_ROWS)))
+    return blocks + held

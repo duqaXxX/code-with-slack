@@ -34,10 +34,6 @@ def rows(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [b for b in blocks if b.get("block_id", "").startswith("session-")]
 
 
-def nothing_held(session_id: str) -> str | None:
-    return None
-
-
 def test_each_session_is_a_row_with_the_picker_s_columns_and_a_button() -> None:
     sessions = [
         info("68da9311-0000-4000-8000-000000000001", "Fix footer effort", 2, git_branch="main",
@@ -45,7 +41,7 @@ def test_each_session_is_a_row_with_the_picker_s_columns_and_a_button() -> None:
         info("68da9311-0000-4000-8000-000000000002", "Add trust gate", 26,
              git_branch="security-fixes", file_size=1_100_000),
     ]  # fmt: skip
-    blocks = resume_blocks(Path("/srv/dev/app"), sessions, nothing_held, NOW, THREAD)
+    blocks = resume_blocks(Path("/srv/dev/app"), sessions, 0, NOW, THREAD)
     assert "/srv/dev/app" in blocks[0]["elements"][0]["text"]
     first, second = rows(blocks)
     # The id's first characters close the row, in plain text like the rest of it.
@@ -60,21 +56,24 @@ def test_each_session_is_a_row_with_the_picker_s_columns_and_a_button() -> None:
     assert button["text"]["text"] == texts.RESUME_BUTTON
 
 
-def test_a_session_held_elsewhere_is_marked_with_a_link_and_has_no_button() -> None:
+def test_sessions_open_in_a_thread_are_counted_under_the_list() -> None:
     sessions = [info("68da9311-0000-4000-8000-000000000001", "Now", 0.1)]
-    held_id = sessions[0].session_id
-    link = "<https://example.slack.com/archives/C000CHAN/p1|open elsewhere>"
-    blocks = resume_blocks(
-        Path("/srv/dev/app"), sessions, lambda sid: link if sid == held_id else None, NOW, THREAD
-    )
-    (row,) = rows(blocks)
-    assert "accessory" not in row
-    assert row["text"]["text"] == f"Now · 6 minutes ago · 68da9311 · {link}"
+    blocks = resume_blocks(Path("/srv/dev/app"), sessions, 3, NOW, THREAD)
+    assert len(rows(blocks)) == 1  # the rows are the sessions that can be resumed
+    assert blocks[-1]["elements"][0]["text"] == texts.RESUME_OPEN_MANY.format(count=3)
+    one = resume_blocks(Path("/srv/dev/app"), sessions, 1, NOW, THREAD)
+    assert one[-1]["elements"][0]["text"] == texts.RESUME_OPEN_ONE
+
+
+def test_a_folder_whose_sessions_are_all_open_says_there_is_none_to_resume() -> None:
+    first, second = resume_blocks(Path("/srv/dev/app"), [], 2, NOW, THREAD)
+    assert first["elements"][0]["text"] == texts.RESUME_NONE_LEFT.format(directory="/srv/dev/app")
+    assert second["elements"][0]["text"] == texts.RESUME_OPEN_MANY.format(count=2)
 
 
 def test_a_free_row_carries_no_link() -> None:
     sessions = [info("68da9311-0000-4000-8000-000000000001", "Now", 0.1)]
-    (row,) = rows(resume_blocks(Path("/srv/dev/app"), sessions, nothing_held, NOW, THREAD))
+    (row,) = rows(resume_blocks(Path("/srv/dev/app"), sessions, 0, NOW, THREAD))
     assert "accessory" in row
     assert row["text"]["text"] == "Now · 6 minutes ago · 68da9311"
 
@@ -85,13 +84,13 @@ def test_the_branch_reads_as_the_terminal_shows_it() -> None:
         info("68da9311-0000-4000-8000-000000000001", "Notes", 50, git_branch="HEAD",
              file_size=976_000),
     ]  # fmt: skip
-    (row,) = rows(resume_blocks(Path("/srv/dev/notes"), sessions, nothing_held, NOW, THREAD))
+    (row,) = rows(resume_blocks(Path("/srv/dev/notes"), sessions, 0, NOW, THREAD))
     assert row["text"]["text"] == "Notes · 2 days ago · HEAD · 953.1KB · 68da9311"
 
 
 def test_only_the_newest_sessions_are_listed() -> None:
     sessions = [info(f"68da9311-0000-4000-8000-{i:012d}", f"s{i}", i) for i in range(25)]
-    blocks = resume_blocks(Path("/srv/dev/app"), sessions, nothing_held, NOW, THREAD)
+    blocks = resume_blocks(Path("/srv/dev/app"), sessions, 0, NOW, THREAD)
     listed = rows(blocks)
     assert len(listed) == RESUME_ROWS == 20  # the maintainer, 2026-09-25: ten were too few
     first = parse_resume_value(listed[0]["accessory"]["value"])
@@ -103,18 +102,18 @@ def test_only_the_newest_sessions_are_listed() -> None:
 
 def test_no_more_line_when_every_session_fits() -> None:
     sessions = [info(f"68da9311-0000-4000-8000-{i:012d}", f"s{i}", i) for i in range(RESUME_ROWS)]
-    blocks = resume_blocks(Path("/srv/dev/app"), sessions, nothing_held, NOW, THREAD)
+    blocks = resume_blocks(Path("/srv/dev/app"), sessions, 0, NOW, THREAD)
     assert len(rows(blocks)) == RESUME_ROWS and "accessory" in blocks[-1]
 
 
 def test_a_title_is_shown_as_written() -> None:
     sessions = [info("68da9311-0000-4000-8000-000000000001", "see <http://x|ok> ```", 1)]
-    (row,) = rows(resume_blocks(Path("/srv/dev/app"), sessions, nothing_held, NOW, THREAD))
+    (row,) = rows(resume_blocks(Path("/srv/dev/app"), sessions, 0, NOW, THREAD))
     assert "&lt;http://x|ok&gt;" in row["text"]["text"] and "```" not in row["text"]["text"]
 
 
 def test_no_session_yet_says_so() -> None:
-    blocks = resume_blocks(Path("/srv/dev/app"), [], nothing_held, NOW, THREAD)
+    blocks = resume_blocks(Path("/srv/dev/app"), [], 0, NOW, THREAD)
     assert blocks[0]["elements"][0]["text"] == texts.RESUME_EMPTY.format(directory="/srv/dev/app")
     assert rows(blocks) == []
 
@@ -213,7 +212,7 @@ def test_dating_stops_once_the_rest_cannot_enter_the_list(monkeypatch: pytest.Mo
 def test_the_branch_and_the_folder_are_shown_as_written() -> None:
     # git accepts `<`, `>` and `&` in a branch name; unescaped, `<!here>` would notify the channel.
     sessions = [info("68da9311-0000-4000-8000-000000000001", "t", 1, git_branch="fix/<!here>")]
-    blocks = resume_blocks(Path("/srv/R&D"), sessions, nothing_held, NOW, THREAD)
+    blocks = resume_blocks(Path("/srv/R&D"), sessions, 0, NOW, THREAD)
     assert "R&amp;D" in blocks[0]["elements"][0]["text"]
     assert "fix/&lt;!here&gt;" in rows(blocks)[0]["text"]["text"]
 
