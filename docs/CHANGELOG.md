@@ -256,6 +256,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- The Answer form shows every word of an option (issue #47). Slack caps an option object's text
+  and description at 75 characters each, so a longer description ended in `…` mid-sentence, and
+  an option's `preview` was never shown. When an option of a question says more than a choice
+  holds, the page now shows the question in bold and each option whole above the choice: its
+  label in bold and its full description in a `rich_text` block, its preview in a preformatted
+  element of the same block (`approvals.question_view`, `approvals._option_whole`). The choice keeps the labels alone,
+  titled with the question's header. A question whose options all fit keeps the form it had.
+  The input shape with a `preview` was recorded on Claude Code 2.1.286
+  (`tests/fixtures/sdk/ask-preview-can-use-tool.json`).
 - A restart that lands at the end of a turn no longer leaves both ⏳ and ✅ on the thread's root
   message (issue #104). `StatusReaction.show` changes the reaction with two calls, and the
   session read idle between them, so the drain closed it and the close cancelled the reader

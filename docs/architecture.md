@@ -363,7 +363,13 @@ and no text can close its code block. A clarifying question (Claude Code's `AskU
 same way and is posted as one line naming the questions, with **Answer** and **Skip**. Answer
 opens a modal (`approvals.question_view`) that shows one question at a time, since Slack has
 no tabs: radio buttons, or checkboxes when several may be picked, each option with its
-description, and an **Other** field, as the terminal offers. The modal's own button reads
+description, and an **Other** field, as the terminal offers. Slack caps an option object's text
+and description at 75 characters each and gives it no place for the option's `preview`. When an
+option says more than that (`approvals._says_more`), the page shows the question in bold, then
+every option whole in a `rich_text` block: its label in bold, its full description, and its
+preview in a preformatted element, which keeps its line breaks. Rich text shows its text as
+written, so nothing Claude wrote is read as markup. The choice under them keeps the labels
+alone, titled with the question's header. The modal's own button reads
 `Next (1/3)` and moves on (`response_action: update`) only once the question has an answer,
 otherwise the question gets an error (`response_action: errors`); it reads `Submit` on the last.
 What was filled travels in the view's `private_metadata` (`approvals.Draft`, under Slack's
