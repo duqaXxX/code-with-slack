@@ -66,6 +66,17 @@ ENDED_RESTARTING = "code-with-slack is restarting; send your message again in a 
 # Never shown: an idle close (D9) always finds nothing running, sent or queued to end with it.
 ENDED_IDLE = "code-with-slack closed this idle session"
 RESTARTING = "code-with-slack is restarting; send this again in a moment."
+# Under RESTARTING, and after a channel's `!status`, while a stop waits: one row per thread that
+# holds it (issue #119). mrkdwn.
+RESTART_WAITS_FOR = "It is waiting for:"
+RESTART_WAITS_HEADER = "code-with-slack is restarting. " + RESTART_WAITS_FOR
+RESTART_WAIT_ROW = "• <#{channel}>, {link}: {hold}"
+RESTART_WAIT_SESSION = "Session"  # the link's label for a session with no title yet
+RESTART_WAIT_STOP = "`!stop` in a thread ends the wait there."
+RESTART_HOLD_OWNER = "an approval or a question is waiting for you"
+RESTART_HOLD_TURN = "a turn is running"
+RESTART_HOLD_TASKS = "{counts} running"
+RESTART_HOLD_REPORT = "a background task is about to report"
 BACKGROUND_NOTICE = "_Background task update_"
 PROMPT_IMAGE = "an image"
 COMPACTED = "Compacted the conversation: {before} → {after} tokens."

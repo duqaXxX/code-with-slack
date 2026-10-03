@@ -592,6 +592,21 @@ class ThreadSession:
         session that may have sent the signal (`may_have_ordered_restart`), does not count."""
         return self._quiet(awaited_only=True)
 
+    @property
+    def restart_hold(self) -> str:
+        """What a stop still waits for in this thread, in words the owner can act on; empty
+        when the thread does not hold it (`SessionManager.drain` reads the same two flags)."""
+        if self.restart_ready and not self.reporting:
+            return ""
+        if self.waiting_for_owner:
+            return texts.RESTART_HOLD_OWNER
+        if held := self._running_kinds(awaited_only=True):
+            if not self.busy:
+                return texts.RESTART_HOLD_TASKS.format(counts=held)
+        elif not self.busy and self.reporting:
+            return texts.RESTART_HOLD_REPORT
+        return texts.RESTART_HOLD_TURN
+
     def _quiet(self, *, awaited_only: bool) -> bool:
         return (
             not self.busy
@@ -2358,6 +2373,14 @@ class SessionManager:
         """The live sessions of a channel, across its threads; a closed one (D9's idle close, or
         a gone resume) is left out even before the next lookup evicts it."""
         return [s for (c, _), s in self._sessions.items() if c == channel_id and not s.closed]
+
+    def restart_holds(self) -> list[tuple[ThreadSession, str]]:
+        """While a stop waits: each thread that holds it, of any channel, with what it waits
+        for there (`ThreadSession.restart_hold`). Empty when no stop is under way."""
+        if not self.draining:
+            return []
+        held = ((s, s.restart_hold) for s in self._sessions.values() if not s.closed)
+        return [(session, hold) for session, hold in held if hold]
 
     def working_in(self, *, besides: ThreadSession) -> ThreadSession | None:
         """D8: a live session of any channel, other than `besides`, whose folder resolves to the

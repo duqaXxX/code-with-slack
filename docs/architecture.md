@@ -21,7 +21,8 @@ once connected, posts the v1-to-v2 upgrade notice to each channel that still owe
 `launchctl kill TERM` and `launchctl bootout` send, `SessionManager.drain` lets the turns already
 sent finish, each up to its reply's end (the stream's stop, footer included), and the background tasks with the turns that report them (a task whose end came without
 its notification is waited for `sessions.INJECTED_TURN_WAIT`, since the CLI can suppress it), and
-sends no other: a new prompt gets `texts.RESTARTING`, a queued turn is dropped without a reply of its own (`ThreadSession.drop_queued`): one note
+sends no other: a new prompt gets `texts.RESTARTING` and, under it, the threads the stop still waits for
+(`refuse_restarting`, from `SessionManager.restart_holds`), a queued turn is dropped without a reply of its own (`ThreadSession.drop_queued`): one note
 (`sessions.not_sent`, `N messages were not sent because code-with-slack restarted: send them
 again.`, with the start of each) is added to the end of the thread's running reply, or posted as a
 message of its own when nothing runs. Approvals and questions stay open: the Socket Mode connection closes only

@@ -232,7 +232,10 @@ On `SIGTERM` code-with-slack stops starting turns and lets everything already ru
 turns, the background commands and agents, which end with the Claude Code process, and the turn in
 which Claude reports each one. Then it exits, and `KeepAlive` starts it again. Meanwhile a new
 message gets `code-with-slack is restarting; send this again in a moment.`, a queued one ends with
-the same request. An approval or a question Claude asks meanwhile stays open and can be answered, so
+the same request. Under that sentence the refusal lists each thread the restart still waits for,
+with a link to it and what holds it there (a turn, an approval or a question waiting for you,
+background tasks), so you know where to answer or send `!stop`; `!status` typed in a channel
+shows the same list. An approval or a question Claude asks meanwhile stays open and can be answered, so
 a session that restarts the daemon can still finish its turn. The daemon's `!words` keep working:
 `!stop` ends a long turn so the restart goes on. A thread left with only background tasks says so
 in the line under its last message (`Restart waits for 1 shell · !stop ends it now`), since
