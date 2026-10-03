@@ -136,6 +136,8 @@ class TurnRenderer:
         self._nested: set[str] = set()  # tasks shown on a command's line, not on their own
         self._answers: dict[str, Preview] = {}  # a question's answers, until its call ends
         self._wrote_text = False
+        self._after_text = False  # Claude's text is the last thing in the reply, no card since
+        self._break_due = False  # the text block that just started follows text directly
         self.result: ResultMessage | None = None
         self.auth_failed = False
         # The reply's footer, as decided by the turn(s) that have closed it so far (a report
@@ -147,8 +149,19 @@ class TurnRenderer:
         match message:
             case StreamEvent(parent_tool_use_id=None, event=event):
                 delta = event.get("delta") or {}
-                if event.get("type") == "content_block_delta" and delta.get("type") == "text_delta":
-                    await self._text(str(delta.get("text", "")))
+                block = event.get("content_block") or {}
+                if event.get("type") == "content_block_start" and block.get("type") == "text":
+                    # Two text blocks with no card between them (a goal's inner turns, a Stop hook
+                    # that continues the turn) would run together: the break waits for the first
+                    # text, so a block that stays empty adds none.
+                    self._break_due = self._after_text
+                elif (
+                    event.get("type") == "content_block_delta" and delta.get("type") == "text_delta"
+                ):
+                    text = str(delta.get("text", ""))
+                    if text and self._break_due:
+                        text, self._break_due = "\n\n" + text, False
+                    await self._text(text)
             case AssistantMessage():
                 await self._assistant(message)
             case UserMessage(content=list() as blocks):
@@ -259,6 +272,7 @@ class TurnRenderer:
         that started the task it reports): a blank line still separates it from what is there,
         as a paragraph break would."""
         prefix = "\n\n" if self._wrote_text or self._lines else ""
+        self._after_text = False
         await self._sink.text(prefix + text + "\n\n", notice=True)
 
     async def feed_error(self, text: str) -> None:
@@ -384,10 +398,15 @@ class TurnRenderer:
         )
 
     async def _set(self, update: TaskUpdate) -> None:
+        if update.id not in self._lines:
+            # Only a new line puts a card after the text. A line that changes does so where its
+            # card sits, and the text stays the last thing in the reply.
+            self._after_text = False
         self._lines[update.id] = update
         await self._sink.task(update)
 
     async def _text(self, markdown: str, *, notice: bool = False) -> None:
         if markdown:
             self._wrote_text = True
+            self._after_text = not notice  # a notice ends with its own break
             await self._sink.text(markdown, notice=notice)

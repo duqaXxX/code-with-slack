@@ -1,6 +1,7 @@
 import dataclasses
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 from claude_agent_sdk import AssistantMessage, Message, ResultMessage
@@ -329,3 +330,93 @@ async def test_the_daemon_s_own_lines_are_notices_and_claude_s_words_are_not() -
 async def test_a_turn_that_says_nothing_gets_a_notice_not_words() -> None:
     sink, _ = await render([silent_result()])
     assert sink.notices == [texts.NO_OUTPUT]
+
+
+def block_events(*pieces: str, parent: str | None = None, thinking: bool = False) -> list[Message]:
+    """The stream events of one content block, in the shape the recorded streams have (see
+    `tests/fixtures/sdk/goal.jsonl`): a start, one delta per piece, a stop."""
+    kind, delta = ("thinking", "thinking_delta") if thinking else ("text", "text_delta")
+    wire: list[dict[str, Any]] = [
+        {"type": "content_block_start", "index": 1, "content_block": {"type": kind, kind: ""}}
+    ]
+    wire += [
+        {"type": "content_block_delta", "index": 1, "delta": {"type": delta, kind: piece}}
+        for piece in pieces
+    ]
+    wire.append({"type": "content_block_stop", "index": 1})
+    out = [
+        parse_message(
+            {
+                "type": "stream_event",
+                "event": event,
+                "session_id": "00000000-0000-0000-0000-000000000001",
+                "parent_tool_use_id": parent,
+                "uuid": "00000000-0000-0000-0000-000000000002",
+            }
+        )
+        for event in wire
+    ]
+    return [m for m in out if m is not None]
+
+
+async def test_the_inner_turns_of_a_goal_do_not_run_together() -> None:
+    sink, _ = await render(sdk_messages("goal"))
+    written = "".join(sink.texts)
+    assert written.endswith("tick\n\ntick\n\ntick")
+    assert "ticktick" not in written
+
+
+async def test_two_text_blocks_with_nothing_between_are_a_paragraph_apart() -> None:
+    sink, _ = await render(block_events("one") + block_events("two"))
+    assert sink.texts == ["one", "\n\ntwo"]
+
+
+async def test_deltas_of_one_block_stay_joined() -> None:
+    sink, _ = await render(block_events("on", "e ", "two"))
+    assert sink.texts == ["on", "e ", "two"]
+
+
+async def test_a_reply_s_first_text_has_no_leading_break() -> None:
+    sink, _ = await render(block_events("one"))
+    assert sink.texts == ["one"]
+
+
+async def test_a_tool_card_between_two_texts_adds_no_break() -> None:
+    recorded = sdk_messages("foreground")
+    plain, _ = await render(recorded)
+    sink, _ = await render(block_events("before") + recorded)
+    assert sink.texts == ["before", *plain.texts]
+
+
+async def test_an_empty_block_adds_no_break() -> None:
+    sink, _ = await render(block_events("one") + block_events() + block_events("two"))
+    assert sink.texts == ["one", "\n\ntwo"]
+    sink, _ = await render(block_events("one") + block_events())
+    assert sink.texts == ["one"]
+
+
+async def test_a_subagent_s_text_neither_adds_nor_takes_a_break() -> None:
+    nested = block_events("inner", parent="toolu_000")
+    sink, _ = await render(block_events("one") + nested + block_events("two"))
+    assert sink.texts == ["one", "\n\ntwo"]
+    sink, _ = await render(block_events("one") + nested)
+    assert sink.texts == ["one"]
+
+
+async def test_a_thinking_block_between_two_texts_adds_one_break() -> None:
+    sink, _ = await render(
+        block_events("one") + block_events("hmm", thinking=True) + block_events("two")
+    )
+    assert sink.texts == ["one", "\n\ntwo"]
+
+
+async def test_a_card_updated_where_it_sits_between_two_texts_keeps_the_break() -> None:
+    # Recorded: a background command ends after the turn's text, so its card changes in place,
+    # above that text, and the report turn's text follows it directly.
+    recorded = sdk_messages("background")
+    ended = next(i for i, m in enumerate(recorded) if isinstance(m, TaskNotificationMessage))
+    before, _ = await render(recorded[:ended])
+    sink, _ = await render(recorded)
+    assert not any(t.id not in {b.id for b in before.tasks} for t in sink.tasks)  # no new card
+    report = sink.texts[len(before.texts)]
+    assert before.texts[-1].strip() and report.startswith("\n\n")
