@@ -24,7 +24,8 @@ from slack_sdk.http_retry.request import HttpRequest
 from slack_sdk.http_retry.state import RetryState
 from slack_sdk.web.async_client import AsyncWebClient
 
-from code_with_slack.render.escape import mrkdwn_escape
+from code_with_slack import texts
+from code_with_slack.render.escape import mrkdwn_escape, shown_as_written
 from code_with_slack.render.fold import Fold
 from code_with_slack.render.renderer import STOPPED, TaskUpdate
 
@@ -158,6 +159,13 @@ CONTEXT_LIMIT = 3000
 def notice_text(text: str) -> str:
     """A daemon notice fitted into one context element: cut with `…` past its limit."""
     return text if len(text) <= CONTEXT_LIMIT else text[: CONTEXT_LIMIT - 1] + "…"
+
+
+def plain_lines(body: str) -> str:
+    """A preview's lines of words as one context element's text: each indented under its card
+    and shown as written, the whole cut with `…` past the element's limit."""
+    lines = (texts.NESTED + shown_as_written(line) for line in body.split("\n"))
+    return notice_text("\n".join(lines))
 
 
 # Invisible, so a block that holds only this one shows no text of its own; never pasted as a
@@ -348,7 +356,13 @@ class _Tool:
         """A new state of the call. What follows its card is worked out once, here."""
         self.update = update
         view = update.shown_preview
-        self._pieces = [c for c in split(view.body) if c] if view and view.body else []
+        if view is None or not view.body:
+            self._pieces = []
+        elif view.plain:
+            # One context block, as it is drawn: a piece counts for what the message holds.
+            self._pieces = [plain_lines(view.body)]
+        else:
+            self._pieces = [c for c in split(view.body) if c]
 
     def pieces(self) -> list[str]:
         """What follows the tool's card: the terminal's preview of a call that ended well, cut
@@ -373,7 +387,8 @@ def card_fields(update: TaskUpdate) -> dict[str, str]:
     fields = {"title": title[:CARD_TITLE_LIMIT], "status": update.status}
     output = update.output
     if view:
-        fields["output"] = view.summary[:CARD_TEXT_LIMIT]
+        if view.summary:
+            fields["output"] = view.summary[:CARD_TEXT_LIMIT]
     elif output and (update.status == "error" or output == STOPPED):
         fields["output"] = output[:CARD_TEXT_LIMIT]
     elif update.status == "in_progress" and update.details:
@@ -411,10 +426,13 @@ def card_block(update: TaskUpdate) -> dict[str, Any]:
 
 def piece_blocks(tool: _Tool, index: int) -> list[dict[str, Any]]:
     """Piece `index` (1 is the first) of a tool's preview as blocks: a collapsed container for a
-    diff, code blocks for a new file's first lines."""
+    diff, code blocks for a new file's first lines, a context block for lines of words (a
+    question's answers), each indented under its card and shown as written."""
     view = tool.update.shown_preview
     assert view is not None
     body = tool.pieces()[index - 1]
+    if view.plain:
+        return [context_block(body)]
     if view.language == "diff":
         return diff_containers(view.summary, body)
     return preview_blocks(body)
@@ -422,7 +440,8 @@ def piece_blocks(tool: _Tool, index: int) -> list[dict[str, Any]]:
 
 def piece_chunk(tool: _Tool, index: int) -> dict[str, Any]:
     """The same piece for a stream: a `blocks` chunk (measured 2026-09-28 for a diff's container
-    and 2026-09-29 for a markdown block, which reads back as rich text)."""
+    and 2026-09-29 for a markdown block, which reads back as rich text; a context block in one
+    was seen drawn on the daemon on 2026-10-03)."""
     return {"type": "blocks", "blocks": piece_blocks(tool, index)}
 
 

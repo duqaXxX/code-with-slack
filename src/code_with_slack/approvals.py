@@ -219,8 +219,9 @@ TYPED_LIMIT = 300
 def answered_blocks(
     questions: list[dict[str, Any]], answers: dict[str, str | list[str]]
 ) -> list[dict[str, Any]]:
-    """An answered request as the terminal keeps it: `User answered Claude's questions:`, then
-    `· question → answer` per question, with no buttons left to press."""
+    """An answered request as the terminal keeps it, for a question whose answers the reply
+    cannot show: `User answered Claude's questions:`, then `· question → answer` per question,
+    with no buttons left to press."""
     lines = [texts.ANSWERED]
     for q in questions:
         answer = answers.get(q["question"], "")

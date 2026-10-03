@@ -6,12 +6,15 @@ sentence or a preview instead, and this module reproduces it from what the SDK s
 The shapes read here come from `UserMessage.tool_use_result`, which the SDK types as
 `dict[str, Any]` and does not document: measured on Claude Code 2.1.283 (2026-09-27,
 `tests/fixtures/sdk/edit-write.jsonl`), and guarded by the release probe. Any other shape gives
-None, and the generic line is shown instead.
+None, and the generic line is shown instead. An answered question is the exception: its lines
+come from the questions and answers the daemon itself sent back (`answered`), not from a result.
 """
 
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Literal
+
+from code_with_slack import texts
 
 # How the terminal folds finished calls of these tools. Captured from the terminal on Claude Code
 # 2.1.283 (2026-09-27), where Bash also does the searching (the CLI has no Grep or Glob tool):
@@ -37,6 +40,9 @@ class Preview:
     # `diff` for a diff, which shows collapsed under its call's line, in a code block Slack
     # colours as a diff (rich text preformatted element reference, 2026-09-27: `language`).
     language: Literal["", "diff"] = ""
+    # The body is lines of words (a question's answers): shown small under the card, as
+    # written, in no code block.
+    plain: bool = False
 
 
 def folded(name: str, n: int) -> str:
@@ -107,6 +113,22 @@ def _changed(added: int, removed: int) -> str:
     if removed:
         parts.append(f"removed {_lines(removed)}" if parts else f"Removed {_lines(removed)}")
     return ", ".join(parts) or "No change"
+
+
+def answered(
+    questions: list[dict[str, Any]], answers: dict[str, str | list[str]]
+) -> Preview | None:
+    """The answers to a question as the terminal keeps them: a line per question that has one,
+    `· question → answer`, a multi-select's answers joined by commas. None with no answer."""
+    lines: list[str] = []
+    for entry in questions:
+        question = entry["question"]
+        answer = answers.get(question, "")
+        shown = ", ".join(answer) if isinstance(answer, list) else answer
+        if shown:
+            # One line each, however the question or a typed answer was written.
+            lines.append(f"· {' '.join(question.split())} → {' '.join(shown.split())}")
+    return Preview(texts.ANSWERED, "", "\n".join(lines), plain=True) if lines else None
 
 
 def preview(name: str, result: Any, cwd: str | None) -> Preview | None:

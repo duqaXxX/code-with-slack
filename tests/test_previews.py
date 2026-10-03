@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 from claude_agent_sdk import AssistantMessage, ToolResultBlock, ToolUseBlock, UserMessage
 
-from code_with_slack.render.previews import Preview, folded, preview
+from code_with_slack.render.previews import Preview, answered, folded, preview
 from tests.fakes import sdk_messages
 
 CWD = "/home/dev/project"
@@ -137,3 +137,33 @@ def test_an_unknown_line_shape_falls_back_to_the_generic_line() -> None:
     assert (
         preview("Edit", {"filePath": "/home/dev/project/f", "structuredPatch": patch}, CWD) is None
     )
+
+
+QUESTIONS = [{"question": "Colour?"}, {"question": "Sizes?"}]
+
+
+def test_an_answered_question_shows_each_answer_as_the_terminal() -> None:
+    # The answers as `approvals.to_permission` sends them: a label, or a list for a multi-select.
+    assert answered(QUESTIONS, {"Colour?": "blue", "Sizes?": ["s", "xl"]}) == Preview(
+        "User answered Claude's questions:",
+        "",
+        "· Colour? → blue\n· Sizes? → s, xl",
+        plain=True,
+    )
+
+
+def test_a_question_with_no_answer_has_no_line_and_none_has_no_preview() -> None:
+    shown = answered(QUESTIONS, {"Sizes?": "s"})
+    assert shown is not None and shown.body == "· Sizes? → s"
+    assert answered(QUESTIONS, {}) is None
+
+
+def test_a_question_written_on_several_lines_keeps_one_line() -> None:
+    shown = answered([{"question": "Colour?\nPick one."}], {"Colour?\nPick one.": "dark\nblue"})
+    assert shown is not None and shown.body == "· Colour? Pick one. → dark blue"
+
+
+def test_a_question_s_result_alone_gives_no_preview() -> None:
+    # The answers come from the daemon's own data, never from the undocumented result.
+    [(name, result, _)] = results("ask-answered")
+    assert name == "AskUserQuestion" and preview(name, result, CWD) is None

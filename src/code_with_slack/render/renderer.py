@@ -28,7 +28,7 @@ from claude_agent_sdk.types import (
 
 from code_with_slack import texts
 from code_with_slack.footer import format_tokens
-from code_with_slack.render.previews import Preview, preview
+from code_with_slack.render.previews import Preview, answered, preview
 
 TaskStatus = Literal["pending", "in_progress", "complete", "error"]
 TITLE_LIMIT = 80
@@ -134,6 +134,7 @@ class TurnRenderer:
         self._running: dict[str, str] = {}
         self._commands: set[str] = set()  # lines of tasks no call started (a command's)
         self._nested: set[str] = set()  # tasks shown on a command's line, not on their own
+        self._answers: dict[str, Preview] = {}  # a question's answers, until its call ends
         self._wrote_text = False
         self.result: ResultMessage | None = None
         self.auth_failed = False
@@ -186,6 +187,22 @@ class TurnRenderer:
         """The line title of a task this reply shows, running or ended."""
         entry = self._lines.get(self._line_of_task.get(task_id, ""))
         return entry.title if entry else None
+
+    def answered(
+        self,
+        tool_use_id: str,
+        questions: list[dict[str, Any]],
+        answers: dict[str, str | list[str]],
+    ) -> bool:
+        """Keep a question's answers for the line of its call, which shows them once the call
+        ends. False when this reply has no line of its own for that call (one asked inside a
+        subagent shows on the subagent's line) or there is no answer to show: the caller keeps
+        the answers elsewhere."""
+        shown = answered(questions, answers)
+        if shown is None or tool_use_id not in self._lines:
+            return False
+        self._answers[tool_use_id] = shown
+        return True
 
     def owns(self, tool_use_id: str) -> bool:
         """Whether this reply holds the line of that tool call, or of the subagent it runs in."""
@@ -295,7 +312,8 @@ class TurnRenderer:
                 return
             elif entry is not None:
                 failed = isinstance(block, ToolResultBlock) and bool(block.is_error)
-                shown = None if failed else preview(entry.name, result, self._cwd)
+                kept = self._answers.pop(block.tool_use_id, None)
+                shown = None if failed else kept or preview(entry.name, result, self._cwd)
                 await self._set(
                     replace(
                         entry,

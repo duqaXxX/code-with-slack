@@ -7,8 +7,10 @@ from typing import Any
 
 import aiohttp
 import pytest
+from claude_agent_sdk import AssistantMessage, ToolUseBlock, UserMessage
 from slack_sdk.errors import SlackApiError
 
+from code_with_slack import texts
 from code_with_slack.render import sinks
 from code_with_slack.render.previews import Preview
 from code_with_slack.render.renderer import STOPPED, TaskUpdate, TurnRenderer
@@ -1046,6 +1048,96 @@ async def test_a_stopped_message_shows_its_previews_as_blocks(slack: FakeSlack) 
         "markdown",
     ]
     assert blocks[3]["text"] == "```\n1 hi\n```"
+
+
+async def test_an_answered_question_shows_in_the_reply_where_it_was_answered(
+    slack: FakeSlack,
+) -> None:
+    # ask-answered.jsonl (CLI 2.1.286). The terminal keeps `User answered Claude's questions:`
+    # and a line per answer where the question was asked, before what Claude says next.
+    sink = reply(slack)
+    renderer = TurnRenderer(sink, "/home/dev/project")
+    call: ToolUseBlock | None = None
+    for message in sdk_messages("ask-answered"):
+        if isinstance(message, AssistantMessage):
+            call = next((b for b in message.content if isinstance(b, ToolUseBlock)), call)
+        if isinstance(message, UserMessage) and call is not None:
+            # The session hands the answers over once the owner gave them, before the result.
+            assert isinstance(message.tool_use_result, dict)
+            assert renderer.answered(
+                call.id, call.input["questions"], message.tool_use_result["answers"]
+            )
+        await renderer.feed(message)
+    await renderer.close(None)
+    [card] = slack.message_cards()[0]
+    assert (card["title"], card["status"]) == ("User answered Claude's questions:", "complete")
+    assert "output" not in card and "details" not in card
+    chunks = [c for _, a in slack.calls if "chunks" in a for c in a["chunks"]]
+    kinds = [c["type"] for c in chunks]
+    [answers] = [c for c in chunks if c["type"] == "blocks"]
+    assert answers["blocks"] == [
+        sinks.context_block(
+            f"{texts.NESTED}· Which color do you prefer? → Blue\n"
+            f"{texts.NESTED}· Do you also like green? → Yes, Only in spring"
+        )
+    ]
+    # Claude's next words come after the answers, in the same message.
+    assert "markdown_text" in kinds[kinds.index("blocks") + 1 :]
+
+
+async def test_answers_to_a_call_the_reply_has_no_line_for_are_not_kept(slack: FakeSlack) -> None:
+    renderer = TurnRenderer(reply(slack))
+    assert not renderer.answered("toolu_unseen", [{"question": "Colour?"}], {"Colour?": "blue"})
+
+
+async def test_a_stopped_message_shows_the_answers_under_their_card(slack: FakeSlack) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    answered = Preview("User answered Claude's questions:", "", "· Colour? → <b> `x`", plain=True)
+    await sink.task(tool("q", "AskUserQuestion", preview=answered))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("more")
+    await settled()
+    blocks = slack.calls_to("chat.update")[-1]["blocks"]
+    assert [b["type"] for b in blocks] == ["task_card", "context", "markdown"]
+    assert "output" not in blocks[0]
+    # Shown as written: no markup of the question's or the answer's is read as Slack's.
+    assert (
+        blocks[1]["elements"][0]["text"] == f"{texts.NESTED}· Colour? → &lt;b&gt; `\u200bx`\u200b"
+    )
+
+
+async def test_answers_longer_than_a_context_block_are_cut(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    body = "\n".join(f"· {'q' * 900} → {'a' * 300}" for _ in range(4))
+    await sink.task(
+        tool("q", "AskUserQuestion", preview=Preview("User answered", "", body, plain=True))
+    )
+    await settled()
+    [answers] = [
+        c for _, a in slack.calls if "chunks" in a for c in a["chunks"] if c["type"] == "blocks"
+    ]
+    [block] = answers["blocks"]
+    text = block["elements"][0]["text"]
+    assert len(text) == sinks.CONTEXT_LIMIT and text.endswith("…")
+
+
+async def test_answers_longer_than_a_message_still_show_and_the_reply_goes_on(
+    slack: FakeSlack,
+) -> None:
+    # Counted for the 3,000 characters it shows, never for its whole body: a body past
+    # MESSAGE_LIMIT would fit no message, and the reply would stop there.
+    sink = reply(slack)
+    body = "· " + "q" * (sinks.MESSAGE_LIMIT + 4_000) + " → yes"
+    await sink.task(
+        tool("q", "AskUserQuestion", preview=Preview("User answered", "", body, plain=True))
+    )
+    await sink.text("And then.")
+    await settled()
+    chunks = [c for _, a in slack.calls if "chunks" in a for c in a["chunks"]]
+    assert [c["type"] for c in chunks] == ["task_update", "blocks", "markdown_text"]
+    assert len(slack.created_ts) == 1
 
 
 async def test_a_subagent_card_counts_its_calls_from_a_recorded_turn(slack: FakeSlack) -> None:

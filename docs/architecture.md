@@ -263,6 +263,9 @@ with the language `diff`, which Slack desktop colours; each changed line also ca
 square after its sign, since Slack mobile colours nothing. A diff longer than
 `sinks.MESSAGE_LIMIT` continues in a second container with the same title, in the next message. A
 new file shows its sentence and a `markdown` code block with its first 10 lines and `… +N lines`.
+An answered `AskUserQuestion` shows its answers the same way, as a `context` block of words
+(`Preview.plain`). Its lines come from the questions and answers the daemon sent back, so they
+depend on no undocumented field.
 The preview reads `UserMessage.tool_use_result`, which the SDK does not document; any shape other
 than the one measured falls back to the generic card, and the release probe's claim P13 checks the
 shape on each new SDK.
@@ -371,10 +374,16 @@ the workspace, and the channel and thread its request was posted in (`approvals.
 alongside its `private_metadata`). Each request has a random id that only its buttons carry; a
 click resolves it once, only from the channel and thread it was posted in, and only after the
 identity and channel guards. Once decided, the request message is deleted: the tool's line in the
-reply records the call. An answered question is kept instead, rewritten with no buttons as the
-terminal keeps it (`approvals.answered_blocks`: `User answered Claude's questions:`, then
-`⎿ · question → answer`, cut at Slack's 3,000 characters); if Slack refuses that rewrite, the
-request is deleted, so no button is left that no longer works.
+reply records the call. For an answered question that line is the record of the answers, as the
+terminal keeps it: the call's card reads `User answered Claude's questions:` and a `context`
+block under it holds `⎿ · question → answer` for each question, cut at Slack's 3,000 characters
+(`render.previews.answered`, drawn by `sinks.piece_blocks`). It sits in the reply where the
+question was asked, so what Claude does next shows below it. The session hands the answers to
+the reply itself (`ThreadSession._keep_answers`, `TurnRenderer.answered`), keyed by the call id
+the permission request carries, and then deletes the request. When the reply has no line of its
+own for that call (a question asked inside a subagent shows on the subagent's line), the request
+is rewritten instead, with no buttons, into the same record (`approvals.answered_blocks`); if
+Slack refuses that rewrite, the request is deleted, so no button is left that no longer works.
 `!stop` denies every request still pending in the session's own thread and deletes its message. A
 request Slack does not accept is denied at once, with a message telling Claude Code that it could
 not be shown, and the tool's line records the denial.

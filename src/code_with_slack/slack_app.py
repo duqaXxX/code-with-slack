@@ -26,7 +26,6 @@ from code_with_slack.approvals import (
     Deny,
     Draft,
     absorb,
-    answered_blocks,
     draft_answers,
     first_unanswered,
     is_answered,
@@ -1298,44 +1297,6 @@ def build_app(
                 describe(exc),
             )
 
-    async def show_answered(
-        channel: str,
-        thread_ts: str,
-        ts: str | None,
-        questions: list[dict[str, Any]],
-        answers: dict[str, str | list[str]],
-    ) -> None:
-        # The terminal keeps what was asked and answered; the request becomes that record.
-        if ts is None:
-            return
-        try:
-            # Shares the same process-wide budget every ReplySink draws from: an answered
-            # request is rare, but it is still one more chat.update against the same app.
-            await sessions.update_limiter.acquire()
-            await slack.chat_update(
-                channel=channel,
-                ts=ts,
-                text=texts.ANSWERED,
-                blocks=answered_blocks(questions, answers),
-            )
-        except Exception as exc:
-            # The request must not keep buttons that no longer work: remove it, as before.
-            logger.warning("could not record an answer in %s: %s", channel, describe(exc))
-            await remove_request(channel, thread_ts, ts)
-            return
-        # Crash repair (issue #19): answered without a delete, so it no longer carries buttons and
-        # must still leave the tracked list. Kept outside the try above on purpose (fix round 2
-        # item 1): a failed write here must never look like the chat.update itself failed and
-        # trigger a delete of a message that was just successfully updated. Best-effort: logged.
-        try:
-            state.remove_request(channel, thread_ts, ts)
-        except Exception as exc:
-            logger.warning(
-                "could not clear an answered request from state.json in %s: %s",
-                channel,
-                describe(exc),
-            )
-
     @app.action("question_open")
     async def on_question_open(ack: AsyncAck, body: dict[str, Any]) -> None:
         await ack()
@@ -1415,9 +1376,8 @@ def build_app(
         if resolved is None:
             await tell_owner(draft.channel_id, draft.thread_ts, texts.APPROVAL_GONE)
             return
-        await show_answered(
-            draft.channel_id, draft.thread_ts, pending.message_ts, questions, answers
-        )
+        # The session that asked decides what becomes of the request message: its reply keeps
+        # the answers, or the request itself does (`ThreadSession._keep_answers`).
 
     @app.error
     async def on_error(error: Exception) -> None:

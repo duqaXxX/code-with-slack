@@ -944,11 +944,11 @@ async def test_next_with_an_answer_moves_to_the_next_question(world: World) -> N
     assert not pending.future.done()
 
 
-async def test_a_complete_submit_answers_claude_and_keeps_the_answers(world: World) -> None:
+async def test_a_complete_submit_answers_claude_and_leaves_the_request_to_the_session(
+    world: World,
+) -> None:
     approval_id, pending = world.approvals.open(CHANNEL, FORM_THREAD, "Colour", QUESTIONS)
     pending.message_ts = "1790000000.000009"
-    world.state.open_thread(CHANNEL, FORM_THREAD)
-    world.state.add_request(CHANNEL, FORM_THREAD, pending.message_ts)
     draft = Draft(approval_id, CHANNEL, FORM_THREAD, active=1, picks={0: [1]})
     values = {
         "q1": {"answer": {"type": "checkboxes", "selected_options": [{"value": "0"}]}},
@@ -956,65 +956,10 @@ async def test_a_complete_submit_answers_claude_and_keeps_the_answers(world: Wor
     }
     await world.dispatch(form_body("view_submission", draft, values))
     assert pending.future.result() == Answer({"Colour?": "blue", "Sizes?": ["s", "xl"]})
-    # The request stays as the terminal's record of the answers (terminal, CLI 2.1.283:
-    # `User answered Claude's questions:` then `⎿ · Which colour do you prefer? → Red`).
+    # The session that asked decides what becomes of the request (`_keep_answers`): its reply
+    # keeps the answers and the request goes, or the request itself becomes the record.
     assert world.slack.calls_to("chat.delete") == []
-    [update] = world.slack.calls_to("chat.update")
-    assert update["ts"] == "1790000000.000009"
-    assert update["blocks"][0]["elements"][0]["text"] == (
-        f"{texts.ANSWERED}\n{texts.NESTED}· Colour? → blue\n{texts.NESTED}· Sizes? → s, xl"
-    )
-    # Crash repair (issue #19): answered without a delete, so it is no longer tracked either.
-    assert world.state.thread(CHANNEL, FORM_THREAD).requests == ()
-
-
-async def test_a_failed_state_write_after_an_answer_never_deletes_the_just_updated_message(
-    world: World,
-) -> None:
-    # Fix round 2 item 1: `state.remove_request` sits outside `show_answered`'s own try around
-    # the chat.update on purpose, so a write failure there can never look like the update itself
-    # failed and delete the message it just successfully wrote.
-    approval_id, pending = world.approvals.open(CHANNEL, FORM_THREAD, "Colour", QUESTIONS)
-    pending.message_ts = "1790000000.000009"
-    world.state.open_thread(CHANNEL, FORM_THREAD)
-    world.state.add_request(CHANNEL, FORM_THREAD, pending.message_ts)
-
-    def boom(*_: object, **__: object) -> None:
-        raise RuntimeError("disk full")
-
-    world.state.remove_request = boom  # type: ignore[method-assign]
-    draft = Draft(approval_id, CHANNEL, FORM_THREAD, active=1, picks={0: [1]})
-    values = {
-        "q1": {"answer": {"type": "checkboxes", "selected_options": [{"value": "0"}]}},
-        "o1": {"other": {"type": "plain_text_input", "value": "xl"}},
-    }
-    await world.dispatch(form_body("view_submission", draft, values))
-    assert world.slack.calls_to("chat.delete") == []  # never deleted despite the write failing
-    assert len(world.slack.calls_to("chat.update")) == 1
-
-
-async def test_show_answered_draws_from_the_process_s_shared_update_limiter(
-    slack: FakeSlack, tmp_path: Path
-) -> None:
-    limiter = UpdateLimiter(limit=1, window=0.3, burst=1)
-    world = World(slack, tmp_path, update_limiter=limiter)
-    await limiter.acquire()  # spent, as a busy ReplySink's own chat.update already would have
-    approval_id, pending = world.approvals.open(CHANNEL, FORM_THREAD, "Colour", QUESTIONS)
-    pending.message_ts = "1790000000.000009"
-    draft = Draft(approval_id, CHANNEL, FORM_THREAD, active=1, picks={0: [1]})
-    values = {
-        "q1": {"answer": {"type": "checkboxes", "selected_options": [{"value": "0"}]}},
-        "o1": {"other": {"type": "plain_text_input", "value": "xl"}},
-    }
-    start = time.monotonic()
-    await world.dispatch(form_body("view_submission", draft, values))  # runs the listener task
-    for _ in range(50):  # the listener task runs in the background: poll for its write
-        if world.slack.calls_to("chat.update"):
-            break
-        await asyncio.sleep(0.02)
-    # waits for the same budget a busy reply had already spent, not a free pass of its own.
-    assert world.slack.calls_to("chat.update")
-    assert time.monotonic() - start >= 0.2
+    assert world.slack.calls_to("chat.update") == []
 
 
 @pytest.mark.parametrize("user", [{"id": STRANGER}, {"team_id": OTHER_TEAM}])
@@ -1897,21 +1842,6 @@ def test_long_answers_fit_slack_s_limit() -> None:
     answers: dict[str, str | list[str]] = {"q" * 900: "a" * 300}
     [block] = answered_blocks(questions, answers)
     assert len(block["elements"][0]["text"]) <= SECTION_LIMIT
-
-
-async def test_an_answer_slack_will_not_record_removes_the_request(world: World) -> None:
-    approval_id, pending = world.approvals.open(CHANNEL, FORM_THREAD, "Colour", QUESTIONS)
-    pending.message_ts = "1790000000.000009"
-    draft = Draft(approval_id, CHANNEL, FORM_THREAD, active=1, picks={0: [1]})
-    values = {
-        "q1": {"answer": {"type": "checkboxes", "selected_options": [{"value": "0"}]}},
-        "o1": {"other": {"type": "plain_text_input", "value": "xl"}},
-    }
-    world.slack.responses["chat.update"] = {"ok": False, "error": "msg_too_long"}
-    await world.dispatch(form_body("view_submission", draft, values))
-    assert pending.future.done()
-    # Its buttons would no longer work: the request goes, as before this record existed.
-    assert [a["ts"] for a in world.slack.calls_to("chat.delete")] == ["1790000000.000009"]
 
 
 # --- D8: two busy sessions in one folder (Phase 3, task 2) ---
