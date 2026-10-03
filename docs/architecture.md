@@ -146,8 +146,8 @@ level, or in a thread that holds no session, acts as a top-level word: its answe
 in the channel (`in_channel`, or `say` with no thread), which is neither ephemeral nor a thread
 reply, so it stays after a reload and never notifies. A word typed inside a session's thread is
 answered by `tell_owner` or an ephemeral `say` under the owner's message (`chat.postEphemeral`
-with `thread_ts`), which Slack drops on reload, or by `acknowledge`, a ✅ reaction on the word
-(`!bypass`); `!stop` there posts nothing when it stops something, since the session reacts on its own root,
+with `thread_ts`), which Slack drops on reload; `!bypass` adds `acknowledge`, a ✅ reaction on the
+word, which stays; `!stop` there posts nothing when it stops something, since the session reacts on its own root,
 and `texts.NOTHING_TO_STOP_THREAD` (ephemeral) when nothing runs. `word_report` chooses the same
 place for a word's failure, and `reply_on_failure` logs a report that itself fails instead of
 letting it raise, since a raise would reach the message handler's own failure path, which posts
@@ -503,8 +503,8 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   (`chat.update`, which never notifies, and is skipped once the setup is decided) with the new
   model's levels. Start reads every control from the click's `state.values`
   (`setup.read_choice`), and `ThreadSession.apply_setup` applies it, and Start is authoritative: effort and bypass are written
-  from the choice whatever `state.json` held (a restart or a `!bypass on` typed meanwhile can
-  have left either), so what runs is what the summary says. An effort the live client was not
+  from the choice whatever `state.json` held (a restart can have left either; `!bypass` in
+  the thread is refused before Start, `ThreadSession.before_start` and `texts.BYPASS_BEFORE_START`, and one typed while Start is applied waits for it, `ThreadSession.switch_bypass`), so what runs is what the summary says. An effort the live client was not
   built with is stored and the client reconnected (the SDK has no runtime effort setter and no query has been
   sent, so no session is lost), a non-default model is `set_model()` on the live client (not
   stored: it survives a resume and leaves the owner's default alone, measured 2026-09-30, CLI

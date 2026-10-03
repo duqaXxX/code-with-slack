@@ -494,19 +494,24 @@ async def test_bang_bypass_on_inside_a_thread_switches_the_live_client(world: Wo
     word = reply("!bypass on", THREAD)
     await world.dispatch(word)
     assert world.clients[0].modes == ["bypassPermissions"]
-    # The answer is a ✅ on the owner's word: no text, nothing that rings.
+    # The answer says what changed, to the owner alone and under their word, and a ✅ stays on
+    # the word after a reload takes the line away. Neither rings.
     assert reactions_on(world, word["event"]["ts"]) == ["white_check_mark"]
+    (answer,) = world.slack.calls_to("chat.postEphemeral")
+    assert answer["text"] == texts.BYPASS_ON_THREAD and answer["thread_ts"] == THREAD
     # No placeholder for the session's reply: nothing is posted until Claude has something to say.
-    assert world.ephemerals() == [] and said(world) == []
+    assert said(world) == []
 
 
-async def test_bang_bypass_off_inside_a_thread_reacts_too(world: World) -> None:
+async def test_bang_bypass_off_inside_a_thread_says_so_too(world: World) -> None:
     await world.dispatch(message("hi", ts=THREAD))
     await world.dispatch(reply("!bypass on", THREAD))
     word = reply("!bypass off", THREAD)
     await world.dispatch(word)
     assert world.clients[0].modes == ["bypassPermissions", "default"]
     assert reactions_on(world, word["event"]["ts"]) == ["white_check_mark"]
+    assert world.ephemerals() == [texts.BYPASS_ON_THREAD, texts.BYPASS_OFF_THREAD]
+    assert said(world) == []
     assert world.state.thread(CHANNEL, THREAD).bypass is False
 
 
@@ -1021,7 +1026,8 @@ async def test_nobody_else_can_submit_the_form(world: World, user: dict[str, str
 
 
 async def test_a_bypass_inside_a_thread_fails_when_the_directory_is_gone(world: World) -> None:
-    world.sessions.open(CHANNEL, THREAD)
+    # A session that ran before: one that never did answers the word without connecting.
+    world.state.open_thread(CHANNEL, THREAD, session_id="68da9311-0000-4000-8000-00000000beef")
     (world.root / "app").rmdir()
     await world.dispatch(reply("!bypass on", THREAD))
     assert world.ephemerals() == [texts.DIRECTORY_MISSING.format(directory=world.root / "app")]
@@ -1969,6 +1975,23 @@ async def test_continue_sends_the_held_message(world: World) -> None:
     assert world.state.thread(CHANNEL, THREAD).requests == ()
 
 
+async def test_bypass_typed_after_start_while_held_switches_the_session(world: World) -> None:
+    # Start was applied (the world's setup starts on its own), then D8 asks: the setup's box is
+    # gone, so the word works as in a session that ran, and holds after Continue.
+    await start_a_hold(world)
+    question_ts = world.slack.posted_ts[-1]
+    word = reply("!bypass on", THREAD)
+    await world.dispatch(word)
+    assert world.ephemerals() == [texts.BYPASS_ON_THREAD]
+    assert reactions_on(world, word["event"]["ts"]) == ["white_check_mark"]
+    hold_id = button_value(posted_blocks(world, -1), HOLD_CONTINUE)
+    await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, THREAD, message_ts=question_ts))
+    client = world.clients[-1]
+    assert client.queries == ["hello"]
+    assert client.modes == ["bypassPermissions"]
+    assert world.state.thread(CHANNEL, THREAD).bypass is True
+
+
 async def test_cancel_drops_the_message_and_says_so(world: World) -> None:
     await start_a_hold(world)
     question_ts = world.slack.posted_ts[-1]
@@ -2628,6 +2651,35 @@ async def assert_cancelled_while_settling(manual: World) -> None:
     assert len(manual.slack.calls_to("chat.delete")) == 1
 
 
+async def test_bypass_typed_while_start_is_applied_wins_over_the_box(
+    manual: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The word came after the click: it waits for Start to finish, then switches the session,
+    # so what its answer says is what runs. Start is held inside `set_model`, after the point
+    # where it is marked as applied and before it compares the box with the live client.
+    gate = asyncio.Event()
+
+    async def slow(self: FakeClaudeClient, model: str | None = None) -> None:
+        self.models_set.append(model)
+        await gate.wait()
+
+    monkeypatch.setattr(FakeClaudeClient, "set_model", slow)
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(setup_click(manual, model="opus"))  # bypass unticked
+    await asyncio.sleep(0.1)
+    word = reply("!bypass on", THREAD)
+    await manual.dispatch(word)
+    await asyncio.sleep(0.1)
+    assert texts.BYPASS_ON_THREAD not in manual.ephemerals()  # nothing is said before it holds
+    gate.set()
+    await manual.settle(0.3)
+    assert manual.clients[-1].modes == ["bypassPermissions"]
+    assert manual.state.thread(CHANNEL, THREAD).bypass is True
+    assert texts.BYPASS_ON_THREAD in manual.ephemerals()
+    assert reactions_on(manual, word["event"]["ts"]) == ["white_check_mark"]
+    assert manual.queries() == ["hello"]
+
+
 async def test_stop_while_start_settles_cancels(manual: World) -> None:
     await start_with_a_gated_reconnect(manual)
     await manual.dispatch(reply("!stop", THREAD))
@@ -2806,14 +2858,22 @@ async def test_a_restart_during_start_leaves_nothing_for_the_next_start(manual: 
     )
 
 
-async def test_bypass_typed_while_the_setup_waits_is_overridden_by_start(manual: World) -> None:
+@pytest.mark.parametrize("word", ["!bypass on", "!bypass off"])
+async def test_bypass_typed_while_the_setup_waits_points_at_the_setup(
+    manual: World, word: str
+) -> None:
     await manual.dispatch(message("hello", ts=THREAD))
-    await manual.dispatch(reply("!bypass on", THREAD))
-    assert manual.clients[-1].modes == ["bypassPermissions"]
+    typed = reply(word, THREAD)
+    await manual.dispatch(typed)
+    # Start alone sets bypass before the first prompt: the word changes nothing and says so.
+    assert manual.clients[-1].modes == []
+    assert manual.state.thread(CHANNEL, THREAD).bypass is None
+    assert manual.ephemerals() == [texts.BYPASS_BEFORE_START]
+    assert reactions_on(manual, typed["event"]["ts"]) == []  # nothing took effect: no ✅
     await manual.dispatch(setup_click(manual))  # bypass unticked
     await manual.settle(0.3)
     client = manual.clients[-1]
-    assert client.modes[-1] == "default"  # the live client is back to asking
+    assert client.modes == []  # never left the folder's own mode
     assert manual.state.thread(CHANNEL, THREAD).bypass is False
     assert client.queries == ["hello"]
     assert manual.slack.calls_to("chat.update")[-1]["text"].endswith("Bypass: off")

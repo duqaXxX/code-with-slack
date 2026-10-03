@@ -825,9 +825,18 @@ def build_app(
             case Bypass(on=on):
                 if session is None:
                     await in_channel(channel, texts.BYPASS_TOP_LEVEL)
+                elif not await session.switch_bypass(on):
+                    # Start writes the setup's box over the switch (`apply_setup`): one
+                    # flipped before it would not hold, so the word changed nothing.
+                    await tell_owner(channel, thread_ts, texts.BYPASS_BEFORE_START)
                 else:
-                    await session.set_bypass(on)
+                    # Both: the line says what changed and is gone on reload, the ✅ stays.
                     await acknowledge(channel, ts)
+                    await tell_owner(
+                        channel,
+                        thread_ts,
+                        texts.BYPASS_ON_THREAD if on else texts.BYPASS_OFF_THREAD,
+                    )
             case Status():
                 if session is None:
                     await channel_status(channel)
@@ -858,8 +867,9 @@ def build_app(
                     await handle_resume(channel, thread_ts, target)
 
     async def acknowledge(channel: str, ts: str) -> None:
-        """✅ on the owner's own message: the answer to a word that has nothing to say. A reaction
-        never rings a phone; a failed one is logged, never raised (the word already took effect)."""
+        """✅ on the owner's own message: the mark that a word took effect, which stays after a
+        reload. A reaction never rings a phone; a failed one is logged, never raised (the word
+        already took effect)."""
         try:
             await slack.reactions_add(channel=channel, name="white_check_mark", timestamp=ts)
         except Exception as exc:

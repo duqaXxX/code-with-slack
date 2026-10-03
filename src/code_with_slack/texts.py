@@ -128,6 +128,18 @@ BIND_BUSY = (
     "Let them finish or send `!stop`, then bind again."
 )
 BYPASS_TOP_LEVEL = "Bypass belongs to one session: send `!bypass on` inside its thread."
+# True with the setup on screen and without it (after a stop, a restart or a Cancel).
+BYPASS_BEFORE_START = (
+    "This session has not started yet: tick Bypass in its setup and press Start. "
+    "If no setup is shown, send a message here first."
+)
+BYPASS_ON_THREAD = (
+    "Bypass is on in this session: every tool runs without asking, until `!bypass off`. "
+    "It survives a restart."
+)
+BYPASS_OFF_THREAD = (
+    "Bypass is off in this session: Claude Code asks again before tools that need approval."
+)
 STOPPED = "Stopped the current turn."
 # An answered question, as the terminal keeps it in the transcript.
 ANSWERED = "User answered Claude's questions:"
