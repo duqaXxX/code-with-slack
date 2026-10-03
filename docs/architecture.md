@@ -257,9 +257,9 @@ is tried once more with the next write, and the cards stay if that fails too.
 A finished `Edit` or `Write` shows its preview as a `blocks` chunk under the card
 (`render.previews.preview`): a diff is a collapsible,
 full-width `container` block (`sinks.diff_containers`), closed until the owner opens it, whose
-title is the call's line (`✓ Update(notes.txt)`), its subtitle the sentence (`Added 1 line,
-removed 1 line`), and inside is the whole numbered diff in a rich text preformatted element with
-the language `diff`, which Slack desktop colours; each changed line also carries a red or green
+title is the sentence (`Added 1 line, removed 1 line`), since the card above it is the call's line
+(`Update(notes.txt)`), and inside is the whole numbered diff in a rich text preformatted element
+with the language `diff`, which Slack desktop colours; each changed line also carries a red or green
 square after its sign, since Slack mobile colours nothing. A diff longer than
 `sinks.MESSAGE_LIMIT` continues in a second container with the same title, in the next message. A
 new file shows its sentence and a `markdown` code block with its first 10 lines and `… +N lines`.
