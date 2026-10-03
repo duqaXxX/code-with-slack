@@ -286,11 +286,13 @@ def build_app(
                 ephemeral=ephemeral,
             )
 
-    async def tell_owner(channel: str, thread_ts: str, text: str) -> None:
+    async def tell_owner(channel: str, thread_ts: str, text: str, *, stays: bool = False) -> None:
         """A line for the owner alone, under their message in `thread_ts`'s thread: a refusal
-        that answers what they just did. Never raises: nobody is left to tell about a failure."""
+        that answers what they just did. With `stays` it is a post in the thread instead, which
+        a reload keeps and which can notify. Never raises: nobody is left to tell about a
+        failure."""
         try:
-            await notice(channel, thread_ts, text, ephemeral=True)
+            await notice(channel, thread_ts, text, ephemeral=not stays)
         except Exception as exc:
             logger.warning("could not reach the owner in %s: %s", channel, describe(exc))
 
@@ -799,7 +801,8 @@ def build_app(
         """A word of the daemon's own. Typed in the channel (or in a thread that holds no
         session) it is answered by a normal post in the channel; typed inside a session's thread
         it is answered for the owner alone under their message, or by a reaction, so nothing
-        rings a phone. `ts` is the word's own message."""
+        rings a phone; `!stop` is the exception, answered by a post that stays in the thread.
+        `ts` is the word's own message."""
         where = None if session is None else thread_ts
         quiet = session is not None
         match command:
@@ -857,11 +860,18 @@ def build_app(
                     # None: only a D8 hold was cancelled, which already said `Not sent.` from
                     # its own waiter.
                     stopped = await session.stop()
+                    if stopped:
+                        # The answer goes under the ending and the footer of the reply the
+                        # stop cut short, which may be a message of its own.
+                        await session.stop_landed()
                     if stopped is not None:
-                        await notice(
+                        # Through `tell_owner`: the stop itself worked, so a post that fails
+                        # must not be reported as the word's failure.
+                        await tell_owner(
                             channel,
                             thread_ts,
                             texts.STOPPED_THREAD if stopped else texts.NOTHING_TO_STOP_THREAD,
+                            stays=True,
                         )
             case Resume(target=target):
                 if session is not None:

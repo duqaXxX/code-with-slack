@@ -449,6 +449,19 @@ async def test_queue_waits_while_approval_pending(harness_for: Callable[..., Har
     assert isinstance(h.clients[0].permission_results[0], PermissionResultAllow)
 
 
+async def test_stop_landed_gives_up_when_the_stopped_turn_never_ends(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "STOP_TAIL_WAIT", 0.05)
+    h = harness_for({"turns": [[CanUseToolCall("Bash", {"command": "rm -rf build"})]]})
+    session = h.session()
+    turn = await session.submit("clean")
+    await until(lambda: bool(h.approvals._pending))
+    assert await session.stop() is True
+    await asyncio.wait_for(session.stop_landed(), 2)
+    assert not turn.done.is_set()  # it did not end: the wait is bounded
+
+
 async def test_stop_denies_pending_and_interrupts(harness_for: Callable[..., Harness]) -> None:
     h = harness_for(
         {
@@ -461,7 +474,9 @@ async def test_stop_denies_pending_and_interrupts(harness_for: Callable[..., Har
     turn = await session.submit("clean")
     await until(lambda: bool(h.approvals._pending))
     assert await session.stop() is True
-    await asyncio.wait_for(turn.done.wait(), 2)
+    # The answer to the stop waits for the reply it cut short: it sits under its footer.
+    await asyncio.wait_for(session.stop_landed(), 2)
+    assert turn.done.is_set()
     assert h.clients[0].interrupts == 1
     assert isinstance(h.clients[0].permission_results[0], PermissionResultDeny)
     assert len(h.slack.calls_to("chat.delete")) == 1
