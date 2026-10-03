@@ -1120,6 +1120,33 @@ def split_background() -> tuple[list[Any], list[Any], list[Any]]:
     return first, later[:start], later[start:]
 
 
+def split_nested_command() -> tuple[list[Any], list[Any], list[Any], list[int]]:
+    """The recorded subagent that runs two long commands: the owner's turn, what the main stream
+    carries while the agent works (each command's own task, then the agent's), the report turn,
+    and the index in the middle part where each notification ends."""
+    first, later = split_turns(sdk_messages("subagent-nested-command"))[:2]
+    start = next(
+        i for i, m in enumerate(later) if isinstance(m, SystemMessage) and m.subtype == "init"
+    )
+    work = later[:start]
+    ends = [i for i, m in enumerate(work) if isinstance(m, TaskNotificationMessage)]
+    return first, work, later[start:], ends
+
+
+def split_nested_background() -> tuple[list[Any], list[Any], list[Any], list[Any], list[Any]]:
+    """The recorded subagent whose command outlives it: the owner's turn; what the main stream
+    carries until the agent's first end; the report turn; the command's end and the agent's
+    second start and end; the second report turn."""
+    first, middle, third = split_turns(sdk_messages("subagent-nested-background"))
+    start = next(
+        i for i, m in enumerate(middle) if isinstance(m, SystemMessage) and m.subtype == "init"
+    )
+    again = next(
+        i for i, m in enumerate(third) if isinstance(m, SystemMessage) and m.subtype == "init"
+    )
+    return first, middle[:start], middle[start:], third[:again], third[again:]
+
+
 def renamed_background() -> tuple[list[Any], list[Any], list[Any]]:
     """The same recorded background run as `split_background`, with its task and tool ids
     changed so a second one can run alongside the first with no id collision (D1)."""
@@ -2240,9 +2267,13 @@ async def test_a_command_s_task_waits_while_a_report_turn_is_expected(
     assert session._active is None
 
 
-async def test_a_task_started_under_a_background_agent_goes_to_the_agent_s_reply(
+async def test_a_task_started_after_its_call_ended_is_an_ordinary_task_of_the_agent_s_reply(
     harness_for: Callable[..., Harness],
 ) -> None:
+    # The `nested` frame is hand-written, with no recording behind it: a subagent asked to start
+    # a subagent ran the command itself (2026-10-03, CLI 2.1.286), so no real task of type agent
+    # under an agent is known. A task that starts once its call has ended is not that call's
+    # foreground work: it is any background task, on the reply holding the agent.
     recorded = sdk_messages("subagent")
     turn = [m for m in split_turns(recorded)[0] if getattr(m, "parent_tool_use_id", None) is None]
     child_call = next(
@@ -2264,6 +2295,39 @@ async def test_a_task_started_under_a_background_agent_goes_to_the_agent_s_reply
     await until(lambda: any(c["title"] == "nested" for c in h.cards()))
     assert len(h.slack.posted_ts) == posted and len(h.slack.stream_ts) == 1  # no reply of its own
     assert "nested" in session._task_replies
+
+
+async def test_a_nested_task_that_ends_before_its_call_s_result_is_the_agent_s_foreground_work(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # Hand-written like the one above (an agent under an agent is unrecorded), in the order the
+    # recorded nested command has: the task's end comes before its call's result.
+    recorded = sdk_messages("subagent")
+    turn = [m for m in split_turns(recorded)[0] if getattr(m, "parent_tool_use_id", None) is None]
+    children = [m for m in recorded if getattr(m, "parent_tool_use_id", None) is not None]
+    call = next(
+        m
+        for m in children
+        if isinstance(m, AssistantMessage) and any(isinstance(b, ToolUseBlock) for b in m.content)
+    )
+    child_call = next(b.id for b in call.content if isinstance(b, ToolUseBlock))
+    nested = dataclasses.replace(
+        started_of("subagent"), task_id="nested", tool_use_id=child_call, description="nested"
+    )
+    ended = dataclasses.replace(
+        next(m for m in sdk_messages("subagent") if isinstance(m, TaskNotificationMessage)),
+        task_id="nested",
+        tool_use_id=child_call,
+    )
+    h = harness_for({"turns": [turn]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    at = children.index(call) + 1
+    h.clients[0].inject([*children[:at], nested, ended, *children[at:]])
+    await asyncio.sleep(0.1)
+    assert not any(c["title"] == "nested" for c in h.cards())
+    assert "nested" not in session._task_replies and "nested" not in session._tasks
+    assert session._ended == [] and session._expiry is None
 
 
 async def test_a_stop_lets_the_running_turn_finish_and_ends_the_queued_one(
@@ -3659,3 +3723,146 @@ async def test_a_post_outside_the_session_sets_its_thread_status_again(
     h.manager.wrote(CHANNEL, THREAD)
     h.manager.wrote(CHANNEL, "1790000000.999999")  # no live session there: nothing to set
     assert told == [True]
+
+
+class ExpectedTurns:
+    """Counts how often a session starts waiting for a report turn."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.entered = 0
+        original = sessions.ThreadSession._expect_injected_turn
+
+        def counting(session: Any) -> None:
+            self.entered += 1
+            original(session)
+
+        monkeypatch.setattr(sessions.ThreadSession, "_expect_injected_turn", counting)
+
+
+async def test_the_commands_a_subagent_runs_arm_no_wait_for_a_report_turn(
+    harness_for: Callable[..., Harness],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # subagent-nested-command.jsonl: each long command the agent runs gets a task of its own on
+    # the main stream, started by a call that has a parent. Claude Code reports it to the agent,
+    # so no turn follows it.
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.05)
+    waits = ExpectedTurns(monkeypatch)
+    first, work, _, ends = split_nested_command()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    (agent_task,) = session._task_replies
+    h.clients[0].inject(work[: ends[1] + 1])
+    await asyncio.sleep(0.2)  # longer than the wait: nothing was armed to fire in it
+    assert waits.entered == 0 and session._expiry is None
+    assert session._settled.is_set() and not session._injected_expected
+    assert "no turn followed a task notification" not in caplog.text
+    assert list(session._tasks) == [agent_task] and list(session._task_replies) == [agent_task]
+    assert session._ended == [] and session._unreported == {} and session._held == []
+
+
+async def test_an_owner_prompt_is_not_held_while_a_subagent_s_command_ends(
+    harness_for: Callable[..., Harness],
+) -> None:
+    first, work, _, ends = split_nested_command()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    h.clients[0].inject(work[: ends[0] + 1])
+    await asyncio.sleep(0.05)
+    await session.submit("and now?")
+    # INJECTED_TURN_WAIT is the production 30 s: a held prompt would not reach the client here
+    await until(lambda: h.clients[0].queries == ["start it", "and now?"], limit=1.0)
+
+
+async def test_a_subagent_s_commands_have_no_card_and_no_end_line_in_the_report(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.2)
+    waits = ExpectedTurns(monkeypatch)
+    first, work, report, _ = split_nested_command()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    h.clients[0].inject(work)
+    h.clients[0].inject(report)
+    await until(lambda: session.idle and h.reactions()[-1:] == [Status.DONE.value], limit=3.0)
+    assert waits.entered == 1  # the agent's own notification
+    (body,) = h.bodies()  # D1: the report renders into the reply that started the agent
+    assert body.count("✓ ") == 1 and '✓ Agent "' in body
+    ((card,),) = h.slack.message_cards()  # the two commands show on the agent's card
+    assert card["title"].endswith("· 2 calls") and card["status"] == "complete"
+    assert not any(m.streaming for m in h.slack.messages.values())
+
+
+async def test_a_subagent_s_command_whose_reply_is_not_tracked_is_held_as_before(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A restart or an idle close dropped the reply that holds the agent's call: the session cannot
+    # tell the command's task is nested, and treats it as any task of no known reply (held, and a
+    # report turn expected). Ignoring it instead would drop a top-level task of an unknown call.
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.05)
+    waits = ExpectedTurns(monkeypatch)
+    first, work, _, ends = split_nested_command()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    session._task_replies.clear()
+    nested = work[ends[0]].task_id  # the frames of the first command's task alone
+    h.clients[0].inject([m for m in work[: ends[0] + 1] if getattr(m, "task_id", None) == nested])
+    await until(lambda: waits.entered == 1)
+    assert any(isinstance(m, TaskNotificationMessage) for m in session._held)
+
+
+async def nested_background_running(h: Harness, session: Any) -> tuple[str, list[Any], list[Any]]:
+    """Plays the recorded subagent up to its first report turn's end, with its command still
+    running. Returns that command's task id and the frames still to come."""
+    _, work, report, tail, report_two = split_nested_background()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    h.clients[0].inject(work)
+    h.clients[0].inject(report)
+    command = next(m.task_id for m in work if isinstance(m, TaskStartedMessage))
+    return command, tail, report_two
+
+
+async def test_a_subagent_s_command_that_outlives_its_call_is_a_running_shell(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # subagent-nested-background.jsonl: the command runs in the background of a subagent that
+    # ends (and reports) before it does; its own end follows the report turn.
+    first = split_nested_background()[0]
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    command, _, _ = await nested_background_running(h, session)
+    await until(lambda: command in session._task_replies and session._active is None)
+    await asyncio.sleep(0.1)
+    assert session._running_kinds() == "1 shell" and command in session._running_task_ids()
+    assert not session.idle and not session.restart_ready
+    assert h.reactions()[-1] == Status.WORKING.value  # the first report turn did not end it
+    drained = asyncio.create_task(h.manager.drain(asyncio.Event()))
+    await asyncio.sleep(0.1)
+    assert not drained.done()  # a drain waits for the command
+    drained.cancel()
+    assert await session.stop() is True
+    assert h.clients[0].stopped_tasks == [command]
+
+
+async def test_a_subagent_s_command_and_the_agent_s_second_end_close_the_reply_as_before(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sessions, "INJECTED_TURN_WAIT", 0.2)
+    first = split_nested_background()[0]
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    command, tail, report_two = await nested_background_running(h, session)
+    await until(lambda: command in session._task_replies and session._active is None)
+    h.clients[0].inject(tail)
+    h.clients[0].inject(report_two)
+    await until(lambda: session.idle and h.reactions()[-1:] == [Status.DONE.value], limit=3.0)
+    assert session._running_kinds() == "" and session._running_task_ids() == []
+    assert session._unlanded == set()
+    assert not any(m.streaming for m in h.slack.messages.values())
+    assert [c["status"] for c in h.cards()] == ["complete", "complete"]
+    assert len(h.slack.stream_ts) == 1  # every report rendered into the reply that began it

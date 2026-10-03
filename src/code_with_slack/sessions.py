@@ -73,6 +73,7 @@ from code_with_slack.render.escape import mrkdwn_escape
 from code_with_slack.render.renderer import (
     INTERRUPTED,
     Sink,
+    TaskFrame,
     TurnRenderer,
     ended_line,
     one_line,
@@ -1370,12 +1371,15 @@ class ThreadSession:
             init_session_id = message.data.get("session_id")
             if isinstance(init_session_id, str):
                 self._deps.state.set_session(self.channel_id, self.thread_ts, init_session_id)
+        if isinstance(message, TASK_MESSAGES) and (inner := self._nesting_reply(message)):
+            # A task of a call inside another call (a long command a subagent runs) is that
+            # call's root's work: Claude Code reports it to the subagent, so no turn follows it.
+            # None of what a task of the conversation sets up (its record, its end line, a wait
+            # for its report, a held frame) applies; the reply keeps the frame off its cards.
+            await inner.feed(message)
+            return
         if isinstance(message, TaskStartedMessage):
-            self._tasks[message.task_id] = (message.task_type or "", message.description)
-            if self.may_have_ordered_restart:
-                self._after_restart.add(message.task_id)
-            while len(self._tasks) > TASKS_KEPT:
-                del self._tasks[next(iter(self._tasks))]
+            self._record_task(message)
         stopped = isinstance(message, TASK_MESSAGES) and message.task_id in self._stopped
         if (
             isinstance(message, TaskNotificationMessage)
@@ -1434,6 +1438,7 @@ class ThreadSession:
         origin = self._origin_of(call) if call else None
         if origin is not None:
             await origin.feed(message)
+            await self._adopt_promoted(origin)
             if isinstance(message, TaskStartedMessage):
                 self._task_replies[message.task_id] = origin
                 await self._show_running()
@@ -1463,6 +1468,7 @@ class ThreadSession:
             self._show_thread_status()
         active = self._active
         await active.renderer.feed(message)
+        await self._adopt_promoted(active.renderer)
         if isinstance(message, ResultMessage):
             # The turn stays active until its reply is closed: the footer is read first, and a
             # drain that saw this thread idle meanwhile would exit before the reply's end,
@@ -1475,6 +1481,23 @@ class ThreadSession:
             # D10: checked only now, with `_active` cleared: `_finish` alone still reads busy.
             if not stopped:
                 await self._react_done_if_idle()
+
+    def _record_task(self, message: TaskStartedMessage) -> None:
+        self._tasks[message.task_id] = (message.task_type or "", message.description)
+        if self.may_have_ordered_restart:
+            self._after_restart.add(message.task_id)
+        while len(self._tasks) > TASKS_KEPT:
+            del self._tasks[next(iter(self._tasks))]
+
+    async def _adopt_promoted(self, renderer: TurnRenderer) -> None:
+        """Tasks that just outlived the nested call that started them are ordinary background
+        tasks from now on: recorded and counted as one that outlived its turn."""
+        promoted = renderer.take_promoted()
+        for started in promoted:
+            self._record_task(started)
+            self._task_replies[started.task_id] = renderer
+        if promoted:
+            await self._show_running()
 
     def _ended_line(self, message: TaskNotificationMessage) -> str:
         """The terminal's line for a task's end: a command's own summary, or `Agent "..."
@@ -1762,6 +1785,16 @@ class ThreadSession:
         for reply in replies:
             with contextlib.suppress(Exception):
                 await reply.settle()
+
+    def _nesting_reply(self, message: TaskFrame) -> TurnRenderer | None:
+        """The reply that holds the root of the call this task frame's task belongs to, when a
+        call inside another call started it. `None` when no tracked reply can tell (a restart
+        dropped it): the task is then treated as any other, since a top-level task of a call no
+        reply holds looks the same."""
+        replies = set(self._task_replies.values())
+        if self._active is not None:
+            replies.add(self._active.renderer)
+        return next((r for r in replies if r.nests(message)), None)
 
     def _origin_of(self, tool_use_id: str) -> TurnRenderer | None:
         return next((r for r in self._task_replies.values() if r.owns(tool_use_id)), None)
