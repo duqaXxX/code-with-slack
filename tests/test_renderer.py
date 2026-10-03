@@ -4,9 +4,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from claude_agent_sdk import AssistantMessage, Message, ResultMessage
+from claude_agent_sdk import AssistantMessage, Message, ResultMessage, UserMessage
 from claude_agent_sdk._internal.message_parser import parse_message
-from claude_agent_sdk.types import TaskNotificationMessage, TaskUpdatedMessage, ToolUseBlock
+from claude_agent_sdk.types import (
+    TaskNotificationMessage,
+    TaskStartedMessage,
+    TaskUpdatedMessage,
+    ToolUseBlock,
+)
 
 from code_with_slack import texts
 from code_with_slack.render.renderer import (
@@ -420,3 +425,133 @@ async def test_a_card_updated_where_it_sits_between_two_texts_keeps_the_break() 
     assert not any(t.id not in {b.id for b in before.tasks} for t in sink.tasks)  # no new card
     report = sink.texts[len(before.texts)]
     assert before.texts[-1].strip() and report.startswith("\n\n")
+
+
+def nested_command_turns() -> tuple[list[Message], list[Message], str]:
+    """subagent-nested-command.jsonl: the owner's turn, and what the main stream carries after it
+    (two commands the background subagent runs, each with a task of its own, then the agent's
+    own end and the report turn)."""
+    first, later = split_turns(sdk_messages("subagent-nested-command"))[:2]
+    (agent_call,) = top_level_tool_ids(first)
+    return first, later, agent_call
+
+
+async def test_the_commands_a_subagent_runs_get_no_line_of_their_own() -> None:
+    first, later, agent_call = nested_command_turns()
+    sink, renderer = await render(first)
+    for message in later:
+        await renderer.feed(message)
+    # one work, one line: the two commands show on the agent's card, through its call count
+    assert {t.id for t in sink.tasks} == {agent_call}
+    assert sink.tasks[-1].calls == 2 and sink.tasks[-1].status == "complete"
+    assert renderer.running_tasks == []
+
+
+async def test_a_dropped_task_id_that_starts_again_ends_its_line() -> None:
+    # Hand-built order, no recording behind it: the recorded frames of the first command, sent a
+    # second time after its call's result. Only an agent's task was recorded starting again
+    # under its id (`subagent-nested-background.jsonl`).
+    first, later, _ = nested_command_turns()
+    _, renderer = await render(first)
+    started = next(m for m in later if isinstance(m, TaskStartedMessage))
+    ended = next(
+        m for m in later if isinstance(m, TaskNotificationMessage) and m.task_id == started.task_id
+    )
+    result = next(
+        i for i, m in enumerate(later) if i > later.index(ended) and isinstance(m, UserMessage)
+    )
+    for message in later[: result + 1]:
+        await renderer.feed(message)
+    assert started.task_id not in renderer.running_tasks  # dropped: it ended before the result
+    await renderer.feed(started)  # its call is closed now: an ordinary task
+    assert started.task_id in renderer.running_tasks
+    await renderer.feed(ended)
+    assert started.task_id not in renderer.running_tasks
+
+
+async def test_a_subagent_s_command_is_not_a_task_that_outlives_the_turn() -> None:
+    first, later, _ = nested_command_turns()
+    _, renderer = await render(first)
+    (agent_task,) = renderer.running_tasks
+    started = next(m for m in later if isinstance(m, TaskStartedMessage))
+    for message in later[: later.index(started) + 1]:
+        await renderer.feed(message)
+    assert renderer.running_tasks == [agent_task]
+    assert renderer.task_title(started.task_id) is None
+
+
+async def test_every_frame_of_a_nested_task_stays_off_the_card_list() -> None:
+    first, later, agent_call = nested_command_turns()
+    sink, renderer = await render(first)
+    started = next(m for m in later if isinstance(m, TaskStartedMessage))
+    for message in later:
+        await renderer.feed(message)
+        if message is started:
+            break
+    # frames of a kind the recording does not hold for a nested task, built from one it does
+    for status in ("completed", "killed"):
+        await renderer.feed(
+            dataclasses.replace(
+                next(m for m in later if isinstance(m, TaskUpdatedMessage)),
+                task_id=started.task_id,
+                status=status,
+            )
+        )
+    assert {t.id for t in sink.tasks} == {agent_call}
+
+
+async def test_a_task_of_a_call_the_reply_never_saw_keeps_its_own_line() -> None:
+    # The reply cannot tell the call is nested (a restart dropped what held its root): the task
+    # is shown as any task of an unknown call.
+    _, later, _ = nested_command_turns()
+    started = next(m for m in later if isinstance(m, TaskStartedMessage))
+    sink, _ = await render([started])
+    assert [t.id for t in sink.tasks] == [f"task-{started.task_id}"]
+
+
+def nested_background_turns() -> tuple[list[Message], list[Message], str]:
+    """subagent-nested-background.jsonl: a background subagent starts `sleep 20` in the
+    background (the nested call's result comes while the command runs), reports and ends; the
+    command's end arrives after the report turn, and the agent starts again and ends once more."""
+    first, *later = split_turns(sdk_messages("subagent-nested-background"))
+    (agent_call,) = top_level_tool_ids(first)
+    return first, [m for turn in later for m in turn], agent_call
+
+
+async def test_a_subagent_s_command_that_outlives_its_call_becomes_a_task_line() -> None:
+    first, later, agent_call = nested_background_turns()
+    sink, renderer = await render(first)
+    (agent_task,) = renderer.running_tasks
+    started = next(m for m in later if isinstance(m, TaskStartedMessage))
+    assert started.tool_use_id != agent_call
+    for message in later:
+        await renderer.feed(message)
+        if message is started:
+            # held aside while its call is open: no line, not running
+            assert renderer.running_tasks == [agent_task]
+            assert renderer.task_title(started.task_id) is None
+        if isinstance(message, UserMessage) and renderer.running_tasks != [agent_task]:
+            break  # the nested call's result: the task outlives it
+    assert renderer.running_tasks == [agent_task, started.task_id]
+    line = sink.tasks[-1]
+    assert (line.id, line.title, line.status, line.task) == (
+        f"task-{started.task_id}",
+        started.description,
+        "in_progress",
+        True,
+    )
+    assert [m.task_id for m in renderer.take_promoted()] == [started.task_id]
+    assert renderer.take_promoted() == []
+    assert not renderer.nests(started)
+
+
+async def test_an_ended_command_of_a_subagent_ends_its_line_as_a_background_task() -> None:
+    first, later, agent_call = nested_background_turns()
+    sink, renderer = await render(first)
+    for message in later:
+        await renderer.feed(message)
+    last = {t.id: t for t in sink.tasks}
+    started = next(m for m in later if isinstance(m, TaskStartedMessage))
+    assert set(last) == {agent_call, f"task-{started.task_id}"}
+    assert last[f"task-{started.task_id}"].status == "complete"
+    assert renderer.running_tasks == []

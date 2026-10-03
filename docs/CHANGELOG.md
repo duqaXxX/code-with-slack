@@ -261,6 +261,23 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A long command a background subagent runs in the foreground of its own context is the
+  subagent's work (`TurnRenderer.nests`). Claude Code starts a task for it on the main
+  conversation's stream (recorded: Claude Code 2.1.286, `subagent-nested-command.jsonl`) and
+  reports its end to the subagent, so no turn follows it. The session took every such end for a
+  notification that a turn would report: it held the owner's next prompt for
+  `INJECTED_TURN_WAIT`, logged `no turn followed a task notification` once the wait passed, and
+  put an end line for the command at the top of the agent's report. The reply also gave the
+  command a card beside the agent's, and counted it as a running task. A task started by a call
+  that runs inside another call is now held aside while that call is open: when it ends before
+  the call's result it has no card, record, end line, wait or running count of its own, and shows
+  on its root's card through the call count. When it is still running at the call's result (a
+  command the subagent put in the background, recorded in `subagent-nested-background.jsonl`) it
+  outlives the call and is an ordinary background task from then on: its own line, counted
+  as a running shell, reached by `!stop`, kept in the reply's footer and awaited by a restart
+  (`TurnRenderer.take_promoted`). A task of a call no tracked reply holds (a restart dropped it)
+  is still treated as any other task.
+
 - An end of a reply that began always resolves (`ReplySink.close_out`, `wait_landed`). A caller
   cancelled while the end's write was out (a report turn starting while
   `ThreadSession._expire_injected_turn` was writing, a close) left the reply neither landed nor

@@ -31,6 +31,7 @@ from code_with_slack.footer import format_tokens
 from code_with_slack.render.previews import Preview, answered, preview
 
 TaskStatus = Literal["pending", "in_progress", "complete", "error"]
+TaskFrame = TaskStartedMessage | TaskProgressMessage | TaskNotificationMessage | TaskUpdatedMessage
 TITLE_LIMIT = 80
 OUTPUT_LIMIT = 200
 CHILD_LINES = 10
@@ -134,6 +135,15 @@ class TurnRenderer:
         self._running: dict[str, str] = {}
         self._commands: set[str] = set()  # lines of tasks no call started (a command's)
         self._nested: set[str] = set()  # tasks shown on a command's line, not on their own
+        # Tasks a call inside another call started (a long command a subagent runs), held aside
+        # while that call is open: the root's work, shown on its card through `_child`. A task
+        # that ends before its call's result stays here, dropped; one still running at the result
+        # outlives its call and leaves (`_outlived`). Kept after the end, so a later frame of a
+        # dropped one (a `task_updated` after its notification) still finds it.
+        self._inside: set[str] = set()
+        self._aside: dict[str, TaskStartedMessage] = {}  # the held-aside tasks not yet ended
+        self._closed_calls: set[str] = set()  # nested calls whose result arrived
+        self._promoted: list[TaskStartedMessage] = []  # `take_promoted`'s, not yet taken
         self._answers: dict[str, Preview] = {}  # a question's answers, until its call ends
         self._wrote_text = False
         self._after_text = False  # Claude's text is the last thing in the reply, no card since
@@ -200,6 +210,23 @@ class TurnRenderer:
         """The line title of a task this reply shows, running or ended."""
         entry = self._lines.get(self._line_of_task.get(task_id, ""))
         return entry.title if entry else None
+
+    def nests(self, message: TaskFrame) -> bool:
+        """Whether this task frame is of a task held aside or dropped as the work of a call inside
+        another call, a call whose root this reply holds: Claude Code reports such a task to the
+        subagent, not to the conversation. `False` for a call this reply never saw, for a task
+        that started after its call's result, and for one that outlived its call."""
+        if isinstance(message, TaskStartedMessage):
+            call = message.tool_use_id
+            return call in self._root_of and call not in self._closed_calls
+        return message.task_id in self._inside
+
+    def take_promoted(self) -> list[TaskStartedMessage]:
+        """The tasks that outlived the nested call that started them since the last call: each is
+        now an ordinary task of this reply (a line, a running task), which the session records as
+        it does any task it saw start."""
+        promoted, self._promoted = self._promoted, []
+        return promoted
 
     def answered(
         self,
@@ -309,6 +336,7 @@ class TurnRenderer:
                 self._root_of[block.id] = root
                 await self._child(root, title)
         elif isinstance(block, ToolResultBlock | ServerToolResultBlock):
+            await self._outlived(block.tool_use_id)
             entry = self._lines.get(block.tool_use_id)
             if entry is not None and entry.id in self._running.values():
                 # The call only launched a task, which is still running: it outlives the call, so
@@ -338,6 +366,17 @@ class TurnRenderer:
                 )
 
     async def _task_started(self, message: TaskStartedMessage) -> None:
+        if self.nests(message):
+            # Claude Code starts a task for a long command a subagent runs in the foreground of
+            # its own context (recorded: `subagent-nested-command.jsonl`, CLI 2.1.286). The call
+            # already shows on its root's card (`_child`): one work, one line, unless the task
+            # outlives the call (`_outlived`).
+            self._inside.add(message.task_id)
+            self._aside[message.task_id] = message
+            return
+        # An id held aside before, starting again after its call closed, is an ordinary task
+        # now: its later frames must reach it, or its end would never close its line.
+        self._inside.discard(message.task_id)
         if message.tool_use_id and message.tool_use_id in self._lines:
             # A call's task: Claude Code starts one for a long command in the foreground too
             # (recorded: `interrupt.jsonl`, CLI 2.1.283). The line stays the call's until the
@@ -354,6 +393,9 @@ class TurnRenderer:
             self._nested.add(message.task_id)
             await self._child(command, one_line(message.description, TITLE_LIMIT))
             return
+        await self._open_line(message)
+
+    async def _open_line(self, message: TaskStartedMessage) -> None:
         line_id = f"task-{message.task_id}"
         self._line_of_task[message.task_id] = line_id
         self._running[message.task_id] = line_id
@@ -363,7 +405,26 @@ class TurnRenderer:
         name = message.task_type or "task"
         await self._set(TaskUpdate(line_id, title, "in_progress", name=name, task=True))
 
+    async def _outlived(self, call: str) -> None:
+        """A nested call's result: a task it started that is still running outlives it (recorded:
+        `subagent-nested-background.jsonl`, CLI 2.1.286, where the result comes first), and from
+        here is an ordinary background task, as for a call at the top level (`_block`)."""
+        if call not in self._root_of:
+            return
+        self._closed_calls.add(call)
+        for task_id, started in list(self._aside.items()):
+            if started.tool_use_id == call:
+                del self._aside[task_id]
+                self._inside.discard(task_id)
+                # Queued before the line is written: a write that fails must not leave a
+                # running task the session never adopts.
+                self._promoted.append(started)
+                await self._open_line(started)
+
     async def _task_ended(self, task_id: str, status: str, summary: str | None) -> None:
+        if task_id in self._inside:
+            self._aside.pop(task_id, None)  # dropped: it ended before its call's result
+            return
         if task_id in self._nested:
             self._nested.discard(task_id)  # the command's own end closes its line
             return
