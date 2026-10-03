@@ -1,11 +1,9 @@
-"""Questions that hold a message before it is sent. D8: before a message wakes an idle session
-while a live session of another thread (any channel) is busy in the same resolved folder, the
-daemon asks `Another session is working in this folder: <link>. Send anyway?`, with Continue and
-Cancel. The session setup (`setup.py`) is the other one: model, effort and bypass, then Start.
+"""Questions that hold a message before it is sent. The one question today is the session setup
+(`setup.py`): model, effort and bypass, then Start.
 
 Kept in memory only, like `approvals.Approvals`: a hold never outlives the process (`!stop`, a
-top-level `!stop` of its channel, and a drain all cancel one exactly as Cancel does), so nothing
-here needs to survive a restart. A thread has at most one open at a time, whichever kind.
+top-level `!stop` of its channel, and a drain all cancel one), so nothing here needs to survive a
+restart. A thread has at most one open at a time.
 """
 
 import asyncio
@@ -13,18 +11,13 @@ import secrets
 from dataclasses import dataclass, field
 from typing import Any
 
-from code_with_slack import texts
-
-HOLD_CONTINUE = "hold_continue"
-HOLD_CANCEL = "hold_cancel"
-
 
 @dataclass
 class Pending:
     channel_id: str
     thread_ts: str
-    # What the owner chose (D8: True for Continue; the setup: its `Choice`), or None when the
-    # question was cancelled (Cancel, `!stop`, a drain).
+    # What the owner chose (the setup's `Choice`), or None when the question was cancelled
+    # (`!stop`, a drain).
     future: asyncio.Future[Any]
     message_ts: str | None = field(default=None)
     # What the asker needs back with a click that carries only the id (the setup's model list).
@@ -79,8 +72,8 @@ class Holds:
         return not pending.future.done()
 
     def cancel(self, channel_id: str, thread_ts: str) -> Pending | None:
-        """Cancel the hold open in this thread, if any: the same outcome as the owner clicking
-        Cancel (`!stop`, a top-level `!stop` of its channel, a drain). One already answered but
+        """Cancel the hold open in this thread, if any: the same outcome for every way to cancel
+        (`!stop`, a top-level `!stop` of its channel, a drain). One already answered but
         still being applied is flagged `cancelled` instead: its asker sends nothing."""
         for hold_id, pending in list(self._pending.items()):
             if pending.channel_id != channel_id or pending.thread_ts != thread_ts:
@@ -109,32 +102,3 @@ class Holds:
 
     def discard(self, hold_id: str) -> None:
         self._pending.pop(hold_id, None)
-
-
-def hold_blocks(hold_id: str, link: str) -> list[dict[str, Any]]:
-    """The question in the thread: a `mrkdwn` section (`link` in mrkdwn's own `<url|label>` form,
-    same as approvals and the resume picker use for their own buttons) plus Continue and Cancel."""
-    return [
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": texts.HOLD_QUESTION.format(link=link)},
-        },
-        {
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "action_id": HOLD_CONTINUE,
-                    "value": hold_id,
-                    "style": "primary",
-                    "text": {"type": "plain_text", "text": texts.HOLD_CONTINUE_BUTTON},
-                },
-                {
-                    "type": "button",
-                    "action_id": HOLD_CANCEL,
-                    "value": hold_id,
-                    "text": {"type": "plain_text", "text": texts.HOLD_CANCEL_BUTTON},
-                },
-            ],
-        },
-    ]

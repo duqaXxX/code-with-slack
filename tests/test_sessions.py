@@ -3788,7 +3788,7 @@ async def test_a_close_right_after_a_turn_ends_leaves_done_alone_on_the_root(
     assert Status.DONE.value not in removed[removed.index(Status.WORKING.value) :]
 
 
-# --- D8: hold reactions (Phase 3 final fix wave) ---
+# --- Hold reactions (the session setup's ✋) ---
 
 
 async def test_hold_end_reacts_from_the_thread_s_history_after_a_client_reset(
@@ -3826,7 +3826,7 @@ async def test_hold_keeps_a_standing_error_and_cancel_restores_it(
     harness_for: Callable[..., Harness],
 ) -> None:
     # `hold_start`'s own WAITING reaction must not reset `_error_standing` (it did, through
-    # `_react`), or Cancel right after turns a standing ❌ back into ✅: a hold is not new work.
+    # `_react`), or a cancel right after turns a standing ❌ back into ✅: a hold is not new work.
     h = harness_for({"turns": [sdk_messages("tools")]})
     session = h.session()
     await asyncio.wait_for((await session.submit("go")).done.wait(), 2)
@@ -3838,7 +3838,7 @@ async def test_hold_keeps_a_standing_error_and_cancel_restores_it(
     await asyncio.sleep(0)
     await session.hold_end(continued=False)
     await asyncio.sleep(0)
-    assert h.reactions()[-1] == Status.ERROR.value  # Cancel restores it, not ✅
+    assert h.reactions()[-1] == Status.ERROR.value  # a cancel restores it, not ✅
 
 
 async def test_cancel_while_another_approval_is_open_shows_waiting_not_working(
@@ -3861,31 +3861,6 @@ async def test_cancel_while_another_approval_is_open_shows_waiting_not_working(
     approval_id = next(iter(h.approvals._pending))
     assert h.approvals.resolve(approval_id, CHANNEL, THREAD, Approve()) is not None
     await asyncio.wait_for(turn.done.wait(), 2)
-
-
-async def test_working_in_does_not_resolve_a_path_on_every_lookup(
-    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # `working_in` used to call `Path.resolve()` on the event loop for every live session on
-    # every message; each session's folder is now cached once, at construction.
-    h = harness_for(
-        {"turns": [[CanUseToolCall("Bash", {"command": "ls"}), *sdk_messages("tools")]]}
-    )
-    first = h.session(THREAD)
-    second = h.session(OTHER_THREAD)
-    await first.submit("clean")
-    await until(lambda: bool(h.approvals._pending))  # first is genuinely busy now
-
-    def boom(self: Path, *args: Any, **kwargs: Any) -> Path:
-        raise AssertionError("working_in must not resolve a path on every lookup")
-
-    monkeypatch.setattr(Path, "resolve", boom)
-    try:
-        assert h.manager.working_in(besides=second) is first
-    finally:
-        monkeypatch.undo()
-    approval_id = next(iter(h.approvals._pending))
-    assert h.approvals.resolve(approval_id, CHANNEL, THREAD, Approve()) is not None
 
 
 async def test_the_manager_names_the_threads_with_a_live_session(

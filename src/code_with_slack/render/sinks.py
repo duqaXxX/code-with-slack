@@ -137,7 +137,7 @@ class Clock:
 
 
 async def delete_request(slack: AsyncWebClient, *, channel: str, ts: str) -> None:
-    """Delete a request (an approval, a question, a D8 hold) once it is decided or stale:
+    """Delete a request (an approval, a question, a session setup) once it is decided or stale:
     `message_not_found` counts as done, as everywhere else this project deletes one. Shared by
     `ThreadSession._delete_request`, `slack_app.py`'s `remove_request` and `repair.py` (issue #19
     fix round item 9), so the one behaviour lives in one place."""
