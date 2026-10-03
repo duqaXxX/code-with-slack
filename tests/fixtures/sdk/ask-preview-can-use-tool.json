@@ -1,0 +1,26 @@
+{
+  "tool_name": "AskUserQuestion",
+  "input": {
+    "questions": [
+      {
+        "question": "Which status line layout would you prefer?",
+        "header": "Status Line",
+        "options": [
+          {
+            "label": "Minimal",
+            "description": "Shows only essential information like current file, cursor position, and branch name in a single compact line. This layout maximizes horizontal space for your code while keeping critical status information always visible.",
+            "preview": "~/project/main.js:42:15 | main\n"
+          },
+          {
+            "label": "Detailed",
+            "description": "Displays comprehensive information including file path, cursor position, git branch, modification status, and encoding across multiple information groups. This gives you full context about your file and workspace state at a glance.",
+            "preview": "~/project/main.js | Ln 42, Col 15 | main | Modified | UTF-8\n"
+          }
+        ],
+        "multiSelect": false
+      }
+    ]
+  },
+  "tool_use_id": "toolu_01DRb6mwGd2AsnBb1YjRS282",
+  "agent_id": null
+}

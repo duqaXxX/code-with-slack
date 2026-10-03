@@ -8,6 +8,8 @@ from claude_agent_sdk.types import (
 )
 
 from code_with_slack.approvals import (
+    OPTION_TEXT_LIMIT,
+    SECTION_LIMIT,
     TYPED_LIMIT,
     Answer,
     Approvals,
@@ -149,6 +151,105 @@ def test_a_single_question_has_no_counter() -> None:
     view = question_view(Draft("abc", "C1", THREAD), TWO[:1])
     assert view["submit"]["text"] == "Submit"
     assert view["blocks"][0]["type"] == "input"
+
+
+def test_options_that_fit_keep_their_description_under_the_choice() -> None:
+    fits = "x" * OPTION_TEXT_LIMIT
+    question = {"question": "Colour?", "options": [{"label": "red", "description": fits}]}
+    view = question_view(Draft("abc", "C1", THREAD), [question])
+    [choice, _] = view["blocks"]
+    assert choice["label"]["text"] == "Colour?"
+    assert choice["element"]["options"][0]["description"]["text"] == fits
+
+
+def bold(text: str) -> dict[str, Any]:
+    return {"type": "text", "text": text, "style": {"bold": True}}
+
+
+def test_options_that_say_more_than_a_choice_holds_are_shown_whole_above_it() -> None:
+    # ask-preview-can-use-tool.json (CLI 2.1.286): two options whose descriptions pass the 75
+    # characters an option object holds, each with a `preview` (issue #47).
+    [question] = sdk_json("ask-preview-can-use-tool")["input"]["questions"]
+    minimal, detailed = question["options"]
+    assert len(minimal["description"]) > OPTION_TEXT_LIMIT and minimal["preview"]
+    view = question_view(Draft("abc", "C1", THREAD), [question])
+    asked, first, second, choice, other = view["blocks"]
+    assert asked == {
+        "type": "rich_text",
+        "elements": [{"type": "rich_text_section", "elements": [bold(question["question"])]}],
+    }
+    assert first == {
+        "type": "rich_text",
+        "elements": [
+            {
+                "type": "rich_text_section",
+                "elements": [
+                    bold("Minimal"),
+                    {"type": "text", "text": "\n" + minimal["description"]},
+                ],
+            },
+            {
+                "type": "rich_text_preformatted",
+                "elements": [{"type": "text", "text": minimal["preview"].rstrip("\n")}],
+            },
+        ],
+    }
+    assert second["elements"][0]["elements"][1]["text"] == "\n" + detailed["description"]
+    # The choice keeps the labels alone, under the question's header: nothing is shown cut.
+    assert (choice["type"], other["type"]) == ("input", "input")
+    assert choice["label"]["text"] == question["header"]
+    assert choice["element"]["options"] == [
+        {"text": {"type": "plain_text", "text": "Minimal"}, "value": "0"},
+        {"text": {"type": "plain_text", "text": "Detailed"}, "value": "1"},
+    ]
+
+
+def test_a_preview_alone_is_enough_to_show_the_options_whole() -> None:
+    question = {
+        "question": "Layout?",
+        "options": [
+            {"label": "one", "description": "Short", "preview": "a\n  b"},
+            {"label": "two"},
+        ],
+    }
+    _, one, two, choice, _ = question_view(Draft("abc", "C1", THREAD), [question])["blocks"]
+    assert one["elements"][1]["elements"][0]["text"] == "a\n  b"  # its line breaks kept
+    assert two["elements"] == [{"type": "rich_text_section", "elements": [bold("two")]}]
+    assert choice["label"]["text"] == "Answer"  # no header to name the choice
+
+
+def test_options_shown_whole_are_shown_as_written_and_fit_slack_s_limits() -> None:
+    # Rich text reads no markup: what Claude wrote shows as it wrote it, asterisks included.
+    written = "Deletes all *.tmp in build_dir <!channel> " + "d" * 4000
+    question = {
+        "question": "Which\n*one*?",
+        "header": "Pick",
+        "options": [{"label": "<a>", "description": written, "preview": "p" * 4000}],
+    }
+    asked, option, _, _ = question_view(Draft("abc", "C1", THREAD), [question])["blocks"]
+    assert asked["elements"][0]["elements"] == [bold("Which *one*?")]
+    label, description = option["elements"][0]["elements"]
+    assert label == bold("<a>")
+    assert description["text"].startswith("\nDeletes all *.tmp in build_dir <!channel> ")
+    assert len(description["text"]) == SECTION_LIMIT + 1 and description["text"].endswith("…")
+    assert len(option["elements"][1]["elements"][0]["text"]) == SECTION_LIMIT
+
+
+def test_a_question_of_several_keeps_its_counter_above_the_options_shown_whole() -> None:
+    long = {
+        "question": "Why?",
+        "header": "Why",
+        "options": [{"label": "a", "description": "d" * 76}],
+    }
+    view = question_view(Draft("abc", "C1", THREAD), [long, TWO[0]])
+    assert [b["type"] for b in view["blocks"]] == [
+        "context",
+        "rich_text",
+        "rich_text",
+        "input",
+        "input",
+    ]
+    assert view["blocks"][0]["elements"][0]["text"] == "Why · 1 of 2"
 
 
 def test_absorb_keeps_what_the_question_on_screen_shows() -> None:
