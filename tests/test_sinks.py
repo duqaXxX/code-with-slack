@@ -1218,17 +1218,8 @@ def test_a_task_card_block_reads_back_as_the_card_it_was() -> None:
     assert block["output"]["type"] == "rich_text" and "details" not in block
 
 
-def title_of(container: dict[str, Any]) -> str:
-    """A container's rich title as it reads, with the call's name in code style checked."""
-    [section] = container["rich_text_title"]["elements"]
-    icon, name = section["elements"]
-    assert name["style"] == {"code": True}
-    assert container["title"]["text"] == icon["text"] + name["text"]  # the plain fallback
-    return str(icon["text"] + name["text"])
-
-
 def test_a_diff_shows_collapsed_and_full_width() -> None:
-    [block] = sinks.diff_containers("✓", "Update(a.txt)", "Added 1 line", "+\U0001f7e9 1 x")
+    [block] = sinks.diff_containers("Added 1 line", "+\U0001f7e9 1 x")
     assert block["is_collapsible"] is True and block["default_collapsed"] is True
     assert block["width"] == "full"
     [child] = block["child_blocks"]
@@ -1236,18 +1227,24 @@ def test_a_diff_shows_collapsed_and_full_width() -> None:
     assert pre["type"] == "rich_text_preformatted" and pre["language"] == "diff"
 
 
+def test_a_diff_is_titled_with_its_sentence_alone() -> None:
+    # The call's line is the card above it (issue #110): the container must not say it again.
+    [block] = sinks.diff_containers("Added 1 line", "+x")
+    assert block["title"] == {"type": "plain_text", "text": "Added 1 line"}
+    assert "rich_text_title" not in block and "subtitle" not in block
+
+
 def test_a_diff_past_a_message_continues_in_the_next() -> None:
     body = "\n".join(f"+\U0001f7e9 {i} {'x' * 90}" for i in range(1, 400))
-    blocks = sinks.diff_containers("✓", "Update(a.txt)", "Added 399 lines", body)
+    blocks = sinks.diff_containers("Added 399 lines", body)
     assert len(blocks) > 1
     assert all(len(sinks.block_text(b)) <= sinks.MESSAGE_LIMIT for b in blocks)
     assert "\n".join(sinks.block_text(b) for b in blocks) == body  # nothing lost at the cuts
 
 
 def test_a_long_title_is_cut_to_slacks_limit() -> None:
-    [block] = sinks.diff_containers("✓", "Update(" + "a" * 200 + ")", "Added 1 line", "+x")
+    [block] = sinks.diff_containers("x" * 200, "+x")
     assert len(block["title"]["text"]) == 150
-    assert title_of(block) == block["title"]["text"]
 
 
 @pytest.mark.parametrize("fence", ["```", "````", "``````", "```x```"])

@@ -110,6 +110,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- A diff's container is titled with the preview's sentence alone (#110): `Added 10 lines`, with
+  no subtitle. Before, it repeated the call's line (`✓ Update(notes.txt)`) that the task card
+  above it already shows, so every `Edit` or `Write` read as two rows with the same name
+  (`sinks.diff_containers`).
 - `!bypass on` and `!bypass off` inside a session's thread answer with a line of text (#68):
   an ephemeral message under the word (`texts.BYPASS_ON_THREAD`, `texts.BYPASS_OFF_THREAD`)
   that says what changed, and for `on` that it survives a restart. The ✅ on the word stays,

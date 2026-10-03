@@ -77,8 +77,6 @@ TOO_LONG = "msg_too_long"
 STILL_STREAMING = "streaming_state_conflict"
 # What stands where a preview arrived too late for its message.
 PREVIEW_CUT = "Preview left out: it did not fit this message."
-# The icon of a diff container's title.
-ICONS = {"pending": "⏳", "in_progress": "⏳", "complete": "✓", "error": "✗"}
 TERMINAL = ("complete", "error")
 
 
@@ -175,30 +173,15 @@ def preview_blocks(body: str) -> list[dict[str, Any]]:
     return [{"type": "markdown", "text": f"```\n{chunk}\n```"} for chunk in split(body) if chunk]
 
 
-def diff_containers(icon: str, title: str, summary: str, body: str) -> list[dict[str, Any]]:
-    """A diff as the terminal's call line, collapsed: a full-width container per MESSAGE_LIMIT
-    piece of the body, titled with the call's line and its summary, closed until the owner opens
-    it. The diff sits in the message itself, so it opens after a restart too."""
-    # The plain title is the fallback of a client that does not draw the rich one, which shows
-    # the call's name in code style as the tool line does. Both are cut to the plain one's 150.
-    name = title[: 150 - len(icon) - 1]
+def diff_containers(summary: str, body: str) -> list[dict[str, Any]]:
+    """A diff under its call's card, collapsed: a full-width container per MESSAGE_LIMIT piece of
+    the body, titled with the preview's sentence, closed until the owner opens it. The diff sits
+    in the message itself, so it opens after a restart too."""
     return [
         {
             "type": "container",
-            "title": {"type": "plain_text", "text": f"{icon} {name}"},
-            "rich_text_title": {
-                "type": "rich_text",
-                "elements": [
-                    {
-                        "type": "rich_text_section",
-                        "elements": [
-                            {"type": "text", "text": f"{icon} "},
-                            {"type": "text", "text": name, "style": {"code": True}},
-                        ],
-                    }
-                ],
-            },
-            "subtitle": {"type": "mrkdwn", "text": summary[:150]},
+            # The card above is the call's line: the title says only what the diff holds.
+            "title": {"type": "plain_text", "text": summary[:150]},
             "width": "full",
             "is_collapsible": True,
             "default_collapsed": True,
@@ -433,7 +416,7 @@ def piece_blocks(tool: _Tool, index: int) -> list[dict[str, Any]]:
     assert view is not None
     body = tool.pieces()[index - 1]
     if view.language == "diff":
-        return diff_containers(ICONS[tool.update.status], view.title, view.summary, body)
+        return diff_containers(view.summary, body)
     return preview_blocks(body)
 
 
