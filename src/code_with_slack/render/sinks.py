@@ -441,7 +441,7 @@ def piece_blocks(tool: _Tool, index: int) -> list[dict[str, Any]]:
 def piece_chunk(tool: _Tool, index: int) -> dict[str, Any]:
     """The same piece for a stream: a `blocks` chunk (measured 2026-09-28 for a diff's container
     and 2026-09-29 for a markdown block, which reads back as rich text; a context block in one
-    is not measured yet)."""
+    was seen drawn on the daemon on 2026-10-03)."""
     return {"type": "blocks", "blocks": piece_blocks(tool, index)}
 
 

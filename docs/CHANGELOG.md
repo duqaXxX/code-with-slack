@@ -117,7 +117,7 @@ All notable changes to this project are documented here. The format follows
   request message is deleted once the form is submitted, as an approval's is. Before, that
   message was rewritten into the record and stayed below the reply, so everything Claude did
   after the answer showed above it. `approvals.answered_blocks` is gone. A `context` block
-  inside a stream's `blocks` chunk has not been measured on Slack yet.
+  inside a stream's `blocks` chunk was seen drawn on the daemon on 2026-10-03.
 - A diff's container is titled with the preview's sentence alone (#110): `Added 10 lines`, with
   no subtitle. Before, it repeated the call's line (`✓ Update(notes.txt)`) that the task card
   above it already shows, so every `Edit` or `Write` read as two rows with the same name
