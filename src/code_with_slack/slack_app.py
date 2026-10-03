@@ -1376,8 +1376,8 @@ def build_app(
         if resolved is None:
             await tell_owner(draft.channel_id, draft.thread_ts, texts.APPROVAL_GONE)
             return
-        # The reply keeps what was asked and answered, where it was asked (`render.previews`).
-        await remove_request(draft.channel_id, draft.thread_ts, pending.message_ts)
+        # The session that asked decides what becomes of the request message: its reply keeps
+        # the answers, or the request itself does (`ThreadSession._keep_answers`).
 
     @app.error
     async def on_error(error: Exception) -> None:

@@ -48,7 +48,9 @@ from slack_sdk.web.async_client import AsyncWebClient
 
 from code_with_slack import texts
 from code_with_slack.approvals import (
+    Answer,
     Approvals,
+    answered_blocks,
     approval_blocks,
     question_blocks,
     to_permission,
@@ -2102,7 +2104,60 @@ class ThreadSession:
             self._idle_timer_check()  # may (re)start the idle-close timer (D9)
             if not self._interrupting:
                 self._react_waiting_or_working()
+        if questions and isinstance(decision, Answer):
+            await self._keep_answers(context.tool_use_id, message_ts, questions, decision.answers)
         return to_permission(decision, tool_input, questions)
+
+    async def _keep_answers(
+        self,
+        tool_use_id: str | None,
+        message_ts: str,
+        questions: list[dict[str, Any]],
+        answers: dict[str, str | list[str]],
+    ) -> None:
+        """Where an answered question's answers stay. In the reply, under the line of the call,
+        where the question was asked (issue #82): the request has done its job and goes. When
+        the reply has no line of its own for that call, in the request itself, rewritten with no
+        buttons, so the answers are never lost. The permission request names its call
+        (`ToolPermissionContext.tool_use_id`, measured on Claude Code 2.1.286, 2026-10-03)."""
+        active = self._active
+        if (
+            tool_use_id is not None
+            and active is not None
+            and active.renderer.answered(tool_use_id, questions, answers)
+        ):
+            await self._delete_request(message_ts)
+            return
+        try:
+            # One more chat.update against the app's budget, which every reply draws from.
+            await self._deps.update_limiter.acquire()
+            await self._deps.slack.chat_update(
+                channel=self.channel_id,
+                ts=message_ts,
+                text=texts.ANSWERED,
+                blocks=answered_blocks(questions, answers),
+            )
+        except Exception as exc:
+            # The request must not keep buttons that no longer work: remove it.
+            logger.warning(
+                "could not record an answer in %s/%s: %s",
+                self.channel_id,
+                self.thread_ts,
+                describe(exc),
+            )
+            await self._delete_request(message_ts)
+            return
+        # Crash repair (issue #19): it carries no buttons now, so it leaves the tracked list.
+        # Outside the try above: a failed write here must never delete a message just rewritten.
+        try:
+            self._deps.state.remove_request(self.channel_id, self.thread_ts, message_ts)
+        except Exception as exc:
+            logger.warning(
+                "could not clear an answered request from state.json in %s/%s: %s",
+                self.channel_id,
+                self.thread_ts,
+                describe(exc),
+            )
 
     async def _fail(self, turn: Turn, text: str, *, error: bool = False) -> None:
         """End a turn's reply with a line saying why, and release whoever waits on it. `error`

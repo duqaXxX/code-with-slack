@@ -6,8 +6,8 @@ sentence or a preview instead, and this module reproduces it from what the SDK s
 The shapes read here come from `UserMessage.tool_use_result`, which the SDK types as
 `dict[str, Any]` and does not document: measured on Claude Code 2.1.283 (2026-09-27,
 `tests/fixtures/sdk/edit-write.jsonl`), and guarded by the release probe. Any other shape gives
-None, and the generic line is shown instead. An answered `AskUserQuestion` was measured on Claude
-Code 2.1.286 (2026-10-03, `tests/fixtures/sdk/ask-answered.jsonl`).
+None, and the generic line is shown instead. An answered question is the exception: its lines
+come from the questions and answers the daemon itself sent back (`answered`), not from a result.
 """
 
 from dataclasses import dataclass
@@ -115,32 +115,25 @@ def _changed(added: int, removed: int) -> str:
     return ", ".join(parts) or "No change"
 
 
-def _answered(result: dict[str, Any]) -> Preview | None:
+def answered(
+    questions: list[dict[str, Any]], answers: dict[str, str | list[str]]
+) -> Preview | None:
     """The answers to a question as the terminal keeps them: a line per question that has one,
-    `· question → answer`, a multi-select's answers joined by commas."""
-    questions, answers = result.get("questions"), result.get("answers")
-    if not isinstance(questions, list) or not isinstance(answers, dict):
-        return None
+    `· question → answer`, a multi-select's answers joined by commas. None with no answer."""
     lines: list[str] = []
     for entry in questions:
-        question = entry.get("question") if isinstance(entry, dict) else None
-        answer = answers.get(question) if isinstance(question, str) else None
-        if isinstance(answer, list):
-            answer = ", ".join(str(item) for item in answer)
-        if isinstance(question, str) and isinstance(answer, str) and answer:
+        question = entry["question"]
+        answer = answers.get(question, "")
+        shown = ", ".join(answer) if isinstance(answer, list) else answer
+        if shown:
             # One line each, however the question or a typed answer was written.
-            lines.append(f"· {' '.join(question.split())} → {' '.join(answer.split())}")
+            lines.append(f"· {' '.join(question.split())} → {' '.join(shown.split())}")
     return Preview(texts.ANSWERED, "", "\n".join(lines), plain=True) if lines else None
 
 
 def preview(name: str, result: Any, cwd: str | None) -> Preview | None:
-    """The terminal's view of a finished `Edit` or `Write`, or of an answered
-    `AskUserQuestion`; None for any other tool or shape."""
-    if not isinstance(result, dict):
-        return None
-    if name == "AskUserQuestion":
-        return _answered(result)
-    if not isinstance(result.get("filePath"), str):
+    """The terminal's view of a finished `Edit` or `Write`, or None for any other tool or shape."""
+    if not isinstance(result, dict) or not isinstance(result.get("filePath"), str):
         return None
     path = _shown(result["filePath"], cwd)
     patch = result.get("structuredPatch")

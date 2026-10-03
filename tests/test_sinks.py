@@ -7,6 +7,7 @@ from typing import Any
 
 import aiohttp
 import pytest
+from claude_agent_sdk import AssistantMessage, ToolUseBlock, UserMessage
 from slack_sdk.errors import SlackApiError
 
 from code_with_slack import texts
@@ -1056,7 +1057,16 @@ async def test_an_answered_question_shows_in_the_reply_where_it_was_answered(
     # and a line per answer where the question was asked, before what Claude says next.
     sink = reply(slack)
     renderer = TurnRenderer(sink, "/home/dev/project")
+    call: ToolUseBlock | None = None
     for message in sdk_messages("ask-answered"):
+        if isinstance(message, AssistantMessage):
+            call = next((b for b in message.content if isinstance(b, ToolUseBlock)), call)
+        if isinstance(message, UserMessage) and call is not None:
+            # The session hands the answers over once the owner gave them, before the result.
+            assert isinstance(message.tool_use_result, dict)
+            assert renderer.answered(
+                call.id, call.input["questions"], message.tool_use_result["answers"]
+            )
         await renderer.feed(message)
     await renderer.close(None)
     [card] = slack.message_cards()[0]
@@ -1073,6 +1083,11 @@ async def test_an_answered_question_shows_in_the_reply_where_it_was_answered(
     ]
     # Claude's next words come after the answers, in the same message.
     assert "markdown_text" in kinds[kinds.index("blocks") + 1 :]
+
+
+async def test_answers_to_a_call_the_reply_has_no_line_for_are_not_kept(slack: FakeSlack) -> None:
+    renderer = TurnRenderer(reply(slack))
+    assert not renderer.answered("toolu_unseen", [{"question": "Colour?"}], {"Colour?": "blue"})
 
 
 async def test_a_stopped_message_shows_the_answers_under_their_card(slack: FakeSlack) -> None:

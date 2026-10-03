@@ -112,11 +112,13 @@ All notable changes to this project are documented here. The format follows
 
 - The answers to a question show in the reply, where the question was asked (#82). The call's
   card reads `User answered Claude's questions:` and a small line per question follows it,
-  `⎿ · question → answer`, read from the tool's result (`render.previews.preview`,
-  `Preview.plain`; shape measured on Claude Code 2.1.286, fixture `ask-answered.jsonl`). The
-  request message is deleted once the form is submitted, as an approval's is. Before, that
+  `⎿ · question → answer` (`render.previews.answered`, `Preview.plain`). The session hands
+  the answers the owner gave to the reply (`ThreadSession._keep_answers`,
+  `TurnRenderer.answered`), keyed by the call id the permission request carries (measured on
+  Claude Code 2.1.286), and deletes the request message, as an approval's is. Before, that
   message was rewritten into the record and stayed below the reply, so everything Claude did
-  after the answer showed above it. `approvals.answered_blocks` is gone. A `context` block
+  after the answer showed above it. The rewrite remains as the fallback for a question whose
+  call the reply has no line of its own for (`approvals.answered_blocks`). A `context` block
   inside a stream's `blocks` chunk was seen drawn on the daemon on 2026-10-03.
 - A diff's container is titled with the preview's sentence alone (#110): `Added 10 lines`, with
   no subtitle. Before, it repeated the call's line (`✓ Update(notes.txt)`) that the task card

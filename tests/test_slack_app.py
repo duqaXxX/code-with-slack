@@ -944,11 +944,11 @@ async def test_next_with_an_answer_moves_to_the_next_question(world: World) -> N
     assert not pending.future.done()
 
 
-async def test_a_complete_submit_answers_claude_and_removes_the_request(world: World) -> None:
+async def test_a_complete_submit_answers_claude_and_leaves_the_request_to_the_session(
+    world: World,
+) -> None:
     approval_id, pending = world.approvals.open(CHANNEL, FORM_THREAD, "Colour", QUESTIONS)
     pending.message_ts = "1790000000.000009"
-    world.state.open_thread(CHANNEL, FORM_THREAD)
-    world.state.add_request(CHANNEL, FORM_THREAD, pending.message_ts)
     draft = Draft(approval_id, CHANNEL, FORM_THREAD, active=1, picks={0: [1]})
     values = {
         "q1": {"answer": {"type": "checkboxes", "selected_options": [{"value": "0"}]}},
@@ -956,12 +956,10 @@ async def test_a_complete_submit_answers_claude_and_removes_the_request(world: W
     }
     await world.dispatch(form_body("view_submission", draft, values))
     assert pending.future.result() == Answer({"Colour?": "blue", "Sizes?": ["s", "xl"]})
-    # The reply keeps the answers, where the question was asked (issue #82): the request has
-    # done its job and goes, as an approval's does, so nothing sits below what Claude does next.
-    assert [a["ts"] for a in world.slack.calls_to("chat.delete")] == ["1790000000.000009"]
+    # The session that asked decides what becomes of the request (`_keep_answers`): its reply
+    # keeps the answers and the request goes, or the request itself becomes the record.
+    assert world.slack.calls_to("chat.delete") == []
     assert world.slack.calls_to("chat.update") == []
-    # Crash repair (issue #19): deleted, so it is no longer tracked either.
-    assert world.state.thread(CHANNEL, FORM_THREAD).requests == ()
 
 
 @pytest.mark.parametrize("user", [{"id": STRANGER}, {"team_id": OTHER_TEAM}])
@@ -1835,6 +1833,15 @@ async def test_a_thread_in_the_current_folder_never_gets_the_notice(world: World
     await world.dispatch(reply("go on", THREAD))
     assert not any("Claude Code resumes a session only there" in t for t in world.ephemerals())
     await world.sessions.close_all()
+
+
+def test_long_answers_fit_slack_s_limit() -> None:
+    from code_with_slack.approvals import SECTION_LIMIT, answered_blocks
+
+    questions = [{"question": "q" * 900} for _ in range(4)]
+    answers: dict[str, str | list[str]] = {"q" * 900: "a" * 300}
+    [block] = answered_blocks(questions, answers)
+    assert len(block["elements"][0]["text"]) <= SECTION_LIMIT
 
 
 # --- D8: two busy sessions in one folder (Phase 3, task 2) ---

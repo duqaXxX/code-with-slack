@@ -484,6 +484,100 @@ async def test_ask_user_question_returns_answers(harness_for: Callable[..., Harn
     assert result.updated_input == {"questions": recorded["input"]["questions"], "answers": answers}
 
 
+def answered_turn() -> tuple[list[Any], str, dict[str, Any]]:
+    """The recorded turn of an answered question (ask-answered.jsonl, CLI 2.1.286), with the
+    permission request where the CLI makes it: after the call, before its result. With it, the
+    call's id, which the request carries (measured), and the call's input."""
+    messages = sdk_messages("ask-answered")
+    call = next(
+        b
+        for m in messages
+        if isinstance(m, AssistantMessage)
+        for b in m.content
+        if isinstance(b, ToolUseBlock)
+    )
+    at = next(i for i, m in enumerate(messages) if isinstance(m, UserMessage))
+    ask = CanUseToolCall(call.name, call.input, tool_use_id=call.id)
+    return [*messages[:at], ask, *messages[at:]], call.id, call.input
+
+
+async def test_an_answered_question_stays_in_the_reply_and_its_request_goes(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # Issue #82: the answers show under the call's line, where the question was asked, so what
+    # Claude does next shows below them; the request message has done its job.
+    batch, _, asked_input = answered_turn()
+    h = harness_for({"turns": [batch]})
+    turn = await h.session().submit("ask me")
+    await until(lambda: bool(h.approvals._pending))
+    request_ts = h.slack.posted_ts[-1]
+    assert h.state.thread(CHANNEL, THREAD).requests == (request_ts,)
+    approval_id = next(iter(h.approvals._pending))
+    answers = {q["question"]: q["options"][0]["label"] for q in asked_input["questions"]}
+    h.approvals.resolve(approval_id, CHANNEL, THREAD, Answer(answers))
+    await asyncio.wait_for(turn.done.wait(), 2)
+    assert [a["ts"] for a in h.slack.calls_to("chat.delete")] == [request_ts]
+    assert all(a["ts"] != request_ts for a in h.slack.calls_to("chat.update"))
+    assert h.state.thread(CHANNEL, THREAD).requests == ()
+    cards = [c for message in h.slack.message_cards() for c in message]
+    [card] = [c for c in cards if c["title"] == texts.ANSWERED]
+    assert card["status"] == "complete"
+    shown = [
+        b["elements"][0]["text"]
+        for _, a in h.slack.calls
+        for c in a.get("chunks") or []
+        if c["type"] == "blocks"
+        for b in c["blocks"]
+        if b["type"] == "context"
+    ]
+    first = asked_input["questions"][0]
+    assert shown and f"· {first['question']} → {first['options'][0]['label']}" in shown[0]
+
+
+async def test_answers_the_reply_cannot_show_stay_in_the_request(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # A question whose call the reply holds no line for (asked inside a subagent, say): the
+    # request is rewritten into the record, with no buttons, as the terminal keeps it.
+    recorded = sdk_json("ask-can-use-tool")
+    call = CanUseToolCall(recorded["tool_name"], recorded["input"], tool_use_id="toolu_unseen")
+    h = harness_for({"turns": [[call, *sdk_messages("tools")]]})
+    turn = await h.session().submit("ask me")
+    await until(lambda: bool(h.approvals._pending))
+    request_ts = h.slack.posted_ts[-1]
+    approval_id = next(iter(h.approvals._pending))
+    answers = {q["question"]: q["options"][0]["label"] for q in recorded["input"]["questions"]}
+    h.approvals.resolve(approval_id, CHANNEL, THREAD, Answer(answers))
+    await asyncio.wait_for(turn.done.wait(), 2)
+    assert h.slack.calls_to("chat.delete") == []
+    [update] = [a for a in h.slack.calls_to("chat.update") if a["ts"] == request_ts]
+    text = update["blocks"][0]["elements"][0]["text"]
+    first = recorded["input"]["questions"][0]
+    assert text.startswith(f"{texts.ANSWERED}\n{texts.NESTED}· {first['question']} → ")
+    assert [b["type"] for b in update["blocks"]] == ["context"]
+    assert h.state.thread(CHANNEL, THREAD).requests == ()
+
+
+async def test_a_record_slack_refuses_removes_the_request(
+    harness_for: Callable[..., Harness],
+) -> None:
+    recorded = sdk_json("ask-can-use-tool")
+    call = CanUseToolCall(recorded["tool_name"], recorded["input"], tool_use_id="toolu_unseen")
+    h = harness_for({"turns": [[call, *sdk_messages("tools")]]})
+    turn = await h.session().submit("ask me")
+    await until(lambda: bool(h.approvals._pending))
+    request_ts = h.slack.posted_ts[-1]
+    h.slack.responses["chat.update"] = {"ok": False, "error": "msg_too_long"}
+    approval_id = next(iter(h.approvals._pending))
+    answers = {q["question"]: q["options"][0]["label"] for q in recorded["input"]["questions"]}
+    h.approvals.resolve(approval_id, CHANNEL, THREAD, Answer(answers))
+    await until(lambda: bool(h.slack.calls_to("chat.delete")))
+    # Its buttons would no longer work: the request goes.
+    assert [a["ts"] for a in h.slack.calls_to("chat.delete")] == [request_ts]
+    h.slack.responses.pop("chat.update")
+    await asyncio.wait_for(turn.done.wait(), 2)
+
+
 async def test_an_approval_request_is_tracked_in_state_while_it_is_open(
     harness_for: Callable[..., Harness],
 ) -> None:
