@@ -128,7 +128,11 @@ BIND_BUSY = (
     "Let them finish or send `!stop`, then bind again."
 )
 BYPASS_TOP_LEVEL = "Bypass belongs to one session: send `!bypass on` inside its thread."
-BYPASS_BEFORE_START = "This session has not started yet: tick Bypass in its setup and press Start."
+# True with the setup on screen and without it (after a stop, a restart or a Cancel).
+BYPASS_BEFORE_START = (
+    "This session has not started yet: tick Bypass in its setup and press Start. "
+    "If no setup is shown, send a message here first."
+)
 BYPASS_ON_THREAD = (
     "Bypass is on in this session: every tool runs without asking, until `!bypass off`. "
     "It survives a restart."

@@ -825,12 +825,11 @@ def build_app(
             case Bypass(on=on):
                 if session is None:
                     await in_channel(channel, texts.BYPASS_TOP_LEVEL)
-                elif session.before_start:
+                elif not await session.switch_bypass(on):
                     # Start writes the setup's box over the switch (`apply_setup`): one
-                    # flipped before it would not hold, so the word changes nothing.
+                    # flipped before it would not hold, so the word changed nothing.
                     await tell_owner(channel, thread_ts, texts.BYPASS_BEFORE_START)
                 else:
-                    await session.set_bypass(on)
                     # Both: the line says what changed and is gone on reload, the ✅ stays.
                     await acknowledge(channel, ts)
                     await tell_owner(

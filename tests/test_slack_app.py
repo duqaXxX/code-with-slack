@@ -2651,6 +2651,35 @@ async def assert_cancelled_while_settling(manual: World) -> None:
     assert len(manual.slack.calls_to("chat.delete")) == 1
 
 
+async def test_bypass_typed_while_start_is_applied_wins_over_the_box(
+    manual: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The word came after the click: it waits for Start to finish, then switches the session,
+    # so what its answer says is what runs. Start is held inside `set_model`, after the point
+    # where it is marked as applied and before it compares the box with the live client.
+    gate = asyncio.Event()
+
+    async def slow(self: FakeClaudeClient, model: str | None = None) -> None:
+        self.models_set.append(model)
+        await gate.wait()
+
+    monkeypatch.setattr(FakeClaudeClient, "set_model", slow)
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(setup_click(manual, model="opus"))  # bypass unticked
+    await asyncio.sleep(0.1)
+    word = reply("!bypass on", THREAD)
+    await manual.dispatch(word)
+    await asyncio.sleep(0.1)
+    assert texts.BYPASS_ON_THREAD not in manual.ephemerals()  # nothing is said before it holds
+    gate.set()
+    await manual.settle(0.3)
+    assert manual.clients[-1].modes == ["bypassPermissions"]
+    assert manual.state.thread(CHANNEL, THREAD).bypass is True
+    assert texts.BYPASS_ON_THREAD in manual.ephemerals()
+    assert reactions_on(manual, word["event"]["ts"]) == ["white_check_mark"]
+    assert manual.queries() == ["hello"]
+
+
 async def test_stop_while_start_settles_cancels(manual: World) -> None:
     await start_with_a_gated_reconnect(manual)
     await manual.dispatch(reply("!stop", THREAD))

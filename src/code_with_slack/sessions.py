@@ -452,6 +452,8 @@ class ThreadSession:
         self._submitted = False
         # `apply_setup` changed something that `forget_setup` has not undone.
         self._setup_applied = False
+        # Held while Start is applied, so a `!bypass` typed meanwhile acts after it.
+        self._setup_lock = asyncio.Lock()
         # What the live client was built with or switched to: the effort option (no runtime
         # setter exists) and whether it effectively runs in bypass (the switch, or the folder's own
         # settings starting it so). `apply_setup` compares the owner's choice with these, not with
@@ -887,6 +889,17 @@ class ThreadSession:
             raise SessionClosed
         self._deps.state.set_bypass(self.channel_id, self.thread_ts, on)
 
+    async def switch_bypass(self, on: bool) -> bool:
+        """`!bypass on` or `off` typed in the thread: switch and store it, True; or False,
+        changing nothing, before Start (`before_start`). A Start being applied is waited for,
+        so the word, typed after the click, is what holds; one that failed has undone itself
+        by then, and the word is refused."""
+        async with self._setup_lock:
+            if self.before_start:
+                return False
+            await self.set_bypass(on)
+            return True
+
     @property
     def never_ran(self) -> bool:
         """No turn was ever queued in this thread: its next message is a first prompt, which asks
@@ -912,32 +925,34 @@ class ThreadSession:
         explicit off with the semantics of `!bypass off`: the mode it returns to is `default`.
         Measured 2026-09-30 (CLI 2.1.285): `set_model` survives a resume and leaves the owner's
         own default alone, so the daemon does not store the model. A failure undoes what was
-        applied (`forget_setup`) and goes on."""
-        self._setup_applied = True
-        effort = None if choice.effort == DEFAULT else choice.effort
-        try:
-            self._deps.state.set_effort(self.channel_id, self.thread_ts, effort)
-            self._deps.state.set_bypass(self.channel_id, self.thread_ts, choice.bypass)
-            client = await self.ensure_connected()
-            if effort != self._client_effort:
-                client = await self._reconnect()
-            if choice.model != DEFAULT:
-                await client.set_model(choice.model)
-            if choice.bypass != self._client_bypass:
-                # A client connected above applies the stored switch itself: this only moves one
-                # that was already live, off meaning the mode it would have had without bypass.
-                await self.set_bypass(choice.bypass)
-        except BaseException:
+        applied (`forget_setup`) and goes on. All of it under `_setup_lock`, which a word's
+        `switch_bypass` waits on."""
+        async with self._setup_lock:
+            self._setup_applied = True
+            effort = None if choice.effort == DEFAULT else choice.effort
             try:
-                await self.forget_setup()
-            except Exception as undo:
-                logger.warning(
-                    "could not undo a failed setup in %s/%s: %s",
-                    self.channel_id,
-                    self.thread_ts,
-                    describe(undo),
-                )
-            raise
+                self._deps.state.set_effort(self.channel_id, self.thread_ts, effort)
+                self._deps.state.set_bypass(self.channel_id, self.thread_ts, choice.bypass)
+                client = await self.ensure_connected()
+                if effort != self._client_effort:
+                    client = await self._reconnect()
+                if choice.model != DEFAULT:
+                    await client.set_model(choice.model)
+                if choice.bypass != self._client_bypass:
+                    # A client connected above applies the stored switch itself: this only moves one
+                    # that was already live, off meaning the mode it would have had without bypass.
+                    await self.set_bypass(choice.bypass)
+            except BaseException:
+                try:
+                    await self.forget_setup()
+                except Exception as undo:
+                    logger.warning(
+                        "could not undo a failed setup in %s/%s: %s",
+                        self.channel_id,
+                        self.thread_ts,
+                        describe(undo),
+                    )
+                raise
 
     async def forget_setup(self) -> None:
         """Undo a Start whose message was not sent (a failure, a stop, a D8 Cancel, or a restart
