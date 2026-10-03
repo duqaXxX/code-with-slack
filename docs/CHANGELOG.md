@@ -22,7 +22,9 @@ All notable changes to this project are documented here. The format follows
   session closes. A clearing call that fails is
   tried once more, and again when the session closes. A refusal from Slack is logged
   and the line is skipped; `missing_scope` or `not_allowed_token_type` ends the attempts for
-  the rest of the run. It never notifies and stores nothing.
+  the rest of the run. It never notifies and stores nothing. Known limit (issue #130): the iOS
+  app can show no status for a thread that Slack on desktop already has open; `docs/setup.md`
+  says so.
 - Cleanup of `state.json` (new module `code_with_slack.cleanup`): on start and then every 6
   hours, a bound channel Slack answers `channel_not_found` about is forgotten with its threads
   (`StateStore.remove_channel`), and the pruning of threads whose session is gone, which ran on
