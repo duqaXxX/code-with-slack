@@ -73,10 +73,15 @@ RESTART_WAITS_HEADER = "code-with-slack is restarting. " + RESTART_WAITS_FOR
 RESTART_WAIT_ROW = "• <#{channel}>, {link}: {hold}"
 RESTART_WAIT_SESSION = "Session"  # the link's label for a session with no title yet
 RESTART_WAIT_STOP = "`!stop` in a thread ends the wait there."
+RESTART_WAITS_MORE = "…and {count} more."
+# In a channel's `!status`, a post every member reads: the threads of other channels are counted
+# and not named.
+RESTART_WAITS_ELSEWHERE = "{count} more in other channels."
 RESTART_HOLD_OWNER = "an approval or a question is waiting for you"
 RESTART_HOLD_TURN = "a turn is running"
 RESTART_HOLD_TASKS = "{counts} running"
-RESTART_HOLD_REPORT = "a background task is about to report"
+# Ends by itself (`INJECTED_TURN_WAIT`): `!stop` has nothing to stop there.
+RESTART_HOLD_REPORT = "a background task is about to report, within 30 seconds"
 BACKGROUND_NOTICE = "_Background task update_"
 PROMPT_IMAGE = "an image"
 COMPACTED = "Compacted the conversation: {before} → {after} tokens."

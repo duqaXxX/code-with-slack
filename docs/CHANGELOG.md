@@ -117,8 +117,13 @@ All notable changes to this project are documented here. The format follows
   folder's sessions cannot be listed), and what holds it there
   (`ThreadSession.restart_hold`: a turn running, an approval or a question waiting for the
   owner, the background tasks still running, a task about to report). The last line says
-  `!stop` in a thread ends the wait there. `!status` typed in a channel adds the same list, as
-  a notice of its own, while a stop waits. Before, nothing in Slack said which thread held a
+  `!stop` in a thread ends the wait there; it is left out when every thread only waits for a
+  task's report, which ends by itself within 30 seconds and which `!stop` does not shorten.
+  The list holds eight rows at most (`RESTART_WAIT_ROWS`) and counts the rest, so a notice is
+  never cut inside a link. `!status` typed in a channel adds, as a notice of its own while a
+  stop waits, the rows of that channel's threads and a count of those in other channels: its
+  answer is a post the channel's members read, so another channel's thread is never named
+  there. Before, nothing in Slack said which thread held a
   restart, and the owner could only wait out the 29 minutes or send a second signal. The
   refusal stays ephemeral and the list is built from what the daemon holds in memory, one
   `chat.getPermalink` call per listed thread and one listing of each folder's sessions.

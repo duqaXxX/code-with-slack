@@ -1764,6 +1764,49 @@ async def test_a_channel_status_during_a_stop_lists_what_the_stop_waits_for(worl
     assert texts.RESTART_HOLD_TURN in waits and waits.endswith(texts.RESTART_WAIT_STOP)
 
 
+async def test_a_channel_status_during_a_stop_counts_other_channels_without_naming_them(
+    world: World,
+) -> None:
+    (world.root / "other").mkdir()  # another folder: no D8 hold between the two sessions
+    world.state.bind(OTHER_CHANNEL, world.root / "other")
+    await world.dispatch(message("hello", ts=THREAD))
+    await world.dispatch(message("busy elsewhere", ts=OTHER_THREAD, channel=OTHER_CHANNEL))
+    assert world.queries() == ["hello", "busy elsewhere"]
+    cut_short = asyncio.Event()
+    draining = asyncio.create_task(world.sessions.drain(cut_short))
+    await asyncio.sleep(0.05)
+    await world.dispatch(message("!status"))
+    cut_short.set()
+    await draining
+    waits = said(world)[-1]
+    # A post the channel's members read: the other channel's thread is counted, never named.
+    assert OTHER_CHANNEL not in waits and waits.count("• ") == 1
+    assert texts.RESTART_WAITS_ELSEWHERE.format(count=1) in waits
+
+
+async def test_a_thread_that_only_waits_for_a_report_gets_no_stop_advice(world: World) -> None:
+    await world.dispatch(message("hello", ts=THREAD))
+    session = world.sessions.get(CHANNEL, THREAD)
+    world.sessions.restart_holds = lambda: [(session, texts.RESTART_HOLD_REPORT)]  # type: ignore[method-assign]
+    world.sessions.draining = True
+    await world.dispatch(message("list the files", ts=OTHER_THREAD))
+    refusal = world.ephemerals()[-1]
+    assert texts.RESTART_HOLD_REPORT in refusal and texts.RESTART_WAIT_STOP not in refusal
+    world.sessions.draining = False
+
+
+async def test_a_long_list_of_waits_is_cut_between_rows(world: World) -> None:
+    await world.dispatch(message("hello", ts=THREAD))
+    session = world.sessions.get(CHANNEL, THREAD)
+    world.sessions.restart_holds = lambda: [(session, texts.RESTART_HOLD_TURN)] * 11  # type: ignore[method-assign]
+    world.sessions.draining = True
+    await world.dispatch(message("list the files", ts=OTHER_THREAD))
+    lines = world.ephemerals()[-1].split("\n")
+    assert sum(line.startswith("• ") for line in lines) == 8
+    assert lines[-2:] == [texts.RESTART_WAITS_MORE.format(count=3), texts.RESTART_WAIT_STOP]
+    world.sessions.draining = False
+
+
 async def test_a_channel_status_with_no_stop_under_way_says_nothing_of_a_restart(
     world: World,
 ) -> None:
