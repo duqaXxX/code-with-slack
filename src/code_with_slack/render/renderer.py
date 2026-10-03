@@ -398,8 +398,11 @@ class TurnRenderer:
         )
 
     async def _set(self, update: TaskUpdate) -> None:
+        if update.id not in self._lines:
+            # Only a new line puts a card after the text. A line that changes does so where its
+            # card sits, and the text stays the last thing in the reply.
+            self._after_text = False
         self._lines[update.id] = update
-        self._after_text = False
         await self._sink.task(update)
 
     async def _text(self, markdown: str, *, notice: bool = False) -> None:

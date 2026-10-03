@@ -408,3 +408,15 @@ async def test_a_thinking_block_between_two_texts_adds_one_break() -> None:
         block_events("one") + block_events("hmm", thinking=True) + block_events("two")
     )
     assert sink.texts == ["one", "\n\ntwo"]
+
+
+async def test_a_card_updated_where_it_sits_between_two_texts_keeps_the_break() -> None:
+    # Recorded: a background command ends after the turn's text, so its card changes in place,
+    # above that text, and the report turn's text follows it directly.
+    recorded = sdk_messages("background")
+    ended = next(i for i, m in enumerate(recorded) if isinstance(m, TaskNotificationMessage))
+    before, _ = await render(recorded[:ended])
+    sink, _ = await render(recorded)
+    assert not any(t.id not in {b.id for b in before.tasks} for t in sink.tasks)  # no new card
+    report = sink.texts[len(before.texts)]
+    assert before.texts[-1].strip() and report.startswith("\n\n")

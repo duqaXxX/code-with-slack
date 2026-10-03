@@ -273,8 +273,10 @@ All notable changes to this project are documented here. The format follows
   that each answered `tick` were written as `tickticktick`; a Stop hook that makes a turn go on
   has the same shape. The stream announces each block with a `content_block_start` event, and
   `TurnRenderer.feed` now puts `\n\n` before the first text of a block that follows Claude's
-  text directly. A tool card, a notice, a block that stays empty, a thinking block and a
-  subagent's text change nothing. Recorded fixture: `tests/fixtures/sdk/goal.jsonl`.
+  text directly. A new tool card, a notice, a block that stays empty, a thinking block and a
+  subagent's text change nothing. A card that changes where it sits (a background task that
+  ends above the text) separates nothing, so the text of the turn that reports the task is a
+  paragraph apart too. Recorded fixtures: `tests/fixtures/sdk/goal.jsonl`, `background.jsonl`.
 - The Answer form shows every word of an option (issue #47). Slack caps an option object's text
   and description at 75 characters each, so a longer description ended in `…` mid-sentence, and
   an option's `preview` was never shown. When an option of a question says more than a choice
