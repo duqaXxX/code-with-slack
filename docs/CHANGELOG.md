@@ -110,6 +110,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The answers to a question show in the reply, where the question was asked (#82). The call's
+  card reads `User answered Claude's questions:` and a small line per question follows it,
+  `⎿ · question → answer`, read from the tool's result (`render.previews.preview`,
+  `Preview.plain`; shape measured on Claude Code 2.1.286, fixture `ask-answered.jsonl`). The
+  request message is deleted once the form is submitted, as an approval's is. Before, that
+  message was rewritten into the record and stayed below the reply, so everything Claude did
+  after the answer showed above it. `approvals.answered_blocks` is gone. A `context` block
+  inside a stream's `blocks` chunk has not been measured on Slack yet.
 - A diff's container is titled with the preview's sentence alone (#110): `Added 10 lines`, with
   no subtitle. Before, it repeated the call's line (`✓ Update(notes.txt)`) that the task card
   above it already shows, so every `Edit` or `Write` read as two rows with the same name

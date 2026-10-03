@@ -2162,7 +2162,7 @@ class SessionManager:
     @property
     def update_limiter(self) -> UpdateLimiter:
         """The chat.update budget every ReplySink in the process draws from, so a chat.update
-        made outside a reply (e.g. slack_app.py's `show_answered`) can share the same one."""
+        made outside a reply (slack_app.py's own edits) can share the same one."""
         return self._deps.update_limiter
 
     def open(self, channel_id: str, thread_ts: str) -> ThreadSession | None:

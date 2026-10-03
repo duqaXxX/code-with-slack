@@ -137,3 +137,45 @@ def test_an_unknown_line_shape_falls_back_to_the_generic_line() -> None:
     assert (
         preview("Edit", {"filePath": "/home/dev/project/f", "structuredPatch": patch}, CWD) is None
     )
+
+
+def test_an_answered_question_shows_each_answer_as_the_terminal() -> None:
+    # ask-answered.jsonl (CLI 2.1.286): a single choice answered with a label, a multi-select
+    # with a label and typed text, the way `approvals.to_permission` answers.
+    [(name, result, failed)] = results("ask-answered")
+    assert (name, failed) == ("AskUserQuestion", False)
+    assert preview(name, result, CWD) == Preview(
+        "User answered Claude's questions:",
+        "",
+        "· Which color do you prefer? → Blue\n· Do you also like green? → Yes, Only in spring",
+        plain=True,
+    )
+
+
+def test_a_question_nobody_answered_has_no_preview() -> None:
+    # ask.jsonl: the question was refused, so its result carries no answers.
+    [(name, result, failed)] = results("ask")
+    assert (name, failed) == ("AskUserQuestion", True)
+    assert preview(name, result, CWD) is None
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"questions": [{"question": "Colour?"}]},
+        {"questions": "Colour?", "answers": {"Colour?": "blue"}},
+        {"questions": [{"question": "Colour?"}], "answers": ["blue"]},
+        {"questions": [{"question": "Colour?"}], "answers": {"Size?": "s"}},
+    ],
+)
+def test_an_answer_of_another_shape_has_no_preview(result: dict[str, Any]) -> None:
+    assert preview("AskUserQuestion", result, CWD) is None
+
+
+def test_a_question_written_on_several_lines_keeps_one_line() -> None:
+    result = {
+        "questions": [{"question": "Colour?\nPick one."}],
+        "answers": {"Colour?\nPick one.": "blue"},
+    }
+    shown = preview("AskUserQuestion", result, CWD)
+    assert shown is not None and shown.body == "· Colour? Pick one. → blue"
