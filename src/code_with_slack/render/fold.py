@@ -10,7 +10,8 @@ place, as the terminal folds a call once the next one follows.
 
 A call with a view of its own never folds: an Edit or a Write that ended well (its preview), a
 subagent or a background command (its task card), a stopped call. It keeps the card that shows
-it, or gets one, and the run takes no new call after it.
+it, or gets one, and the run takes no new call after it. An Edit or a Write reaches the fold only
+once it has ended (`Renderer._block`): one that failed joins the run as a call that ended.
 
 Neither card carries `details` or `output`: Slack appends both to what a card already holds
 (measured 2026-10-01), so a card that is reused keeps its text in its title.

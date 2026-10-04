@@ -211,6 +211,18 @@ class Stage:
                     seen[block["task_id"]] = self.card_line(card_of(block))
         return "\n".join(seen.values())
 
+    def containers_since(self, mark: Mark) -> str:
+        """Every container a reply showed since `mark`, as `title subtitle` a line each."""
+        seen: list[str] = []
+        for _, args in self.slack.calls[mark.calls :]:
+            chunks = [c for c in args.get("chunks") or [] if c["type"] == "blocks"]
+            for block in [b for c in chunks for b in c["blocks"]] + (args.get("blocks") or []):
+                if block["type"] == "container":
+                    line = f"{block['title']['text']} {block.get('subtitle', {}).get('text', '')}"
+                    if line.strip() not in seen:
+                        seen.append(line.strip())
+        return "\n".join(seen)
+
     @staticmethod
     def card_line(card: dict[str, Any]) -> str:
         return f"{card['status']} {card['title']} {card.get('output', '')}".strip()
@@ -344,15 +356,16 @@ async def previews(s: Stage) -> dict[str, Observation]:
     )
     asked = s.asked_since(mark)
     called = "Write" in asked and "Edit" in asked
-    lines = s.cards_since(mark)
+    lines = s.containers_since(mark)
     # Both previews built: the shapes they read are still the measured ones.
     shown = "Write(preview.txt)" in lines and "Update(preview.txt)" in lines
     shown = shown and "Wrote 3 lines" in lines and "Added 1 line, removed 1 line" in lines
     if not called:
         detail = f"permission requests: {asked}"
     elif not shown:
-        # What the cards showed instead: a changed wording or shape is visible at once.
-        detail = f"cards showed: {' '.join(lines.split())[:160]!r}"
+        # What the reply showed instead: a changed wording or shape is visible at once.
+        other = lines or s.cards_since(mark)
+        detail = f"reply showed: {' '.join(other.split())[:160]!r}"
     else:
         detail = ""
     return {"P13": Observation(called, shown, detail)}

@@ -149,7 +149,8 @@ CLAIMS = [
         "model",
         "a Write and an Edit show the terminal's preview (undocumented tool_use_result)",
         "code_with_slack.render.previews.preview",
-        "ask Claude to create a file and then edit it; each call shows its preview under its card",
+        "ask Claude to create a file and then edit it; each call shows as one container, titled "
+        "with its line, and no card",
     ),
     Claim(
         "P14",

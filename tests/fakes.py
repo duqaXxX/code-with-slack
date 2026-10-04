@@ -384,13 +384,32 @@ class FakeSlack(AsyncWebClient):
     def _stream_text(self, ts: str) -> str:
         """A stream's `text` as Slack reads it back (recorded 2026-09-28, `message-mixed-*` and
         `message-markdown-*`): the blank lines kept, `**b**` as `*b*`, a heading without its
-        `## `, a list bullet as `•`, a link as `<url|label>`; then its cards' titles."""
+        `## `, a list bullet as `•`, a link as `<url|label>`; then its cards' titles, and each
+        container's title, subtitle and body (`message-blocks-in-chunks-*`)."""
         text, cards = self._shown(ts)
         text = re.sub(r"\[([^\]]*)\]\(([^)]*)\)", r"<\2|\1>", text)
         text = re.sub(r"\*\*(.+?)\*\*", r"*\1*", text)
         text = re.sub(r"^#+ ", "", text, flags=re.M)
         text = re.sub(r"^[-*] ", "• ", text, flags=re.M)
-        return " ".join([text, *(c["title"] for c in cards)]).strip()
+        containers = [
+            " ".join(
+                [
+                    block["title"]["text"],
+                    block.get("subtitle", {}).get("text", ""),
+                    *(
+                        f"```{e['text']}```"
+                        for child in block["child_blocks"]
+                        for pre in child["elements"]
+                        for e in pre["elements"]
+                    ),
+                ]
+            )
+            for chunk in self.messages[ts].chunks
+            if chunk["type"] == "blocks"
+            for block in chunk["blocks"]
+            if block["type"] == "container"
+        ]
+        return " ".join([text, *(c["title"] for c in cards), *containers]).strip()
 
     def _thread(self, args: dict[str, Any]) -> dict[str, Any]:
         """What `conversations.replies` reads back of the messages this fake holds: the daemon's

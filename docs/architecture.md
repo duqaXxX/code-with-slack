@@ -243,10 +243,10 @@ holds (measured 2026-10-01, slack-sdk 3.44.1), so a card that is reused keeps it
 title.
 
 A call with a view of its own has a card of its own, keyed by its `tool_use_id`, and ends the
-run: an `Edit` or a `Write` that ended well, a subagent, whose title counts its calls and whose
-`details` say what it is doing now, a background task, which keeps its card `in_progress` for as
-long as it runs, and a stopped call. A call that turns into one of these while a card of a run
-shows it keeps that card.
+run: a subagent, whose title counts its calls and whose `details` say what it is doing now, a
+background task, which keeps its card `in_progress` for as long as it runs, and a stopped call. A
+call that turns into one of these while a card of a run shows it keeps that card. An `Edit` or a
+`Write` that ended well also ends the run, and has no card: its preview is all that shows it.
 
 Once the reply's body has ended, each run reads as one line of counts in a `context` block
 (`✓ Ran 2 shell commands · Read 1 file · ✗ Ran 1 shell command`), as the terminal folds a run
@@ -255,15 +255,22 @@ showed, so the line is written by the `chat.update` that follows the stream's st
 (`ReplySink._end`), which never notifies. The reply has ended with the stop: an update that fails
 is tried once more with the next write, and the cards stay if that fails too.
 
-A finished `Edit` or `Write` shows its preview as a `blocks` chunk under the card
-(`render.previews.preview`): a diff is a collapsible,
-full-width `container` block (`sinks.diff_containers`), closed until the owner opens it, whose
-title is the sentence (`Added 1 line, removed 1 line`), since the card above it is the call's line
-(`Update(notes.txt)`), and inside is the whole numbered diff in a rich text preformatted element
-with the language `diff`, which Slack desktop colours; each changed line also carries a red or green
-square after its sign, since Slack mobile colours nothing. A diff longer than
-`sinks.MESSAGE_LIMIT` continues in a second container with the same title, in the next message. A
-new file shows its sentence and a `markdown` code block with its first 10 lines and `… +N lines`.
+The renderer keeps an `Edit` or a `Write` (`previews.PREVIEWED`) from the sink until its result
+arrives (`TurnRenderer._block`), since a stream cannot take back the card a running call would
+get. While the call runs the reply shows nothing for it; a call that waits for approval has the
+approval's message. One that ended well is a `blocks` chunk with no card
+(`render.previews.preview`): a collapsible, full-width `container` block
+(`sinks.preview_containers`), closed until the owner opens it, whose title is the call's line
+(`Update(notes.txt)`), in code style through `rich_text_title` with the plain `title` as the
+fallback, and whose subtitle is the sentence (`Added 1 line, removed 1 line`). Inside a
+diff's container is the whole numbered diff in a rich text preformatted element with the language
+`diff`, which Slack desktop colours; each changed line also carries a red or green square after
+its sign, since Slack mobile colours nothing. A new file's container holds its first 10 lines and
+`… +N lines`. A body longer than `sinks.MESSAGE_LIMIT` continues in a second container with the
+same title, in the next message. One that failed joins its run as a call that ended, with the
+reason in its title; one that was stopped has a card of its own; one whose preview has no lines
+(an empty new file) has a card that says the sentence. A card the sink already drew for the call
+stays (`_Tool.cardless`), and the diff under it is then titled with the sentence alone.
 An answered `AskUserQuestion` shows its answers the same way, as a `context` block of words
 (`Preview.plain`). Its lines come from the questions and answers the daemon sent back, so they
 depend on no undocumented field.

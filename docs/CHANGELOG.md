@@ -122,6 +122,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- An `Edit` or a `Write` that ended well is one row in a reply (issue #136): a collapsed
+  container titled with the call's line in code style (`Update(notes.txt)`), with the sentence
+  (`Added 1 line, removed 1 line`) as its subtitle and the diff inside, and no task card. A new
+  file's first lines are in a container of the same shape, where they were an open code block.
+  The renderer sends these two tools to the sink once they have ended
+  (`previews.PREVIEWED`, `TurnRenderer._block`), so the reply shows nothing for one while it
+  runs. One that failed joins its run with the reason in its title, and one that was stopped
+  has a card of its own. `sinks.diff_containers` is now `sinks.preview_containers`.
 - The SDK release watch (`.github/workflows/sdk-release-watch.yml`) runs as two jobs. `test`
   installs the latest `claude-agent-sdk` and runs the suite with a token that only reads.
   `report`, now the only job with `issues: write`, starts on a runner of its own from a clean

@@ -28,7 +28,7 @@ from claude_agent_sdk.types import (
 
 from code_with_slack import texts
 from code_with_slack.footer import format_tokens
-from code_with_slack.render.previews import Preview, answered, preview
+from code_with_slack.render.previews import PREVIEWED, Preview, answered, preview
 
 TaskStatus = Literal["pending", "in_progress", "complete", "error"]
 TaskFrame = TaskStartedMessage | TaskProgressMessage | TaskNotificationMessage | TaskUpdatedMessage
@@ -330,11 +330,16 @@ class TurnRenderer:
         if isinstance(block, ToolUseBlock | ServerToolUseBlock):
             title = task_title(block.name, block.input)
             root = self._root_of.get(parent, parent) if parent else None
-            if root is None or root not in self._lines:
-                await self._set(TaskUpdate(block.id, title, "in_progress", name=block.name))
-            else:
+            if root is not None and root in self._lines:
                 self._root_of[block.id] = root
                 await self._child(root, title)
+            elif block.name in PREVIEWED:
+                # Kept from the sink until it ends: what shows it then is its preview with no
+                # card, or a card that says why it failed. An approval has a message of its own.
+                self._lines[block.id] = TaskUpdate(block.id, title, "in_progress", name=block.name)
+                self._after_text = False
+            else:
+                await self._set(TaskUpdate(block.id, title, "in_progress", name=block.name))
         elif isinstance(block, ToolResultBlock | ServerToolResultBlock):
             await self._outlived(block.tool_use_id)
             entry = self._lines.get(block.tool_use_id)

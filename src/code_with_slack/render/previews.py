@@ -30,6 +30,9 @@ WORDS = {
 MARKS = {"-": "\U0001f7e5", "+": "\U0001f7e9", " ": "  "}
 # The terminal shows a new file's first lines, then how many it leaves out.
 NEW_FILE_LINES = 10
+# The tools `preview` reads. A reply shows a call of one only once it has ended: a stream cannot
+# take back a card, and a call that ended well is its preview alone.
+PREVIEWED = frozenset({"Edit", "Write"})
 
 
 @dataclass(frozen=True)
@@ -147,7 +150,7 @@ def preview(name: str, result: Any, cwd: str | None) -> Preview | None:
         if len(lines) > NEW_FILE_LINES:
             body.append(f"… +{_lines(len(lines) - NEW_FILE_LINES)}")
         return Preview(f"Write({path})", f"Wrote {_lines(len(lines))} to {path}", "\n".join(body))
-    if name in ("Edit", "Write") and isinstance(patch, list) and patch:
+    if name in PREVIEWED and isinstance(patch, list) and patch:
         diff = _diff(patch)
         if diff is None:
             return None

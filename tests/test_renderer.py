@@ -555,3 +555,35 @@ async def test_an_ended_command_of_a_subagent_ends_its_line_as_a_background_task
     assert set(last) == {agent_call, f"task-{started.task_id}"}
     assert last[f"task-{started.task_id}"].status == "complete"
     assert renderer.running_tasks == []
+
+
+# An Edit or a Write is shown once it has ended (issue #136): a stream cannot take back the card
+# a running call would get, and one that ended well is its preview alone.
+
+
+async def test_an_edit_or_a_write_reaches_the_sink_only_once_it_has_ended() -> None:
+    # edit-write.jsonl (CLI 2.1.286): three calls that ended well and an Edit that failed.
+    sink, _ = await render(sdk_messages("edit-write"))
+    held = [t for t in sink.tasks if t.name in ("Edit", "Write")]
+    assert [(t.name, t.status, t.preview is not None) for t in held] == [
+        ("Write", "complete", True),
+        ("Edit", "error", False),
+        ("Edit", "complete", True),
+        ("Write", "complete", True),
+    ]
+    assert len({t.id for t in held}) == 4  # one state each: none was sent while it ran
+
+
+async def test_a_write_cut_short_by_a_stop_shows_as_stopped() -> None:
+    messages = sdk_messages("edit-write")
+    call = next(
+        i
+        for i, m in enumerate(messages)
+        if isinstance(m, AssistantMessage) and any(isinstance(b, ToolUseBlock) for b in m.content)
+    )
+    stopped = dataclasses.replace(silent_result(), terminal_reason="aborted_tools")
+    sink, _ = await render([*messages[: call + 1], stopped])
+    assert not sink.tasks  # nothing while it ran
+    assert sink.finished is not None
+    [closing] = sink.finished
+    assert (closing.name, closing.status, closing.output) == ("Write", "complete", STOPPED)

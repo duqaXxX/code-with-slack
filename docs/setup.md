@@ -460,8 +460,9 @@ has something to show: its first words, or the card of the first tool it uses. T
 the order it is written. The tool calls between two pieces of text show as two cards: the first
 counts what ended, in the terminal's words (`Ran 2 shell commands · Read 1 file`), and the second
 names the call that runs now. A subagent's card counts the calls it made and shows what it is
-doing now, and a background task keeps its card open until it ends. An Edit or a Write shows its
-preview under its card. When the reply ends, a divider and the footer close the same message, and
+doing now, and a background task keeps its card open until it ends. An Edit or a Write shows once it has ended, as
+one collapsed block titled with the call (`Update(notes.txt)`) that opens on its diff or on the
+new file's first lines. When the reply ends, a divider and the footer close the same message, and
 each pair of cards gives way to one line (`✓ Ran 2 shell commands · Read 1 file`). A reply still
 running 280 seconds after it started stops being a stream (Slack closes streams at 5 minutes) and
 goes on in the same message, updated instead of streamed; what Claude wrote after its last call
