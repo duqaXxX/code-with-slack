@@ -1367,9 +1367,15 @@ class ReplySink:
     @staticmethod
     def _first_words(plan: _Plan) -> str:
         """The start of what a stream's first chunks say, as plain words: empty when there are
-        none to compare (then nothing is adopted)."""
+        none to compare (then nothing is adopted). A stream's `text` reads back with a card's
+        title and with a container's title in it (recorded 2026-09-28, slack-sdk 3.44.1)."""
         first = plan.chunks[0]
-        return plain_words(str(first.get("text") or first.get("title") or ""))[:ADOPT_WORDS]
+        if first["type"] == "blocks":
+            block = first["blocks"][0]
+            words = str(block.get("title", {}).get("text") or block_text(block))
+        else:
+            words = str(first.get("text") or first.get("title") or "")
+        return plain_words(words)[:ADOPT_WORDS]
 
     async def _adopt(self, attempted: float, *, stream: bool, probe: str) -> str | None:
         """A create that failed on the connection may have landed. Read the thread back, and

@@ -2037,6 +2037,21 @@ async def test_a_stream_is_adopted_from_slack_s_converted_read_back() -> None:
     assert len(slack.calls_to("chat.startStream")) == 1
 
 
+async def test_a_start_that_holds_only_a_container_is_adopted_by_its_title() -> None:
+    # A reply that opens on an Edit that ended well starts its stream with a `blocks` chunk
+    # alone (issue #136): the container's title is what the read-back is compared with.
+    slack = ResetAfterApply()
+    slack.reset_next = "chat.startStream"
+    sink = reply(slack)
+    view = Preview("Update(a.txt)", "Added 1 line", "+x", "diff")
+    await sink.task(tool("e", "Edit", preview=view))
+    await settled()
+    await sink.text("Done.")
+    await settled()
+    assert len(slack.calls_to("chat.startStream")) == 1  # never started again
+    assert slack.stream_texts() == ["Done."]  # the adopted stream took the rest
+
+
 async def test_a_start_with_nothing_to_compare_is_not_adopted() -> None:
     slack = ResetAfterApply()
     slack.reset_next = "chat.startStream"
