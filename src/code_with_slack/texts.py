@@ -26,7 +26,9 @@ REASON_SHARED = "it is shared with another workspace"
 REASON_MEMBERS = "it has members other than you and the bot"
 REASON_UNREADABLE = "the bot cannot read its details"
 DIRECTORY_MISSING = (
-    "The directory `{directory}` no longer exists. Bind this channel again with `!bind <path>`."
+    "The directory `{directory}` no longer exists. Restore it to keep using this thread, or, in "
+    "the channel, bind another folder with `!bind <path>` and send a new message to start a "
+    "session there."
 )
 DIRECTORY_UNTRUSTED = (
     "Claude Code has not been trusted in `{directory}`, so its hooks and settings would run "
@@ -41,7 +43,12 @@ SESSION_GONE = (
     "This thread's session no longer exists: Claude Code deleted it or cannot find it. Send a "
     "new message in the channel to start one."
 )
-NOT_A_SESSION = "This thread is not a session: send a new message in the channel to start one."
+# Names no cause: the daemon keeps no record of a thread whose entry it dropped, so it cannot
+# tell a thread that never held a session from one whose session may still be resumable.
+NOT_A_SESSION = (
+    "This thread holds no session. In the channel, send a new message to start one, or "
+    "`!resume` to continue an earlier one."
+)
 WORD_IN_THREAD = "`!{word}` works in the channel, not inside a thread."
 CLEAR_IN_THREAD = "One thread is one session: send a new message in the channel to start a new one."
 UPGRADE_NOTICE = (

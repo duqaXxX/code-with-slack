@@ -477,8 +477,8 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   the channel list and the setup's checkbox all read it.
 - If the thread's stored session cannot be resumed (its transcript was deleted), its entry is
   dropped, the thread ends (`SessionGone`), and its reply, and every reply still waiting in it,
-  says so (`texts.SESSION_GONE`); the next message in that thread starts a session there again,
-  as a fresh top-level message would. If the thread's directory no longer exists, nothing starts
+  says so (`texts.SESSION_GONE`); the next message in that thread finds no entry, starts
+  nothing and gets `texts.NOT_A_SESSION`. If the thread's directory no longer exists, nothing starts
   and the reply says so (`texts.DIRECTORY_MISSING`). If macOS privacy protection denies the
   daemon the directory (a launchd service does not inherit Terminal's access to `~/Documents`),
   nothing starts and the reply says how to grant access.
