@@ -204,9 +204,14 @@ SETUP_BYPASS_DESCRIPTION = "Run every tool without asking, until `!bypass off`."
 SETUP_START_BUTTON = "Start"
 SETUP_SUMMARY = "Model: {model} · Effort: {effort} · Bypass: {bypass}"
 STATUS = (
-    "Directory: `{directory}`\nSession: `{session}`\nMode: `{mode}`\n"
+    "Directory: `{directory}`\nSession: `{session}`{terminal}\nMode: `{mode}`\n"
     "Claude Code: `{version}`\nNow: {activity}"
 )
+# The line under `Session:` once the thread has a session (issue #12). Claude Code leaves a
+# session created through the Agent SDK out of the terminal's picker; a fork made in the
+# terminal is a terminal session and is listed (sessions reference, read 2026-09-25; measured
+# on CLI 2.1.282). `directory` arrives quoted for the shell.
+STATUS_TERMINAL = "\nTerminal: `cd {directory} && claude --resume {session} --fork-session`"
 ACTIVITY_IDLE = "idle"
 VERSION_PENDING = "started, version shown after the first turn"
 STATUS_BACKGROUND = "Background: `{counts}`"
@@ -375,8 +380,8 @@ its thread; inside a thread it shows that session's directory, mode and the foot
 thread it stops only that one. `!resume`, typed in the channel only, lists this folder's twenty \
 newest sessions, from the terminal too, each with the start of its id and a **Resume** button; \
 `!resume <id>` (that start is enough), or `!resume <title>` for a session that has one, resumes \
-it in the thread of your `!resume` message. To continue a session in the terminal, run \
-`claude --resume <id>` there with the full id `!status` shows.
+it in the thread of your `!resume` message. To continue a session in the terminal, run the \
+`Terminal:` command `!status` shows in its thread.
 
 **Bypass**
 `!bypass on`, sent inside a session's thread, lets Claude Code run every tool without asking in \

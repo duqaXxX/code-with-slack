@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import shlex
 from collections import deque
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
@@ -1126,9 +1127,16 @@ class ThreadSession:
             if self.busy
             else texts.ACTIVITY_IDLE
         )
+        session_id = stored.session_id if stored else None
         text = texts.STATUS.format(
             directory=self.directory,
-            session=(stored.session_id if stored else None) or "new",
+            session=session_id or "new",
+            # Claude Code files a session under the folder it was created in, the thread's own.
+            terminal=texts.STATUS_TERMINAL.format(
+                directory=shlex.quote(str(self.directory)), session=session_id
+            )
+            if session_id
+            else "",
             mode=self._mode_for(self.bypass),
             # Only a turn's `init` message carries the version, never the connect (measured).
             version=self.cli_version

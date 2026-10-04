@@ -329,6 +329,24 @@ thread keeps the folder it was opened in: `!bind` only changes where the *next* 
 thread's Claude Code process closes on its own after an hour with nothing to do; the next message
 sent to it resumes the session, as `claude --resume <id>` would.
 
+### Continuing a session in the terminal
+
+Claude Code leaves a session created through the Agent SDK out of the terminal's session picker
+and out of `claude --continue`; it resumes one only by its id
+([sessions reference](https://code.claude.com/docs/en/sessions)). Every session started from
+Slack is such a session. `!status`, typed in the session's thread, shows the command to run:
+
+```
+Terminal: `cd <folder> && claude --resume <session id> --fork-session`
+```
+
+`--fork-session` continues in a copy with a session id of its own. The copy is a terminal
+session, so the picker lists it from then on (measured 2026-09-26 on Claude Code 2.1.282, on one
+session started from Slack). The thread stays on the session it had and sees nothing of what the
+copy does afterwards. To bring the copy into Slack, send `!resume` in the channel: it opens in a
+new thread. The line is absent until the thread's first turn has ended, since no session exists
+before it.
+
 ### Finding a session again: the Home tab
 
 Open code-with-slack from Slack's sidebar and choose its **Home** tab. It lists the sessions your
@@ -385,7 +403,7 @@ top-level, not as a reply:
 | `!bind` | Lists `ALLOWED_ROOT` itself (shown as `.`) and the folders up to two levels below it, never inside a git repository, that Claude Code trusts, with a **Bind** button each; the channel's own folder is marked when it is listed. At most 20 are shown, in path order; when there are more, the higher levels fill the list first. A click never ends a running turn: it is refused until every session of the channel is idle | Refused, in an ephemeral message: `!bind works in the channel, not inside a thread.` |
 | `!bind <folder>` | Binds the channel to a folder under `ALLOWED_ROOT`, given relative to it (`!bind my-project`); an absolute path inside it works too. A new channel does nothing else until bound. The answer names the folder each existing thread keeps working in, when it differs from the new one; every prompt sent in that thread after the bind gets the same notice, as an ephemeral message | Same refusal as above |
 | `!bypass on` / `off` | Refused, in a post in the channel: `Bypass belongs to one session: send !bypass on inside its thread.` | Switches that session to `bypassPermissions` and back, kept in `state.json` per thread: an idle close and a restart of code-with-slack keep it, `!resume` starts a session with it off. The answer is a line only you see, `Bypass is on in this session: every tool runs without asking, until !bypass off. It survives a restart.` or `Bypass is off in this session: Claude Code asks again before tools that need approval.`, and a ✅ on your word, which stays after a reload. Before the setup's Start (the setup waits, or was cancelled) the word changes nothing and answers `This session has not started yet: tick Bypass in its setup and press Start. If no setup is shown, send a message here first.` |
-| `!status` | The channel's directory, then every live session of it, each linked to its thread, busy, waiting or idle, its bypass and running tasks, and its folder when it moved elsewhere | That session's directory, session id and mode, the folder it works in when it moved elsewhere, then the footer's values one per line, in an ephemeral message |
+| `!status` | The channel's directory, then every live session of it, each linked to its thread, busy, waiting or idle, its bypass and running tasks, and its folder when it moved elsewhere | That session's directory, session id, the command that continues it in the terminal, its mode, the folder it works in when it moved elsewhere, then the footer's values one per line, in an ephemeral message |
 | `!stop` | Stops every running session of the channel and its background tasks, and denies its pending approvals; the answer is `Stopped what was running in this channel.`, or `Nothing is running in this channel.`; each stopped session's root shows ✅ | Stops that session the same way; the answer is `Stopped.`, or `Nothing is running in this session.`, in a message that stays in the thread; ✅ on the session's root. A stop you gave is not an error, so it never shows ❌ |
 | `!help [text]` | Lists code-with-slack's own words; Claude Code's own commands are listed inside a session's thread | Lists code-with-slack's own words and every command that session offers now, in an ephemeral message; with a text, only the lines whose name or description contains it, for example `!help model` |
 | `!resume` | Lists the twenty newest sessions of the channel's directory that no thread holds (not of other worktrees), terminal and Slack alike, as a post in the channel, each with the first 8 characters of its session id and a **Resume** button. A session already open in a thread of any channel has no row: the twenty rows are sessions you can resume, and a line under the list counts the open ones (`3 more are open in their own threads.`). A click resumes the session in the thread of your `!resume` message and removes the list from the channel; a list posted before that change answers `This list is out of date: send !resume again for a current one.` | Refused, in an ephemeral message: `!resume works in the channel, not inside a thread.` |
