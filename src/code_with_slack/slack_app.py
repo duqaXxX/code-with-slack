@@ -518,8 +518,8 @@ def build_app(
                 # also raise `ResultError` (a logged-out CLI, most likely) or anything a stray
                 # bug throws; none of them may ever leave a Start's ✋ standing forever. A
                 # failure gets the reaction a turn that reached the queue and then failed gets; a
-                # plain return (the drain notice posted fine) shows what the thread's state is
-                # now (`ThreadSession._react_after_hold`).
+                # plain return (the drain notice posted fine) leaves the root bare, as a
+                # cancelled setup does.
                 if held is not None and not submitted:
                     await held.react_hold_abandoned(error=failed)
 
@@ -584,7 +584,7 @@ def build_app(
             text=texts.SETUP_FALLBACK,
             blocks=lambda setup_id: setup_blocks(setup_id, models, Choice(bypass=ticked)),
             settle=settle,
-            context=models,
+            models=models,
         )
         if answer is None:
             await session.forget_setup()  # a stop or drain that came while Start was applied
@@ -598,13 +598,13 @@ def build_app(
         *,
         text: str,
         blocks: Callable[[str], list[dict[str, Any]]],
-        settle: Callable[[Any, str, Pending], Awaitable[None]] | None = None,
-        context: Any = None,
-    ) -> Any:
-        """Post a question that holds the owner's message and wait for the answer: whatever its
-        buttons resolved it with, or None when it was cancelled (`!stop`, a drain) or never shown
+        settle: Callable[[Choice, str, Pending], Awaitable[None]],
+        models: list[dict[str, Any]],
+    ) -> Choice | None:
+        """Post the setup that holds the owner's message and wait for the answer: the choice
+        Start read, or None when it was cancelled (`!stop`, a drain) or never shown
         (`Not sent.` or the unposted notice, told already). `blocks` gets the id only its buttons
-        carry; `context` comes back with a click that carries only that id. `settle(answer,
+        carry; `models` comes back with a click, which carries only that id. `settle(answer,
         message_ts, pending)` applies an answer and writes its summary while the thread still
         shows ✋ and the hold is still open, so a `!stop` or drain meanwhile cancels
         (`Pending.cancelled`: nothing is sent, the message is removed, `Not sent.`). When it
@@ -612,7 +612,7 @@ def build_app(
         if sessions.draining:  # a restart could have started during an await before this
             await refuse_restarting(channel, thread_ts)
             return None
-        hold_id, pending = holds.open(channel, thread_ts, context)
+        hold_id, pending = holds.open(channel, thread_ts, models)
         try:
             posted = await slack.chat_postMessage(
                 channel=channel,
@@ -648,7 +648,7 @@ def build_app(
                     thread_ts,
                     describe(exc),
                 )
-        answer: Any = None
+        answer: Choice | None = None
         sent = False
         try:
             if waiting:
@@ -657,7 +657,7 @@ def build_app(
             if answer is None:
                 if not waiting:
                     await remove_request(channel, thread_ts, message_ts)
-            elif settle is not None:
+            else:
                 try:
                     await settle(answer, message_ts, pending)
                 except Exception as exc:
@@ -699,7 +699,7 @@ def build_app(
         # The controls' own state rides on the click: nothing about the choice is stored here,
         # and the model list is the one the message was built from.
         values = (body.get("state") or {}).get("values") or {}
-        choice = read_choice(values, pending.context or [])
+        choice = read_choice(values, pending.models)
         if holds.resolve(setup_id, channel, thread_ts, choice) is None:
             await tell_owner(channel, thread_ts, texts.HOLD_GONE)
 
@@ -719,7 +719,7 @@ def build_app(
         if setup_id is None or pending is None:
             await tell_owner(channel, thread_ts, texts.HOLD_GONE)
             return
-        models = pending.context or []
+        models = pending.models
         values = (body.get("state") or {}).get("values") or {}
         choice = read_choice(values, models)
         try:

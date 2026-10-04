@@ -11,17 +11,19 @@ import secrets
 from dataclasses import dataclass, field
 from typing import Any
 
+from code_with_slack.setup import Choice
+
 
 @dataclass
 class Pending:
     channel_id: str
     thread_ts: str
-    # What the owner chose (the setup's `Choice`), or None when the question was cancelled
-    # (`!stop`, a drain).
-    future: asyncio.Future[Any]
+    # What the owner chose, or None when the question was cancelled (`!stop`, a drain).
+    future: asyncio.Future[Choice | None]
     message_ts: str | None = field(default=None)
-    # What the asker needs back with a click that carries only the id (the setup's model list).
-    context: Any = None
+    # The model list the message was built from: a click carries only the id and the controls'
+    # state, which is read against it.
+    models: list[dict[str, Any]] = field(default_factory=list)
     # Set by `Holds.cancel` while an answer is being applied (the setup's Start settling): the
     # asker sends nothing once it is done.
     cancelled: bool = False
@@ -34,10 +36,12 @@ class Holds:
     def __init__(self) -> None:
         self._pending: dict[str, Pending] = {}
 
-    def open(self, channel_id: str, thread_ts: str, context: Any = None) -> tuple[str, Pending]:
+    def open(
+        self, channel_id: str, thread_ts: str, models: list[dict[str, Any]]
+    ) -> tuple[str, Pending]:
         hold_id = secrets.token_urlsafe(16)
         pending = Pending(
-            channel_id, thread_ts, asyncio.get_running_loop().create_future(), context=context
+            channel_id, thread_ts, asyncio.get_running_loop().create_future(), models=models
         )
         self._pending[hold_id] = pending
         return hold_id, pending
@@ -45,9 +49,11 @@ class Holds:
     def get(self, hold_id: str) -> Pending | None:
         return self._pending.get(hold_id)
 
-    def resolve(self, hold_id: str, channel_id: str, thread_ts: str, value: Any) -> Pending | None:
+    def resolve(
+        self, hold_id: str, channel_id: str, thread_ts: str, value: Choice | None
+    ) -> Pending | None:
         """Resolve once with `value` (None cancels), and only from the channel and thread the
-        request was posted in. A value keeps the entry until the asker `discard`s it, so a stop
+        request was posted in. A choice keeps the entry until the asker `discard`s it, so a stop
         that arrives while the answer is applied still finds it (`cancel`)."""
         pending = self._pending.get(hold_id)
         if (
