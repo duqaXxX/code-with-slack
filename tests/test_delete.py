@@ -138,3 +138,26 @@ async def test_a_thread_whose_root_is_gone_is_forgotten(world: World) -> None:
     assert await world.deleter.delete(CHANNEL, ROOT) is None
     assert world.deleted(world.bot) == [] and world.deleted(world.owner) == []
     assert world.state.thread(CHANNEL, ROOT) is None
+
+
+async def test_threads_are_deleted_one_at_a_time(world: World, tmp_path: Path) -> None:
+    import asyncio
+
+    other = "1790000100.000001"
+    world.state.open_thread(CHANNEL, other, session_id=SESSION)
+    world.bot.responses["conversations.replies"] = lambda args: {
+        "ok": True,
+        "messages": [message(str(args["ts"]), OWNER)],
+        "has_more": False,
+    }
+    world.owner.gate = asyncio.Event()
+    world.owner.gate_method = "chat.delete"
+    first = asyncio.create_task(world.deleter.delete(CHANNEL, ROOT))
+    await world.owner.gated.wait()  # the first delete is inside its call to Slack
+    second = asyncio.create_task(world.deleter.delete(CHANNEL, other))
+    again = asyncio.create_task(world.deleter.delete(CHANNEL, ROOT))  # the same thread, twice
+    await asyncio.sleep(0.05)
+    assert world.released == [(CHANNEL, ROOT)]  # the others have not started
+    world.owner.gate.set()
+    assert await asyncio.gather(first, second, again) == [None, None, None]
+    assert world.deleted(world.owner) == [ROOT, other]  # the repeated one found nothing left

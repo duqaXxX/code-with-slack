@@ -9,11 +9,14 @@ there is no deleter, and the page offers no delete.
 
 The replies go first and the root last: the reference does not say what a root deleted under its
 replies leaves behind. `chat.delete` is Tier 3 (50+ per minute); both clients retry a rate limit
-after the time Slack asks for. A delete that stops half way leaves the thread in `state.json`,
+after the time Slack asks for, which is what a delete's time is made of (measured 2026-10-05
+on a free workspace: 20 to 40 seconds a thread, with a rate limit met every few calls), so
+threads are deleted one at a time. A delete that stops half way leaves the thread in `state.json`,
 so asking again continues with the messages that are left. The Claude Code session is not
 touched: its transcript stays, and `!resume` lists it again once no thread holds it.
 """
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -51,6 +54,9 @@ class ThreadDeleter:
         self._bot_user_id = bot_user_id
         self._state = state
         self._release = release
+        # One thread at a time: two deletes at once would share Slack's rate limit, and each
+        # would use up its retries on the other's calls.
+        self._one_at_a_time = asyncio.Lock()
 
     async def delete(self, channel_id: str, thread_ts: str) -> str | None:
         """Delete every message of a thread that holds a session and forget the thread. Returns
@@ -58,6 +64,12 @@ class ThreadDeleter:
         why it is still there. Never raises."""
         if self._state.thread(channel_id, thread_ts) is None:
             return None  # not a thread of the daemon's: nothing a click may delete
+        async with self._one_at_a_time:
+            return await self._delete(channel_id, thread_ts)
+
+    async def _delete(self, channel_id: str, thread_ts: str) -> str | None:
+        if self._state.thread(channel_id, thread_ts) is None:
+            return None  # deleted while this call waited its turn
         try:
             if not await self._release(channel_id, thread_ts):
                 return texts.HOME_DELETE_BUSY

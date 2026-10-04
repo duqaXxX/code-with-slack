@@ -425,8 +425,13 @@ buttons `Delete thread` and `Cancel`:
 
 Confirmed, code-with-slack closes the thread's session if it is idle, deletes every message of
 the thread, the first one last, and forgets the thread. The Claude Code session is not touched:
-`!resume` lists it again. Slack allows about 50 deletes a minute, so a long thread takes a few
-minutes, and the session stays on the page until its thread is gone.
+`!resume` lists it again.
+
+A delete is not immediate: Slack limits how fast messages can be deleted, and a thread takes
+from some seconds to a few minutes. From the click on, the session's small line reads
+`deleting…` in place of its status and has no Delete; the session leaves the page when its
+thread is gone. Threads are deleted one at a time, so several chosen in a row all read
+`deleting…` and go one after the other.
 
 When a delete does not end, a line under the header says why:
 `Not deleted: that thread is working or waiting for you.`, or

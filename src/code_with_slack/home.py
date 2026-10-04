@@ -136,6 +136,8 @@ class HomeRow:
     # The thread's last reply, or its root while it has none: epoch seconds.
     last_activity: int
     permalink: str
+    # Its thread is being deleted, or waits for the delete before it: the row says so.
+    deleting: bool = False
 
 
 @dataclass(frozen=True)
@@ -389,7 +391,7 @@ def _card(row: HomeRow, channel_name: str = "", *, editing: bool = False) -> lis
     replies = texts.HOME_REPLY if row.replies == 1 else texts.HOME_REPLIES.format(count=row.replies)
     when = texts.HOME_LAST_REPLY if row.replies else texts.HOME_STARTED
     details = [
-        _WORDS.get(row.status) if row.status else None,
+        texts.HOME_DELETING if row.deleting else _WORDS.get(row.status) if row.status else None,
         replies if row.replies else None,
         when.format(when=_date(row.last_activity, "ago")),
     ]
@@ -401,7 +403,7 @@ def _card(row: HomeRow, channel_name: str = "", *, editing: bool = False) -> lis
         "type": "section",
         "text": {"type": "mrkdwn", "text": f"{icon}*{title}*"},
     }
-    if editing and row.status not in _IN_USE:
+    if editing and not row.deleting and row.status not in _IN_USE:
         head["accessory"] = _delete_button(row, channel_name)
     return [head, context_block(" · ".join(d for d in details if d))]
 
@@ -523,6 +525,9 @@ class Home:
         # Kept in memory like the filters: a restart starts out of edit mode.
         self._editing = False
         self._notice: str | None = None
+        # The threads a delete was asked for and has not ended: Slack's rate limit makes one
+        # take from seconds to minutes, and the page says so from the click on.
+        self._deleting: set[tuple[str, str]] = set()
         self._debounce = debounce
         self._clock = clock
         self._task: asyncio.Task[None] | None = None
@@ -585,11 +590,20 @@ class Home:
         await self.publish()
 
     async def delete(self, channel_id: str, thread_ts: str) -> None:
-        """Delete a thread the page lists, then publish: without it, or with the line that
-        says why it is still there. The page stays in edit mode."""
-        if self._delete is None or not self._editing:
+        """Delete a thread the page lists. Publishes at once with the row marked as being
+        deleted, then again when the delete ended: without the row, or with the line that says
+        why it is still there. A second click on the same thread while it runs does nothing.
+        The page stays in edit mode."""
+        key = (channel_id, thread_ts)
+        if self._delete is None or not self._editing or key in self._deleting:
             return
-        self._notice = await self._delete(channel_id, thread_ts)
+        self._deleting.add(key)
+        self._notice = None
+        await self.publish()
+        try:
+            self._notice = await self._delete(channel_id, thread_ts)
+        finally:
+            self._deleting.discard(key)
         # A delete that stopped half way changed the thread: its root is read again.
         self._stale.add((channel_id, thread_ts))
         await self.publish()
@@ -713,6 +727,7 @@ class Home:
                     replies=facts.replies,
                     last_activity=facts.latest_reply or int(float(thread_ts)),
                     permalink=link,
+                    deleting=(channel_id, thread_ts) in self._deleting,
                 )
             )
         rows.sort(key=lambda row: row.last_activity, reverse=True)

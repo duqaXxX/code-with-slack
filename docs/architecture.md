@@ -804,7 +804,10 @@ header has no **New thread**, and the title row of each session whose status is 
 or `waiting for you` carries a `danger` button (`home.DELETE_ACTION`) with a `confirm` dialog
 that names the thread, cut to the dialog's 300 characters. Slack sends the click only after the
 owner confirmed. The listener checks the owner and the workspace, like every Home control, and
-`Home.delete` acts only in edit mode.
+`Home.delete` acts only in edit mode. It publishes at once with the thread marked
+(`HomeRow.deleting`: the row reads `texts.HOME_DELETING` in place of its status and has no
+button), ignores a second click on a thread it is already deleting, and publishes again when
+the delete ended.
 
 `ThreadDeleter.delete` acts only on a thread `state.json` holds. It asks
 `SessionManager.release`, which closes the thread's live session when it is idle (the test the
@@ -812,7 +815,8 @@ idle close makes, as silent) and answers False for one that is not. It then read
 page by page (`conversations.replies`, cursor pagination) and deletes each message with
 `chat.delete`: the bot's own with the bot token, every other with the owner's, the replies
 first and the root last; `message_not_found` counts as deleted. `chat.delete` is Tier 3 and both
-clients retry a rate limit. Only then is the thread dropped from `state.json`
+clients retry a rate limit, which is where a delete's time goes; threads are deleted one at a
+time, so two deletes never spend each other's retries. Only then is the thread dropped from `state.json`
 (`StateStore.remove_thread`). Any other failure stops the delete and leaves the thread where it
 is, with a line under the page's header (`texts.HOME_DELETE_FAILED`, or `texts.HOME_DELETE_BUSY`
 for a thread in use); the same click later continues with what is left. The Claude Code session

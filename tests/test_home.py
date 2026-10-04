@@ -1197,3 +1197,33 @@ async def test_a_home_with_no_deleter_never_enters_edit_mode(
     page = published(slack)[-1]
     assert buttons(page, EDIT_ACTION) == [] and buttons(page, DELETE_ACTION) == []
     assert len(buttons(page, NEW_THREAD_ACTION)) == 2
+
+
+async def test_a_thread_being_deleted_says_so_from_the_click_on_and_takes_no_second_click(
+    tmp_path: Path, slack: FakeSlack, state: StateStore
+) -> None:
+    started: list[tuple[str, str]] = []
+    finish = asyncio.Event()
+
+    async def delete(channel_id: str, thread_ts: str) -> str | None:
+        started.append((channel_id, thread_ts))
+        await finish.wait()  # Slack's rate limit: a delete takes from seconds to minutes
+        state.remove_thread(channel_id, thread_ts)
+        return None
+
+    home = make_home(slack, state, listing(tmp_path), delete=delete)
+    await home.edit(True)
+    running = asyncio.create_task(home.delete(CHANNEL, OLD_THREAD))
+    await until(lambda: bool(started))
+    page = published(slack)[-1]
+    # Published before the delete ends: the row reads `deleting…` and offers no Delete.
+    assert any(note.startswith("deleting… · 19 replies") for note in notes(page))
+    assert buttons(page, DELETE_ACTION) == []
+    await home.delete(CHANNEL, OLD_THREAD)  # a second click while it runs
+    assert started == [(CHANNEL, OLD_THREAD)]
+    # Leaving edit mode does not hide what is going on.
+    await home.edit(False)
+    assert any(note.startswith("deleting…") for note in notes(published(slack)[-1]))
+    finish.set()
+    await running
+    assert not any("Fix the footer" in title for title in titles(published(slack)[-1]))
