@@ -690,6 +690,9 @@ async def test_bang_stop_inside_a_thread_stops_only_that_session(
     await world.dispatch(click_in(HOLD_CONTINUE, hold_id, CHANNEL, OTHER_THREAD))
     posted = len(world.slack.calls_to("chat.postMessage"))
     await world.dispatch(reply("!stop", THREAD))
+    # The answer follows the wait above, which lasts as long as `dispatch` lets listeners run:
+    # the test waits for the post itself, not for that time to have been enough.
+    await until(lambda: len(world.slack.calls_to("chat.postMessage")) > posted)
     # One line that stays in the thread: an ephemeral one is gone on reload (issue #85).
     (answer,) = world.slack.calls_to("chat.postMessage")[posted:]
     assert answer["text"] == texts.STOPPED_THREAD and answer["thread_ts"] == THREAD
