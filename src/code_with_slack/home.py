@@ -26,7 +26,9 @@ What reaches the app from the page is a `block_actions` payload per use of a con
 (`slack_app` owns the listeners): a filter, which carries the state of every control in
 `view.state.values`, and the **New thread** link button, which Slack follows itself and still
 reports (button element reference, read 2026-10-01). A session's **Open** is a plain link in its
-line of details, which reports nothing. **New thread** is the documented deep link to the channel
+line of details, which reports nothing: the permalink of the thread's last reply, which Slack
+opens the thread on (seen in the Mac app and on iOS, 2026-10-05), or of its root while it has
+none. **New thread** is the documented deep link to the channel
 (docs.slack.dev/interactivity/deep-linking; it opened the channel in the desktop app on
 2026-10-01): the owner's own top-level message there starts the session, so the thread is one
 the owner started and its replies notify.
@@ -49,7 +51,7 @@ from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
 from code_with_slack import texts
-from code_with_slack.render.escape import shown_as_written
+from code_with_slack.render.escape import mrkdwn_escape, shown_as_written
 from code_with_slack.render.renderer import one_line
 from code_with_slack.render.sinks import context_block, describe
 from code_with_slack.render.status import Status
@@ -134,6 +136,8 @@ class ThreadFacts:
 
     replies: int
     latest_reply: int | None  # epoch seconds
+    # The last reply's own `ts`, as Slack wrote it: what a permalink to that message is asked by.
+    latest_ts: str | None
     # The root's status reaction (`render.status.Status.value`), when it carries one.
     reaction: str | None
 
@@ -146,6 +150,7 @@ def thread_facts(root: dict[str, Any]) -> ThreadFacts:
     return ThreadFacts(
         replies=int(root.get("reply_count") or 0),
         latest_reply=int(float(latest)) if latest else None,
+        latest_ts=str(latest) if latest else None,
         reaction=next((name for name in names if name in _WORDS), None),
     )
 
@@ -332,7 +337,8 @@ def _card(row: HomeRow) -> list[dict[str, Any]]:
     ]
     # Open is a link in the small line, not a button: a button sits at the far right of the
     # title's row, and a row that carries one cannot be small (the maintainer, 2026-10-01).
-    details.append(f"<{row.permalink}|{texts.HOME_OPEN}>")
+    # A reply's permalink carries a query (`?thread_ts=…&cid=…`), and mrkdwn reads `&` as markup.
+    details.append(f"<{mrkdwn_escape(row.permalink)}|{texts.HOME_OPEN}>")
     return [
         {"type": "section", "text": {"type": "mrkdwn", "text": f"{icon}*{title}*"}},
         context_block(" · ".join(d for d in details if d)),
@@ -451,9 +457,10 @@ class Home:
         # last, so a filter just chosen is never overwritten by an older page.
         self._publishing = asyncio.Lock()
         self._asking = asyncio.Semaphore(THREADS_AT_ONCE)
-        # A thread's permalink never changes: asked once per run. None: Slack no longer has the
-        # root (`GONE`), which stands for the run too.
-        self._links: dict[tuple[str, str], str | None] = {}
+        # Each thread's permalink, with the `ts` of the message it opens: the thread's last reply,
+        # or its root while it has none. Asked again only once that `ts` changed. A None link:
+        # Slack no longer has that message (`GONE`).
+        self._links: dict[tuple[str, str], tuple[str, str | None]] = {}
         # A channel's name, asked once per run. None: Slack no longer has the channel, or the
         # bot left it (`GONE`): the channel and its threads are left out of the page.
         self._names: dict[str, str | None] = {}
@@ -636,7 +643,7 @@ class Home:
             facts = await self._root(channel_id, thread_ts)
             if facts is None:
                 return None, None
-            return await self._permalink(channel_id, thread_ts), facts
+            return await self._permalink(channel_id, thread_ts, facts.latest_ts or thread_ts), facts
 
     async def _root(self, channel_id: str, thread_ts: str) -> ThreadFacts | None:
         key = (channel_id, thread_ts)
@@ -662,20 +669,23 @@ class Home:
         self._facts[key] = facts
         return facts
 
-    async def _permalink(self, channel_id: str, thread_ts: str) -> str | None:
+    async def _permalink(self, channel_id: str, thread_ts: str, message_ts: str) -> str | None:
+        """The permalink that opens the thread on `message_ts`: Slack scrolls a thread to the
+        reply its permalink names (seen in the Mac app and on iOS, 2026-10-05)."""
         key = (channel_id, thread_ts)
-        if key not in self._links:
-            try:
-                answer = await self._slack.chat_getPermalink(
-                    channel=channel_id, message_ts=thread_ts
-                )
-                self._links[key] = str(answer["permalink"])
-            except Exception as exc:
-                logger.warning(
-                    "could not get a permalink for %s/%s: %s", channel_id, thread_ts, describe(exc)
-                )
-                if not _gone(exc):
-                    self._incomplete = True
-                    return None
-                self._links[key] = None
-        return self._links[key]
+        kept = self._links.get(key)
+        if kept is not None and kept[0] == message_ts:
+            return kept[1]
+        link: str | None = None
+        try:
+            answer = await self._slack.chat_getPermalink(channel=channel_id, message_ts=message_ts)
+            link = str(answer["permalink"])
+        except Exception as exc:
+            logger.warning(
+                "could not get a permalink for %s/%s: %s", channel_id, message_ts, describe(exc)
+            )
+            if not _gone(exc):
+                self._incomplete = True
+                return None
+        self._links[key] = (message_ts, link)
+        return link

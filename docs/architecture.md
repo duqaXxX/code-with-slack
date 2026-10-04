@@ -739,8 +739,14 @@ the root for a thread that has neither (one that ended before the daemon kept it
 `status` are both set only for an answer that never reached Slack, where the root shows ❌ and
 `status` stays for crash repair. A root is read again only for a thread a state write touched
 since the last read, which every turn does at its start and at its end
-(`StateStore.on_sessions_change` names the threads it changed). Each row also needs the root
-message's permalink (`chat.getPermalink`, asked once per thread per run).
+(`StateStore.on_sessions_change` names the threads it changed). Each row also needs a permalink
+(`chat.getPermalink`) for its **Open** link: the one of the thread's last reply, whose `ts` is
+the root's `latest_reply`, or the root's own while the thread has no reply. Slack opens a thread
+on the reply its permalink names (seen in the Mac app and on iOS on 2026-10-05; the method's
+reference gives the link's form and says nothing of the scroll). The last reply is the last
+message of the thread, the owner's included. The link is kept per thread with that `ts` and
+asked again only when the `ts` changed, so a reply costs one call. It carries a query
+(`?thread_ts=…&cid=…`), written into the page with `&` escaped as mrkdwn takes it.
 `home.THREADS_AT_ONCE` threads are asked about at a time.
 
 Only three answers are final, the ones in `home.GONE`: `channel_not_found`, `message_not_found`

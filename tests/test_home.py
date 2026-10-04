@@ -577,11 +577,16 @@ def published(slack: FakeSlack) -> list[dict[str, Any]]:
 def test_a_root_is_read_as_slack_returns_it() -> None:
     recorded = slack_payload("api-conversations-replies-root")["messages"][0]
     assert thread_facts(recorded) == ThreadFacts(
-        replies=19, latest_reply=1789996400, reaction=Status.DONE.value
+        replies=19,
+        latest_reply=1789996400,
+        latest_ts="1789996400.000200",
+        reaction=Status.DONE.value,
     )
     # A root nobody replied to and nobody reacted to carries neither field.
     bare = root(OLD_THREAD, reply_count=None, latest_reply=None, reactions=None)
-    assert thread_facts(bare) == ThreadFacts(replies=0, latest_reply=None, reaction=None)
+    assert thread_facts(bare) == ThreadFacts(
+        replies=0, latest_reply=None, latest_ts=None, reaction=None
+    )
     # The owner's own reactions are not a status.
     assert thread_facts(root(OLD_THREAD, reactions=reacted("eyes"))).reaction is None
 
@@ -847,6 +852,51 @@ async def test_a_chosen_channel_slack_did_not_answer_about_stays_chosen(
     slack.responses["conversations.info"] = slack_error("channel_not_found")
     await home.publish()
     assert home.chosen.channel is None
+
+
+def reply_link(args: dict[str, Any]) -> dict[str, Any]:
+    """A permalink as `chat.getPermalink` forms it for the message asked about; a reply's carries
+    its thread and channel in the query (docs.slack.dev/reference/methods/chat.getPermalink, read
+    2026-10-05)."""
+    link = f"https://example.slack.com/archives/{args['channel']}/p{args['message_ts']}"
+    return {"ok": True, "channel": args["channel"], "permalink": link.replace(".", "")}
+
+
+async def test_open_links_to_the_thread_s_last_reply_and_to_the_root_while_it_has_none(
+    tmp_path: Path, slack: FakeSlack, state: StateStore, roots: dict[str, Any]
+) -> None:
+    roots[NEW_THREAD] = root(NEW_THREAD, reply_count=None, latest_reply=None)
+    slack.responses["chat.getPermalink"] = reply_link
+    home = make_home(slack, state, listing(tmp_path))
+    told_by_state(home, state)
+    await home.publish()
+    last = f"{EPOCH - 3600}.000200"
+    assert [(a["channel"], a["message_ts"]) for a in slack.calls_to("chat.getPermalink")] == [
+        (CHANNEL, last),
+        (OTHER_CHANNEL, NEW_THREAD),
+    ]
+    # The link on the page is the one Slack answered with for that message.
+    opens = f"<{reply_link({'channel': CHANNEL, 'message_ts': last})['permalink']}|"
+    assert any(opens in note for note in notes(published(slack)[-1]))
+
+    # A reply arrives in one thread: its link alone is asked again, for the new last reply.
+    newer = f"{EPOCH - 5}.000300"
+    roots[OLD_THREAD] = root(OLD_THREAD, reply_count=20, latest_reply=newer)
+    state.set_status_pending(CHANNEL, OLD_THREAD, Status.WORKING.value)
+    await home.publish()
+    await home.publish()
+    assert [a["message_ts"] for a in slack.calls_to("chat.getPermalink")][2:] == [newer]
+    opens = f"<{reply_link({'channel': CHANNEL, 'message_ts': newer})['permalink']}|"
+    assert any(opens in note for note in notes(published(slack)[-1]))
+
+
+def test_a_reply_s_permalink_is_written_as_mrkdwn_takes_it() -> None:
+    # `&` is markup in mrkdwn (docs.slack.dev/messaging/formatting-message-text, read 2026-10-05).
+    link = f"{LINK}?thread_ts=1789990000.000100&cid={CHANNEL}"
+    page = view([row(permalink=link)], channels={CHANNEL: "cc-articles"})
+    assert notes(page)[-1].endswith(
+        f" · <{LINK}?thread_ts=1789990000.000100&amp;cid={CHANNEL}|{texts.HOME_OPEN}>"
+    )
 
 
 async def test_a_permalink_slack_refuses_leaves_the_thread_out_for_the_run(

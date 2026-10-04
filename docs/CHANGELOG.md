@@ -122,6 +122,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Session index (issue #101): a session's **Open** link in the Home tab opens the thread on its
+  last reply, where it opened it on its first message. The link is the permalink of the message
+  the root names in `latest_reply`, the owner's own messages included, and the root's permalink
+  while the thread has no reply (`Home._permalink`). It is asked again only when the thread's
+  last reply changed, so each reply costs one `chat.getPermalink` call; `state.json` is
+  unchanged. Slack scrolling a thread to the reply its permalink names was seen in the Mac app
+  and on iOS on 2026-10-05.
 - An `Edit` or a `Write` that ended well is one row in a reply (issue #136): a collapsed
   container titled with the call's line in code style (`Update(notes.txt)`), with the sentence
   (`Added 1 line, removed 1 line`) as its subtitle and the diff inside, and no task card. A new
