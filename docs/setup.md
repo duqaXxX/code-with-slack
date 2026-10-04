@@ -344,7 +344,12 @@ Terminal: `cd <folder> && claude --resume <session id> --fork-session`
 session, so the picker lists it from then on (measured 2026-09-26 on Claude Code 2.1.282, on one
 session started from Slack). The thread stays on the session it had and sees nothing of what the
 copy does afterwards. To bring the copy into Slack, send `!resume` in the channel: it opens in a
-new thread.
+new thread. Slack does not look for the copy by itself: the thread never moves to it, and
+nothing in the thread says that one exists.
+
+Keep `--fork-session` in the command. Without it the terminal resumes the thread's own session,
+and two processes on one session interleave their messages into one transcript (same
+reference); the next message sent in the thread would do that while the terminal is still open.
 
 The line shows as soon as the thread has a session id, which Claude Code reports when the first
 turn starts; a fork made while a turn runs copies the conversation as it stands, with a tool call

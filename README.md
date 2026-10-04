@@ -48,7 +48,9 @@ From then on:
 - `!<command>` runs a Claude Code command, such as `!compact` or `!model opus`, inside a
   session's thread. `!help` lists the commands that session offers.
 - `!status`, typed in the channel, lists every live session with a link to its thread; inside a
-  thread it shows that session's directory and mode, then the footer's values one per line.
+  thread it shows that session's directory and mode, then the footer's values one per line, and
+  the command that continues the session in the terminal: a session started from Slack stays
+  out of the terminal's session picker, and that command forks it into one the picker lists.
   `!stop`, typed in the channel, stops every session; inside a thread it stops that one.
 - `!resume`, typed in the channel, lists the directory's sessions, from the terminal too, with a
   Resume button each; `!resume <id or name>` or a click moves that session into a new thread.
