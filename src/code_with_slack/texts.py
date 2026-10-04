@@ -203,10 +203,17 @@ SETUP_BYPASS_OPTION = "Bypass permissions"
 SETUP_BYPASS_DESCRIPTION = "Run every tool without asking, until `!bypass off`."
 SETUP_START_BUTTON = "Start"
 SETUP_SUMMARY = "Model: {model} · Effort: {effort} · Bypass: {bypass}"
-STATUS = (
-    "Directory: `{directory}`\nSession: `{session}`\nMode: `{mode}`\n"
-    "Claude Code: `{version}`\nNow: {activity}"
-)
+STATUS = "Directory: `{directory}`\nSession: `{session}`"
+STATUS_STATE = "Mode: `{mode}`\nClaude Code: `{version}`\nNow: {activity}"
+# The line between the two once the thread has a session id (issue #12). Claude Code leaves a
+# session created through the Agent SDK out of the terminal's picker; a fork made in the
+# terminal gets an id of its own and a row there (sessions reference, read 2026-10-04; the
+# picker listing such a fork measured on CLI 2.1.282). `claude --resume <id>` finds a session
+# from any folder since 2.1.223 (same reference): the `cd` chooses where the fork works and
+# whose picker lists it. `directory` arrives quoted for the shell, and `command` as a code
+# span, or escaped as plain text when it holds a backtick.
+TERMINAL_COMMAND = "cd {directory} && claude --resume {session} --fork-session"
+STATUS_TERMINAL = "Terminal: {command}"
 ACTIVITY_IDLE = "idle"
 VERSION_PENDING = "started, version shown after the first turn"
 STATUS_BACKGROUND = "Background: `{counts}`"
@@ -375,8 +382,8 @@ its thread; inside a thread it shows that session's directory, mode and the foot
 thread it stops only that one. `!resume`, typed in the channel only, lists this folder's twenty \
 newest sessions, from the terminal too, each with the start of its id and a **Resume** button; \
 `!resume <id>` (that start is enough), or `!resume <title>` for a session that has one, resumes \
-it in the thread of your `!resume` message. To continue a session in the terminal, run \
-`claude --resume <id>` there with the full id `!status` shows.
+it in the thread of your `!resume` message. To continue a session in the terminal, run the \
+`Terminal:` command `!status` shows in its thread.
 
 **Bypass**
 `!bypass on`, sent inside a session's thread, lets Claude Code run every tool without asking in \

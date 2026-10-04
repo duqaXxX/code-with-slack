@@ -433,7 +433,15 @@ left out.
 `Context: ...`), read by the same `ThreadSession._footer_data` and written from the same list,
 `footer.footer_fields`, as the footer writes them, then the running tasks; bypass and the folder
 are left out, since its Mode and Directory lines show them. When the session works in another
-folder than the one it was opened in, a `Working in:` line names it before the values. It starts
+folder than the one it was opened in, a `Working in:` line names it before the values. Once the
+thread has a session id, a `Terminal:` line under `Session:` gives
+`cd <folder> && claude --resume <id> --fork-session` (`sessions.terminal_line`): a session
+created through the SDK stays out of the terminal's picker, and a fork made in the terminal is
+listed (`docs/setup.md`, "Continuing a session in the terminal"). The folder is the thread's
+own, quoted for the shell, so the fork is listed where `!resume` in the channel looks; the id
+is stored from the first turn's `init` message, so the line shows during that turn too. A
+command holding a backtick is written as escaped text, since a code span cannot hold one, and
+the line is left out when the folder cannot be used (`DirectoryUnavailable`). It starts
 the thread's client when none is running, since the model and the
 context come from it (`get_context_usage()` answers before a session's first turn and during a
 turn: measured on claude-agent-sdk 0.2.158, bundled CLI 2.1.280, 2026-09-25). The session tokens

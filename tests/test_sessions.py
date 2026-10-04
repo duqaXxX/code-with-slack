@@ -3,6 +3,7 @@ import dataclasses
 import json
 import logging
 import re
+import shlex
 import subprocess
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
@@ -2355,6 +2356,58 @@ async def test_status_before_any_turn_starts_the_client_and_leaves_out_the_token
     assert "Model: `claude-haiku-4-5-20251001`" in text and "Context: `7%`" in text
     # Only a turn's Stop hook, or `/effort`, reports the level: the settings do not say it.
     assert "Session tokens" not in text and "Effort" not in text
+    # No session exists yet, so there is nothing the terminal could fork (#12).
+    assert "Session: `new`\nMode: " in text and "Terminal:" not in text
+
+
+async def test_status_gives_the_command_that_forks_the_session_in_the_terminal(
+    harness_for: Callable[..., Harness], tmp_path: Path
+) -> None:
+    # A session born in Slack stays out of the terminal's picker; a fork of it is listed (#12).
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
+    stored = h.state.thread(CHANNEL, THREAD).session_id
+    lines = (await session.status()).splitlines()
+    assert lines[1] == f"Session: `{stored}`"
+    folder = shlex.quote(str(tmp_path))
+    assert lines[2] == f"Terminal: `cd {folder} && claude --resume {stored} --fork-session`"
+    assert lines[3].startswith("Mode: ")
+
+
+def test_a_terminal_command_holding_a_backtick_is_escaped_text_not_a_code_span() -> None:
+    # A code span would end at the folder's backtick and the owner would copy half a command.
+    line = sessions.terminal_line(Path("/work/my`proj"), "0000-id")
+    assert line == ("Terminal: cd '/work/my\\`proj' \\&\\& claude --resume 0000-id --fork-session")
+
+
+async def test_status_leaves_the_terminal_command_out_of_a_folder_that_cannot_be_used(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    await asyncio.wait_for((await h.session().submit("list the files")).done.wait(), 2)
+    await h.manager.close_all()
+
+    async def untrusted(directory: Path) -> bool:
+        return False
+
+    h.deps.workspace_trusted = untrusted
+    text = await h.session().status()
+    stored = h.state.thread(CHANNEL, THREAD).session_id
+    assert f"Session: `{stored}`\nMode: " in text and "Terminal:" not in text
+    assert text.endswith(texts.DIRECTORY_UNTRUSTED.format(directory=h.tmp_path))
+
+
+async def test_the_terminal_command_quotes_a_folder_the_shell_would_split(
+    harness_for: Callable[..., Harness], tmp_path: Path
+) -> None:
+    spaced = tmp_path / "my project"
+    spaced.mkdir()
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    h.state.bind(CHANNEL, spaced)
+    session = h.session()
+    await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
+    assert f"Terminal: `cd '{spaced}' && claude --resume " in await session.status()
 
 
 async def test_status_says_why_claude_code_cannot_start_in_place_of_the_footer_s_values(
