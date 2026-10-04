@@ -319,6 +319,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A reply's banner is computed in a time linear in its first paragraph (`strip_markdown`). Three
+  of its patterns read ahead and were tried again from every later start, so a paragraph that was
+  one long run of `[`, of blank lines or of `_` inside a word held the event loop, and with it
+  every other thread's reply and approval: about 15 s for 100,000 `[` characters (Python 3.12.13,
+  measured 2026-10-04). The banner's text is unchanged.
 - A long command a background subagent runs in the foreground of its own context is the
   subagent's work (`TurnRenderer.nests`). Claude Code starts a task for it on the main
   conversation's stream (recorded: Claude Code 2.1.286, `subagent-nested-command.jsonl`) and
