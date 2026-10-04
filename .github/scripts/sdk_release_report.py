@@ -5,17 +5,25 @@ message shapes the fixtures record. A new SDK release is read against the projec
 workflow installs it, runs the suite, and this names what is left to check by hand.
 
     PINNED=0.2.158 LATEST=0.2.160 LATEST_CLI=2.1.285 FIXTURE_CLI=2.1.280 OUTCOME=pass \
-    LAST_COMMENTED=0.2.159 uv run python .github/scripts/sdk_release_report.py
+    LAST_COMMENTED=0.2.159 python3 .github/scripts/sdk_release_report.py
 
 prints `{"title": ..., "body": ..., "comment": ... or null}` as JSON, or `null` when the latest
 release is the pinned one and there is nothing to report.
+
+The workflow runs this beside the token that writes the issue, in a job that never installs the
+project, so it runs on the machine's own `python3`: it imports the standard library only, and its
+annotations stay unevaluated for an interpreter older than the project's.
 """
+
+from __future__ import annotations
 
 import json
 import os
 import re
 
 VERSION = re.compile(r"\d+(\.\d+)+")
+# The words the workflow's test job writes, and the default below for a run that names none.
+OUTCOMES = frozenset({"pass", "fail", "install failed", "skipped"})
 
 
 def _checked(version: str) -> str:
@@ -23,6 +31,14 @@ def _checked(version: str) -> str:
     if not VERSION.fullmatch(version):
         raise ValueError(f"not a version: {version!r}")
     return version
+
+
+def _known(outcome: str) -> str:
+    # The outcome reaches the issue's body and a comment, and comes from the job that ran the
+    # release under test: anything but these words is refused.
+    if outcome not in OUTCOMES:
+        raise ValueError(f"not an outcome: {outcome!r}")
+    return outcome
 
 
 def report(
@@ -38,6 +54,7 @@ def report(
     comes once per new version, and at every run whose suite did not pass."""
     pinned, latest = _checked(pinned), _checked(latest)
     latest_cli, fixture_cli = _checked(latest_cli), _checked(fixture_cli)
+    outcome = _known(outcome)
     if latest == pinned:
         return None
     cli_changed = latest_cli != fixture_cli
