@@ -14,7 +14,9 @@ All notable changes to this project are documented here. The format follows
   the Agent SDK out of the terminal's picker, and a fork made in the terminal is listed. The
   line is absent while the thread has no session id and when its folder is missing, unreadable
   or not trusted; a command holding a backtick shows as escaped text. `!guide` names that line in place of
-  `claude --resume <id>`, and `docs/setup.md` has a section on it.
+  `claude --resume <id>`, and `docs/setup.md` has a section on it, which also says why the
+  command keeps `--fork-session` and that Slack does not look for the fork by itself; the
+  README names the command.
 - Thread status (issues #83 and #95): Slack's own status line under a thread's last message
   (`render.status.ThreadStatus`, `assistant.threads.setStatus` with a loading message, which is
   what makes it show on iOS). It reads `Working…` from the moment a prompt is received until
