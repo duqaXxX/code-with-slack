@@ -410,8 +410,16 @@ inserted and deleted since the last commit, staged and unstaged, untracked files
 ccstatusline's git-changes counts them. They come from plumbing commands (`git diff-files
 --shortstat` and `git diff-index --cached --shortstat HEAD`, the empty tree before a first
 commit), which never write the index: `git diff` refreshes it under `index.lock`, and a diff
-killed at `GIT_TIMEOUT` would leave the lock behind and stop every commit. git runs there with
-`core.fsmonitor` off, so a repo's own configuration runs no command. The effort level is the one Claude Code reports in the input of a
+killed at `GIT_TIMEOUT` would leave the lock behind and stop every commit. The branch and the
+changes show only where that folder is in a repository the owner trusted in Claude Code
+(`trust.trusted_repository`); anywhere else no git runs and the footer leaves both out, since a
+diff runs the `clean` filters a repository's config names. git is given the repository with
+`--git-dir` and started at the repository's root, so it searches for nothing from the folder: a
+planted `.git` file, a bare layout or a `core.worktree` there is never read. `core.fsmonitor` is
+off, and `--ignore-submodules=dirty` keeps git out of every nested repository the index names,
+so a submodule counts by its checked-out commit alone, also one set to `ignore = all`. Inside
+the repository's own `.git` directory the branch alone shows. All the git calls of one footer
+share `GIT_TIMEOUT` (`footer.git_state`). The effort level is the one Claude Code reports in the input of a
 `Stop` hook the daemon registers on each client (`effort.level`); `/effort` and `/model` run no
 hook, so after one of them the footer follows its output (`Set effort level to ...`). Until Claude
 Code reports a level on the running client the footer leaves it out, and when the model takes no
@@ -457,8 +465,23 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   `code_with_slack.trust.workspace_trusted` reads Claude Code's record
   (`projects["<path>"].hasTrustDialogAccepted` in `~/.claude.json`) by Claude Code's rules: in a
   git repository the repository root decides (the main checkout's root for a worktree) and a
-  trusted parent does not cover it; outside git, a trusted folder covers its subdirectories. A
-  folder git cannot answer about (git missing or failing) counts as untrusted. An untrusted
+  trusted parent does not cover it; outside git, a trusted folder covers its subdirectories.
+  Which repository a folder belongs to is read from the filesystem (`trust.locate`) and never
+  asked of git there, since git would answer from the folder's own `.git` file, `commondir` and
+  `core.worktree`, which whoever supplied the folder wrote. The first folder up the path that
+  holds a `.git` entry is the repository's root and is keyed on itself, whatever that entry
+  says. One case moves the key: the entry is a file naming `<main>/.git/worktrees/<id>`, and the
+  `gitdir` file in that directory, which git writes on the main checkout's side, names this
+  folder back; the key is then the main checkout. Paths are compared as directories on disk
+  (device and inode), so a path in another case or Unicode form is the same folder and a name
+  one space longer is another. A folder git would take for a bare repository outside the root's
+  own `.git` has no key and counts as untrusted, with everything below it. That is told by the
+  names of its entries alone (a `HEAD`, with `objects` and `refs` or a `commondir`), so a folder
+  that only looks like a git dir counts too. The check runs no command, so nothing in a folder
+  can hold it. Trust is by path, as in Claude Code: a folder placed at a path the owner
+  trusted, or at the path of a worktree deleted and not pruned, passes for it, and a repository
+  placed at a trusted path covers the worktrees it registers. A path in the record that passes
+  through a symlink trusts nothing. An untrusted
   folder starts nothing, and the reply says to open `claude` there in the terminal
   once and accept the dialog. A `!bind` runs the same checks (`sessions.check_directory`: missing,
   unreadable, untrusted): the channel is bound, and the answer gives the reason instead of

@@ -10,55 +10,172 @@ already trusted the folder in the terminal, by the rules Claude Code documents:
 - outside a repository, a trusted folder covers its subdirectories.
 
 The record is `projects["<path>"].hasTrustDialogAccepted` in `~/.claude.json`.
+
+Which repository a folder belongs to is read from the filesystem and never asked of git there:
+git would answer from the folder's own `.git` file, `commondir` and `core.worktree`, which
+whoever supplied the folder wrote. The layout read here is the one gitrepository-layout(5) and
+git-worktree(1) document, and the bare-repository test follows `is_git_directory` in git's
+setup.c (git 2.54.0, read 2026-10-04).
 """
 
 import asyncio
+import errno
 import functools
 import json
 import logging
+import os
+import stat
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# git's own limit for a `.git` file (setup.c, read_gitfile_gently).
+GITFILE_BYTES = 1 << 20
 
-class GitUnavailable(Exception):
-    """git could not answer, so whether the folder is in a repository is unknown."""
+
+class Unkeyed(Exception):
+    """git would find a repository at the folder that no path the owner trusted can stand for:
+    a bare layout, or metadata that cannot be read."""
 
 
-async def _git(directory: Path, *args: str) -> str | None:
-    """git's answer, or None when `directory` is outside any repository (exit 128, measured
-    2026-09-25). Any other failure raises: it must not pass for "outside a repository"."""
+@dataclass(frozen=True)
+class Repository:
+    """A folder's repository, as the filesystem shows it."""
+
+    root: Path  # the folder that holds the `.git` entry
+    key: Path  # the path whose trust covers it: the main checkout for a registered worktree
+    git_dir: Path | None  # None when the `.git` entry names none
+    inside_git_dir: bool  # the folder is in the root's own `.git` directory, and has no work tree
+
+
+def _mode(path: Path) -> int | None:
+    """`path`'s own type, a symlink not followed; None when nothing is there."""
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "git",
-            "-C",
-            str(directory),
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        return os.lstat(path).st_mode
     except OSError as exc:
-        raise GitUnavailable(type(exc).__name__) from exc
-    out, err = await proc.communicate()
-    if proc.returncode == 0 and out.strip():
-        return out.decode(errors="replace").strip()
-    if proc.returncode == 128 and b"not a git repository" in err:
-        return None
-    raise GitUnavailable(f"exit {proc.returncode}")
+        if exc.errno in (errno.ENOENT, errno.ENOTDIR):
+            return None
+        raise Unkeyed from exc
 
 
-async def repository_root(directory: Path) -> Path | None:
-    """The root Claude Code keys a repository's trust on, or None outside git."""
-    common = await _git(directory, "rev-parse", "--path-format=absolute", "--git-common-dir")
-    if common is None:
+def _regular_file(path: Path) -> bytes | None:
+    """A regular file's content. Never waits on a FIFO, never follows a symlink."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    except OSError:
         return None
-    # git prints resolved paths, the form Claude Code records.
-    if Path(common).name == ".git":
-        return Path(common).parent
-    top = await _git(directory, "rev-parse", "--show-toplevel")
-    return Path(top) if top else None
+    try:
+        found = os.fstat(fd)
+        if not stat.S_ISREG(found.st_mode) or found.st_size > GITFILE_BYTES:
+            return None
+        return os.read(fd, GITFILE_BYTES)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def _git_dir_like(folder: Path) -> bool:
+    """Whether git could take `folder` for a git dir: it wants a HEAD, and `objects` and `refs`
+    there or in the directory a `commondir` names. Every folder git accepts passes here; a test
+    holds that against the git installed."""
+    if not os.path.lexists(folder / "HEAD"):
+        return False
+    if os.path.lexists(folder / "commondir"):
+        return True
+    return os.path.lexists(folder / "objects") and os.path.lexists(folder / "refs")
+
+
+def _gitfile_target(gitfile: Path) -> Path | None:
+    """The git dir a `.git` file names, read as git reads it."""
+    content = _regular_file(gitfile)
+    if content is None or not content.startswith(b"gitdir: "):
+        return None
+    # git strips line ends only: a trailing space belongs to the path.
+    target = os.fsdecode(content[len(b"gitdir: ") :].rstrip(b"\r\n"))
+    return Path(os.path.realpath(gitfile.parent / target)) if target else None
+
+
+def _main_checkout(git_dir: Path, root: Path) -> Path | None:
+    """The main checkout that registers `root` as a linked worktree, None when none does.
+
+    The link is read on the main checkout's side, in `<main>/.git/worktrees/<id>/gitdir`, which
+    git writes there; what `root`'s own `.git` file says only tells where to look.
+    """
+    if git_dir.parent.name != "worktrees" or git_dir.parent.parent.name != ".git":
+        return None
+    # A main checkout is a repository by the walk's own test: a `.git` holding a worktree
+    # registry and nothing else, left in a trusted folder outside git, makes it none.
+    if not _git_dir_like(git_dir.parent.parent):
+        return None
+    content = _regular_file(git_dir / "gitdir")
+    if content is None:
+        return None
+    # An absolute path, or one relative to this directory (`git worktree add --relative-paths`).
+    registered = git_dir / os.fsdecode(content.removesuffix(b"\n"))
+    # The two folders are compared as directories on disk: the same one whatever the case or
+    # the Unicode form git wrote, another one for a name one space longer. Not the `.git` files:
+    # a file can be hard-linked into a second folder.
+    try:
+        if registered.name != ".git" or not os.path.samestat(
+            os.stat(registered.parent), os.stat(root)
+        ):
+            return None
+    except OSError:
+        return None
+    return git_dir.parent.parent.parent
+
+
+def locate(directory: Path) -> Repository | None:
+    """The repository holding `directory`, None outside git. Raises `Unkeyed`.
+
+    The walk is git's own, with one difference: a folder holding a `.git` entry is keyed on
+    itself, whatever that entry claims, unless a main checkout registers it as its worktree.
+    """
+    try:
+        return _locate(Path(os.path.realpath(directory)))
+    except (OSError, ValueError, RecursionError) as exc:
+        # What a `.git` file or symlink names is somebody else's text: a NUL in it is no path,
+        # and `realpath` gives up on a long enough chain of symlinks (Python 3.12).
+        raise Unkeyed from exc
+
+
+def _locate(folder: Path) -> Repository | None:
+    if not stat.S_ISDIR(os.stat(folder).st_mode):
+        raise Unkeyed
+    passed: list[Path] = []
+    git_dir_passed: Path | None = None  # the first on the way up, where git would stop
+    for root in (folder, *folder.parents):
+        entry = root / ".git"
+        mode = _mode(entry)
+        # git walks past a `.git` directory that is no git dir.
+        if mode is not None and not (stat.S_ISDIR(mode) and not _git_dir_like(entry)):
+            break
+        if git_dir_passed is None and _git_dir_like(root):
+            git_dir_passed = root
+        passed.append(root)
+    else:
+        if git_dir_passed is not None:
+            raise Unkeyed
+        return None
+    if git_dir_passed is not None:
+        # In the root's own `.git` directory, reached in whatever case, the repository is the
+        # root's. Anywhere else it is a bare layout below the root: git stops there and reads
+        # that folder's own config.
+        own = os.stat(entry)
+        if not (stat.S_ISDIR(mode) and any(os.path.samestat(own, os.stat(p)) for p in passed)):
+            raise Unkeyed
+        return Repository(root, root, git_dir_passed, True)
+    if stat.S_ISDIR(mode):
+        return Repository(root, root, entry, False)
+    if stat.S_ISLNK(mode):
+        return Repository(root, root, Path(os.path.realpath(entry)), False)
+    git_dir = _gitfile_target(entry) if stat.S_ISREG(mode) else None
+    main = _main_checkout(git_dir, root) if git_dir else None
+    return Repository(root, main or root, git_dir, False)
 
 
 def _trusted_paths(home: Path) -> frozenset[str]:
@@ -95,20 +212,56 @@ def _read_trusted(record_path: Path, mtime_ns: int, size: int) -> frozenset[str]
     )
 
 
-def _covered(directory: Path, root: Path | None, home: Path) -> bool:
+def _trusted(path: Path, home: Path) -> bool:
+    """Whether `path` is a folder the owner trusted: the same directory on disk as a recorded
+    path, so a path in another case or Unicode form is that folder and `app ` is not `app`."""
     trusted = _trusted_paths(home)
-    if root is not None:
-        return str(root) in trusted
-    folder = directory.resolve()
-    return any(str(p) in trusted for p in (folder, *folder.parents))
+    if str(path) in trusted:
+        return True
+    try:
+        mine = os.stat(path)
+    except OSError:
+        return False
+    for recorded in trusted:
+        try:
+            # A recorded path stands for the folder it spells, not for one a symlink in it
+            # leads to: none of its components may be a symlink.
+            if (
+                os.path.samestat(mine, os.lstat(recorded))
+                and os.path.realpath(recorded) == recorded
+            ):
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
+def _trusted_repository(directory: Path, home: Path) -> Repository | None:
+    try:
+        repository = locate(directory)
+    except Unkeyed:
+        return None
+    return repository if repository and _trusted(repository.key, home) else None
+
+
+def _workspace_trusted(directory: Path, home: Path) -> bool:
+    try:
+        repository = locate(directory)
+    except Unkeyed:
+        return False
+    if repository is not None:
+        return _trusted(repository.key, home)
+    folder = Path(os.path.realpath(directory))
+    return any(_trusted(path, home) for path in (folder, *folder.parents))
+
+
+async def trusted_repository(directory: Path, home: Path | None = None) -> Repository | None:
+    """The repository holding `directory` when the owner trusted it in Claude Code; None outside
+    git, in a repository not trusted, and where the layout has no key."""
+    return await asyncio.to_thread(_trusted_repository, directory, home or Path.home())
 
 
 async def workspace_trusted(directory: Path, home: Path | None = None) -> bool:
     """Whether the owner trusted `directory` in Claude Code, as the terminal would decide; False
-    when git cannot tell whether it is in a repository."""
-    try:
-        root = await repository_root(directory)
-    except GitUnavailable as exc:
-        logger.warning("could not ask git about %s: %s", directory, exc)
-        return False
-    return await asyncio.to_thread(_covered, directory, root, home or Path.home())
+    where git would find a repository that no trusted path stands for."""
+    return await asyncio.to_thread(_workspace_trusted, directory, home or Path.home())

@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage
 
 from code_with_slack.render.escape import mrkdwn_escape
+from code_with_slack.trust import Repository
 
 if TYPE_CHECKING:  # sessions imports this module
     from code_with_slack.sessions import ClaudeClient
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 USAGE_TTL = 300.0
 # `/usage` answers in seconds; past this the probe gives up, so the footer never stops refreshing.
 USAGE_TIMEOUT = 60.0
+# For every git call of one footer together: the reply waits for it.
 GIT_TIMEOUT = 5.0
 # The footer's fields that come before the folder.
 SESSION = ("Model", "Effort")
@@ -157,38 +159,35 @@ class UsageProbe:
             await client.disconnect()
 
 
-async def _git(cwd: Path, *args: str) -> str | None:
-    """`git` run in `cwd`: its output, or None when it fails or outlasts `GIT_TIMEOUT`."""
+async def _git(repository: Repository, *args: str) -> str | None:
+    """`git` on `repository`: its output, or None when it fails. `git_state` holds the time
+    limit."""
     try:
         proc = await asyncio.create_subprocess_exec(
             "git",
-            # The folder is wherever the session went, maybe a repo just cloned: a diff there
-            # must not run the repo's own fsmonitor command.
+            # A diff must not run the repo's own fsmonitor command.
             "-c",
             "core.fsmonitor=false",
-            "-C",
-            str(cwd),
+            # Named, never found: git left to search from the folder would take a planted `.git`
+            # file, a bare layout or a `core.worktree` at its word (git(1), `--git-dir`).
+            "--git-dir",
+            str(repository.git_dir),
             *args,
+            cwd=repository.root,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
     except OSError:
         return None
     try:
-        out, _ = await asyncio.wait_for(proc.communicate(), GIT_TIMEOUT)
-    except TimeoutError:
-        return None
+        out, _ = await proc.communicate()
     finally:
-        # Also when the footer is cancelled (the session closing): no git left unreaped.
+        # Also when the time limit or the session closing cancels the footer: no git left
+        # unreaped.
         if proc.returncode is None:
             proc.kill()
             await proc.wait()
     return out.decode(errors="replace") if proc.returncode == 0 else None
-
-
-async def git_branch(cwd: Path) -> str | None:
-    out = await _git(cwd, "branch", "--show-current")
-    return out.strip() or None if out else None
 
 
 def shortstat_lines(out: str) -> tuple[int, int]:
@@ -198,27 +197,59 @@ def shortstat_lines(out: str) -> tuple[int, int]:
     return (int(insertions[1]) if insertions else 0, int(deletions[1]) if deletions else 0)
 
 
-async def git_changes(cwd: Path) -> tuple[int, int] | None:
+async def _changes(repository: Repository) -> tuple[int, int] | None:
     """Lines inserted and deleted since the last commit, staged and unstaged, as ccstatusline's
-    git-changes counts them for the terminal (untracked files not counted). None outside a repo.
+    git-changes counts them for the terminal (untracked files not counted). None where there is
+    no work tree.
 
     Plumbing only: `git diff` refreshes and rewrites the index under `index.lock` (measured on
     git 2.54, `--no-optional-locks` included), and a lock left by a killed diff would stop every
-    `git add` and commit in the repo. `diff-files` and `diff-index` never write it."""
-    unstaged = await _git(cwd, "diff-files", "--shortstat")
+    `git add` and commit in the repo. `diff-files` and `diff-index` never write it.
+
+    A submodule counts by its commit alone. Without `--ignore-submodules=dirty` git runs
+    `git status` inside every nested repository the index names, under that repository's own
+    config and filters (measured on git 2.54, 2026-10-04).
+    """
+    unstaged = await _git(repository, "diff-files", "--shortstat", "--ignore-submodules=dirty")
     if unstaged is None:
         return None
-    staged = await _git(cwd, "diff-index", "--cached", "--shortstat", "HEAD")
+    # `--`: git runs at the root, where a file named HEAD would make the revision ambiguous.
+    staged = await _git(repository, "diff-index", "--cached", "--shortstat", "HEAD", "--")
     if staged is None:
         # No commit yet: what is staged is compared with the empty tree, as `git diff --cached`.
-        empty = await _git(cwd, "hash-object", "-t", "tree", "/dev/null")
+        empty = await _git(repository, "hash-object", "-t", "tree", "/dev/null")
         if empty is None:
             return None
-        staged = await _git(cwd, "diff-index", "--cached", "--shortstat", empty.strip())
+        staged = await _git(repository, "diff-index", "--cached", "--shortstat", empty.strip())
         if staged is None:
             return None
     (added, removed), (added_staged, removed_staged) = map(shortstat_lines, (unstaged, staged))
     return added + added_staged, removed + removed_staged
+
+
+async def git_state(
+    here: Path, repository: Callable[[Path], Awaitable[Repository | None]]
+) -> tuple[str | None, tuple[int, int] | None]:
+    """The branch and the changes of the repository holding `here`, each None when unknown.
+
+    `repository` answers only for a repository the owner trusted in Claude Code
+    (`code_with_slack.trust.trusted_repository`): anywhere else no git runs, since a diff runs
+    the filters a repository's config names. Every call shares one `GIT_TIMEOUT`.
+    """
+    branch: str | None = None
+    changes: tuple[int, int] | None = None
+    try:
+        async with asyncio.timeout(GIT_TIMEOUT):
+            found = await repository(here)
+            if found is None or found.git_dir is None:
+                return None, None
+            out = await _git(found, "branch", "--show-current")
+            branch = out.strip() or None if out else None
+            if not found.inside_git_dir:
+                changes = await _changes(found)
+    except TimeoutError:
+        pass
+    return branch, changes
 
 
 def effort_change(output: str) -> tuple[bool, str | None]:

@@ -43,6 +43,7 @@ from code_with_slack.sessions import (
 )
 from code_with_slack.setup import Choice
 from code_with_slack.state import StateStore
+from code_with_slack.trust import Repository, Unkeyed, locate
 from probe.claims import Observation
 from tests.fakes import FakeSlack, card_of
 
@@ -128,6 +129,15 @@ class Stage:
         async def trusted(directory: Path) -> bool:
             return directory == workdir
 
+        async def repository(directory: Path) -> Repository | None:
+            # The probe's own folders stand for trusted ones: the "working folder" scene makes
+            # its repo there, and the owner's record of trusted folders knows none of them.
+            try:
+                found = await asyncio.to_thread(locate, directory)
+            except Unkeyed:
+                return None
+            return found if found and found.key.is_relative_to(workdir) else None
+
         async def no_usage() -> str:
             return ""
 
@@ -140,6 +150,7 @@ class Stage:
                 usage=UsageCache(no_usage),
                 client_factory=self.client,
                 workspace_trusted=trusted,
+                trusted_repository=repository,
             )
         )
         opened = self.manager.open(CHANNEL, THREAD)

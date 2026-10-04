@@ -62,8 +62,7 @@ from code_with_slack.footer import (
     effort_change,
     format_footer,
     format_status_fields,
-    git_branch,
-    git_changes,
+    git_state,
     session_tokens,
 )
 from code_with_slack.guards import Identity
@@ -92,7 +91,7 @@ from code_with_slack.render.status import Status, StatusReaction, ThreadStatus
 from code_with_slack.resume import by_last_activity
 from code_with_slack.setup import DEFAULT, Choice
 from code_with_slack.state import StateStore
-from code_with_slack.trust import workspace_trusted
+from code_with_slack.trust import Repository, trusted_repository, workspace_trusted
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +294,8 @@ class SessionDeps:
     holds: Holds = field(default_factory=Holds)
     client_factory: ClientFactory = default_client_factory
     workspace_trusted: Callable[[Path], Awaitable[bool]] = workspace_trusted
+    # The footer's git runs only on what this returns: a repository the owner trusted.
+    trusted_repository: Callable[[Path], Awaitable[Repository | None]] = trusted_repository
     sessions_of: Callable[[Path], list[SDKSessionInfo]] = directory_sessions
     # Shared by every ReplySink in the process, so their chat.update writes stay under one
     # app-wide budget together; a fresh default here gives each test its own.
@@ -2096,7 +2097,7 @@ class ThreadSession:
                     "could not read the context usage in %s: %s", self.channel_id, describe(exc)
                 )
         here = self.working_directory or self.directory
-        branch, changes = await asyncio.gather(git_branch(here), git_changes(here))
+        branch, changes = await git_state(here, self._deps.trusted_repository)
         return FooterData(
             bypass=self.bypass,
             branch=branch,

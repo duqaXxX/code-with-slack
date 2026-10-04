@@ -21,6 +21,8 @@ from claude_agent_sdk.types import PermissionResult, ToolPermissionContext
 from slack_sdk.web.async_client import AsyncWebClient
 from slack_sdk.web.async_slack_response import AsyncSlackResponse
 
+from code_with_slack.trust import Repository, Unkeyed, locate
+
 FIXTURES = Path(__file__).parent / "fixtures"
 OWNER = "U000ALICE"
 STRANGER = "U000BOB"
@@ -32,6 +34,15 @@ BOT = "U000BOT"
 # The root message's ts of a synthetic thread: a Slack thread_ts is that message's own epoch time.
 THREAD = "1780000000.000001"
 OTHER_THREAD = "1780000000.000002"
+
+
+async def any_repository(directory: Path) -> Repository | None:
+    """`trust.trusted_repository` for a test about something else: every repository counts as
+    trusted, and the owner's own `~/.claude.json` is never read."""
+    try:
+        return await asyncio.to_thread(locate, directory)
+    except Unkeyed:
+        return None
 
 
 def sdk_messages(name: str) -> list[Message]:
