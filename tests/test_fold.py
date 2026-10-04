@@ -137,6 +137,29 @@ def test_an_edit_that_ends_with_a_preview_keeps_the_card_that_showed_it() -> Non
     assert shown(fold.task(call("b", "Bash"))) == [("fold:b", "in_progress", "Bash: b")]
 
 
+def test_an_edit_that_arrives_ended_ends_the_run_and_is_not_counted() -> None:
+    # Issue #136: the renderer sends an Edit only once it has ended.
+    fold = Fold()
+    fold.task(call("a", "Bash"))
+    fold.task(call("a", "Bash", "complete"))
+    view = Preview("Update(notes.txt)", "Added 1 line", "1 +x", "diff")
+    done = call("e", "Edit", "complete", preview=view)
+    assert fold.task(done) == [done]  # as it came: nothing of the run changes
+    assert shown(fold.task(call("b", "Bash"))) == [("fold:b", "in_progress", "Bash: b")]
+
+
+def test_an_edit_that_arrives_failed_joins_the_run_as_a_call_that_ended() -> None:
+    fold = Fold()
+    fold.task(call("a", "Bash"))
+    fold.task(call("a", "Bash", "complete"))
+    cards = fold.task(call("e", "Edit", "error", output="No such file"))
+    assert shown(cards) == [
+        ("fold:a", "complete", "Ran 1 shell command"),
+        ("now:e", "error", "Edit: e · No such file"),
+    ]
+    assert cards[0].folded == "✓ Ran 1 shell command · ✗ Edit"
+
+
 def test_a_shown_call_that_becomes_a_task_takes_the_second_card() -> None:
     fold = Fold()
     fold.task(call("a", "Read", "complete"))

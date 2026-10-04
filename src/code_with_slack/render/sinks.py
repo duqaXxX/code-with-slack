@@ -181,15 +181,18 @@ def preview_blocks(body: str) -> list[dict[str, Any]]:
     return [{"type": "markdown", "text": f"```\n{chunk}\n```"} for chunk in split(body) if chunk]
 
 
-def diff_containers(summary: str, body: str) -> list[dict[str, Any]]:
-    """A diff under its call's card, collapsed: a full-width container per MESSAGE_LIMIT piece of
-    the body, titled with the preview's sentence, closed until the owner opens it. The diff sits
-    in the message itself, so it opens after a restart too."""
+def preview_containers(
+    title: str, body: str, *, subtitle: str = "", language: str = "diff"
+) -> list[dict[str, Any]]:
+    """A preview's body, collapsed: a full-width container per MESSAGE_LIMIT piece of it, closed
+    until the owner opens it. A call with no card is titled with its line and says the preview's
+    sentence under it; under a card, which is the call's line, the title is the sentence alone.
+    The body sits in the message itself, so it opens after a restart too."""
     return [
         {
             "type": "container",
-            # The card above is the call's line: the title says only what the diff holds.
-            "title": {"type": "plain_text", "text": summary[:150]},
+            "title": {"type": "plain_text", "text": title[:150]},
+            **({"subtitle": {"type": "plain_text", "text": subtitle[:150]}} if subtitle else {}),
             "width": "full",
             "is_collapsible": True,
             "default_collapsed": True,
@@ -201,7 +204,7 @@ def diff_containers(summary: str, body: str) -> list[dict[str, Any]]:
                     "elements": [
                         {
                             "type": "rich_text_preformatted",
-                            "language": "diff",
+                            **({"language": language} if language else {}),
                             "elements": [{"type": "text", "text": chunk}],
                         }
                     ],
@@ -362,6 +365,7 @@ class _Tool:
     update: TaskUpdate
     rev: int = 0
     _pieces: list[str] = field(default_factory=list, init=False, repr=False)
+    _carded: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.set(self.update)
@@ -377,6 +381,15 @@ class _Tool:
             self._pieces = [plain_lines(view.body)]
         else:
             self._pieces = [c for c in split(view.body) if c]
+        if view is None or view.plain or not self._pieces:
+            self._carded = True
+
+    @property
+    def cardless(self) -> bool:
+        """Whether the tool is its preview alone: an Edit or a Write that reached the reply
+        already ended well. A state that needs a card (running, failed, stopped, a preview with
+        no body) gives it one for good, since a stream cannot take a card back."""
+        return not self._carded
 
     def pieces(self) -> list[str]:
         """What follows the tool's card: the terminal's preview of a call that ended well, cut
@@ -385,7 +398,8 @@ class _Tool:
 
     @property
     def extent(self) -> int:
-        """The elements of the tool: its card, then its preview pieces."""
+        """The elements of the tool: its card (counted even when `cardless` draws none, so a
+        cursor reads the same either way), then its preview pieces."""
         return 1 + len(self.pieces())
 
 
@@ -439,16 +453,19 @@ def card_block(update: TaskUpdate) -> dict[str, Any]:
 
 
 def piece_blocks(tool: _Tool, index: int) -> list[dict[str, Any]]:
-    """Piece `index` (1 is the first) of a tool's preview as blocks: a collapsed container for a
-    diff, code blocks for a new file's first lines, a context block for lines of words (a
-    question's answers), each indented under its card and shown as written."""
+    """Piece `index` (1 is the first) of a tool's preview as blocks. With no card: a collapsed
+    container titled with the call's line. Under a card: a collapsed container for a diff, code
+    blocks for a new file's first lines, a context block for lines of words (a question's
+    answers), each indented under its card and shown as written."""
     view = tool.update.shown_preview
     assert view is not None
     body = tool.pieces()[index - 1]
     if view.plain:
         return [context_block(body)]
+    if tool.cardless:
+        return preview_containers(view.title, body, subtitle=view.summary, language=view.language)
     if view.language == "diff":
-        return diff_containers(view.summary, body)
+        return preview_containers(view.summary, body)
     return preview_blocks(body)
 
 
@@ -881,10 +898,10 @@ class ReplySink:
 
     @staticmethod
     def _tool_elements(tool: _Tool, floor: int, ceil: int | None) -> tuple[bool, range]:
-        """Whether a span takes a tool's card, and which of its preview pieces."""
+        """Whether a span takes a tool's card, if it has one, and which of its preview pieces."""
         extent = tool.extent
         top = extent if ceil is None else min(extent, ceil)
-        return floor == 0 and top > 0, range(max(floor, 1), top)
+        return floor == 0 and top > 0 and not tool.cardless, range(max(floor, 1), top)
 
     def _closing_blocks(self) -> list[dict[str, Any]]:
         """The footer below a divider, and after it, on the thread's latest reply only, what

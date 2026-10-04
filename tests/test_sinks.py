@@ -1021,23 +1021,65 @@ async def test_a_card_says_what_the_tool_line_said(slack: FakeSlack) -> None:
     ]
 
 
-async def test_a_diff_preview_follows_its_card_as_a_blocks_chunk(slack: FakeSlack) -> None:
+async def test_an_edit_that_ended_well_is_one_container_with_no_card(slack: FakeSlack) -> None:
+    # Issue #136: the call's line is the container's title, its sentence the subtitle.
     sink = reply(slack)
     view = Preview("Update(a.txt)", "Added 1 line", "+\U0001f7e9 1 x", "diff")
     await sink.task(tool("e", "Edit", preview=view))
     await settled()
     [start] = slack.calls_to("chat.startStream")
-    card, blocks = start["chunks"]
-    assert card == {
-        "type": "task_update",
-        "id": "e",
-        "title": "Update(a.txt)",
-        "status": "complete",
-        "output": "Added 1 line",
-    }
+    [blocks] = start["chunks"]
     assert blocks["type"] == "blocks"
     [container] = blocks["blocks"]
     assert container["type"] == "container" and container["is_collapsible"] is True
+    assert container["title"] == {"type": "plain_text", "text": "Update(a.txt)"}
+    assert container["subtitle"] == {"type": "plain_text", "text": "Added 1 line"}
+
+
+async def test_a_new_file_that_was_written_is_one_container_with_no_card(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    view = Preview("Write(new.txt)", "Wrote 2 lines to new.txt", "1 alpha\n2 beta")
+    await sink.task(tool("w", "Write", preview=view))
+    await settled()
+    [start] = slack.calls_to("chat.startStream")
+    [blocks] = start["chunks"]
+    [container] = blocks["blocks"]
+    assert container["title"]["text"] == "Write(new.txt)"
+    assert container["subtitle"]["text"] == "Wrote 2 lines to new.txt"
+    assert container["default_collapsed"] is True
+    [pre] = container["child_blocks"][0]["elements"]
+    assert "language" not in pre  # no highlighting asked for lines that are no diff
+    assert sinks.block_text(container) == "1 alpha\n2 beta"
+
+
+async def test_a_diff_under_a_card_that_already_showed_keeps_the_sentence_as_title(
+    slack: FakeSlack,
+) -> None:
+    # A stream cannot take a card back: a call that showed one keeps it, and its container
+    # does not repeat the call's line (issue #110).
+    sink = reply(slack)
+    view = Preview("Update(a.txt)", "Added 1 line", "+x", "diff")
+    await sink.task(tool("e", "Edit", "in_progress"))
+    await settled()
+    await sink.task(tool("e", "Edit", preview=view))
+    await settled()
+    [append] = slack.calls_to("chat.appendStream")
+    card, blocks = append["chunks"]
+    assert card["type"] == "task_update" and card["title"] == "Update(a.txt)"
+    [container] = blocks["blocks"]
+    assert container["title"]["text"] == "Added 1 line" and "subtitle" not in container
+
+
+async def test_a_preview_with_no_lines_keeps_its_card(slack: FakeSlack) -> None:
+    # An empty new file has nothing to put in a container: the card says the sentence.
+    sink = reply(slack)
+    await sink.task(
+        tool("w", "Write", preview=Preview("Write(e.txt)", "Wrote 0 lines to e.txt", ""))
+    )
+    await settled()
+    [start] = slack.calls_to("chat.startStream")
+    [card] = start["chunks"]
+    assert card["type"] == "task_update" and card["output"] == "Wrote 0 lines to e.txt"
 
 
 async def test_a_new_file_preview_follows_its_card_as_a_code_block(slack: FakeSlack) -> None:
@@ -1092,32 +1134,32 @@ async def test_an_edit_and_a_write_show_as_the_terminal_shows_them(slack: FakeSl
     for message in sdk_messages("edit-write"):
         await renderer.feed(message)
     await renderer.close(None)
-    cards = slack.message_cards()[0]
-    assert [
-        (c["title"], c["status"]) for c in cards if c["title"].startswith(("Write(", "Upd"))
-    ] == [
-        ("Write(new.txt)", "complete"),
-        ("Update(notes.txt)", "complete"),
-        ("Write(notes.txt)", "complete"),
-    ]
-    assert cards[0]["output"] == "Wrote 15 lines to new.txt"
     chunks = [c for _, a in slack.calls if "chunks" in a for c in a["chunks"]]
-    diffs = [
-        b for c in chunks if c["type"] == "blocks" for b in c["blocks"] if b["type"] == "container"
+    # Each one that ended well is a container alone; no card ever named it (issue #136).
+    cards = [c for c in chunks if c["type"] == "task_update"]
+    assert not [c["title"] for c in cards if c["title"].startswith(("Write", "Update("))]
+    assert [(c["title"], c["status"]) for c in cards if c["title"].startswith("Edit")] == [
+        (
+            "Edit: /home/dev/project/notes.txt · "
+            "<tool_use_error>String to replace not found in file.",
+            "error",
+        )
     ]
+    shown = [b for c in chunks if c["type"] == "blocks" for b in c["blocks"]]
+    assert [b["type"] for b in shown] == ["container"] * 3
+    assert [(b["title"]["text"], b["subtitle"]["text"]) for b in shown] == [
+        ("Write(new.txt)", "Wrote 15 lines to new.txt"),
+        ("Update(notes.txt)", "Added 1 line, removed 1 line"),
+        ("Write(notes.txt)", "Added 2 lines, removed 3 lines"),
+    ]
+    new_file, *diffs = shown
     assert [sinks.block_text(d) for d in diffs] == [
         "    1 alpha\n-\U0001f7e5 2 beta\n+\U0001f7e9 2 gamma\n    3 delta",
         "-\U0001f7e5 1 alpha\n-\U0001f7e5 2 gamma\n-\U0001f7e5 3 delta\n"
         "+\U0001f7e9 1 one\n+\U0001f7e9 2 two",
     ]
-    code = [
-        b["text"]
-        for c in chunks
-        if c["type"] == "blocks"
-        for b in c["blocks"]
-        if b["type"] == "markdown"
-    ]
-    assert code[0].splitlines()[1:3] == [" 1 1", " 2 2"] and "… +5 lines" in code[0]
+    lines = sinks.block_text(new_file).splitlines()
+    assert lines[:2] == [" 1 1", " 2 2"] and lines[-1] == "… +5 lines"
 
 
 async def test_a_stopped_message_shows_its_previews_as_blocks(slack: FakeSlack) -> None:
@@ -1132,14 +1174,9 @@ async def test_a_stopped_message_shows_its_previews_as_blocks(slack: FakeSlack) 
     await sink.text("more")
     await settled()
     blocks = slack.calls_to("chat.update")[-1]["blocks"]
-    assert [b["type"] for b in blocks] == [
-        "task_card",
-        "container",
-        "task_card",
-        "markdown",
-        "markdown",
-    ]
-    assert blocks[3]["text"] == "```\n1 hi\n```"
+    assert [b["type"] for b in blocks] == ["container", "container", "markdown"]
+    assert [b["title"]["text"] for b in blocks[:2]] == ["Update(a.txt)", "Write(b.txt)"]
+    assert sinks.block_text(blocks[1]) == "1 hi"
 
 
 async def test_an_answered_question_shows_in_the_reply_where_it_was_answered(
@@ -1434,7 +1471,7 @@ def test_a_task_card_block_reads_back_as_the_card_it_was() -> None:
 
 
 def test_a_diff_shows_collapsed_and_full_width() -> None:
-    [block] = sinks.diff_containers("Added 1 line", "+\U0001f7e9 1 x")
+    [block] = sinks.preview_containers("Added 1 line", "+\U0001f7e9 1 x")
     assert block["is_collapsible"] is True and block["default_collapsed"] is True
     assert block["width"] == "full"
     [child] = block["child_blocks"]
@@ -1444,21 +1481,27 @@ def test_a_diff_shows_collapsed_and_full_width() -> None:
 
 def test_a_diff_is_titled_with_its_sentence_alone() -> None:
     # The call's line is the card above it (issue #110): the container must not say it again.
-    [block] = sinks.diff_containers("Added 1 line", "+x")
+    [block] = sinks.preview_containers("Added 1 line", "+x")
     assert block["title"] == {"type": "plain_text", "text": "Added 1 line"}
     assert "rich_text_title" not in block and "subtitle" not in block
 
 
+def test_a_container_with_no_card_says_the_sentence_under_the_calls_line() -> None:
+    [block] = sinks.preview_containers("Update(a.txt)", "+x", subtitle="s" * 200)
+    assert block["title"]["text"] == "Update(a.txt)"
+    assert block["subtitle"] == {"type": "plain_text", "text": "s" * 150}
+
+
 def test_a_diff_past_a_message_continues_in_the_next() -> None:
     body = "\n".join(f"+\U0001f7e9 {i} {'x' * 90}" for i in range(1, 400))
-    blocks = sinks.diff_containers("Added 399 lines", body)
+    blocks = sinks.preview_containers("Added 399 lines", body)
     assert len(blocks) > 1
     assert all(len(sinks.block_text(b)) <= sinks.MESSAGE_LIMIT for b in blocks)
     assert "\n".join(sinks.block_text(b) for b in blocks) == body  # nothing lost at the cuts
 
 
 def test_a_long_title_is_cut_to_slacks_limit() -> None:
-    [block] = sinks.diff_containers("x" * 200, "+x")
+    [block] = sinks.preview_containers("x" * 200, "+x")
     assert len(block["title"]["text"]) == 150
 
 
@@ -2324,7 +2367,7 @@ async def test_late_words_never_remove_a_preview_that_was_shown(slack: FakeSlack
 
 async def test_late_cards_never_remove_a_preview_that_was_shown(slack: FakeSlack) -> None:
     sink = reply(slack)
-    for i in range(22):  # a card and a preview each: 44 blocks
+    for i in range(44):  # a preview each, with no card: 44 blocks
         await sink.task(tool(f"w{i}", "Write", preview=preview_of(1)))
     await settled()
     await sink.finish([])
@@ -2334,9 +2377,9 @@ async def test_late_cards_never_remove_a_preview_that_was_shown(slack: FakeSlack
     await settled()
     assert len(slack.created_ts) == 1
     blocks = slack.calls_to("chat.update")[-1]["blocks"]
-    assert len([b for b in blocks if marker(0) in sinks.block_text(b)]) == 22
+    assert len([b for b in blocks if marker(0) in sinks.block_text(b)]) == 44
     assert CUT_NOTE not in blocks
-    assert sorted(cards_of(blocks)) == sorted(f"w{i}" for i in range(22))  # none of the late
+    assert cards_of(blocks) == {}  # none of the late
 
 
 async def test_a_late_preview_never_removes_the_one_a_later_call_showed(
@@ -2353,7 +2396,7 @@ async def test_a_late_preview_never_removes_the_one_a_later_call_showed(
     assert len(slack.created_ts) == 1
     blocks = slack.calls_to("chat.update")[-1]["blocks"]
     assert shows(blocks, marker(94))  # b's preview, whole
-    assert cards_of(blocks) == {"a": "complete", "b": "complete"}
+    assert cards_of(blocks) == {"a": "complete"}  # b never had a card
     assert CUT_NOTE in blocks
     assert sum(len(sinks.block_text(b)) for b in blocks) <= sinks.MESSAGE_LIMIT + 100
 
