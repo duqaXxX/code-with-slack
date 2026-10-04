@@ -74,7 +74,7 @@ than one can be open at once, since a background task's own reply can outlive th
 started it; each `ReplySink` owns exactly one entry, added when its stream starts, replaced on a
 continuation, removed once the reply's end is known to have landed or it has given up retrying
 for good); `requests`, the ts of
-every approval, question and session setup message still carrying buttons (added on post, removed on
+every approval, question and D8 hold message still carrying buttons (added on post, removed on
 delete or answer); `status`, the root's reaction name while it is ⏳ or ✋ (cleared once ✅ or ❌ is
 requested). All three default to absent ("nothing open") for a v2 file written before they
 existed, and are ignored by code that reads a v2 file without knowing them: the version stays 2.
@@ -489,14 +489,22 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   `!stop` interrupts the running turn, denies its pending approvals and stops the thread's
   background tasks (`ClaudeSDKClient.stop_task`), then shows `✅` on the root through
   `ThreadSession._react`, which clears `_error_standing`: a stop the owner gave is not an error.
-- Sessions in one folder are independent: a message is sent whether or not another live
-  session, of any channel, is working in the same folder, with no question and no notice about
-  that session, as with two terminals open in one folder. The session setup below is asked as
-  for any first prompt.
-- Session setup (issue #74): a session's first prompt is held before anything is
+- D8: before a message would wake an idle session (`slack_app.submit_to_session`), a live session
+  of any other thread, of any channel, whose resolved folder is the same and is not idle
+  (`SessionManager.working_in`) makes the daemon ask first: `Another session is working in this
+  folder: <link>. Send anyway?`, with Continue and Cancel (`slack_app.hold_before_sending`, kept
+  in `hold.Holds`, memory only). The wait runs inside `submit_to_session`'s own `arrival_lock`, so
+  a later message of the same thread queues behind it rather than opening a second hold. `!stop`
+  inside the held thread or a top-level `!stop` of its channel cancels the wait the same way
+  Cancel does (`Holds.cancel`); so does `SessionManager.drain`, which also cancels every hold
+  still open when a restart starts (a hold opened after that point checks `sessions.draining`
+  itself, since the drain never revisits it). Either way the owner gets `Not sent.`; a hold a
+  message could not post is cancelled and told `HOLD_UNPOSTED`, failing closed rather than
+  sending into a folder another session is using.
+- Session setup (issue #74): a session's first prompt is held before D8 and before anything is
   sent: a top-level message that opens a session (a prompt, files, or a `!name` passthrough), and
   a reply in a thread where nothing was ever sent (`ThreadSession.never_ran`: no turn queued and
-  no stored session id), as after a cancelled setup. `slack_app.setup_before_sending`
+  no stored session id), as after a cancelled setup or a D8 Cancel. `slack_app.setup_before_sending`
   connects the client, then posts one message in the thread (`setup.setup_blocks`): a header
   (`texts.SETUP_HEADER`) and one `actions` block (block_id `setup`, one row that Slack wraps on a
   narrow screen) holding the four controls. A Model select lists the CLI's own models
@@ -520,19 +528,15 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   2.1.285), and bypass goes through `set_bypass` when the choice differs from what the live client
   effectively runs (`_client_bypass`: the choice, or the folder's own bypass). The message then
   becomes one summary line, written inside the same wait (the cancel window covers the limiter
-  wait; a cancel that already deleted the message skips the edit), and stays; the held message goes on unchanged. The wait is `slack_app.ask_owner` over
-  `hold.Holds`, in memory only, and runs inside `submit_to_session`'s own `arrival_lock`, so a
-  later message of the same thread queues behind it rather than opening a second setup. The entry stays in `Holds` while the answer is applied, so `!stop`, a
-  top-level `!stop` and a drain cancel it then too (`Pending.cancelled`; `SessionManager.drain`
-  cancels every setup still open when a restart starts, and a message that arrives after that
-  point is refused by `submit_to_session`'s own `sessions.draining` check, since the drain never
-  revisits it): nothing is sent, the
+  wait; a cancel that already deleted the message skips the edit), and stays; the held message goes on unchanged. The wait shares `slack_app.ask_owner` and
+  `hold.Holds` with D8. The entry stays in `Holds` while the answer is applied, so `!stop`, a
+  top-level `!stop` and a drain cancel it then too (`Pending.cancelled`): nothing is sent, the
   message is deleted, the owner gets `Not sent.` and `!stop` does not say nothing is running. An
-  answer that arrives before `chat.postMessage` has returned is applied the same way. A setup
-  that cannot be posted is told `HOLD_UNPOSTED` and nothing is sent. A failed
+  answer that arrives before `chat.postMessage` has returned is applied the same way. A failed
   apply removes the message and the error reaches the owner. Whatever an unsent Start applied
   (stored effort, bypass, the client with its effort and model) is undone by
-  `ThreadSession.forget_setup`, called when a setup is cancelled or fails, and before each new setup, so the setup asked again shows the defaults. A setup shows
+  `ThreadSession.forget_setup`, called when a setup is cancelled or fails, when D8 cancels after
+  Start, and before each new setup, so the setup asked again shows the defaults. A setup shows
   ✋ and pauses the idle timer; crash repair deletes a setup message left standing.
 - Each `ThreadSession` keeps one `render.status.StatusReaction` on its own root message (D10),
   which `thread_ts` always is: a top-level owner message, or the owner's own `!resume` message.

@@ -3788,7 +3788,25 @@ async def test_a_close_right_after_a_turn_ends_leaves_done_alone_on_the_root(
     assert Status.DONE.value not in removed[removed.index(Status.WORKING.value) :]
 
 
-# --- Hold reactions (the session setup's ✋) ---
+# --- D8: hold reactions (Phase 3 final fix wave) ---
+
+
+async def test_hold_end_reacts_from_the_thread_s_history_after_a_client_reset(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # `_client is None` alone is not "brand-new thread": a D9 idle close or a restart evicts the
+    # object and hands the thread a fresh one on its next lookup, `_client` reset but its
+    # history (a stored session id) intact.
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
+    assert h.state.thread(CHANNEL, THREAD).session_id is not None
+    session._client = None  # what a D9 idle close or a restart hands the thread's next lookup
+    session.hold_start()
+    await asyncio.sleep(0)  # let the WAITING reaction's fire-and-forget task run
+    await session.hold_end(continued=False)
+    await asyncio.sleep(0)
+    assert h.reactions()[-1] == Status.DONE.value
 
 
 async def test_hold_end_clears_the_reaction_for_a_thread_that_never_ran(
@@ -3802,6 +3820,72 @@ async def test_hold_end_clears_the_reaction_for_a_thread_that_never_ran(
     await session.hold_end(continued=False)
     await asyncio.sleep(0)
     assert session._status.current is None
+
+
+async def test_hold_keeps_a_standing_error_and_cancel_restores_it(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # `hold_start`'s own WAITING reaction must not reset `_error_standing` (it did, through
+    # `_react`), or Cancel right after turns a standing ❌ back into ✅: a hold is not new work.
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("go")).done.wait(), 2)
+    h.clients[0].inject([EndOfStream()])  # the CLI process is gone: `_abandon(error=True)`
+    await until(lambda: session._client is None)
+    assert h.reactions()[-1] == Status.ERROR.value
+    session.hold_start()
+    assert session._error_standing is True  # not reset by the WAITING reaction
+    await asyncio.sleep(0)
+    await session.hold_end(continued=False)
+    await asyncio.sleep(0)
+    assert h.reactions()[-1] == Status.ERROR.value  # Cancel restores it, not ✅
+
+
+async def test_cancel_while_another_approval_is_open_shows_waiting_not_working(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # hold_end's not-idle branch reacted WORKING unconditionally; a parallel approval this
+    # thread still holds must keep showing ✋, not ⏳ (`_react_waiting_or_working`).
+    h = harness_for(
+        {"turns": [[CanUseToolCall("Bash", {"command": "ls"}), *sdk_messages("tools")]]}
+    )
+    session = h.session()
+    turn = await session.submit("list the files")
+    await until(lambda: bool(h.approvals._pending))
+    assert session.waiting_for_owner  # the approval is open
+    session.hold_start()
+    await asyncio.sleep(0)
+    await session.hold_end(continued=False)
+    await asyncio.sleep(0)
+    assert h.reactions()[-1] == Status.WAITING.value  # not WORKING: the approval is still open
+    approval_id = next(iter(h.approvals._pending))
+    assert h.approvals.resolve(approval_id, CHANNEL, THREAD, Approve()) is not None
+    await asyncio.wait_for(turn.done.wait(), 2)
+
+
+async def test_working_in_does_not_resolve_a_path_on_every_lookup(
+    harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `working_in` used to call `Path.resolve()` on the event loop for every live session on
+    # every message; each session's folder is now cached once, at construction.
+    h = harness_for(
+        {"turns": [[CanUseToolCall("Bash", {"command": "ls"}), *sdk_messages("tools")]]}
+    )
+    first = h.session(THREAD)
+    second = h.session(OTHER_THREAD)
+    await first.submit("clean")
+    await until(lambda: bool(h.approvals._pending))  # first is genuinely busy now
+
+    def boom(self: Path, *args: Any, **kwargs: Any) -> Path:
+        raise AssertionError("working_in must not resolve a path on every lookup")
+
+    monkeypatch.setattr(Path, "resolve", boom)
+    try:
+        assert h.manager.working_in(besides=second) is first
+    finally:
+        monkeypatch.undo()
+    approval_id = next(iter(h.approvals._pending))
+    assert h.approvals.resolve(approval_id, CHANNEL, THREAD, Approve()) is not None
 
 
 async def test_the_manager_names_the_threads_with_a_live_session(
