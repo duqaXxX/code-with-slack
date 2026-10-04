@@ -114,7 +114,7 @@ class StatusReaction:
 
     async def clear(self) -> None:
         """Remove the current reaction, leaving the root bare: for a caller with nothing to
-        revert to (a cancelled setup on a session that had shown no reaction yet)."""
+        revert to (D8's Cancel on a session that had shown no reaction yet)."""
         self._wanted = None
         async with self._lock:
             if self._current is None:

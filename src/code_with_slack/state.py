@@ -43,7 +43,7 @@ class ThreadState:
     # added on its first message, replaced on a continuation, removed once its final write is
     # known to have landed (or it has given up retrying for good).
     open_replies: tuple[str, ...] = ()
-    # ts of every approval, question or session setup request still carrying buttons.
+    # ts of every approval, question or D8 hold request still carrying buttons.
     requests: tuple[str, ...] = ()
     # The root's reaction name while it is ⏳ or ✋ (`render.status.Status.value`); cleared once
     # ✅ or ❌ is requested.

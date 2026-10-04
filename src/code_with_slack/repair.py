@@ -1,9 +1,9 @@
 """Repair what a crashed daemon left open (issue #19): a reply whose stream never stopped or
-whose cards still run, an approval, question or session setup request still carrying buttons,
-and the ⏳/✋ reaction a turn mid-flight left on its root. Runs once on start, right after
-`auth.test` and before opening the Socket Mode connection (the web client works without it) and
-before `state.prune` (a pruned thread's leftovers must still be repaired); a graceful stop clears
-these same fields itself, so a second start finds nothing to do.
+whose cards still run, an approval, question or D8 hold request still carrying buttons, and the
+⏳/✋ reaction a turn mid-flight left on its root. Runs once on start, right after `auth.test` and
+before opening the Socket Mode connection (the web client works without it) and before
+`state.prune` (a pruned thread's leftovers must still be repaired); a graceful stop clears these
+same fields itself, so a second start finds nothing to do.
 
 A reply's message is stopped first (`chat.stopStream`; Slack ends a stream itself 5 minutes after
 it started, and answers `message_not_in_streaming_state` to a stop then), which is the one
