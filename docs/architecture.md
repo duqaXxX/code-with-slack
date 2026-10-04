@@ -799,7 +799,9 @@ after every session has closed and publishes what was still owed, giving up afte
 `auth.test` that the token is the owner's own in the bot's workspace, and hands its `delete` to
 `Home`. The header line is then a section with an **Edit** button (`home.EDIT_ACTION`), since a
 context block holds no button; without the token it stays the context line and the page has no
-such control. `Home.edit` keeps the mode in memory and publishes: in edit mode a channel's
+such control. `Home.edit` keeps the mode in memory and publishes. It keeps the filters the page
+had on entering and puts them back on leaving, so one chosen inside edit mode (**Show all** on
+the channel being cleaned) does not outlast it. In edit mode a channel's
 header has no **New thread**, and the title row of each session whose status is not `working`
 or `waiting for you` carries a `danger` button (`home.DELETE_ACTION`) with a `confirm` dialog
 that names the thread, cut to the dialog's 300 characters. Slack sends the click only after the

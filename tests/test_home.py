@@ -1227,3 +1227,27 @@ async def test_a_thread_being_deleted_says_so_from_the_click_on_and_takes_no_sec
     finish.set()
     await running
     assert not any("Fix the footer" in title for title in titles(published(slack)[-1]))
+
+
+async def test_done_brings_back_the_filters_the_page_had_before_edit(
+    tmp_path: Path, slack: FakeSlack, state: StateStore
+) -> None:
+    async def delete(channel_id: str, thread_ts: str) -> str | None:
+        return None
+
+    home = make_home(slack, state, listing(tmp_path), delete=delete)
+    before = HomeFilter(status=Status.DONE.value, date=LAST_7)
+    await home.choose(before)
+    await home.edit(True)
+    await home.edit(True)  # a click sent twice does not take the filters of edit mode as "before"
+    # Show all on the channel being cleaned chooses that channel: it lasts while edit mode does.
+    await home.choose(HomeFilter(channel=CHANNEL))
+    assert buttons(published(slack)[-1], EDIT_ACTION)[0]["value"] == EDIT_OFF  # still editing
+    await home.edit(False)
+    assert home.chosen == before
+    # The menus show the filters that are back (their block follows what is chosen).
+    assert control(published(slack)[-1], STATUS_ACTION)["initial_option"]["value"] == before.status
+    # Out of edit mode a filter is the owner's choice again, and a second Done changes nothing.
+    await home.choose(HomeFilter(channel=CHANNEL))
+    await home.edit(False)
+    assert home.chosen == HomeFilter(channel=CHANNEL)

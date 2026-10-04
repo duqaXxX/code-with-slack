@@ -524,6 +524,8 @@ class Home:
         self._delete = delete
         # Kept in memory like the filters: a restart starts out of edit mode.
         self._editing = False
+        # The filters as they were when edit mode was entered: Done brings them back.
+        self._before_edit: HomeFilter | None = None
         self._notice: str | None = None
         # The threads a delete was asked for and has not ended: Slack's rate limit makes one
         # take from seconds to minutes, and the page says so from the click on.
@@ -584,8 +586,16 @@ class Home:
         await self.publish()
 
     async def edit(self, on: bool) -> None:
-        """Enter or leave edit mode and publish at once."""
-        self._editing = on and self._delete is not None
+        """Enter or leave edit mode and publish at once. Edit mode is a parenthesis: a filter
+        chosen inside it (Show all on the channel being cleaned, most often) lasts while it
+        does, and leaving it brings back the filters the page had on entering."""
+        on = on and self._delete is not None
+        if on and not self._editing:
+            self._before_edit = self._chosen
+        elif not on and self._editing and self._before_edit is not None:
+            self._chosen = self._before_edit
+            self._before_edit = None
+        self._editing = on
         self._notice = None
         await self.publish()
 

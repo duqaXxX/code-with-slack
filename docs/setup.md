@@ -414,7 +414,8 @@ number of replies is read when a session starts or ends a turn, so a word typed 
 With `SLACK_USER_TOKEN` configured (Part 1), the line above the sessions carries an **Edit**
 button. In edit mode each session shows a red **Delete** button, the **New thread** buttons are
 left out, and **Done** leaves the mode. A session that is working or waiting for you has no
-Delete.
+Delete. A filter you choose in edit mode, **Show all** on a channel included, lasts while you
+are in it: **Done** brings back the filters the page had when you pressed **Edit**.
 
 Delete asks first, in a dialog titled `Delete this thread?` that names the thread, with the
 buttons `Delete thread` and `Cancel`:

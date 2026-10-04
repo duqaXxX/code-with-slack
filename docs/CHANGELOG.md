@@ -13,7 +13,8 @@ All notable changes to this project are documented here. The format follows
   are the owner's. With the token set, the line above the sessions carries **Edit**; in edit
   mode each session that is not working or waiting for the owner carries a red **Delete** with
   Slack's confirmation dialog, which names the thread, and the **New thread** buttons are left
-  out. Confirmed, the new module `delete` (`ThreadDeleter`) closes the thread's idle session
+  out. **Done** brings back the filters the page had when **Edit** was pressed, so **Show all**
+  used in edit mode does not leave the page on one channel. Confirmed, the new module `delete` (`ThreadDeleter`) closes the thread's idle session
   (`SessionManager.release`), deletes every message, the root last, and drops the thread from
   `state.json`; the Claude Code session stays and `!resume` lists it again. Slack's rate limit
   makes a delete take from seconds to minutes: from the click on the session's line reads
