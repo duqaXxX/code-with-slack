@@ -25,7 +25,10 @@ if [ -n "$number" ]; then
     --jq '[.comments[].body | capture("claude-agent-sdk (?<v>[0-9]+(\\.[0-9]+)+)").v] | last // empty')"
 fi
 
-report="$(LAST_COMMENTED="$last_commented" uv run --quiet python .github/scripts/sdk_release_report.py)"
+# The machine's own python3, never `uv run`: this script holds a token that writes issues, and the
+# project's environment is where the workflow installs a release nobody has reviewed. The report
+# imports the standard library only, so it needs nothing from that environment.
+report="$(LAST_COMMENTED="$last_commented" python3 .github/scripts/sdk_release_report.py)"
 if [ "$report" = "null" ]; then
   echo "the latest release is the pinned one; nothing to report"
   exit 0

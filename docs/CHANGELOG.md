@@ -112,6 +112,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The SDK release watch (`.github/workflows/sdk-release-watch.yml`) runs as two jobs. `test`
+  installs the latest `claude-agent-sdk` and runs the suite with a token that only reads.
+  `report`, now the only job with `issues: write`, starts on a runner of its own from a clean
+  checkout and never installs the project: `.github/scripts/watch-sdk-release.sh` runs
+  `sdk_release_report.py` with the machine's `python3` where it used `uv run`. Until now one job
+  did both, so a release nobody had reviewed ran in the workspace and the environment that the
+  issue step then used with its token. The report refuses an outcome other than `pass`, `fail`,
+  `install failed` and `skipped`, as it already refused a version that is not one.
 - Two refusal texts say what the thread model does (issue #78). `texts.DIRECTORY_MISSING` ends
   ``Restore it to keep using this thread, or, in the channel, bind another folder with
   `!bind <path>` and send a new message to start a session there.``: a thread keeps its folder,
@@ -311,6 +319,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A reply's banner is computed in a time linear in its first paragraph (`strip_markdown`). Three
+  of its patterns read ahead and were tried again from every later start, so a paragraph that was
+  one long run of `[`, of blank lines or of `_` inside a word held the event loop, and with it
+  every other thread's reply and approval: about 15 s for 100,000 `[` characters (Python 3.12.13,
+  measured 2026-10-04). The banner's text is unchanged.
 - A long command a background subagent runs in the foreground of its own context is the
   subagent's work (`TurnRenderer.nests`). Claude Code starts a task for it on the main
   conversation's stream (recorded: Claude Code 2.1.286, `subagent-nested-command.jsonl`) and

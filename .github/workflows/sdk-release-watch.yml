@@ -2,6 +2,10 @@
 # shapes the tests' fixtures record. This asks, every day, whether the suite still passes on the
 # SDK release PyPI serves now, and keeps one issue with the answer and the checks left to do by hand.
 # Dependabot's weekly pull request still moves the pin; this is the checklist beside it.
+#
+# Two jobs, because the release under test is code nobody here has reviewed: `test` installs and
+# runs it with a token that only reads, and `report`, the one job that can write an issue, starts
+# on a runner of its own where that release was never installed.
 name: SDK release watch
 
 on:
@@ -13,15 +17,20 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: sdk-release-watch
   cancel-in-progress: false
 
 jobs:
-  watch:
+  test:
     runs-on: ubuntu-latest
+    outputs:
+      pinned: ${{ steps.versions.outputs.pinned }}
+      latest: ${{ steps.versions.outputs.latest }}
+      fixture_cli: ${{ steps.versions.outputs.fixture_cli }}
+      cli: ${{ steps.tests.outputs.cli }}
+      outcome: ${{ steps.tests.outputs.outcome }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -62,22 +71,37 @@ jobs:
             echo "outcome=fail" >> "$GITHUB_OUTPUT"
           fi
 
+  report:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # A clean checkout, and neither uv nor the project's environment: with the token in reach,
+      # nothing runs that the `test` job could have written. That job's outputs are text it could
+      # have written, so they arrive through the environment and sdk_release_report.py refuses any
+      # that is not a version or a known outcome.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Open the issue, or bring it up to date
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          PINNED: ${{ steps.versions.outputs.pinned }}
-          LATEST: ${{ steps.versions.outputs.latest }}
-          LATEST_CLI: ${{ steps.tests.outputs.cli }}
-          FIXTURE_CLI: ${{ steps.versions.outputs.fixture_cli }}
-          OUTCOME: ${{ steps.tests.outputs.outcome }}
+          PINNED: ${{ needs.test.outputs.pinned }}
+          LATEST: ${{ needs.test.outputs.latest }}
+          LATEST_CLI: ${{ needs.test.outputs.cli }}
+          FIXTURE_CLI: ${{ needs.test.outputs.fixture_cli }}
+          OUTCOME: ${{ needs.test.outputs.outcome }}
         run: bash .github/scripts/watch-sdk-release.sh
 
       - name: Fail the run when the suite failed
-        if: steps.tests.outputs.outcome != 'pass'
+        if: needs.test.outputs.outcome != 'pass'
         env:
-          LATEST: ${{ steps.versions.outputs.latest }}
-          OUTCOME: ${{ steps.tests.outputs.outcome }}
+          LATEST: ${{ needs.test.outputs.latest }}
+          OUTCOME: ${{ needs.test.outputs.outcome }}
         run: |
           echo "claude-agent-sdk $LATEST: $OUTCOME" >&2
           exit 1

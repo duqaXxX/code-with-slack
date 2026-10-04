@@ -70,6 +70,11 @@ def methods(slack: FakeSlack) -> list[str]:
 async def settled() -> None:
     """Long enough for a debounced write, with the debounce shrunk to 10 ms."""
     await asyncio.sleep(0.05)
+    # A loop stalled past both (a full garbage collection) finds the debounce and this sleep due
+    # together, and would hand back before the write got anywhere: let what the debounce woke
+    # run to its next wait, as `FakeClock.advance` does.
+    for _ in range(20):
+        await asyncio.sleep(0)
 
 
 def tool(id: str, name: str, status: str = "complete", **fields: Any) -> TaskUpdate:
@@ -1387,6 +1392,37 @@ def test_a_notice_fits_one_context_element() -> None:
 def test_a_banner_is_plain_and_escaped() -> None:
     text = "## Title\n\n- **bold** and `code` with [a link](https://x.example) & <tags>"
     assert sinks.banner_text(text) == "Title\nbold and code with a link &amp; &lt;tags&gt;"
+
+
+@pytest.mark.parametrize(
+    ("text", "plain"),
+    [
+        ("see [1] and [a [b](u) then [c](v", "see [1] and a [b then [c](v"),
+        ("intro\n \n\t\n- item\n  \nnot a marker", "intro\nitem\n  \nnot a marker"),
+        ("snake_case a_`_`_b _lead_ trail_ *x* 2*3", "snake_case a___b lead trail x 2*3"),
+    ],
+)
+def test_stripping_markdown_keeps_what_only_looks_like_a_marker(text: str, plain: str) -> None:
+    # The texts a pattern reads and puts back. Each result is the one the patterns gave before
+    # they were made linear (taken from them, 2026-10-04).
+    assert sinks.strip_markdown(text) == plain
+
+
+@pytest.mark.parametrize(
+    ("paragraph", "banner"),
+    [
+        ("[" * 100_000, "[" * sinks.BANNER_LIMIT),
+        ("x" + "\n " * 50_000 + "y", ("x" + "\n " * 150)[: sinks.BANNER_LIMIT]),
+        ("a" + "_`" * 50_000 + "b", "a" + "_" * (sinks.BANNER_LIMIT - 1)),
+    ],
+    ids=["brackets", "blank lines", "underscores"],
+)
+def test_a_banner_takes_a_time_linear_in_its_paragraph(paragraph: str, banner: str) -> None:
+    # About 4 ms of CPU each. Patterns that start again from every `[`, blank line or `_` took
+    # 15, 49 and 11 seconds on these, with the event loop held (measured 2026-10-04, Python 3.12).
+    started = time.process_time()
+    assert sinks.banner_text(paragraph, limit=sinks.BANNER_LIMIT) == banner
+    assert time.process_time() - started < 1
 
 
 def test_a_task_card_block_reads_back_as_the_card_it_was() -> None:

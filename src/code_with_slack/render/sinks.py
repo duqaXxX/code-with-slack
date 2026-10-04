@@ -270,11 +270,18 @@ def plain_words(text: str) -> str:
 
 
 def strip_markdown(text: str) -> str:
-    """The markdown markers of `text` removed, nothing escaped."""
-    plain = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
-    plain = re.sub(r"^\s*(?:#+|>|[-+*]|\d+\.)\s+", "", plain, flags=re.M)
+    """The markdown markers of `text` removed, nothing escaped, in a time linear in the text: a
+    banner is cut from a paragraph as long as Claude wrote it."""
+    # A pattern that reads ahead and then fails is tried again from every later start, which is
+    # quadratic on a long run of `[`, of blank lines or of `_` inside a word. So the three that
+    # read ahead also match what they read where no marker is (a `[` no link closes, space no
+    # marker follows, `_` between two letters), and the replacement puts that back as it was.
+    plain = re.sub(r"\[([^\]]*)(?:\](?:\([^)]*(\))?)?)?", lambda m: m[1] if m[2] else m[0], text)
+    plain = re.sub(
+        r"^\s*((?:#+|>|[-+*]|\d+\.)\s+)?", lambda m: "" if m[1] else m[0], plain, flags=re.M
+    )
     plain = re.sub(r"\*\*|__|~~|`+", "", plain)
-    plain = re.sub(r"(?<!\w)[*_]+|[*_]+(?!\w)", "", plain)
+    plain = re.sub(r"(?<!\w)[*_]+|[*_]+(?!\w)|(_+)", r"\1", plain)
     return plain.strip()
 
 

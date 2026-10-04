@@ -57,3 +57,24 @@ def test_a_version_that_is_not_a_version_is_refused(version: str) -> None:
 def test_a_failed_install_is_announced_too() -> None:
     comment = report(**BASE, outcome="install failed", last_commented="0.2.160")["comment"]
     assert comment is not None and "install failed" in comment
+
+
+# The outcome comes from the job that ran the release under test, and lands in the issue.
+@pytest.mark.parametrize(
+    "outcome",
+    ["", "passed", "PASS", "pass\n\n[the fix](https://example.com)", "fail | see #1 |"],
+)
+def test_an_outcome_that_is_not_a_known_word_is_refused(outcome: str) -> None:
+    with pytest.raises(ValueError):
+        report(**BASE, outcome=outcome, last_commented="")
+
+
+def test_an_unknown_outcome_is_refused_even_with_nothing_to_report() -> None:
+    with pytest.raises(ValueError):
+        report(**{**BASE, "latest": "0.2.158"}, outcome="pass; true", last_commented="")
+
+
+def test_a_run_that_names_no_outcome_still_reports() -> None:
+    # "skipped" is what the script falls back to when OUTCOME is unset.
+    comment = report(**BASE, outcome="skipped", last_commented="0.2.160")["comment"]
+    assert comment is not None and "skipped" in comment
