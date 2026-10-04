@@ -10,9 +10,10 @@ All notable changes to this project are documented here. The format follows
 - `!status` typed in a session's thread shows, under `Session:`, the command that continues
   that session in the terminal (issue #12, first step):
   `` Terminal: `cd <folder> && claude --resume <session id> --fork-session` ``, with the folder
-  quoted for the shell (`texts.STATUS_TERMINAL`). Claude Code leaves a session created through
+  quoted for the shell (`sessions.terminal_line`). Claude Code leaves a session created through
   the Agent SDK out of the terminal's picker, and a fork made in the terminal is listed. The
-  line is absent while the thread has no session id. `!guide` names that line in place of
+  line is absent while the thread has no session id and when its folder is missing, unreadable
+  or not trusted; a command holding a backtick shows as escaped text. `!guide` names that line in place of
   `claude --resume <id>`, and `docs/setup.md` has a section on it.
 - Thread status (issues #83 and #95): Slack's own status line under a thread's last message
   (`render.status.ThreadStatus`, `assistant.threads.setStatus` with a loading message, which is

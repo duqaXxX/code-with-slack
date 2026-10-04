@@ -3,6 +3,7 @@ import dataclasses
 import json
 import logging
 import re
+import shlex
 import subprocess
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
@@ -2369,8 +2370,32 @@ async def test_status_gives_the_command_that_forks_the_session_in_the_terminal(
     stored = h.state.thread(CHANNEL, THREAD).session_id
     lines = (await session.status()).splitlines()
     assert lines[1] == f"Session: `{stored}`"
-    assert lines[2] == f"Terminal: `cd {tmp_path} && claude --resume {stored} --fork-session`"
+    folder = shlex.quote(str(tmp_path))
+    assert lines[2] == f"Terminal: `cd {folder} && claude --resume {stored} --fork-session`"
     assert lines[3].startswith("Mode: ")
+
+
+def test_a_terminal_command_holding_a_backtick_is_escaped_text_not_a_code_span() -> None:
+    # A code span would end at the folder's backtick and the owner would copy half a command.
+    line = sessions.terminal_line(Path("/work/my`proj"), "0000-id")
+    assert line == ("Terminal: cd '/work/my\\`proj' \\&\\& claude --resume 0000-id --fork-session")
+
+
+async def test_status_leaves_the_terminal_command_out_of_a_folder_that_cannot_be_used(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"turns": [sdk_messages("tools")]})
+    await asyncio.wait_for((await h.session().submit("list the files")).done.wait(), 2)
+    await h.manager.close_all()
+
+    async def untrusted(directory: Path) -> bool:
+        return False
+
+    h.deps.workspace_trusted = untrusted
+    text = await h.session().status()
+    stored = h.state.thread(CHANNEL, THREAD).session_id
+    assert f"Session: `{stored}`\nMode: " in text and "Terminal:" not in text
+    assert text.endswith(texts.DIRECTORY_UNTRUSTED.format(directory=h.tmp_path))
 
 
 async def test_the_terminal_command_quotes_a_folder_the_shell_would_split(

@@ -69,7 +69,7 @@ from code_with_slack.footer import (
 from code_with_slack.guards import Identity
 from code_with_slack.hold import Holds
 from code_with_slack.prompt import Prompt, user_message
-from code_with_slack.render.escape import mrkdwn_escape
+from code_with_slack.render.escape import markdown_escape, mrkdwn_escape
 from code_with_slack.render.renderer import (
     INTERRUPTED,
     Sink,
@@ -315,6 +315,17 @@ class Turn:
     prompt: Prompt
     sink: ReplySink
     done: asyncio.Event = field(default_factory=asyncio.Event)
+
+
+def terminal_line(directory: Path, session_id: str) -> str:
+    """The `!status` line with the command that forks a session in the terminal, run from the
+    thread's folder, where `!resume` in its channel then finds the fork."""
+    command = texts.TERMINAL_COMMAND.format(
+        directory=shlex.quote(str(directory)), session=session_id
+    )
+    # A code span cannot hold a backtick: such a command is plain text, escaped.
+    shown = markdown_escape(command) if "`" in command else f"`{command}`"
+    return texts.STATUS_TERMINAL.format(command=shown)
 
 
 def not_sent(turns: list[Turn], because: str) -> str:
@@ -1093,12 +1104,13 @@ class ThreadSession:
         data: FooterData | None = None
         unavailable: list[str] = []
         gone = False
+        usable = True
         try:
             await self.ensure_connected()
             self._refresh_usage()
             data = await self._footer_data(self.session_tokens)
         except DirectoryUnavailable as exc:
-            unavailable = [exc.message]
+            unavailable, usable = [exc.message], False
         except SessionGone as exc:
             # This call is the one that found it gone: `ensure_connected` already closed the
             # session over it, which is not the race the check below guards against.
@@ -1128,22 +1140,18 @@ class ThreadSession:
             else texts.ACTIVITY_IDLE
         )
         session_id = stored.session_id if stored else None
-        text = texts.STATUS.format(
-            directory=self.directory,
-            session=session_id or "new",
-            # Claude Code files a session under the folder it was created in, the thread's own.
-            terminal=texts.STATUS_TERMINAL.format(
-                directory=shlex.quote(str(self.directory)), session=session_id
-            )
-            if session_id
-            else "",
+        head = [texts.STATUS.format(directory=self.directory, session=session_id or "new")]
+        # Left out with a folder the line above cannot use: its `cd` would fail there.
+        if session_id and usable:
+            head.append(terminal_line(self.directory, session_id))
+        state = texts.STATUS_STATE.format(
             mode=self._mode_for(self.bypass),
             # Only a turn's `init` message carries the version, never the connect (measured).
             version=self.cli_version
             or (texts.VERSION_PENDING if self._client is not None else "not started"),
             activity=activity,
         )
-        return "\n".join([text, *fields, *unavailable])
+        return "\n".join([*head, state, *fields, *unavailable])
 
     def _refresh_usage(self) -> None:
         """Refresh the usage limits in the background when stale; the next footer shows them."""

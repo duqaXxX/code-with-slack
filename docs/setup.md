@@ -344,8 +344,14 @@ Terminal: `cd <folder> && claude --resume <session id> --fork-session`
 session, so the picker lists it from then on (measured 2026-09-26 on Claude Code 2.1.282, on one
 session started from Slack). The thread stays on the session it had and sees nothing of what the
 copy does afterwards. To bring the copy into Slack, send `!resume` in the channel: it opens in a
-new thread. The line is absent until the thread's first turn has ended, since no session exists
-before it.
+new thread.
+
+The line shows as soon as the thread has a session id, which Claude Code reports when the first
+turn starts; a fork made while a turn runs copies the conversation as it stands, with a tool call
+still running marked as cut off. It is left out when the thread's folder is missing, unreadable
+or not trusted, with the reason at the end of the status. `claude --resume <session id>` finds
+the session from any folder (Claude Code 2.1.223 or later); the `cd` makes the copy work in the
+thread's folder, which is where the picker and `!resume` in the channel then list it.
 
 ### Finding a session again: the Home tab
 
