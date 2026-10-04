@@ -67,7 +67,7 @@ from code_with_slack.guards import (
     is_prompt_message,
     message_actor,
 )
-from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, Pending, hold_blocks
+from code_with_slack.hold import Holds, Pending
 from code_with_slack.home import (
     FILTER_ACTIONS,
     NEW_THREAD_ACTION,
@@ -461,39 +461,25 @@ def build_app(
             prompt = await with_attachments(channel, thread_ts, text, files) if files else text
             if prompt is None:
                 return
-            # Checked before D8 too: a drain already cancelled every hold open when it started
-            # (SessionManager.drain) and will never cancel one opened after, so a message that
-            # arrives once draining has begun must never open a new one (it would wait forever).
+            # A drain already cancelled every setup open when it started (SessionManager.drain)
+            # and will never cancel one opened after, so a message that arrives once draining has
+            # begun must never open a new one (it would wait forever).
             if sessions.draining:
                 await refuse_restarting(channel, thread_ts)
                 return
-            # D8: this message would wake `session` (busy just queues behind what is already
-            # running); ask first when another live session, of any channel, is already busy in
-            # the same resolved folder. Later messages of this thread queue behind the wait,
-            # since it runs inside the arrival lock. `held` is the object a Continue's ✋ was left
-            # standing on (`hold_end(continued=True)` bets on the `submit()` below to replace it
-            # with ⏳): kept apart from `session`, which a `SessionClosed` retry below can
-            # reassign, so a non-submit exit always restores the reaction on the object that
-            # actually shows it.
+            # `held` is the object a Start's ✋ was left standing on (`hold_end(continued=True)`
+            # bets on the `submit()` below to replace it with ⏳): kept apart from `session`,
+            # which a `SessionClosed` retry below can reassign, so a non-submit exit always
+            # restores the reaction on the object that actually shows it.
             held: ThreadSession | None = None
-            asked_setup = False
             if not in_thread or session.never_ran:
-                # A session's first prompt: its setup comes before anything else, the D8 question
-                # included. A reply in a thread whose setup was cancelled, or whose D8 question
-                # was, is a first prompt too: nothing was ever sent in it.
+                # A session's first prompt: its setup comes before anything else. A reply in a
+                # thread whose setup was cancelled is a first prompt too: nothing was ever sent
+                # in it.
                 ready = await setup_before_sending(channel, thread_ts, session)
                 if ready is None:
                     return
                 session = held = ready
-                asked_setup = True
-            if not session.busy:
-                other = sessions.working_in(besides=session)
-                if other is not None:
-                    if not await hold_before_sending(channel, thread_ts, session, other):
-                        if asked_setup:
-                            await session.forget_setup()  # the Start that nothing was sent for
-                        return
-                    held = session
             # Retried once against a freshly looked-up session: the one this call was handed can
             # still close under it (most likely D9's idle close, though `touch()` at the lookup
             # already guards the common case) during the download above or the steps below.
@@ -530,29 +516,12 @@ def build_app(
             finally:
                 # `submitted` alone, not a fixed set of exception types: `ensure_connected` can
                 # also raise `ResultError` (a logged-out CLI, most likely) or anything a stray
-                # bug throws; none of them may ever leave a Continue's ✋ standing forever. A
+                # bug throws; none of them may ever leave a Start's ✋ standing forever. A
                 # failure gets the reaction a turn that reached the queue and then failed gets; a
-                # plain return (the drain notice posted fine) restores a Cancel's own reaction
-                # instead.
+                # plain return (the drain notice posted fine) leaves the root bare, as a
+                # cancelled setup does.
                 if held is not None and not submitted:
                     await held.react_hold_abandoned(error=failed)
-
-    async def hold_before_sending(
-        channel: str, thread_ts: str, session: ThreadSession, other: ThreadSession
-    ) -> bool:
-        """D8: post `Another session is working in this folder: <link>. Send anyway?` and wait
-        for the owner's Continue or Cancel, cancelled the same way by `!stop` (in this thread or
-        the whole channel) or a drain. True to send the message on; False when it was not,
-        either way telling the owner `Not sent.` already."""
-        link = await thread_mrkdwn_link(other.channel_id, other.thread_ts, "Session")
-        answer = await ask_owner(
-            channel,
-            thread_ts,
-            session,
-            text=texts.HOLD_QUESTION.format(link=link),
-            blocks=lambda hold_id: hold_blocks(hold_id, link),
-        )
-        return answer is True
 
     async def setup_before_sending(
         channel: str, thread_ts: str, session: ThreadSession
@@ -615,7 +584,7 @@ def build_app(
             text=texts.SETUP_FALLBACK,
             blocks=lambda setup_id: setup_blocks(setup_id, models, Choice(bypass=ticked)),
             settle=settle,
-            context=models,
+            models=models,
         )
         if answer is None:
             await session.forget_setup()  # a stop or drain that came while Start was applied
@@ -629,13 +598,13 @@ def build_app(
         *,
         text: str,
         blocks: Callable[[str], list[dict[str, Any]]],
-        settle: Callable[[Any, str, Pending], Awaitable[None]] | None = None,
-        context: Any = None,
-    ) -> Any:
-        """Post a question that holds the owner's message and wait for the answer: whatever its
-        buttons resolved it with, or None when it was cancelled (`!stop`, a drain) or never shown
+        settle: Callable[[Choice, str, Pending], Awaitable[None]],
+        models: list[dict[str, Any]],
+    ) -> Choice | None:
+        """Post the setup that holds the owner's message and wait for the answer: the choice
+        Start read, or None when it was cancelled (`!stop`, a drain) or never shown
         (`Not sent.` or the unposted notice, told already). `blocks` gets the id only its buttons
-        carry; `context` comes back with a click that carries only that id. `settle(answer,
+        carry; `models` comes back with a click, which carries only that id. `settle(answer,
         message_ts, pending)` applies an answer and writes its summary while the thread still
         shows ✋ and the hold is still open, so a `!stop` or drain meanwhile cancels
         (`Pending.cancelled`: nothing is sent, the message is removed, `Not sent.`). When it
@@ -643,7 +612,7 @@ def build_app(
         if sessions.draining:  # a restart could have started during an await before this
             await refuse_restarting(channel, thread_ts)
             return None
-        hold_id, pending = holds.open(channel, thread_ts, context)
+        hold_id, pending = holds.open(channel, thread_ts, models)
         try:
             posted = await slack.chat_postMessage(
                 channel=channel,
@@ -655,7 +624,7 @@ def build_app(
             )
         except Exception as exc:
             # Nobody can answer a question that was never shown: fail closed, as an unpostable
-            # approval does, rather than send into a folder another session is using.
+            # approval does, rather than send with a model, effort and bypass nobody chose.
             logger.error("could not post a hold in %s/%s: %s", channel, thread_ts, describe(exc))
             holds.discard(hold_id)
             await tell_owner(channel, thread_ts, texts.HOLD_UNPOSTED)
@@ -679,7 +648,7 @@ def build_app(
                     thread_ts,
                     describe(exc),
                 )
-        answer: Any = None
+        answer: Choice | None = None
         sent = False
         try:
             if waiting:
@@ -688,7 +657,7 @@ def build_app(
             if answer is None:
                 if not waiting:
                     await remove_request(channel, thread_ts, message_ts)
-            elif settle is not None:
+            else:
                 try:
                     await settle(answer, message_ts, pending)
                 except Exception as exc:
@@ -714,22 +683,6 @@ def build_app(
             await tell_owner(channel, thread_ts, texts.NOT_SENT)
         return answer
 
-    async def on_hold_decision(ack: AsyncAck, body: dict[str, Any]) -> None:
-        await ack()
-        user, team = interaction_actor(body)
-        channel = (body.get("channel") or {}).get("id")
-        thread_ts = click_thread(body)
-        if not await admitted(user, team, channel, thread_ts):
-            return
-        assert channel is not None
-        action = body["actions"][0]
-        hold_id = str(action.get("value"))
-        answer = True if action["action_id"] == HOLD_CONTINUE else None
-        if holds.resolve(hold_id, channel, thread_ts, answer) is None:
-            await tell_owner(channel, thread_ts, texts.HOLD_GONE)
-            return
-        await remove_request(channel, thread_ts, body["message"]["ts"])
-
     async def on_setup_start(ack: AsyncAck, body: dict[str, Any]) -> None:
         await ack()
         user, team = interaction_actor(body)
@@ -746,7 +699,7 @@ def build_app(
         # The controls' own state rides on the click: nothing about the choice is stored here,
         # and the model list is the one the message was built from.
         values = (body.get("state") or {}).get("values") or {}
-        choice = read_choice(values, pending.context or [])
+        choice = read_choice(values, pending.models)
         if holds.resolve(setup_id, channel, thread_ts, choice) is None:
             await tell_owner(channel, thread_ts, texts.HOLD_GONE)
 
@@ -766,7 +719,7 @@ def build_app(
         if setup_id is None or pending is None:
             await tell_owner(channel, thread_ts, texts.HOLD_GONE)
             return
-        models = pending.context or []
+        models = pending.models
         values = (body.get("state") or {}).get("values") or {}
         choice = read_choice(values, models)
         try:
@@ -793,9 +746,6 @@ def build_app(
     app.action(SETUP_MODEL)(on_setup_model)
     app.action(SETUP_EFFORT)(on_setup_edit)
     app.action(SETUP_BYPASS)(on_setup_edit)
-
-    for action_id in (HOLD_CONTINUE, HOLD_CANCEL):
-        app.action(action_id)(on_hold_decision)
 
     async def handle_word(
         channel: str, thread_ts: str, ts: str, command: Word, *, session: ThreadSession | None
@@ -849,7 +799,7 @@ def build_app(
             case Stop():
                 if session is None:
                     stopped = await sessions.stop_channel(channel)
-                    # None: only a D8 hold was cancelled somewhere in the channel (`Not sent.`,
+                    # None: only a setup was cancelled somewhere in the channel (`Not sent.`,
                     # from its own waiter); no second notice, since nothing Claude Code was doing
                     # stopped.
                     if stopped is not None:
@@ -859,7 +809,7 @@ def build_app(
                 else:
                     # Either answer is a post that stays in the thread: an ephemeral line is
                     # gone on reload, and the root's ✅ alone does not say a stop was received.
-                    # None: only a D8 hold was cancelled, which already said `Not sent.` from
+                    # None: only a setup was cancelled, which already said `Not sent.` from
                     # its own waiter.
                     stopped = await session.stop()
                     if stopped:

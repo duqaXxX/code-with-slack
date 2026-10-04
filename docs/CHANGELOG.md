@@ -59,8 +59,8 @@ All notable changes to this project are documented here. The format follows
   survives a resume).
 - Crash repair (issue #19): `state.json` now tracks, per thread, the ts of every open reply's
   last message (`open_replies`, a list: a background task's own reply can outlive the turn that
-  started it, so more than one can be open at once), the ts of every approval, question and D8
-  hold request still carrying buttons, and the root's reaction while it is ⏳ or ✋, ids only,
+  started it, so more than one can be open at once), the ts of every approval, question and
+  session setup request still carrying buttons, and the root's reaction while it is ⏳ or ✋, ids only,
   never message content (`state.json` stays version 2, additive). On start, before the Socket
   Mode connection opens, `code_with_slack.repair.repair_crash` reads each open reply back by its
   own ts and rewrites it to say the daemon stopped before an answer, dropping the daemon's own
@@ -103,15 +103,16 @@ All notable changes to this project are documented here. The format follows
   resume picker's row for a session already held by another thread, and the refusal when that
   session is named or clicked, both carry a permalink to the holding thread instead of a plain
   marker.
-- D8: two sessions can now work in the same folder at once, but the daemon asks before a message
-  wakes an idle one while a live session of another thread (any channel, resolved path) is not
-  idle in that folder: `Another session is working in this folder: <link>. Send anyway?`, with
-  Continue and Cancel. `!stop` inside the held thread, a top-level `!stop` of its channel, and a
-  restart cancel the wait the same way Cancel does, with a `Not sent.` notice; the idle-close
-  timer and the ✋ root reaction treat a held message the same way they treat an open approval.
 
 ### Changed
 
+- Two sessions in one folder (issue #84): sessions that share a folder run independently, as two
+  terminals open in it do. A message is sent whether or not another live session, of any
+  channel, is working in the same folder, and nothing is posted about that session. The question
+  `Another session is working in this folder: <link>. Send anyway?` with Continue and Cancel,
+  which `main` carried from 2026-09-28 and no release shipped, is removed (`hold.hold_blocks`,
+  `SessionManager.working_in`, the `hold_continue` and `hold_cancel` actions). The session setup
+  is the only question that holds a message, through `hold.Holds`.
 - The `!resume` list shows only sessions that can be resumed (issue #69). A session a thread
   already holds (D6) takes no row and is not dated; one line under the list counts them
   (`texts.RESUME_OPEN_ONE`, `texts.RESUME_OPEN_MANY`), and a folder whose sessions are all open
