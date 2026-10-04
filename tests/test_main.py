@@ -6,6 +6,8 @@ import logging
 import os
 import time
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from claude_agent_sdk import SDKSessionInfo
@@ -463,6 +465,34 @@ def test_alive_sessions_decides_a_short_folder_it_does_not_find(
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setattr("code_with_slack.sessions.list_sessions", lambda **_: [])
     assert entry._alive_sessions(tmp_path / "project") == set()
+
+
+async def test_the_user_token_must_be_the_owner_s_own_in_the_bot_s_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from code_with_slack.config import ConfigError
+    from code_with_slack.guards import Identity
+
+    identity = Identity("U000ALICE", "T000TEAM", "U000BOT")
+    state = StateStore(tmp_path / "state.json")
+    sessions: Any = SimpleNamespace(release=None)
+    bot = FakeSlack()
+    # No token: nothing deletes, and Slack is not asked anything.
+    assert await entry._deleter(None, bot, identity, state, sessions) is None
+
+    owner = FakeSlack()
+    monkeypatch.setattr(entry, "AsyncWebClient", lambda token: owner)
+    token = "xox" + "p-fake"
+    # `auth.test` names who a token acts as (api-auth-test.json has the same fields for the bot).
+    owner.responses["auth.test"] = {"ok": True, "team_id": "T000TEAM", "user_id": "U000ALICE"}
+    assert await entry._deleter(token, bot, identity, state, sessions) is not None
+    for who in (
+        {"team_id": "T000TEAM", "user_id": "U000BOB"},
+        {"team_id": "T000OTHER", "user_id": "U000ALICE"},
+    ):
+        owner.responses["auth.test"] = {"ok": True, **who}
+        with pytest.raises(ConfigError, match="SLACK_USER_TOKEN"):
+            await entry._deleter(token, bot, identity, state, sessions)
 
 
 def test_only_the_reply_client_skips_the_connection_retry_of_a_post() -> None:

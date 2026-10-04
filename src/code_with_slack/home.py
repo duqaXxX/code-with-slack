@@ -40,7 +40,7 @@ import dataclasses
 import hashlib
 import logging
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -87,6 +87,12 @@ DATE_ACTION = "home_date"
 SEARCH_ACTION = "home_search_text"
 SHOW_ALL_ACTION = "home_show_all"
 NEW_THREAD_ACTION = "home_new_thread"
+EDIT_ACTION = "home_edit"
+DELETE_ACTION = "home_delete"
+# What the Edit button carries: the mode a click asks for, so a click sent twice asks the same.
+EDIT_ON, EDIT_OFF = "edit", "done"
+# A confirmation dialog's text holds 300 characters (confirmation dialog object reference).
+CONFIRM_TEXT = 300
 FILTER_ACTIONS = (CHANNEL_ACTION, STATUS_ACTION, DATE_ACTION, SEARCH_ACTION)
 # A blank row between two sessions: a context line that holds a zero-width space, since Slack
 # sets the distance between blocks itself and takes no empty text.
@@ -104,6 +110,8 @@ _WORDS = {
     Status.DONE.value: texts.HOME_ENDED,
     Status.ERROR.value: texts.HOME_ERROR,
 }
+# A session in one of these states is not offered for deleting: its thread is in use.
+_IN_USE = frozenset({Status.WAITING.value, Status.WORKING.value})
 LAST_48, TODAY, YESTERDAY, LAST_7, LAST_30 = "48h", "today", "yesterday", "7", "30"
 # How far back each rolling period reaches.
 _REACH = {LAST_48: timedelta(hours=48), LAST_7: timedelta(days=7), LAST_30: timedelta(days=30)}
@@ -313,19 +321,69 @@ def _controls(channels: dict[str, str], chosen: HomeFilter) -> list[dict[str, An
     ]
 
 
-def _channel_header(team_id: str, channel_id: str) -> dict[str, Any]:
-    return {
+def _plain(text: str) -> dict[str, Any]:
+    return {"type": "plain_text", "text": text}
+
+
+def _header(time: str, *, editing: bool, can_edit: bool) -> dict[str, Any]:
+    """The line above the sessions. It carries the Edit button when threads can be deleted: a
+    context block holds no button (context block reference), so the line is a section then."""
+    text = texts.HOME_HEADER.format(time=time)
+    if not can_edit:
+        return context_block(text)
+    button: dict[str, Any] = {
+        "type": "button",
+        "action_id": EDIT_ACTION,
+        "text": _plain(texts.HOME_DONE if editing else texts.HOME_EDIT),
+        "value": EDIT_OFF if editing else EDIT_ON,
+    }
+    if editing:
+        button["style"] = "primary"
+    return {"type": "section", "text": {"type": "mrkdwn", "text": text}, "accessory": button}
+
+
+def _channel_header(team_id: str, channel_id: str, *, editing: bool) -> dict[str, Any]:
+    header: dict[str, Any] = {
         "type": "section",
         "text": {"type": "mrkdwn", "text": f"*<#{channel_id}>*"},
-        "accessory": _link_button(
+    }
+    if not editing:
+        header["accessory"] = _link_button(
             texts.HOME_NEW_THREAD,
             f"slack://channel?team={team_id}&id={channel_id}",
             NEW_THREAD_ACTION,
-        ),
+        )
+    return header
+
+
+def _delete_button(row: HomeRow, channel_name: str) -> dict[str, Any]:
+    """The Delete of a session's row, with Slack's own confirmation dialog, which names the
+    thread. The dialog shows before the click is sent (confirmation dialog object reference)."""
+    replies = texts.HOME_REPLY if row.replies == 1 else texts.HOME_REPLIES.format(count=row.replies)
+    named = texts.HOME_DELETE_NAMED if row.replies else texts.HOME_DELETE_NAMED_BARE
+    room = CONFIRM_TEXT - len(texts.HOME_DELETE_TEXT)
+    room -= len(named.format(title="", channel=channel_name, replies=replies))
+    title = one_line(row.title, max(room, 1))
+    return {
+        "type": "button",
+        "action_id": DELETE_ACTION,
+        "style": "danger",
+        "text": _plain(texts.HOME_DELETE),
+        "value": f"{row.channel_id}:{row.thread_ts}",
+        "confirm": {
+            "title": _plain(texts.HOME_DELETE_TITLE),
+            "text": _plain(
+                named.format(title=title, channel=channel_name, replies=replies)
+                + texts.HOME_DELETE_TEXT
+            ),
+            "confirm": _plain(texts.HOME_DELETE_CONFIRM),
+            "deny": _plain(texts.HOME_DELETE_DENY),
+            "style": "danger",
+        },
     }
 
 
-def _card(row: HomeRow) -> list[dict[str, Any]]:
+def _card(row: HomeRow, channel_name: str = "", *, editing: bool = False) -> list[dict[str, Any]]:
     icon = f":{row.status}:  " if row.status else ""
     title = shown_as_written(one_line(row.title, TITLE_LIMIT))
     replies = texts.HOME_REPLY if row.replies == 1 else texts.HOME_REPLIES.format(count=row.replies)
@@ -339,10 +397,13 @@ def _card(row: HomeRow) -> list[dict[str, Any]]:
     # title's row, and a row that carries one cannot be small (the maintainer, 2026-10-01).
     # A reply's permalink carries a query (`?thread_ts=…&cid=…`), and mrkdwn reads `&` as markup.
     details.append(f"<{mrkdwn_escape(row.permalink)}|{texts.HOME_OPEN}>")
-    return [
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"{icon}*{title}*"}},
-        context_block(" · ".join(d for d in details if d)),
-    ]
+    head: dict[str, Any] = {
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": f"{icon}*{title}*"},
+    }
+    if editing and row.status not in _IN_USE:
+        head["accessory"] = _delete_button(row, channel_name)
+    return [head, context_block(" · ".join(d for d in details if d))]
 
 
 def home_view(
@@ -352,16 +413,23 @@ def home_view(
     team_id: str,
     chosen: HomeFilter,
     now: datetime,
+    can_edit: bool = False,
+    editing: bool = False,
+    notice: str | None = None,
 ) -> dict[str, Any]:
     """The Home tab's view. `rows` are newest first and `channels` maps each bound channel Slack
     still has to its name. Only the sessions of the chosen period are shown. With no channel,
     status or search chosen, every channel is a group, the ones with sessions first by their
     newest, each showing its `PER_CHANNEL` newest and a button to see them all (which chooses
     that channel); otherwise only what matches, with no such cut. Never past Slack's 100 blocks:
-    the page says when it stops short."""
+    the page says when it stops short. With `can_edit` the header line carries Edit; in
+    `editing` each session that is not in use carries Delete and no channel carries New thread.
+    `notice` is the line a delete that did not end left, under the header."""
+    editing = editing and can_edit
     blocks: list[dict[str, Any]] = [
         *_controls(channels, chosen),
-        context_block(texts.HOME_HEADER.format(time=_date(int(now.timestamp()), "time"))),
+        _header(_date(int(now.timestamp()), "time"), editing=editing, can_edit=can_edit),
+        *([context_block(notice)] if notice else []),
     ]
     if not channels:
         return {"type": "home", "blocks": [*blocks, context_block(texts.HOME_EMPTY)]}
@@ -386,9 +454,13 @@ def home_view(
         room = (HOME_BLOCKS - 1 - len(blocks) - 3) // CARD_BLOCKS
         if room < min(1, len(cards)) or HOME_BLOCKS - 1 - len(blocks) < 3:
             break
-        blocks += [{"type": "divider"}, _channel_header(team_id, channel_id)]
+        blocks += [{"type": "divider"}, _channel_header(team_id, channel_id, editing=editing)]
+        name = channels.get(channel_id, "")
         for index, row in enumerate(cards[:room]):
-            blocks += [*([context_block(SPACER)] if index else []), *_card(row)]
+            blocks += [
+                *([context_block(SPACER)] if index else []),
+                *_card(row, name, editing=editing),
+            ]
         shown += min(len(cards), room)
         if len(cards) > room:
             break
@@ -436,6 +508,7 @@ class Home:
         team_id: str,
         state: StateStore,
         sessions_of: Callable[[Path], list[SDKSessionInfo]],
+        delete: Callable[[str, str], Awaitable[str | None]] | None = None,
         debounce: float = DEBOUNCE_SECONDS,
         clock: Callable[[], float] = time.time,
     ) -> None:
@@ -444,6 +517,12 @@ class Home:
         self._team = team_id
         self._state = state
         self._sessions_of = sessions_of
+        # Deletes a thread and answers the line to show when it could not
+        # (`delete.ThreadDeleter.delete`). None: no Edit button, the page as it always was.
+        self._delete = delete
+        # Kept in memory like the filters: a restart starts out of edit mode.
+        self._editing = False
+        self._notice: str | None = None
         self._debounce = debounce
         self._clock = clock
         self._task: asyncio.Task[None] | None = None
@@ -497,6 +576,22 @@ class Home:
         """Set the filters and publish at once. A channel that is not one of the page's own
         (not bound, or gone from Slack) is no filter: `publish` drops it."""
         self._chosen = chosen
+        await self.publish()
+
+    async def edit(self, on: bool) -> None:
+        """Enter or leave edit mode and publish at once."""
+        self._editing = on and self._delete is not None
+        self._notice = None
+        await self.publish()
+
+    async def delete(self, channel_id: str, thread_ts: str) -> None:
+        """Delete a thread the page lists, then publish: without it, or with the line that
+        says why it is still there. The page stays in edit mode."""
+        if self._delete is None or not self._editing:
+            return
+        self._notice = await self._delete(channel_id, thread_ts)
+        # A delete that stopped half way changed the thread: its root is read again.
+        self._stale.add((channel_id, thread_ts))
         await self.publish()
 
     async def close(self) -> None:
@@ -555,6 +650,9 @@ class Home:
             team_id=self._team,
             chosen=self._chosen,
             now=datetime.fromtimestamp(self._clock()).astimezone(),
+            can_edit=self._delete is not None,
+            editing=self._editing,
+            notice=self._notice,
         )
         await self._slack.views_publish(user_id=self._owner, view=view)
 

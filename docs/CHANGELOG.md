@@ -7,6 +7,19 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Deleting a session's whole thread from the Home tab (issue #145), with a new optional
+  variable, `SLACK_USER_TOKEN`: the owner's own user token with the user scope `chat:write`.
+  Slack lets a bot delete only its own messages, and a thread's root and the owner's replies
+  are the owner's. With the token set, the line above the sessions carries **Edit**; in edit
+  mode each session that is not working or waiting for the owner carries a red **Delete** with
+  Slack's confirmation dialog, which names the thread, and the **New thread** buttons are left
+  out. Confirmed, the new module `delete` (`ThreadDeleter`) closes the thread's idle session
+  (`SessionManager.release`), deletes every message, the root last, and drops the thread from
+  `state.json`; the Claude Code session stays and `!resume` lists it again. A delete that is
+  refused or stops half way leaves a line under the header and continues when asked again. The
+  daemon refuses to start with a user token that is not the owner's own in the bot's workspace.
+  Without the token nothing changes: no Edit button, and the header stays a small line. The
+  manifest does not ask for the user scope; `docs/setup.md` has the steps.
 - `!status` typed in a session's thread shows, under `Session:`, the command that continues
   that session in the terminal (issue #12, first step):
   `` Terminal: `cd <folder> && claude --resume <session id> --fork-session` ``, with the folder

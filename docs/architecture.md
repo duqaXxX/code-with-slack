@@ -794,6 +794,30 @@ landed, so a filter just chosen is never replaced by an older page. On a stop, `
 after every session has closed and publishes what was still owed, giving up after
 `home.CLOSE_SECONDS`.
 
+**Edit mode and Delete.** With the owner's user token configured (`Config.user_token`,
+`SLACK_USER_TOKEN`), `__main__._deleter` builds a `delete.ThreadDeleter` after checking with
+`auth.test` that the token is the owner's own in the bot's workspace, and hands its `delete` to
+`Home`. The header line is then a section with an **Edit** button (`home.EDIT_ACTION`), since a
+context block holds no button; without the token it stays the context line and the page has no
+such control. `Home.edit` keeps the mode in memory and publishes: in edit mode a channel's
+header has no **New thread**, and the title row of each session whose status is not `working`
+or `waiting for you` carries a `danger` button (`home.DELETE_ACTION`) with a `confirm` dialog
+that names the thread, cut to the dialog's 300 characters. Slack sends the click only after the
+owner confirmed. The listener checks the owner and the workspace, like every Home control, and
+`Home.delete` acts only in edit mode.
+
+`ThreadDeleter.delete` acts only on a thread `state.json` holds. It asks
+`SessionManager.release`, which closes the thread's live session when it is idle (the test the
+idle close makes, as silent) and answers False for one that is not. It then reads the thread
+page by page (`conversations.replies`, cursor pagination) and deletes each message with
+`chat.delete`: the bot's own with the bot token, every other with the owner's, the replies
+first and the root last; `message_not_found` counts as deleted. `chat.delete` is Tier 3 and both
+clients retry a rate limit. Only then is the thread dropped from `state.json`
+(`StateStore.remove_thread`). Any other failure stops the delete and leaves the thread where it
+is, with a line under the page's header (`texts.HOME_DELETE_FAILED`, or `texts.HOME_DELETE_BUSY`
+for a thread in use); the same click later continues with what is left. The Claude Code session
+and its transcript are not touched.
+
 `Home.publish` never raises. `not_enabled` (the Home tab is off in the Slack app's settings) is
 logged once and ends the publishing for that run; any other failure is logged by its error code
 and tried again after `home.RETRY_SECONDS`.

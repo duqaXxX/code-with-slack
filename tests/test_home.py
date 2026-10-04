@@ -14,7 +14,12 @@ from code_with_slack import texts
 from code_with_slack.home import (
     ALL,
     CHANNEL_ACTION,
+    CONFIRM_TEXT,
     DATE_ACTION,
+    DELETE_ACTION,
+    EDIT_ACTION,
+    EDIT_OFF,
+    EDIT_ON,
     FILTERS_BLOCK,
     HOME_BLOCKS,
     LAST_7,
@@ -1068,3 +1073,127 @@ async def test_close_gives_up_on_a_slack_that_does_not_answer(
     home.request()
     await asyncio.wait_for(home.close(), 1)  # returns: a stop never hangs on the page
     assert published(slack) == []
+
+
+def buttons(page: dict[str, Any], action_id: str) -> list[dict[str, Any]]:
+    """The section accessories of the page that carry `action_id`."""
+    found = [b.get("accessory") or {} for b in page["blocks"] if b["type"] == "section"]
+    return [a for a in found if a.get("action_id") == action_id]
+
+
+def test_a_page_that_cannot_delete_has_no_edit_button_even_when_asked_to_edit() -> None:
+    plain = view([row()], channels={CHANNEL: "cc-articles"})
+    asked = view([row()], channels={CHANNEL: "cc-articles"}, editing=True)
+    assert asked == plain
+    assert buttons(plain, EDIT_ACTION) == [] and buttons(plain, DELETE_ACTION) == []
+    assert texts.HOME_HEADER.split(" · ")[0] in notes(plain)[0]  # the header stays a small line
+
+
+def test_a_page_that_can_delete_carries_edit_on_its_header_line() -> None:
+    page = view([row()], channels={CHANNEL: "cc-articles"}, can_edit=True)
+    (edit,) = buttons(page, EDIT_ACTION)
+    assert (edit["text"]["text"], edit["value"]) == (texts.HOME_EDIT, EDIT_ON)
+    assert "style" not in edit
+    # Out of edit mode nothing else changes: New thread stays, no session carries a button.
+    assert len(buttons(page, NEW_THREAD_ACTION)) == 1
+    assert buttons(page, DELETE_ACTION) == []
+    assert len(cards(page)) == 1
+
+
+def test_edit_mode_shows_delete_on_each_session_and_no_new_thread() -> None:
+    rows = [
+        row("Fix the footer", thread_ts="1789990000.000100", status=Status.DONE.value, replies=19),
+        row("Still running", thread_ts="1789990000.000200", status=Status.WORKING.value),
+        row("Asked you", thread_ts="1789990000.000300", status=Status.WAITING.value),
+        row("Never replied", thread_ts="1789990000.000400", status=Status.ERROR.value, replies=0),
+    ]
+    page = view(rows, channels={CHANNEL: "cc-articles"}, can_edit=True, editing=True)
+    (done,) = buttons(page, EDIT_ACTION)
+    assert (done["text"]["text"], done["value"], done["style"]) == (
+        texts.HOME_DONE,
+        EDIT_OFF,
+        "primary",
+    )
+    assert buttons(page, NEW_THREAD_ACTION) == []
+    # A thread that is working or waiting for the owner is in use: no Delete.
+    deletes = buttons(page, DELETE_ACTION)
+    assert [d["value"] for d in deletes] == [
+        f"{CHANNEL}:1789990000.000100",
+        f"{CHANNEL}:1789990000.000400",
+    ]
+    first = deletes[0]
+    assert first["style"] == "danger" and first["text"]["text"] == texts.HOME_DELETE
+    # The button element and its confirm dialog: docs.slack.dev block-elements/button-element
+    # and composition-objects/confirmation-dialog-object, read 2026-10-05.
+    assert first["confirm"] == {
+        "title": {"type": "plain_text", "text": "Delete this thread?"},
+        "text": {
+            "type": "plain_text",
+            "text": "“Fix the footer” in #cc-articles, 19 replies. " + texts.HOME_DELETE_TEXT,
+        },
+        "confirm": {"type": "plain_text", "text": "Delete thread"},
+        "deny": {"type": "plain_text", "text": "Cancel"},
+        "style": "danger",
+    }
+    assert deletes[1]["confirm"]["text"]["text"].startswith("“Never replied” in #cc-articles. ")
+
+
+def test_a_confirmation_never_passes_the_dialog_s_limit() -> None:
+    long = row("word " * 100, replies=1234, status=Status.DONE.value)
+    page = view([long], channels={CHANNEL: "c" * 80}, can_edit=True, editing=True)
+    (delete,) = buttons(page, DELETE_ACTION)
+    text = delete["confirm"]["text"]["text"]
+    assert len(text) <= CONFIRM_TEXT
+    assert text.endswith(texts.HOME_DELETE_TEXT)
+
+
+def test_a_notice_shows_under_the_header() -> None:
+    page = view([row()], channels={CHANNEL: "cc-articles"}, can_edit=True, notice="Not deleted.")
+    assert notes(page)[0] == "Not deleted."
+
+
+async def test_edit_and_delete_publish_the_page_and_keep_it_in_edit_mode(
+    tmp_path: Path, slack: FakeSlack, state: StateStore
+) -> None:
+    asked: list[tuple[str, str]] = []
+    answers: list[str | None] = [texts.HOME_DELETE_BUSY, None]
+
+    async def delete(channel_id: str, thread_ts: str) -> str | None:
+        asked.append((channel_id, thread_ts))
+        answer = answers.pop(0)
+        if answer is None:
+            state.remove_thread(channel_id, thread_ts)
+        return answer
+
+    home = make_home(slack, state, listing(tmp_path), delete=delete)
+    # A delete that arrives out of edit mode is not one the page offered.
+    await home.delete(CHANNEL, OLD_THREAD)
+    assert asked == [] and published(slack) == []
+
+    await home.edit(True)
+    assert len(buttons(published(slack)[-1], DELETE_ACTION)) == 1  # the other one waits for you
+    await home.delete(CHANNEL, OLD_THREAD)
+    page = published(slack)[-1]
+    assert texts.HOME_DELETE_BUSY in notes(page)
+    assert len(buttons(page, DELETE_ACTION)) == 1  # still listed, still in edit mode
+
+    await home.delete(CHANNEL, OLD_THREAD)
+    page = published(slack)[-1]
+    assert asked == [(CHANNEL, OLD_THREAD)] * 2
+    assert texts.HOME_DELETE_BUSY not in notes(page)
+    assert buttons(page, DELETE_ACTION) == []  # gone from the page
+    assert buttons(page, EDIT_ACTION)[0]["value"] == EDIT_OFF
+
+    await home.edit(False)
+    assert buttons(published(slack)[-1], EDIT_ACTION)[0]["value"] == EDIT_ON
+
+
+async def test_a_home_with_no_deleter_never_enters_edit_mode(
+    tmp_path: Path, slack: FakeSlack, state: StateStore
+) -> None:
+    home = make_home(slack, state, listing(tmp_path))
+    await home.edit(True)
+    await home.delete(CHANNEL, OLD_THREAD)
+    page = published(slack)[-1]
+    assert buttons(page, EDIT_ACTION) == [] and buttons(page, DELETE_ACTION) == []
+    assert len(buttons(page, NEW_THREAD_ACTION)) == 2

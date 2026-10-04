@@ -79,6 +79,22 @@ act on behalf of Slack users, which code-with-slack never needs.
 Treat both as passwords: they go in the `.env` file of Part 2 and nowhere else. If one leaks,
 regenerate it on the same page.
 
+### Optional: a user token, to delete threads from the Home tab
+
+Skip this unless you want the Home tab's **Edit** mode, which deletes a session's whole thread
+(see "Deleting a thread" under "Using it"). Slack lets a bot delete only its own messages
+(`chat.delete` reference), and the first message of a thread and your replies are yours, so
+deleting them takes a token that acts as you.
+
+1. Open **OAuth & Permissions**, and under **Scopes**, **User Token Scopes**, add `chat:write`.
+2. Reinstall the app to your workspace when Slack asks.
+3. Copy the **User OAuth Token** (`xoxp-…`) into `.env` as `SLACK_USER_TOKEN` (Part 2).
+
+This token can post, edit and delete messages as you, anywhere you can. code-with-slack uses it
+for one call, `chat.delete`, on the messages of a thread you chose to delete. It is the one
+credential in `.env` that acts under your name: leave it out if you do not need the feature. The
+manifest does not ask for the scope, so an app created from it has no such token.
+
 ### Find your member ID
 
 In Slack, open your profile, choose the **⋮** button, then **Copy member ID** (it starts with
@@ -141,9 +157,13 @@ chmod 600 ~/.config/code-with-slack/.env
 | `SLACK_APP_TOKEN` | the `xapp-…` token |
 | `SLACK_OWNER_USER_ID` | your member ID, the only person the bot answers |
 | `ALLOWED_ROOT` | the directory `!bind` accepts paths under, for example `~/code` |
+| `SLACK_USER_TOKEN` | optional: your own `xoxp-…` token, for the Home tab's Delete |
 
 The workspace ID is not configured: code-with-slack reads it from Slack at startup with the bot
 token and rejects events from any other workspace.
+
+With `SLACK_USER_TOKEN` set, code-with-slack asks Slack at startup whose token it is and refuses
+to start unless it is yours (`SLACK_OWNER_USER_ID`) in the bot's workspace.
 
 `ALLOWED_ROOT` guards against a typo such as `!bind /`. It is not a security boundary:
 Claude Code can read and run outside its working directory once you approve it.
@@ -309,6 +329,8 @@ The bot answers one person, and the rest of this list protects what that person 
 - The Slack MCP server stays off.
 - The Home tab is published to you alone: code-with-slack writes that page for no other member.
 - `~/.config/code-with-slack/.env` is mode `600`.
+- `SLACK_USER_TOKEN` is set only if you use the Home tab's Delete: it acts as you in the whole
+  workspace, and whoever reads `.env` can post and delete under your name.
 - Files you attach are copied to `$TMPDIR/code-with-slack/` (mode `700`) and stay there for 3
   days, so a conversation resumed after a restart still finds them.
 - Trust a folder in Claude Code only after reading its `.claude/` settings and hooks: trusting it
@@ -386,6 +408,31 @@ It holds about 30 sessions at once and says so when it stops short. code-with-sl
 whenever a session starts, ends or changes status, and nothing notifies you when it does. The
 number of replies is read when a session starts or ends a turn, so a word typed in a thread
 (`!status`) is counted at the thread's next turn.
+
+#### Deleting a thread
+
+With `SLACK_USER_TOKEN` configured (Part 1), the line above the sessions carries an **Edit**
+button. In edit mode each session shows a red **Delete** button, the **New thread** buttons are
+left out, and **Done** leaves the mode. A session that is working or waiting for you has no
+Delete.
+
+Delete asks first, in a dialog titled `Delete this thread?` that names the thread, with the
+buttons `Delete thread` and `Cancel`:
+
+```
+“Fix the footer” in #cc-articles, 19 replies. Every message of the thread is deleted from Slack, yours and the bot's. This cannot be undone. The session stays in Claude Code and can be resumed with !resume.
+```
+
+Confirmed, code-with-slack closes the thread's session if it is idle, deletes every message of
+the thread, the first one last, and forgets the thread. The Claude Code session is not touched:
+`!resume` lists it again. Slack allows about 50 deletes a minute, so a long thread takes a few
+minutes, and the session stays on the page until its thread is gone.
+
+When a delete does not end, a line under the header says why:
+`Not deleted: that thread is working or waiting for you.`, or
+`` Could not delete every message of that thread (`<Slack's error>`). Delete it again to continue. ``
+The thread then stays on the page, and Delete continues with the messages that are left.
+Without the token the page has no Edit button.
 
 To keep the page one click away, star the app: open code-with-slack in Slack on desktop and
 click the star beside its name at the top of its page, or drag it from the apps list into

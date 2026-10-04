@@ -3095,6 +3095,28 @@ async def test_an_idle_session_closes_itself_after_the_delay_and_posts_nothing(
     assert len(h.slack.calls) == calls_before  # a silent close
 
 
+async def test_release_closes_an_idle_session_silently_and_refuses_one_in_use(
+    harness_for: Callable[..., Harness],
+) -> None:
+    ask = CanUseToolCall("Bash", {"command": "ls"})
+    h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
+    assert await h.manager.release(CHANNEL, THREAD)  # no live session: the thread is free
+    session = h.session()
+    turn = await session.submit("list the files")
+    await until(lambda: bool(h.approvals._pending))
+    assert not await h.manager.release(CHANNEL, THREAD)  # waiting on the owner
+    assert not session.closed and h.clients[0].connected is True
+    h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, THREAD, Approve())
+    await asyncio.wait_for(turn.done.wait(), 2)
+    await until(lambda: session.idle)
+    await asyncio.sleep(0.02)  # the thread status's last write lands
+    calls_before = len(h.slack.calls)
+    assert await h.manager.release(CHANNEL, THREAD)
+    assert session.closed and session.done_closing.is_set()
+    assert not h.clients[0].connected
+    assert len(h.slack.calls) == calls_before  # as silent as the idle close
+
+
 async def test_the_idle_close_does_not_fire_while_a_turn_runs(
     harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
 ) -> None:

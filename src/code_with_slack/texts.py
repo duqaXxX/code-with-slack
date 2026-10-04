@@ -322,6 +322,22 @@ HOME_NO_MATCH = "No session matches these filters."
 HOME_MORE = "Only the first {rows} sessions are shown: narrow the filters."
 HOME_OPEN = "Open"
 HOME_NEW_THREAD = "New thread"
+HOME_EDIT = "Edit"
+HOME_DONE = "Done"
+HOME_DELETE = "Delete"
+HOME_DELETE_TITLE = "Delete this thread?"
+HOME_DELETE_NAMED = "“{title}” in #{channel}, {replies}. "
+HOME_DELETE_NAMED_BARE = "“{title}” in #{channel}. "
+HOME_DELETE_TEXT = (
+    "Every message of the thread is deleted from Slack, yours and the bot's. This cannot be "
+    "undone. The session stays in Claude Code and can be resumed with !resume."
+)
+HOME_DELETE_CONFIRM = "Delete thread"
+HOME_DELETE_DENY = "Cancel"
+HOME_DELETE_BUSY = "Not deleted: that thread is working or waiting for you."
+HOME_DELETE_FAILED = (
+    "Could not delete every message of that thread (`{error}`). Delete it again to continue."
+)
 HOME_SHOW_ALL = "Show all {count}"
 HOME_UNTITLED = "Session {id}"
 HOME_REPLY = "1 reply"

@@ -2427,6 +2427,20 @@ class SessionManager:
         self._deps.state.bind(channel_id, directory)
         return True
 
+    async def release(self, channel_id: str, thread_ts: str) -> bool:
+        """Close the thread's live session so the thread can be deleted, and wait for its
+        teardown. False, with nothing closed, when the session is not idle or waits for the
+        owner: the same test D9's idle close makes, so the close is as silent."""
+        session = self._sessions.get((channel_id, thread_ts))
+        if session is None:
+            return True
+        if not session.closed:
+            if session.waiting_for_owner or not session.idle:
+                return False
+            await session.close(reason=texts.ENDED_IDLE)
+        await session.done_closing.wait()
+        return True
+
     async def stop_channel(self, channel_id: str) -> bool | None:
         """`stop()` on every live session of the channel; True if any stopped something. None
         when nothing did except cancel a D8 hold: the caller adds no further notice of its own

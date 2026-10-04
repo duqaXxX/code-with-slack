@@ -69,6 +69,9 @@ from code_with_slack.guards import (
 )
 from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, Pending, hold_blocks
 from code_with_slack.home import (
+    DELETE_ACTION,
+    EDIT_ACTION,
+    EDIT_ON,
     FILTER_ACTIONS,
     NEW_THREAD_ACTION,
     SHOW_ALL_ACTION,
@@ -1051,6 +1054,23 @@ def build_app(
         # it is a bound one).
         channel = str(body["actions"][0].get("value"))
         await home.choose(dataclasses.replace(home.chosen, channel=channel))
+
+    @app.action(EDIT_ACTION)
+    async def on_home_edit(ack: AsyncAck, body: dict[str, Any]) -> None:
+        await ack()
+        if not home_owner(body):
+            return
+        await home.edit(str(body["actions"][0].get("value")) == EDIT_ON)
+
+    @app.action(DELETE_ACTION)
+    async def on_home_delete(ack: AsyncAck, body: dict[str, Any]) -> None:
+        # Slack sends this click only once the owner confirmed in the button's own dialog.
+        await ack()
+        if not home_owner(body):
+            return
+        # The value names the thread; `Home.delete` deletes only one `state.json` holds.
+        channel, _, thread_ts = str(body["actions"][0].get("value")).partition(":")
+        await home.delete(channel, thread_ts)
 
     async def on_decision(ack: AsyncAck, body: dict[str, Any]) -> None:
         await ack()
