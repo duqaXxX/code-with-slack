@@ -154,10 +154,10 @@ CLAIMS = [
     Claim(
         "P14",
         "model",
-        "a hook's `cwd` follows a `cd`, so the footer shows that folder's branch",
+        "a hook's `cwd` follows a `cd`, so the footer shows the branch of a trusted repo there",
         "code_with_slack.sessions.ThreadSession._note_cwd",
-        "bind a folder holding a repo one level down, ask Claude to `cd` into it; the footer "
-        "shows the repo's branch",
+        "bind a folder holding a repo you trusted in Claude Code one level down, ask Claude to "
+        "`cd` into it; the footer shows the repo's branch",
     ),
     Claim(
         "P15",

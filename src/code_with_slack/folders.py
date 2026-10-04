@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 FOLDER_ROWS = 20
 FOLDER_DEPTH = 2
 BIND_ACTION = "folder_bind"
-# Each trust check may run git twice: a batch at a time, so a root with many untrusted folders
-# lists in a few rounds, and the check stops soon after the rows are filled.
+# Each trust check reads the filesystem in a thread: a batch at a time, so a root with many
+# untrusted folders lists in a few rounds, and the check stops soon after the rows are filled.
 TRUST_BATCH = 8
 
 

@@ -319,6 +319,34 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- The footer and `!status` run git only on a repository the owner trusted in Claude Code, and
+  leave the branch and the changes out anywhere else (`footer.git_state`, new;
+  `footer.git_branch` and `footer.git_changes` are gone). The diff ran in whatever folder the
+  session had moved to, under that folder's own config, and `git diff-files` runs the `clean`
+  filter a repository's config names: a repository delivered in an archive or laid out as a
+  bare repository inside a clone ran its command with no approval asked. git is now given the
+  repository with `--git-dir` and never searches for one from the folder, and
+  `--ignore-submodules=dirty` keeps it out of a nested repository the index names as a gitlink.
+  That flag changes one count: a submodule set to `ignore = all` whose checked-out commit
+  differs from the recorded one adds one line each way. Anywhere inside a repository's own
+  `.git` directory the branch alone shows, also in a submodule's git dir under `.git/modules`,
+  where the changes showed too. The git calls of one footer share `GIT_TIMEOUT`, where each had
+  its own.
+- The trust check reads which repository a folder belongs to from the filesystem
+  (`trust.locate`, `trust.Repository`, `trust.trusted_repository`, new; `trust.repository_root`
+  and `trust.GitUnavailable` are gone) and runs no git. It took the answer from git run in the
+  folder, so a folder whose `.git` file, `.git` symlink, `commondir` or `core.worktree` named a
+  repository the owner had trusted passed for that repository, and a session started there with
+  the folder's own hooks and settings. A folder holding a `.git` entry is keyed on itself; a
+  linked worktree is keyed on its main checkout only when that checkout registers the folder.
+  What else changes at a session's start and in `!bind`: a `.git` file or symlink that names no
+  git dir no longer lets a trusted parent cover the folder; a folder holding entries named as a
+  git dir's are (`HEAD` with `objects` and `refs`, or with `commondir`) is untrusted with all
+  below it, also when git itself rejects it and also inside a trusted repository; a FIFO in a
+  folder's git metadata no longer holds the check; a folder outside git reached by a path in
+  another case is the trusted folder it is on disk; a worktree whose folder was moved by hand
+  is untrusted until `git worktree repair`; and the check answers the same on a machine with
+  no git.
 - A reply's banner is computed in a time linear in its first paragraph (`strip_markdown`). Three
   of its patterns read ahead and were tried again from every later start, so a paragraph that was
   one long run of `[`, of blank lines or of `_` inside a word held the event loop, and with it

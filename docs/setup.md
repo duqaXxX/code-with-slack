@@ -165,7 +165,10 @@ A session starts only in a folder you have trusted in Claude Code. Claude Code s
 dialog only in the terminal, and a session started from Slack would otherwise run a
 repository's own hooks and apply its settings without asking. Before you bind a channel to a
 repository, open `claude` at its root in the terminal once and accept the dialog. A trusted
-parent folder does not cover a git repository inside it, such as a clone.
+parent folder does not cover a git repository inside it, such as a clone. A worktree is covered
+by its main checkout while git registers it there: after moving a worktree's folder by hand, run
+`git worktree repair` in it. The footer and `!status` show the branch and the uncommitted lines
+only where the session works in a trusted repository.
 
 When Claude Code is logged out, a message in Slack replies with a note asking you to run `claude`
 and `/login` on the machine; the login is never done from Slack. `!login` and `!logout` typed in
@@ -523,7 +526,7 @@ in [features.md](features.md#notifications), not restated here.
 | ``This thread holds no session. In the channel, send a new message to start one, or `!resume` to continue an earlier one.`` | The thread holds no session (a word's own thread, or one with no entry in `state.json`); send a new message in the channel to start one, send `!resume` there to continue a session Claude Code still has, or type a word, which works as if typed there |
 | ``This thread already holds a session: send `!resume` again in the channel to pick another.`` | A Resume click or `!resume <id or name>` was sent to a thread that already has a session; a new `!resume` in the channel gives a thread of its own |
 | `This session is already open in another thread: <link>.` | A Resume click or `!resume <id or name>` named a session already open in some other thread; follow the link and send the message there instead |
-| `Claude Code has not been trusted in ...`, after a message or a `!bind` | Open `claude` in that folder (the repository root) in the terminal, accept the trust dialog, and send the message again |
+| `Claude Code has not been trusted in ...`, after a message or a `!bind` | Open `claude` in that folder (the repository root) in the terminal, accept the trust dialog, and send the message again. For a worktree whose folder was moved by hand, run `git worktree repair` in it |
 | `The directory ... no longer exists` | The thread's directory was moved or deleted: restore it to keep using this thread, or, in the channel, bind another folder with `!bind <path>` and send a new message to start a session there |
 | `macOS does not let code-with-slack read ...` | The directory is in a folder macOS protects: see Part 4, "Folders macOS protects" |
 | `another code-with-slack is running` in the log | A second instance tried to start; only one may run |

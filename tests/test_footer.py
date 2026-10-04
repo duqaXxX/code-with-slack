@@ -20,12 +20,11 @@ from code_with_slack.footer import (
     format_footer,
     format_status_fields,
     format_until,
-    git_branch,
-    git_changes,
+    git_state,
     parse_usage,
     session_tokens,
 )
-from tests.fakes import FakeClaudeClient, sdk_messages
+from tests.fakes import FakeClaudeClient, any_repository, sdk_messages
 
 NOW = datetime(2026, 9, 23, 21, 0, tzinfo=ZoneInfo("Europe/Berlin"))
 
@@ -240,12 +239,16 @@ def repo(tmp_path: Path) -> Path:
 
 
 async def test_git_branch(repo: Path) -> None:
-    assert await git_branch(repo) == "feature-x"
-    assert await git_branch(repo / "missing") is None
+    assert await git_state(repo, any_repository) == ("feature-x", (0, 0))
+    assert await git_state(repo / "missing", any_repository) == (None, None)
 
 
 def git(repo: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+
+async def git_changes(repo: Path) -> tuple[int, int] | None:
+    return (await git_state(repo, any_repository))[1]
 
 
 async def test_git_changes_add_staged_and_unstaged_lines(repo: Path) -> None:

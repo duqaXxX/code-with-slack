@@ -53,6 +53,7 @@ from tests.fakes import (
     FakeClaudeClient,
     FakeSlack,
     HookRun,
+    any_repository,
     sdk_json,
     sdk_messages,
     split_turns,
@@ -103,6 +104,7 @@ class Harness:
             usage=UsageCache(fetch),
             client_factory=self.factory,
             workspace_trusted=trusted,
+            trusted_repository=any_repository,
             # A generous burst: these tests are about session orchestration, not the shared
             # limiter's own pacing (that lives in test_sinks.py), and several use a real 2s
             # `wait_for` budget the production rate (one write every ~1.33s past 5) would blow.
@@ -2001,10 +2003,10 @@ async def test_an_approval_slack_refuses_to_show_is_denied_and_logged(
 async def test_a_footer_that_fails_to_build_still_ends_the_reply(
     harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def broken(cwd: Path) -> str | None:
+    async def broken(here: Path, repository: object) -> tuple[str | None, None]:
         raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
 
-    monkeypatch.setattr(sessions, "git_branch", broken)
+    monkeypatch.setattr(sessions, "git_state", broken)
     h = harness_for({"turns": [sdk_messages("tools")]})
     turn = await h.session().submit("list the files")
     await asyncio.wait_for(turn.done.wait(), 2)
@@ -2285,6 +2287,25 @@ async def test_a_tool_s_hook_moves_the_branch_when_no_stop_hook_runs(
     await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
     assert f" · {tmp_path.name} · feature-x · (+0,-0) · " in statuses(h)[-1]
     assert session.working_directory == repo
+
+
+async def test_the_footer_leaves_out_the_branch_of_a_repository_not_trusted(
+    harness_for: Callable[..., Harness], repo: Path
+) -> None:
+    # The session went into a repo the owner never trusted in Claude Code: no git runs there,
+    # and neither the footer nor `!status` says anything in its place.
+    async def untrusted(directory: Path) -> None:
+        return None
+
+    moved = {**sdk_json("stop-hook"), "cwd": str(repo)}
+    h = harness_for({"turns": [with_stop_hook(sdk_messages("tools"), moved)]})
+    h.deps.trusted_repository = untrusted
+    session = h.session()
+    await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
+    assert "feature-x" not in statuses(h)[-1] and "(+0,-0)" not in statuses(h)[-1]
+    text = await session.status()
+    assert f"Working in: `{repo}`" in text
+    assert "Branch:" not in text and "Uncommitted:" not in text
 
 
 async def test_a_restarted_client_starts_again_in_the_bound_folder(

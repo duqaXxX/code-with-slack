@@ -51,6 +51,7 @@ from tests.fakes import (
     CanUseToolCall,
     FakeClaudeClient,
     FakeSlack,
+    any_repository,
     sdk_messages,
     slack_payload,
     split_turns,
@@ -131,6 +132,7 @@ class World:
                 usage=UsageCache(no_usage),
                 client_factory=factory,
                 workspace_trusted=always_trusted,
+                trusted_repository=any_repository,
                 sessions_of=lambda directory: self.stored_sessions,
                 update_limiter=update_limiter or UpdateLimiter(),
             )
