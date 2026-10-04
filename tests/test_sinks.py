@@ -70,6 +70,11 @@ def methods(slack: FakeSlack) -> list[str]:
 async def settled() -> None:
     """Long enough for a debounced write, with the debounce shrunk to 10 ms."""
     await asyncio.sleep(0.05)
+    # A loop stalled past both (a full garbage collection) finds the debounce and this sleep due
+    # together, and would hand back before the write got anywhere: let what the debounce woke
+    # run to its next wait, as `FakeClock.advance` does.
+    for _ in range(20):
+        await asyncio.sleep(0)
 
 
 def tool(id: str, name: str, status: str = "complete", **fields: Any) -> TaskUpdate:
