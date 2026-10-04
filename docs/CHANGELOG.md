@@ -123,7 +123,7 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 
 - An `Edit` or a `Write` that ended well is one row in a reply (issue #136): a collapsed
-  container titled with the call's line (`Update(notes.txt)`), with the sentence
+  container titled with the call's line in code style (`Update(notes.txt)`), with the sentence
   (`Added 1 line, removed 1 line`) as its subtitle and the diff inside, and no task card. A new
   file's first lines are in a container of the same shape, where they were an open code block.
   The renderer sends these two tools to the sink once they have ended

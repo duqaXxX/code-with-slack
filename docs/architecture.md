@@ -261,7 +261,8 @@ get. While the call runs the reply shows nothing for it; a call that waits for a
 approval's message. One that ended well is a `blocks` chunk with no card
 (`render.previews.preview`): a collapsible, full-width `container` block
 (`sinks.preview_containers`), closed until the owner opens it, whose title is the call's line
-(`Update(notes.txt)`) and whose subtitle is the sentence (`Added 1 line, removed 1 line`). Inside a
+(`Update(notes.txt)`), in code style through `rich_text_title` with the plain `title` as the
+fallback, and whose subtitle is the sentence (`Added 1 line, removed 1 line`). Inside a
 diff's container is the whole numbered diff in a rich text preformatted element with the language
 `diff`, which Slack desktop colours; each changed line also carries a red or green square after
 its sign, since Slack mobile colours nothing. A new file's container holds its first 10 lines and

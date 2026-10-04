@@ -1034,6 +1034,11 @@ async def test_an_edit_that_ended_well_is_one_container_with_no_card(slack: Fake
     assert container["type"] == "container" and container["is_collapsible"] is True
     assert container["title"] == {"type": "plain_text", "text": "Update(a.txt)"}
     assert container["subtitle"] == {"type": "plain_text", "text": "Added 1 line"}
+    # The call's line in code style, as a tool line shows it; the plain title is the fallback.
+    [section] = container["rich_text_title"]["elements"]
+    assert section["elements"] == [
+        {"type": "text", "text": "Update(a.txt)", "style": {"code": True}}
+    ]
 
 
 async def test_a_new_file_that_was_written_is_one_container_with_no_card(slack: FakeSlack) -> None:
@@ -1068,6 +1073,7 @@ async def test_a_diff_under_a_card_that_already_showed_keeps_the_sentence_as_tit
     assert card["type"] == "task_update" and card["title"] == "Update(a.txt)"
     [container] = blocks["blocks"]
     assert container["title"]["text"] == "Added 1 line" and "subtitle" not in container
+    assert "rich_text_title" not in container
 
 
 async def test_a_preview_with_no_lines_keeps_its_card(slack: FakeSlack) -> None:
@@ -1501,8 +1507,10 @@ def test_a_diff_past_a_message_continues_in_the_next() -> None:
 
 
 def test_a_long_title_is_cut_to_slacks_limit() -> None:
-    [block] = sinks.preview_containers("x" * 200, "+x")
+    [block] = sinks.preview_containers("x" * 200, "+x", as_code=True)
     assert len(block["title"]["text"]) == 150
+    [section] = block["rich_text_title"]["elements"]
+    assert len(section["elements"][0]["text"]) == 150
 
 
 @pytest.mark.parametrize("fence", ["```", "````", "``````", "```x```"])

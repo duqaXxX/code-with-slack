@@ -182,16 +182,31 @@ def preview_blocks(body: str) -> list[dict[str, Any]]:
 
 
 def preview_containers(
-    title: str, body: str, *, subtitle: str = "", language: str = "diff"
+    title: str, body: str, *, subtitle: str = "", language: str = "diff", as_code: bool = False
 ) -> list[dict[str, Any]]:
     """A preview's body, collapsed: a full-width container per MESSAGE_LIMIT piece of it, closed
-    until the owner opens it. A call with no card is titled with its line and says the preview's
-    sentence under it; under a card, which is the call's line, the title is the sentence alone.
-    The body sits in the message itself, so it opens after a restart too."""
+    until the owner opens it. A call with no card is titled with its line, in code style as a
+    tool line is (`as_code`), and says the preview's sentence under it; under a card, which is
+    the call's line, the title is the sentence alone. The body sits in the message itself, so it
+    opens after a restart too."""
+    title = title[:150]
+    # The plain title is the fallback of a client that does not draw the rich one.
+    rich = {
+        "rich_text_title": {
+            "type": "rich_text",
+            "elements": [
+                {
+                    "type": "rich_text_section",
+                    "elements": [{"type": "text", "text": title, "style": {"code": True}}],
+                }
+            ],
+        }
+    }
     return [
         {
             "type": "container",
-            "title": {"type": "plain_text", "text": title[:150]},
+            "title": {"type": "plain_text", "text": title},
+            **(rich if as_code else {}),
             **({"subtitle": {"type": "plain_text", "text": subtitle[:150]}} if subtitle else {}),
             "width": "full",
             "is_collapsible": True,
@@ -463,7 +478,9 @@ def piece_blocks(tool: _Tool, index: int) -> list[dict[str, Any]]:
     if view.plain:
         return [context_block(body)]
     if tool.cardless:
-        return preview_containers(view.title, body, subtitle=view.summary, language=view.language)
+        return preview_containers(
+            view.title, body, subtitle=view.summary, language=view.language, as_code=True
+        )
     if view.language == "diff":
         return preview_containers(view.summary, body)
     return preview_blocks(body)
