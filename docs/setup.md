@@ -406,8 +406,9 @@ session offers is sent as a normal prompt, so `!important: …` reaches Claude a
 in a thread whose session no longer resumes (its transcript was deleted) gets `This thread's
 session no longer exists: Claude Code deleted it or cannot find it. Send a new message in the
 channel to start one.`; a reply in a thread that holds no session (a word's own thread, or
-one whose entry the daemon no longer keeps) gets ``This thread holds no session. In the channel,
-send a new message to start one, or `!resume` to continue an earlier one.``, except a word, which acts as if typed at the top level. A Resume click or
+one with no entry in `state.json`) gets ``This thread holds no session. In the channel, send a
+new message to start one, or `!resume` to continue an earlier one.``, except a word, which acts
+as if typed at the top level. A Resume click or
 `!resume <id or name>` sent to a thread that already holds a session gets
 ``This thread already holds a session: send `!resume` again in the channel to pick another.`` A Resume
 click or
@@ -519,7 +520,7 @@ in [features.md](features.md#notifications), not restated here.
 | `Claude Code is not logged in on the host` | Claude Code on the machine is logged out: run `claude`, then `/login` |
 | Some messages get no reply | A second instance is running and receiving part of the events |
 | `This thread's session no longer exists: Claude Code deleted it or cannot find it. Send a new message in the channel to start one.` | The stored session id can no longer be resumed (its transcript was deleted); send a new message in the channel to start one |
-| ``This thread holds no session. In the channel, send a new message to start one, or `!resume` to continue an earlier one.`` | The thread holds no session (a word's own thread, or one whose entry the daemon no longer keeps); send a new message in the channel to start one, send `!resume` there to continue a session Claude Code still has, or type a word, which works as if typed there |
+| ``This thread holds no session. In the channel, send a new message to start one, or `!resume` to continue an earlier one.`` | The thread holds no session (a word's own thread, or one with no entry in `state.json`); send a new message in the channel to start one, send `!resume` there to continue a session Claude Code still has, or type a word, which works as if typed there |
 | ``This thread already holds a session: send `!resume` again in the channel to pick another.`` | A Resume click or `!resume <id or name>` was sent to a thread that already has a session; a new `!resume` in the channel gives a thread of its own |
 | `This session is already open in another thread: <link>.` | A Resume click or `!resume <id or name>` named a session already open in some other thread; follow the link and send the message there instead |
 | `Claude Code has not been trusted in ...`, after a message or a `!bind` | Open `claude` in that folder (the repository root) in the terminal, accept the trust dialog, and send the message again |
