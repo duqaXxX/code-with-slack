@@ -319,12 +319,16 @@ async def test_legitimate_layouts_keep_their_trust(tmp_path: Path, home: Path) -
         repo / ".git" / "refs",
         line_break,
         under_nfd,
-        code / unicodedata.normalize("NFC", "caffè") / "wt",
         code / "link" / "src",
         code / "notes" / "empty",
         code / "notes" / "named" / "sub",
     ):
         assert await workspace_trusted(folder, home), folder
+    # git records the worktree's path in the composed form (git 2.54.0 on macOS), which names
+    # the same folder only where the filesystem folds the two forms together.
+    composed = code / unicodedata.normalize("NFC", "caffè") / "wt"
+    if composed.exists():
+        assert await workspace_trusted(composed, home)
 
 
 async def test_a_path_in_another_case_names_the_same_folder(tmp_path: Path, home: Path) -> None:
