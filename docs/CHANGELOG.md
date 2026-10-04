@@ -112,6 +112,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Two refusal texts say what the thread model does (issue #78). `texts.DIRECTORY_MISSING` ends
+  ``Restore it to keep using this thread, or, in the channel, bind another folder with
+  `!bind <path>` and send a new message to start a session there.``: a thread keeps its folder,
+  so binding the channel again helps only a new thread, and `!bind` is refused inside a thread.
+  `texts.NOT_A_SESSION` reads ``This thread holds no session. In the channel, send a new message
+  to start one, or `!resume` to continue an earlier one.``: it names no cause, since the daemon
+  keeps no record of a thread whose entry it dropped, and points at `!resume` for a session
+  Claude Code still has. `docs/architecture.md` states that a reply in a thread whose session
+  is gone gets this text and starts nothing.
 - The `!resume` list shows only sessions that can be resumed (issue #69). A session a thread
   already holds (D6) takes no row and is not dated; one line under the list counts them
   (`texts.RESUME_OPEN_ONE`, `texts.RESUME_OPEN_MANY`), and a folder whose sessions are all open

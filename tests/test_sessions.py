@@ -1850,7 +1850,7 @@ async def test_a_failed_background_post_still_releases_the_queue(
     assert h.clients[0].queries == ["start it", "next"]
 
 
-async def test_a_missing_directory_asks_to_bind_again(
+async def test_a_missing_directory_starts_nothing_and_says_so(
     harness_for: Callable[..., Harness], tmp_path: Path
 ) -> None:
     gone = tmp_path / "gone"

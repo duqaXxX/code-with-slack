@@ -292,6 +292,30 @@ async def test_a_reply_in_a_thread_that_holds_no_session_is_refused(world: World
     assert world.ephemerals() == [texts.NOT_A_SESSION]
 
 
+async def test_a_reply_after_a_gone_session_starts_nothing(world: World) -> None:
+    # D7 removes the thread's entry with its session, so the next reply finds a thread that
+    # holds no session: it is refused, never treated as a fresh top-level message.
+    world.state.open_thread(CHANNEL, THREAD, session_id="68da9311-0000-4000-8000-00000000dead")
+    world.connect_error = ResultError("transcript missing")
+    await world.dispatch(reply("hello", THREAD))
+    assert world.state.thread(CHANNEL, THREAD) is None
+    world.connect_error = None
+    await world.dispatch(reply("hello again", THREAD))
+    assert world.queries() == []
+    assert world.ephemerals()[-1] == texts.NOT_A_SESSION
+
+
+def test_the_thread_refusals_send_the_owner_to_the_channel() -> None:
+    # Both are shown inside a thread, where `!bind` is refused and a reply meets the same
+    # refusal again: each has to say that its way out is typed in the channel (issue #78).
+    assert "in the channel, bind another folder with `!bind <path>`" in texts.DIRECTORY_MISSING
+    assert "In the channel, send a new message" in texts.NOT_A_SESSION
+    assert "`!resume`" in texts.NOT_A_SESSION
+    # No cause: the daemon cannot tell a thread that never held a session from one whose
+    # entry it dropped while Claude Code still has the session.
+    assert "deleted" not in texts.NOT_A_SESSION
+
+
 @pytest.mark.parametrize(("user", "team"), [(STRANGER, TEAM), (OWNER, OTHER_TEAM)])
 async def test_a_message_from_anyone_else_does_nothing(world: World, user: str, team: str) -> None:
     await world.dispatch(message("rm -rf /", user=user, team=team))
