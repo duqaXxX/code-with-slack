@@ -327,6 +327,14 @@ def _plain(text: str) -> dict[str, Any]:
     return {"type": "plain_text", "text": text}
 
 
+def _section(text: str) -> dict[str, Any]:
+    return {"type": "section", "text": {"type": "mrkdwn", "text": text}}
+
+
+def _deleting_line(count: int) -> str:
+    return texts.HOME_DELETING_ONE if count == 1 else texts.HOME_DELETING_MANY.format(count=count)
+
+
 def _header(time: str, *, editing: bool, can_edit: bool) -> dict[str, Any]:
     """The line above the sessions. It carries the Edit button when threads can be deleted: a
     context block holds no button (context block reference), so the line is a section then."""
@@ -418,6 +426,7 @@ def home_view(
     can_edit: bool = False,
     editing: bool = False,
     notice: str | None = None,
+    deleting: int = 0,
 ) -> dict[str, Any]:
     """The Home tab's view. `rows` are newest first and `channels` maps each bound channel Slack
     still has to its name. Only the sessions of the chosen period are shown. With no channel,
@@ -426,11 +435,14 @@ def home_view(
     that channel); otherwise only what matches, with no such cut. Never past Slack's 100 blocks:
     the page says when it stops short. With `can_edit` the header line carries Edit; in
     `editing` each session that is not in use carries Delete and no channel carries New thread.
-    `notice` is the line a delete that did not end left, under the header."""
+    `notice` is the line a delete that did not end left, under the header; `deleting` is how
+    many threads are being deleted or wait for it, said in a line of full size under the
+    header, since a row that says so can be one of those a channel does not show."""
     editing = editing and can_edit
     blocks: list[dict[str, Any]] = [
         *_controls(channels, chosen),
         _header(_date(int(now.timestamp()), "time"), editing=editing, can_edit=can_edit),
+        *([_section(_deleting_line(deleting))] if deleting else []),
         *([context_block(notice)] if notice else []),
     ]
     if not channels:
@@ -677,6 +689,7 @@ class Home:
             can_edit=self._delete is not None,
             editing=self._editing,
             notice=self._notice,
+            deleting=len(self._deleting),
         )
         await self._slack.views_publish(user_id=self._owner, view=view)
 

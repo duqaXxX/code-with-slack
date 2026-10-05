@@ -808,7 +808,9 @@ that names the thread, cut to the dialog's 300 characters. Slack sends the click
 owner confirmed. The listener checks the owner and the workspace, like every Home control, and
 `Home.delete` acts only in edit mode. It publishes at once with the thread marked
 (`HomeRow.deleting`: the row reads `texts.HOME_DELETING` in place of its status and has no
-button), ignores a second click on a thread it is already deleting, and publishes again when
+button, and a section under the header counts the threads on their way, `texts.HOME_DELETING_ONE`
+or `texts.HOME_DELETING_MANY`, since such a row can be one a channel does not show), ignores a
+second click on a thread it is already deleting, and publishes again when
 the delete ended.
 
 `ThreadDeleter.delete` acts only on a thread `state.json` holds. It asks

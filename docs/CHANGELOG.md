@@ -17,8 +17,9 @@ All notable changes to this project are documented here. The format follows
   used in edit mode does not leave the page on one channel. Confirmed, the new module `delete` (`ThreadDeleter`) closes the thread's idle session
   (`SessionManager.release`), deletes every message, the root last, and drops the thread from
   `state.json`; the Claude Code session stays and `!resume` lists it again. Slack's rate limit
-  makes a delete take from seconds to minutes: from the click on the session's line reads
-  `deleting…` and has no Delete, and threads are deleted one at a time. A delete that is
+  makes a delete take from seconds to minutes: from the click on a line under the header counts
+  the threads being deleted, the session's line reads `deleting…` and has no Delete, and
+  threads are deleted one at a time. A delete that is
   refused or stops half way leaves a line under the header and continues when asked again. The
   daemon refuses to start with a user token that is not the owner's own in the bot's workspace.
   Without the token nothing changes: no Edit button, and the header stays a small line. The

@@ -326,12 +326,21 @@ HOME_EDIT = "Edit"
 HOME_DONE = "Done"
 HOME_DELETE = "Delete"
 HOME_DELETING = "deleting…"
+HOME_DELETING_ONE = (
+    ":hourglass_flowing_sand: *Deleting 1 thread.* Slack limits how fast messages are deleted: "
+    "a thread takes about a minute, and leaves this page when it is gone."
+)
+HOME_DELETING_MANY = (
+    ":hourglass_flowing_sand: *Deleting {count} threads, one at a time.* Slack limits how fast "
+    "messages are deleted: each takes about a minute, and leaves this page when it is gone."
+)
 HOME_DELETE_TITLE = "Delete this thread?"
 HOME_DELETE_NAMED = "“{title}” in #{channel}, {replies}. "
 HOME_DELETE_NAMED_BARE = "“{title}” in #{channel}. "
 HOME_DELETE_TEXT = (
     "Every message of the thread is deleted from Slack, yours and the bot's. This cannot be "
-    "undone. The session stays in Claude Code and can be resumed with !resume."
+    "undone. The session stays in Claude Code and can be resumed with !resume. Deleting takes "
+    "about a minute."
 )
 HOME_DELETE_CONFIRM = "Delete thread"
 HOME_DELETE_DENY = "Cancel"

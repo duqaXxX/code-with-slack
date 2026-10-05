@@ -421,7 +421,7 @@ Delete asks first, in a dialog titled `Delete this thread?` that names the threa
 buttons `Delete thread` and `Cancel`:
 
 ```
-“Fix the footer” in #cc-articles, 19 replies. Every message of the thread is deleted from Slack, yours and the bot's. This cannot be undone. The session stays in Claude Code and can be resumed with !resume.
+“Fix the footer” in #cc-articles, 19 replies. Every message of the thread is deleted from Slack, yours and the bot's. This cannot be undone. The session stays in Claude Code and can be resumed with !resume. Deleting takes about a minute.
 ```
 
 Confirmed, code-with-slack closes the thread's session if it is idle, deletes every message of
@@ -429,9 +429,10 @@ the thread, the first one last, and forgets the thread. The Claude Code session 
 `!resume` lists it again.
 
 A delete is not immediate: Slack limits how fast messages can be deleted, and a thread takes
-from some seconds to a few minutes. From the click on, the session's small line reads
-`deleting…` in place of its status and has no Delete; the session leaves the page when its
-thread is gone. Threads are deleted one at a time, so several chosen in a row all read
+about a minute, more for a long one. From the click on, a line under the header says how many
+threads are being deleted (`Deleting 2 threads, one at a time.` and why it takes time), and the
+session's small line reads `deleting…` in place of its status and has no Delete; the session
+leaves the page, and the count goes down, when its thread is gone. Threads are deleted one at a time, so several chosen in a row all read
 `deleting…` and go one after the other.
 
 When a delete does not end, a line under the header says why:
