@@ -483,7 +483,7 @@ it in the thread of your `!resume` message. To continue a session in the termina
 `!open`, sent inside a session's thread, offers the files changed in that session and a search \
 over the folder's files; choosing one shares it into the thread, where Slack opens it in its \
 file viewer, with Markdown rendered. `!open <path>` opens that file, and `!open <words>` the file \
-whose name contains them, or lists the files that do. The search reads the folder from disk and \
+whose path contains them, or lists the files that do. The search reads the folder from disk and \
 leaves out what `.gitignore` excludes inside a git repository. A file over 1 MB is not opened.
 
 **Bypass**
