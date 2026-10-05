@@ -61,7 +61,6 @@ from code_with_slack.commands import (
 )
 from code_with_slack.config import Config
 from code_with_slack.folders import BIND_ACTION, bind_blocks
-from code_with_slack.footer import GIT_TIMEOUT
 from code_with_slack.guards import (
     ChannelGuard,
     Identity,
@@ -87,22 +86,21 @@ from code_with_slack.openfile import (
     OPEN_SEARCH_ACTION,
     OPTION_ROWS,
     SUGGEST_TIMEOUT,
+    Listings,
     NotAFile,
     Starts,
     TooLarge,
-    changed_since,
+    changed_in,
     matches_blocks,
     newest_first,
-    no_source_blocks,
     openable,
     options,
     picker_blocks,
-    project_files,
     rank,
     regular_files,
+    repositories_of,
     thread_of,
     title_of,
-    usable,
 )
 from code_with_slack.prompt import Prompt
 from code_with_slack.render.escape import markdown_escape, mrkdwn_escape, shown_as_written
@@ -141,7 +139,6 @@ from code_with_slack.setup import (
 )
 from code_with_slack.setup import summary as setup_summary
 from code_with_slack.state import StateStore
-from code_with_slack.trust import Repository
 
 logger = logging.getLogger(__name__)
 # How a failure reaches the owner: the text of one line, delivered where the failed act answers.
@@ -260,9 +257,11 @@ def build_app(
         )
 
     app = AsyncApp(client=slack, authorize=authorize)
-    # What `!open` lists as changed is counted from where each thread's repository stood when this
-    # run first saw the thread (memory only).
+    # What `!open` lists as changed is counted from where each of a thread's repositories stood
+    # when this run first saw the thread (memory only); its search reads each folder's files from
+    # disk, kept for a few seconds.
     starts = Starts(sessions.repository)
+    listings = Listings(sessions.repository)
 
     async def deliver(
         channel: str,
@@ -937,23 +936,16 @@ def build_app(
         a path, else the file whose name contains them, else the files that do."""
         folder = session.directory
         await starts.seen(channel, thread_ts, folder)
-        repository = usable(await sessions.repository(folder))
         if not words:
-            await post_picker(channel, thread_ts, folder, repository)
+            await post_picker(channel, thread_ts, folder)
             return
         if await asyncio.to_thread(regular_files, folder, [words]):
             await open_file(channel, thread_ts, folder, words)
             return
-        shown = shown_as_written(words)
-        if repository is None:
-            await tell_owner(channel, thread_ts, texts.OPEN_NOT_A_FILE.format(path=shown))
-            return
-        index = await git_listing(project_files(repository, folder))
-        if index is None:
-            await tell_owner(channel, thread_ts, texts.OPEN_UNREADABLE)
-            return
+        index = await listings.of(folder)
         found = await asyncio.to_thread(regular_files, folder, rank(index, words))
         if not found:
+            shown = shown_as_written(words)
             await tell_owner(channel, thread_ts, texts.OPEN_NO_MATCH.format(words=shown))
         elif len(found) == 1:
             await open_file(channel, thread_ts, folder, found[0])
@@ -966,27 +958,16 @@ def build_app(
                 ephemeral=False,
             )
 
-    async def git_listing(listing: Awaitable[list[str] | None]) -> list[str] | None:
-        """A git listing within the footer's time limit; None when it fails or runs over."""
-        try:
-            async with asyncio.timeout(GIT_TIMEOUT):
-                return await listing
-        except TimeoutError:
-            return None
-
-    async def post_picker(
-        channel: str, thread_ts: str, folder: Path, repository: Repository | None
-    ) -> None:
+    async def post_picker(channel: str, thread_ts: str, folder: Path) -> None:
         """The picker, a post in the thread that stays so another file can be chosen after
-        the first."""
-        if repository is None:
-            blocks = no_source_blocks()
-        else:
-            names = await git_listing(
-                changed_since(repository, folder, starts.of(channel, thread_ts))
-            )
-            changed = await asyncio.to_thread(newest_first, folder, names or [])
-            blocks = picker_blocks(thread_ts, changed, len(changed))
+        the first. Its changed-files menu is the union over the folder's repositories, left out
+        when there is none or nothing changed."""
+        repositories = await repositories_of(folder, sessions.repository)
+        names = await changed_in(
+            folder, repositories, lambda repository: starts.of(channel, thread_ts, repository)
+        )
+        changed = await asyncio.to_thread(newest_first, folder, names)
+        blocks = picker_blocks(thread_ts, changed, len(changed))
         await deliver(channel, thread_ts, texts.OPEN_FALLBACK, blocks, ephemeral=False)
 
     async def open_file(channel: str, thread_ts: str, folder: Path, relative: str) -> None:
@@ -1065,13 +1046,10 @@ def build_app(
         if folder is None or not words:
             return []
         try:
-            repository = usable(await sessions.repository(folder))
-            if repository is None:
-                return []
             async with asyncio.timeout(SUGGEST_TIMEOUT):
-                index = await project_files(repository, folder)
+                index = await listings.of(folder)
                 found = await asyncio.to_thread(
-                    regular_files, folder, rank(index or [], words), OPTION_ROWS
+                    lambda: regular_files(folder, rank(index, words), OPTION_ROWS)
                 )
         except Exception as exc:  # nothing to show beats a menu that never loads
             logger.warning("could not list files for a search: %s", describe(exc))

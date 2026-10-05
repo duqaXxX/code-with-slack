@@ -11,11 +11,16 @@ All notable changes to this project are documented here. The format follows
   session and a search menu over the folder's files, and `!open <path>` or `!open <words>` for a
   file directly. The chosen file is shared into the thread with `files_upload_v2`, so Slack's own
   file viewer opens it (a `.md` file with Markdown rendered) with the thread beside it. The new
-  module `openfile` holds the logic; the lists come from git on a repository Claude Code trusts,
-  through the footer's git helper (now `footer.run_git`), with commands measured never to write
-  the index (git 2.54.0, 2026-10-05): `ls-files` for the index, `status` under
-  `--no-optional-locks` and `diff-tree` from the commit the thread was on when the daemon first
-  saw it for the changed files. A folder with no repository takes only a path. The search is an
+  module `openfile` holds the logic. The search reads the folder from disk: inside a repository
+  git may run in, git's own list (`ls-files`, which leaves out what `.gitignore` excludes, as the
+  terminal's `@` file picker does under `respectGitignore`), everywhere else a walk of regular
+  files that enters no symlinked folder and no `.git`. A listing stops after 2 seconds with what
+  it found and is kept for 30 seconds. The changed files come from git, through the footer's git
+  helper (now `footer.run_git`), with commands measured never to write the index (git 2.54.0,
+  2026-10-05): `status` under `--no-optional-locks` and `diff-tree` from the commit each
+  repository was on when the daemon first saw the thread, summed over the repositories of the
+  folder (the one that holds it, or those at most two levels below it), with paths from the
+  session's folder; they are left out when there is none or nothing changed. The search is an
   `external_select`, answered through `app.options` over Socket Mode, which needs nothing in the
   manifest. A file over 1 MB, a path that leaves the folder and a click or a query from anyone
   but the owner are refused. The bot needs the new scope `files:write`: an installed app is
@@ -168,6 +173,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The daemon's own git (the footer, `!status` and `!open`) also runs in a repository inside the
+  folder a session started in, when that folder passes `workspace_trusted`: Claude Code launched
+  in a trusted folder works in its subfolders, and a bound folder that is not a repository
+  itself, holding one a level or two down, now shows the branch and the changes there.
+  `trust.trusted_repository` takes the session's folder as a second argument; inside is decided
+  on resolved paths, so a symlink that leads to a repository elsewhere and a worktree whose main
+  checkout is elsewhere still need their own trust, as does any repository outside the folder.
+  `workspace_trusted`, the gate of a session's start and `!bind`, is unchanged. A repository
+  that ends up inside the session's folder (a clone made during the session, say) now has git
+  run under its own config, filters included, outside the approval prompt.
 - Session index (issue #101): a session's **Open** link in the Home tab opens the thread on its
   last reply, where it opened it on its first message. The link is the permalink of the message
   the root names in `latest_reply`, the owner's own messages included, and the root's permalink

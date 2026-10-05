@@ -55,12 +55,7 @@ OPEN_TITLE = "*Open a file*"
 OPEN_CHANGED = "Changed in this session ({count})"
 OPEN_SEARCH = "Search any file…"
 OPEN_BY_NAME = "Or type `!open setup` to open a file by name."
-OPEN_NO_GIT = (
-    "This folder is not a git repository, so there is no list to choose from. Type "
-    "`!open path/to/file` with the file's path inside the folder."
-)
 OPEN_NO_MATCH = "No file matches `{words}`."
-OPEN_UNREADABLE = "git could not list this folder's files."
 OPEN_MATCHES = "*{count} files match* `{words}`"
 OPEN_MATCH_PLACEHOLDER = "Choose a file"
 OPEN_MATCHES_CAPPED = "The first {shown} of {count} are listed: type more of the name to narrow it."
@@ -471,8 +466,8 @@ it in the thread of your `!resume` message. To continue a session in the termina
 `!open`, sent inside a session's thread, offers the files changed in that session and a search \
 over the folder's files; choosing one shares it into the thread, where Slack opens it in its \
 file viewer, with Markdown rendered. `!open <path>` opens that file, and `!open <words>` the file \
-whose name contains them, or lists the files that do. The lists come from git, so a folder that \
-is not a git repository takes only `!open <path>`. A file over 1 MB is not opened.
+whose name contains them, or lists the files that do. The search reads the folder from disk and \
+leaves out what `.gitignore` excludes inside a git repository. A file over 1 MB is not opened.
 
 **Bypass**
 `!bypass on`, sent inside a session's thread, lets Claude Code run every tool without asking in \

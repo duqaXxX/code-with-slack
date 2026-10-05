@@ -1,7 +1,6 @@
 """The footer's branch and changes: git runs only on a repository the owner trusted, named to
 it outright, so no folder's own config or attributes decide what runs."""
 
-import functools
 import os
 import shutil
 import subprocess
@@ -16,6 +15,17 @@ from code_with_slack.trust import Repository, trusted_repository
 from tests.git_layouts import add_worktree, bare_layout, committed, git, trust
 
 Lookup = Callable[[Path], Awaitable[Repository | None]]
+
+
+def lookup_for(home: Path, session_folder: Path) -> Lookup:
+    """The footer's lookup of a session started in `session_folder`. The tests below plant their
+    repositories outside it, as a folder the agent moved to: only what lies inside the session's
+    folder has a way in beside the owner's own trust (`test_trust.py`)."""
+
+    async def lookup(directory: Path) -> Repository | None:
+        return await trusted_repository(directory, session_folder, home)
+
+    return lookup
 
 
 @pytest.fixture
@@ -35,7 +45,7 @@ def repository(tmp_path: Path, app: Path) -> Lookup:
     home = tmp_path / "home"
     home.mkdir()
     trust(home, app, app.parent)
-    return functools.partial(trusted_repository, home=home)
+    return lookup_for(home, tmp_path / "base")
 
 
 def clean_filter(marker: Path) -> str:
@@ -211,7 +221,7 @@ async def test_a_bare_layout_shows_nothing_and_a_trusted_bare_container_its_bran
     home = tmp_path / "home"
     home.mkdir()
     trust(home, app.parent, container)
-    lookup = functools.partial(trusted_repository, home=home)
+    lookup = lookup_for(home, tmp_path / "base")
     assert await git_state(layout, lookup) == (None, None)
     assert await git_state(container, lookup) == ("main", None)  # no work tree to diff
 
@@ -256,7 +266,7 @@ async def test_a_gitfile_s_trailing_space_belongs_to_the_path(tmp_path: Path, ap
     home = tmp_path / "home"
     home.mkdir()
     trust(home, folder)
-    lookup = functools.partial(trusted_repository, home=home)
+    lookup = lookup_for(home, tmp_path / "base")
     assert (await git_state(folder, lookup))[0] == "spaced"
 
 
@@ -276,7 +286,7 @@ async def test_git_is_given_the_repository_and_never_looks_for_one(
     filter_ran(marker)
     git_diffs_there(kept)
     assert filter_ran(marker)  # the control
-    assert await git_state(kept, functools.partial(trusted_repository, home=home)) == (None, None)
+    assert await git_state(kept, lookup_for(home, tmp_path / "base")) == (None, None)
     assert not filter_ran(marker)
 
 
@@ -292,3 +302,60 @@ async def test_every_git_call_shares_one_time_limit(
     monkeypatch.setenv("PATH", f"{stub.parent}:{os.environ['PATH']}")
     monkeypatch.setattr(footer, "GIT_TIMEOUT", 0.8)
     assert await git_state(app, repository) == (None, None)
+
+
+# --- a repository inside the folder the session started in ---
+
+
+@pytest.fixture
+def work(tmp_path: Path) -> tuple[Path, Lookup]:
+    """The folder a session started in (trusted, not a repository), and its footer's lookup."""
+    home = tmp_path / "home"
+    home.mkdir()
+    folder = (tmp_path / "work").resolve()
+    folder.mkdir()
+    trust(home, folder)
+    return folder, lookup_for(home, folder)
+
+
+@pytest.mark.parametrize("depth", [1, 2, 3])
+async def test_the_footer_shows_the_branch_and_changes_of_a_repository_inside_the_folder(
+    work: tuple[Path, Lookup], depth: int
+) -> None:
+    folder, lookup = work
+    repo = committed(folder.joinpath(*"abc"[:depth]))
+    (repo / "src").mkdir()
+    assert await git_state(repo, lookup) == ("main", (0, 0))
+    (repo / "README").write_text("one\nmore\n")
+    assert await git_state(repo / "src", lookup) == ("main", (1, 0))
+
+
+async def test_the_footer_shows_nothing_of_a_repository_outside_the_folder(
+    tmp_path: Path, work: tuple[Path, Lookup]
+) -> None:
+    _, lookup = work
+    elsewhere = committed(tmp_path / "elsewhere")
+    assert await git_state(elsewhere, lookup) == (None, None)
+
+
+async def test_the_footer_shows_nothing_of_a_symlink_to_a_repository_elsewhere(
+    tmp_path: Path, work: tuple[Path, Lookup]
+) -> None:
+    folder, lookup = work
+    (folder / "link").symlink_to(committed(tmp_path / "elsewhere"))
+    assert await git_state(folder / "link", lookup) == (None, None)
+
+
+async def test_known_limit_a_repository_inside_the_folder_runs_its_own_filters(
+    work: tuple[Path, Lookup], marker: Path
+) -> None:
+    # The owner's decision (2026-10-05): a repository inside the folder a session started in is
+    # covered by that folder's trust, so a repository the agent clones there gets the footer's
+    # `diff-files` under its own config. This pins the consequence: it holds only while the
+    # decision does.
+    folder, lookup = work
+    planted(folder / "clone", marker)
+    filter_ran(marker)
+    branch, changes = await git_state(folder / "clone", lookup)
+    assert branch == "main" and changes is not None  # `planted` edits a tracked file
+    assert filter_ran(marker)

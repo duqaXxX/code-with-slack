@@ -3412,13 +3412,31 @@ async def test_the_changes_are_counted_from_the_first_sight_even_after_the_proce
     ]
 
 
-async def test_a_folder_that_is_not_a_repository_gets_a_line_and_no_menu(world: World) -> None:
+async def test_a_folder_that_is_not_a_repository_gets_the_search_alone(world: World) -> None:
     await in_a_thread(world)
     await world.dispatch(reply("!open", THREAD))
-    (post,) = world.slack.calls_to("chat.postMessage")[-1:]
-    assert menus(post) == {}
+    (post,) = picker_posts(world)
+    assert list(menus(post)) == [OPEN_SEARCH_ACTION]
     assert post["blocks"][0]["text"]["text"] == "*Open a file*"
-    assert post["blocks"][1]["elements"][0]["text"] == texts.OPEN_NO_GIT
+    assert [b["type"] for b in post["blocks"]] == ["section", "actions", "context"]
+
+
+async def test_the_changes_of_a_repository_inside_the_folder_are_offered(
+    world: World, project: Path
+) -> None:
+    # The channel's folder is a plain folder that holds a repository one level down.
+    folder = project.parent / "plain"
+    folder.mkdir()
+    world.state.bind(CHANNEL, folder)
+    nested = committed(folder / "workspace").resolve()
+    await in_a_thread(world)
+    put(nested, "docs/new.md")
+    put(folder, "notes.txt")  # outside any repository: not a change
+    await world.dispatch(reply("!open", THREAD))
+    (post,) = picker_posts(world)
+    changed = menus(post)[OPEN_CHANGED_ACTION]
+    assert [o["value"] for o in changed["options"]] == ["workspace/docs/new.md"]
+    assert changed["placeholder"]["text"] == "Changed in this session (1)"
 
 
 async def test_open_with_the_path_of_a_file_shares_it_into_the_thread(
@@ -3666,7 +3684,52 @@ async def test_the_search_of_a_thread_that_is_no_session_offers_nothing(
     assert await suggested(world, suggestion("READ", block_id=block_id)) == []
 
 
-async def test_the_search_of_a_folder_with_no_repository_offers_nothing(world: World) -> None:
+async def test_the_search_of_a_folder_with_no_repository_reads_the_disk(world: World) -> None:
     await in_a_thread(world)
-    put(world.root / "app", "plain.txt")
-    assert await suggested(world, suggestion("plain")) == []
+    plain = world.root / "app"
+    put(plain, "plain.txt")
+    put(plain, "sub/deep/plain-too.txt")
+    assert sorted(await suggested(world, suggestion("plain"))) == [
+        "plain.txt",
+        "sub/deep/plain-too.txt",
+    ]
+
+
+async def test_the_search_of_a_repository_inside_the_folder_leaves_out_what_git_ignores(
+    world: World,
+) -> None:
+    folder = world.root / "app"
+    nested = committed(folder / "workspace").resolve()
+    put(nested, ".gitignore", ".venv/\n")
+    put(nested, "docs/setup.md")
+    put(nested, ".venv/lib/setup_tools.py")
+    put(folder, "setup-notes.txt")
+    await in_a_thread(world)
+    assert sorted(await suggested(world, suggestion("setup"))) == [
+        "setup-notes.txt",
+        "workspace/docs/setup.md",
+    ]
+
+
+async def test_a_name_is_looked_up_in_a_folder_with_no_repository(world: World) -> None:
+    await in_a_thread(world)
+    plain = world.root / "app"
+    put(plain, "docs/Guide.md")
+    put(plain, "other.txt")
+    await world.dispatch(reply("!open guide", THREAD))
+    (done,) = opened(world)
+    assert json.loads(done["files"])[0]["title"] == "docs/Guide.md"
+    assert world.ephemerals() == []
+
+
+async def test_a_name_that_matches_several_files_of_a_plain_folder_offers_them(
+    world: World,
+) -> None:
+    await in_a_thread(world)
+    for name in ("a/setup.md", "b/setup.py"):
+        put(world.root / "app", name)
+    await world.dispatch(reply("!open setup", THREAD))
+    assert opened(world) == []
+    (post,) = [p for p in world.slack.calls_to("chat.postMessage") if OPEN_MATCH_ACTION in str(p)]
+    (select,) = menus(post).values()
+    assert sorted(o["value"] for o in select["options"]) == ["a/setup.md", "b/setup.py"]

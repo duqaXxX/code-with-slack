@@ -1,6 +1,6 @@
 """`!open`'s files: which ones a thread's folder offers, which of them changed in the session, and
-which may be shared. Git is the real one on scratch repositories; nothing is mocked below the
-daemon's own helpers.
+which may be shared. Git is the real one on scratch repositories, and the trust lookups the real
+ones over a scratch `~/.claude.json`; nothing is mocked below the daemon's own helpers.
 
 Block shapes follow the Block Kit reference (select menu element, option object, read
 2026-10-05): an option's `text` holds 75 characters and its `value` 150, a select's `options` 100.
@@ -10,15 +10,17 @@ import hashlib
 import os
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
 
 from code_with_slack.openfile import (
+    Listings,
     NotAFile,
     Starts,
     TooLarge,
+    changed_in,
     changed_since,
     newest_first,
     openable,
@@ -27,12 +29,14 @@ from code_with_slack.openfile import (
     project_files,
     rank,
     regular_files,
+    repositories_of,
     start_commit,
     usable,
+    walk_files,
 )
-from code_with_slack.trust import Repository, locate
+from code_with_slack.trust import Repository, locate, trusted_repository
 from tests.fakes import any_repository
-from tests.git_layouts import committed, git, git_init
+from tests.git_layouts import committed, git, git_init, trust
 
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
@@ -389,21 +393,294 @@ def test_the_measurement_would_notice_a_write(app: Path) -> None:
     assert index_state(app) != before
 
 
+# --- the repositories of a session's folder ---
+
+
+@pytest.fixture
+def home(tmp_path: Path) -> Path:
+    path = tmp_path / "home"
+    path.mkdir()
+    return path
+
+
+@pytest.fixture
+def work(tmp_path: Path, home: Path) -> Path:
+    """A session's folder: not a repository, trusted in Claude Code, repositories inside it."""
+    folder = tmp_path / "work"
+    folder.mkdir()
+    trust(home, folder)
+    return folder.resolve()
+
+
+@pytest.fixture
+def lookup(home: Path) -> Callable[[Path, Path], Awaitable[Repository | None]]:
+    async def trusted(directory: Path, session_folder: Path) -> Repository | None:
+        return await trusted_repository(directory, session_folder, home)
+
+    return trusted
+
+
+async def roots(
+    folder: Path, lookup: Callable[[Path, Path], Awaitable[Repository | None]]
+) -> list[Path]:
+    return sorted(r.root for r in await repositories_of(folder, lookup))
+
+
+async def test_a_folder_inside_a_repository_has_that_repository(
+    app: Path, home: Path, lookup: Callable[[Path, Path], Awaitable[Repository | None]]
+) -> None:
+    trust(home, app)
+    (app / "src").mkdir()
+    assert await roots(app, lookup) == [app]
+    assert await roots(app / "src", lookup) == [app]
+
+
+async def test_a_plain_folder_has_the_usable_repositories_two_levels_below_it(
+    work: Path, lookup: Callable[[Path, Path], Awaitable[Repository | None]]
+) -> None:
+    one = git_init(work / "one")
+    two = git_init(work / "group" / "two")
+    git_init(work / "group" / "deeper" / "three")  # three levels down: not found
+    assert await roots(work, lookup) == sorted([one, two])
+
+
+async def test_a_repository_that_is_not_usable_is_left_out(
+    tmp_path: Path, work: Path, lookup: Callable[[Path, Path], Awaitable[Repository | None]]
+) -> None:
+    git_init(work / "a")
+    (work / "broken").mkdir()
+    (work / "broken" / ".git").write_text("not a gitfile\n")  # a `.git` that names no git dir
+    (work / "link").symlink_to(git_init(tmp_path / "elsewhere"))
+    assert await roots(work, lookup) == [work / "a"]
+
+
+async def test_the_search_never_goes_into_a_repository_for_more(
+    work: Path, lookup: Callable[[Path, Path], Awaitable[Repository | None]]
+) -> None:
+    outer = git_init(work / "outer")
+    git_init(outer / "vendored")
+    assert await roots(work, lookup) == [outer]
+
+
+async def test_hidden_folders_are_not_searched_for_a_repository(
+    work: Path, lookup: Callable[[Path, Path], Awaitable[Repository | None]]
+) -> None:
+    git_init(work / ".hidden")
+    assert await roots(work, lookup) == []
+
+
+async def test_a_folder_in_an_untrusted_repository_has_nothing_below_it(
+    tmp_path: Path, home: Path, lookup: Callable[[Path, Path], Awaitable[Repository | None]]
+) -> None:
+    outer = git_init(tmp_path / "outer")
+    folder = outer / "packages"
+    inner = git_init(folder / "lib")
+    assert await roots(folder, lookup) == []
+    trust(home, inner)  # a repository the owner trusted on its own stays usable
+    assert await roots(folder, lookup) == [inner.resolve()]
+    trust(home, outer)
+    assert await roots(folder, lookup) == [outer.resolve()]
+
+
+# --- what the folder offers to search ---
+
+
+def write_all(root: Path, *names: str) -> None:
+    for name in names:
+        write(root, name)
+
+
+async def test_a_plain_folder_is_walked_for_regular_files_only(tmp_path: Path) -> None:
+    plain = tmp_path / "plain"
+    write_all(plain, "a.txt", "docs/b.md", "docs/deep/c.md", ".hidden/d.txt")
+    write(tmp_path / "outside", "secret.txt")
+    (plain / "dir-link").symlink_to(tmp_path / "outside")
+    (plain / "file-link").symlink_to(plain / "a.txt")
+    write_all(plain, ".git/config", "sub/.git/config")
+    (plain / "empty-dir").mkdir()
+    listing = Listings(any_repository)
+    assert sorted(await listing.of(plain)) == [
+        ".hidden/d.txt",
+        "a.txt",
+        "docs/b.md",
+        "docs/deep/c.md",
+    ]
+
+
+async def test_a_folder_inside_a_repository_lists_what_git_does_not_ignore(app: Path) -> None:
+    write(app, ".gitignore", ".venv/\n*.log\n")
+    write_all(app, "src/tracked.py")
+    commit_all(app)
+    write_all(app, "src/new.py", ".venv/lib/pkg.py", "debug.log")
+    listing = Listings(any_repository)
+    assert sorted(await listing.of(app)) == [
+        ".gitignore",
+        "README",
+        "src/new.py",
+        "src/tracked.py",
+    ]
+    assert sorted(await Listings(any_repository).of(app / "src")) == ["new.py", "tracked.py"]
+
+
+async def test_the_files_of_nested_repositories_come_from_git_and_the_rest_from_disk(
+    work: Path, lookup: Callable[[Path, Path], Awaitable[Repository | None]]
+) -> None:
+    nested = git_init(work / "code-with-slack-workspace")
+    write(nested, ".gitignore", ".venv/\n")
+    write_all(nested, "docs/setup.md", ".venv/lib/pkg.py")
+    commit_all(nested)
+    write_all(nested, "docs/new.md", ".venv/lib/more.py")
+    deep = git_init(work / "a" / "b" / "c")  # three levels down: walked like any folder
+    write_all(deep, "x.txt", ".venv/y.txt")
+    write_all(work, "notes.md", "a/readme.md")
+    listing = Listings(lookup)
+    assert sorted(await listing.of(work)) == [
+        "a/b/c/.venv/y.txt",
+        "a/b/c/x.txt",
+        "a/readme.md",
+        "code-with-slack-workspace/.gitignore",
+        "code-with-slack-workspace/docs/new.md",
+        "code-with-slack-workspace/docs/setup.md",
+        "notes.md",
+    ]
+
+
+async def test_the_files_of_a_repository_that_is_not_usable_are_walked(
+    tmp_path: Path, work: Path, home: Path
+) -> None:
+    # A symlinked folder is not entered, so a repository behind a link is not listed at all.
+    elsewhere = committed(tmp_path / "elsewhere")
+    (work / "link").symlink_to(elsewhere)
+    write(work, "plain.txt")
+
+    async def trusted(directory: Path, session_folder: Path) -> Repository | None:
+        return await trusted_repository(directory, session_folder, home)
+
+    assert await Listings(trusted).of(work) == ["plain.txt"]
+
+
+def test_a_walk_that_runs_out_of_time_returns_what_it_found(tmp_path: Path) -> None:
+    write_all(tmp_path, "top.txt", "one/mid.txt", "one/two/low.txt")
+    visits = iter([False, True])  # the root is read, then the time is up
+    assert walk_files(tmp_path, frozenset(), lambda: next(visits, True)) == ["top.txt"]
+
+
+async def test_a_listing_is_kept_for_a_short_time(tmp_path: Path) -> None:
+    plain = tmp_path / "plain"
+    write_all(plain, "first.txt")
+    now = [100.0]
+    listing = Listings(any_repository, ttl=10.0, clock=lambda: now[0])
+    assert await listing.of(plain) == ["first.txt"]
+    write_all(plain, "second.txt")
+    now[0] = 105.0
+    assert await listing.of(plain) == ["first.txt"]  # a keystroke later: not walked again
+    now[0] = 111.0
+    assert sorted(await listing.of(plain)) == ["first.txt", "second.txt"]
+
+
+async def test_the_listings_of_two_folders_are_kept_apart(tmp_path: Path) -> None:
+    write_all(tmp_path / "x", "x.txt")
+    write_all(tmp_path / "y", "y.txt")
+    listing = Listings(any_repository)
+    assert await listing.of(tmp_path / "x") == ["x.txt"]
+    assert await listing.of(tmp_path / "y") == ["y.txt"]
+
+
+async def test_a_lookup_that_fails_lists_nothing_and_never_raises(tmp_path: Path) -> None:
+    async def broken(directory: Path, session_folder: Path) -> Repository | None:
+        raise OSError
+
+    plain = tmp_path / "plain"
+    write_all(plain, "a.txt")
+    listing = Listings(broken)
+    assert await listing.of(plain) == []
+
+
+async def test_a_nested_repository_s_index_is_relative_to_the_folder_above_it(
+    work: Path,
+) -> None:
+    nested = git_init(work / "app")
+    write_all(nested, "docs/setup.md")
+    commit_all(nested)
+    assert await project_files(repository(nested), work) == ["app/docs/setup.md"]
+
+
+# --- the changes of every repository of the folder ---
+
+
+async def test_the_changes_of_nested_repositories_are_relative_to_the_folder(work: Path) -> None:
+    one = committed(work / "one")
+    two = committed(work / "group" / "two")
+    starts = {one: await start_commit(repository(one)), two: await start_commit(repository(two))}
+    write_all(one, "a.py")
+    write_all(two, "b.py")
+    commit_all(two)
+    write_all(two, "c.py")
+    found = await changed_in(work, [repository(one), repository(two)], lambda r: starts[r.root])
+    assert sorted(found) == ["group/two/b.py", "group/two/c.py", "one/a.py"]
+
+
+async def test_each_repository_is_counted_from_its_own_start(work: Path) -> None:
+    one = committed(work / "one")
+    two = committed(work / "two")
+    start_one = await start_commit(repository(one))
+    write_all(one, "before.py")
+    commit_all(one)
+    start_two = await start_commit(repository(two))  # taken after `one` moved on
+    write_all(two, "after.py")
+    commit_all(two)
+    starts = {one: start_one, two: start_two}
+    found = await changed_in(work, [repository(one), repository(two)], lambda r: starts[r.root])
+    assert sorted(found) == ["one/before.py", "two/after.py"]
+
+
+async def test_a_repository_whose_git_fails_adds_no_changes(work: Path) -> None:
+    one = committed(work / "one")
+    write_all(one, "a.py")
+    gone = repository(one)
+    broken = Repository(
+        root=gone.root, key=gone.key, git_dir=work / "no-such-git-dir", inside_git_dir=False
+    )
+    assert await changed_in(work, [broken], lambda r: None) == []
+    assert await changed_in(work, [gone], lambda r: None) == ["one/a.py"]
+
+
+async def test_no_repository_has_no_changes(work: Path) -> None:
+    assert await changed_in(work, [], lambda r: None) == []
+
+
 # --- the start commit per thread ---
 
 
 async def test_a_threads_start_is_set_once_and_kept(app: Path) -> None:
     starts = Starts(any_repository)
     first = git(app, "rev-parse", "HEAD")
-    assert starts.of("C1", "1.0") is None
+    assert starts.of("C1", "1.0", repository(app)) is None
     await starts.seen("C1", "1.0", app)
     write(app, "later.py")
     commit_all(app)
     await starts.seen("C1", "1.0", app)  # the thread's process closed and came back
-    assert starts.of("C1", "1.0") == first
+    assert starts.of("C1", "1.0", repository(app)) == first
     # Another thread of the same folder starts from where the repository is now.
     await starts.seen("C1", "2.0", app)
-    assert starts.of("C1", "2.0") == git(app, "rev-parse", "HEAD") != first
+    assert starts.of("C1", "2.0", repository(app)) == git(app, "rev-parse", "HEAD") != first
+
+
+async def test_every_repository_of_the_folder_has_its_own_start(work: Path) -> None:
+    one = committed(work / "one")
+    two = committed(work / "group" / "two")
+    starts = Starts(any_repository)
+    await starts.seen("C1", "1.0", work)
+    assert starts.of("C1", "1.0", repository(one)) == git(one, "rev-parse", "HEAD")
+    assert starts.of("C1", "1.0", repository(two)) == git(two, "rev-parse", "HEAD")
+    # A repository that appears later (a clone) starts when first seen; the others keep theirs.
+    first = starts.of("C1", "1.0", repository(one))
+    write(one, "later.py")
+    commit_all(one)
+    late = committed(work / "late")
+    await starts.seen("C1", "1.0", work)
+    assert starts.of("C1", "1.0", repository(one)) == first
+    assert starts.of("C1", "1.0", repository(late)) == git(late, "rev-parse", "HEAD")
 
 
 async def test_a_folder_with_no_repository_records_no_start(tmp_path: Path) -> None:
@@ -411,16 +688,16 @@ async def test_a_folder_with_no_repository_records_no_start(tmp_path: Path) -> N
     plain.mkdir()
     starts = Starts(any_repository)
     await starts.seen("C1", "1.0", plain)
-    assert starts.of("C1", "1.0") is None
+    assert starts.of("C1", "1.0", Repository(plain, plain, None, False)) is None
 
 
 async def test_a_lookup_that_fails_records_nothing_and_never_raises(app: Path) -> None:
-    async def broken(directory: Path) -> Repository | None:
+    async def broken(directory: Path, session_folder: Path) -> Repository | None:
         raise OSError
 
     starts = Starts(broken)
     await starts.seen("C1", "1.0", app)
-    assert starts.of("C1", "1.0") is None
+    assert starts.of("C1", "1.0", repository(app)) is None
 
 
 # --- the picker ---

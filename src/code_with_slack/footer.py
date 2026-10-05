@@ -233,9 +233,10 @@ async def git_state(
 ) -> tuple[str | None, tuple[int, int] | None]:
     """The branch and the changes of the repository holding `here`, each None when unknown.
 
-    `repository` answers only for a repository the owner trusted in Claude Code
-    (`code_with_slack.trust.trusted_repository`): anywhere else no git runs, since a diff runs
-    the filters a repository's config names. Every call shares one `GIT_TIMEOUT`.
+    `repository` answers only for a repository the owner trusted in Claude Code, or one inside the
+    folder the session started in (`code_with_slack.trust.trusted_repository`): anywhere else no
+    git runs, since a diff runs the filters a repository's config names. Every call shares one
+    `GIT_TIMEOUT`.
     """
     branch: str | None = None
     changes: tuple[int, int] | None = None

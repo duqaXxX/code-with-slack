@@ -418,9 +418,11 @@ ccstatusline's git-changes counts them. They come from plumbing commands (`git d
 --shortstat` and `git diff-index --cached --shortstat HEAD`, the empty tree before a first
 commit), which never write the index: `git diff` refreshes it under `index.lock`, and a diff
 killed at `GIT_TIMEOUT` would leave the lock behind and stop every commit. The branch and the
-changes show only where that folder is in a repository the owner trusted in Claude Code
-(`trust.trusted_repository`); anywhere else no git runs and the footer leaves both out, since a
-diff runs the `clean` filters a repository's config names. git is given the repository with
+changes show only where that folder is in a repository the daemon's git may run in
+(`trust.trusted_repository`: one the owner trusted in Claude Code, or one inside the folder the
+session started in, `ThreadSession.directory`, when that folder passes `workspace_trusted`);
+anywhere else no git runs and the footer leaves both out, since a diff runs the `clean` filters a
+repository's config names. git is given the repository with
 `--git-dir` and started at the repository's root, so it searches for nothing from the folder: a
 planted `.git` file, a bare layout or a `core.worktree` there is never read. `core.fsmonitor` is
 off, and `--ignore-submodules=dirty` keeps git out of every nested repository the index names,
@@ -467,16 +469,28 @@ viewer. `code_with_slack.openfile` holds the logic and `slack_app` the handlers 
 `AsyncWebClient.files_upload_v2` (`files:write`): the file itself, its basename as the name and its
 path from the folder as the title, and nothing posted on success.
 
-The files come from git alone, through the footer's `run_git` on a repository
-`SessionManager.repository` (the footer's own `trusted_repository` lookup) found trusted:
-`ls-files --cached --others --exclude-standard` for the index, and for the changed files `status`
-under `--no-optional-locks` with `diff-tree` from the thread's start commit to `HEAD`. No command
-writes the index, and `status` does not report a file that was only touched
+The search reads the folder from disk, and the changed files come from git. Which repositories
+the folder has is `openfile.repositories_of`: the one holding the folder when
+`SessionManager.repository` (the footer's own `trusted_repository` lookup, given the session's
+folder) finds it usable, otherwise the usable ones found at most two levels below it, by
+`folders.folders_within`, the walk `!bind` uses, which never enters a repository. Inside one the
+files come from git, through the footer's `run_git`: `ls-files --cached --others
+--exclude-standard`, which leaves out what `.gitignore` excludes, as the terminal's `@` file
+picker does under `respectGitignore`. Everywhere else `openfile.walk_files` reads the disk:
+regular files, no symlinked folder entered, no `.git` entered, none of the usable repositories'
+roots (git lists those). `openfile.Listings` joins the two for a folder, within
+`LISTING_BUDGET` seconds (what is found by then is the answer), and keeps the result for
+`LISTING_TTL` seconds so the keystrokes of one query do not walk the folder again; `!open <words>`
+reads the same listing. Paths are relative to the session's folder.
+
+The changed files are the union over the same repositories (`openfile.changed_in`): `status`
+under `--no-optional-locks` with `diff-tree` from the repository's start commit to `HEAD`. No
+command writes the index, and `status` does not report a file that was only touched
 (the measurements are in the `openfile` docstring and repeated by `tests/test_openfile.py`). The
-start commit is `openfile.Starts`: a dict by thread in memory, set the first time the daemon sees
-the thread (`submit_to_session` and `open_word` call `Starts.seen`) and never reset, so a session
-that closes when idle and comes back keeps it. A repository with no commit starts from the empty
-tree, as the footer compares what is staged.
+start commit is `openfile.Starts`: a dict by thread and repository in memory, set the first time
+the daemon sees the repository in the thread (`submit_to_session` and `open_word` call
+`Starts.seen`) and never reset, so a session that closes when idle and comes back keeps it. A
+repository with no commit starts from the empty tree, as the footer compares what is staged.
 
 Slack's search menu is an `external_select`: each keystroke is a `block_suggestion` request that
 Socket Mode delivers over the same connection and that Bolt routes to `app.options`, answered by
@@ -523,7 +537,12 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   own `.git` has no key and counts as untrusted, with everything below it. That is told by the
   names of its entries alone (a `HEAD`, with `objects` and `refs` or a `commondir`), so a folder
   that only looks like a git dir counts too. The check runs no command, so nothing in a folder
-  can hold it. Trust is by path, as in Claude Code: a folder placed at a path the owner
+  can hold it. The daemon's own git (footer, `!status`, `!open`) has a second way in beside a
+  trusted key: a repository whose key lies strictly inside the folder the session started in,
+  when that folder passes `workspace_trusted` (`trust.trusted_repository`; both paths resolved, so
+  a symlink that leads elsewhere and a worktree whose main checkout is elsewhere are not inside).
+  The gate for a session's start and for `!bind` is `workspace_trusted` alone and does not take
+  it. Trust is by path, as in Claude Code: a folder placed at a path the owner
   trusted, or at the path of a worktree deleted and not pruned, passes for it, and a repository
   placed at a trusted path covers the worktrees it registers. A path in the record that passes
   through a symlink trusts nothing. An untrusted

@@ -53,7 +53,7 @@ def _children(folder: Path) -> list[Path]:
     return [p for p in entries if _is_folder(p)]
 
 
-def _candidates(root: Path) -> list[Path]:
+def folders_within(root: Path) -> list[Path]:
     """The root, then its folders, then theirs: the higher levels come first."""
     # An unreadable root raises: an empty list would send the owner to trust folders instead.
     with os.scandir(root):
@@ -67,7 +67,7 @@ def _candidates(root: Path) -> list[Path]:
 async def bindable_folders(root: Path, trusted: Callable[[Path], Awaitable[bool]]) -> list[Path]:
     """Trusted folders under `root`, the higher levels first, at most FOLDER_ROWS + 1: one past
     the rows shown is enough to say that more exist, and stops the trust checks there."""
-    candidates = await asyncio.to_thread(_candidates, root)
+    candidates = await asyncio.to_thread(folders_within, root)
     found: list[Path] = []
     for start in range(0, len(candidates), TRUST_BATCH):
         batch = candidates[start : start + TRUST_BATCH]

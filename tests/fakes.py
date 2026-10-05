@@ -37,9 +37,9 @@ THREAD = "1780000000.000001"
 OTHER_THREAD = "1780000000.000002"
 
 
-async def any_repository(directory: Path) -> Repository | None:
+async def any_repository(directory: Path, session_folder: Path | None = None) -> Repository | None:
     """`trust.trusted_repository` for a test about something else: every repository counts as
-    trusted, and the owner's own `~/.claude.json` is never read."""
+    trusted, whatever the session's folder, and the owner's own `~/.claude.json` is never read."""
     try:
         return await asyncio.to_thread(locate, directory)
     except Unkeyed:

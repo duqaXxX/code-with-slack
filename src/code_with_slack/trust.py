@@ -11,6 +11,9 @@ already trusted the folder in the terminal, by the rules Claude Code documents:
 
 The record is `projects["<path>"].hasTrustDialogAccepted` in `~/.claude.json`.
 
+The daemon's own git (the footer, `!status`, `!open`) has a second way in, beside a trusted
+repository key: a repository inside the folder the session started in (`trusted_repository`).
+
 Which repository a folder belongs to is read from the filesystem and never asked of git there:
 git would answer from the folder's own `.git` file, `commondir` and `core.worktree`, which
 whoever supplied the folder wrote. The layout read here is the one gitrepository-layout(5) and
@@ -236,12 +239,27 @@ def _trusted(path: Path, home: Path) -> bool:
     return False
 
 
-def _trusted_repository(directory: Path, home: Path) -> Repository | None:
+def _inside(path: Path, folder: Path) -> bool:
+    """Whether `path` lies strictly inside `folder`, both as they are on disk: a symlink in the
+    folder that leads elsewhere is not inside it."""
+    real = Path(os.path.realpath(folder))
+    resolved = Path(os.path.realpath(path))
+    return resolved != real and resolved.is_relative_to(real)
+
+
+def _trusted_repository(directory: Path, session_folder: Path, home: Path) -> Repository | None:
     try:
         repository = locate(directory)
     except Unkeyed:
         return None
-    return repository if repository and _trusted(repository.key, home) else None
+    if repository is None:
+        return None
+    if _trusted(repository.key, home):
+        return repository
+    # The second way in, for a repository the session's folder holds.
+    if _inside(repository.key, session_folder) and _workspace_trusted(session_folder, home):
+        return repository
+    return None
 
 
 def _workspace_trusted(directory: Path, home: Path) -> bool:
@@ -255,10 +273,26 @@ def _workspace_trusted(directory: Path, home: Path) -> bool:
     return any(_trusted(path, home) for path in (folder, *folder.parents))
 
 
-async def trusted_repository(directory: Path, home: Path | None = None) -> Repository | None:
-    """The repository holding `directory` when the owner trusted it in Claude Code; None outside
-    git, in a repository not trusted, and where the layout has no key."""
-    return await asyncio.to_thread(_trusted_repository, directory, home or Path.home())
+async def trusted_repository(
+    directory: Path, session_folder: Path, home: Path | None = None
+) -> Repository | None:
+    """The repository holding `directory` when the daemon's own git may run in it; None outside
+    git, where the layout has no key, and in a repository neither of these covers:
+
+    - its key is a path the owner trusted in Claude Code (a worktree's key is its main checkout);
+    - its key lies strictly inside `session_folder`, the folder the session was started in, and
+      that folder passes `workspace_trusted`.
+
+    The second is the owner's decision (2026-10-05): Slack is only an interface to Claude Code,
+    which, launched in a trusted folder, works in its subfolders. It reaches no further: a
+    repository outside `session_folder` needs its own trust since the agent may `cd` anywhere,
+    and `workspace_trusted`, which gates a session's start and `!bind`, is not widened. Inside is
+    decided on resolved paths, so a symlink in the folder that leads to a repository elsewhere,
+    and a worktree whose main checkout is elsewhere, are not inside. Nothing here runs git.
+    """
+    return await asyncio.to_thread(
+        _trusted_repository, directory, session_folder, home or Path.home()
+    )
 
 
 async def workspace_trusted(directory: Path, home: Path | None = None) -> bool:

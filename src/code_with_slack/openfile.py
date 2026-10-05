@@ -1,9 +1,14 @@
 """`!open`: a file of the session's folder, shared into its thread so that Slack's own file viewer
 shows it (Markdown rendered, the thread open beside it).
 
-The files come from git alone: the tracked ones and the untracked ones that are not ignored,
-under the folder. Git runs only where the footer's git runs, on a repository the owner trusted
-(`code_with_slack.trust.trusted_repository`), through the footer's `run_git`.
+Which files the search offers is read from the folder's disk. Inside a repository the daemon's git
+may run in (`code_with_slack.trust.trusted_repository`: the repository holding the session's
+folder, or the ones found at most two levels below it) the files come from git, through the
+footer's `run_git`: the tracked ones and the untracked ones that are not ignored. That is what the
+terminal's `@` file picker does, since its setting `respectGitignore` defaults to `true` and
+leaves out the files that match `.gitignore` patterns (code.claude.com/docs/en/settings-reference,
+read 2026-10-05). Everywhere else the folder is walked: regular files only, no symlinked folder
+entered, no `.git` entered. The changed files come from git alone.
 
 Every git command here is plumbing or `status` under `--no-optional-locks`, because `git diff`
 refreshes and rewrites the index under `index.lock` (see `footer._changes`), and a lock left by
@@ -30,11 +35,15 @@ import os
 import posixpath
 import re
 import stat
+import time
+from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
+from itertools import chain
 from pathlib import Path
 from typing import Any
 
 from code_with_slack import texts
+from code_with_slack.folders import folders_within
 from code_with_slack.footer import GIT_TIMEOUT, run_git
 from code_with_slack.render.escape import shown_as_written
 from code_with_slack.render.sinks import context_block, describe
@@ -59,9 +68,17 @@ SNIPPET_LIMIT = 1 << 20
 OPTION_ROWS = 100
 TEXT_LIMIT = 75
 VALUE_LIMIT = 150
-# Slack wants the options of a typed query within 3 seconds.
+# Slack wants the options of a typed query within 3 seconds: a listing stops at LISTING_BUDGET
+# and answers with what it found, SUGGEST_TIMEOUT backs it up. A folder's listing is kept for
+# LISTING_TTL, so the keystrokes of one query do not walk the folder again.
 SUGGEST_TIMEOUT = 2.5
+LISTING_BUDGET = 2.0
+LISTING_TTL = 30.0
 EMPTY_TREE_COMMAND = ("hash-object", "-t", "tree", "/dev/null")
+
+# Answers for a repository: the one holding a directory, usable for a session started in a folder
+# (`code_with_slack.trust.trusted_repository`, whose arguments they are).
+RepositoryLookup = Callable[[Path, Path], Awaitable[Repository | None]]
 
 
 class NotAFile(Exception):
@@ -158,35 +175,86 @@ def usable(repository: Repository | None) -> Repository | None:
     return repository
 
 
-def _prefix(repository: Repository, folder: Path) -> str | None:
-    """The folder's path from the repository's root, `""` for the root itself; None when the
-    folder is not under it."""
-    try:
-        relative = _real(folder).relative_to(repository.root)
-    except ValueError:
-        return None
-    return relative.as_posix() if relative.parts else ""
+def _relation(repository: Repository, folder: Path) -> tuple[str, str] | None:
+    """How the folder and the repository's root meet, as `(strip, add)`: git's paths are relative
+    to the root, and a path from the folder is that path less `strip` and with `add` before it.
+    A folder inside the repository strips its own path from the root (`""` at the root itself),
+    a repository inside the folder adds its own path from the folder, and any other pair is None."""
+    real = _real(folder)
+    if real.is_relative_to(repository.root):
+        relative = real.relative_to(repository.root)
+        return (relative.as_posix() if relative.parts else ""), ""
+    if repository.root.is_relative_to(real):
+        return "", f"{repository.root.relative_to(real).as_posix()}/"
+    return None
 
 
-def _under(output: str, prefix: str) -> list[str]:
-    """The paths of a NUL-separated git output that lie under `prefix`, relative to it, each
-    once."""
-    start = f"{prefix}/" if prefix else ""
+def _under(output: str, strip: str, add: str) -> list[str]:
+    """The paths of a NUL-separated git output that lie under `strip`, as paths from the folder,
+    each once."""
+    start = f"{strip}/" if strip else ""
     names = (name[len(start) :] for name in output.split("\0") if name.startswith(start))
-    return list(dict.fromkeys(name for name in names if name))
+    return list(dict.fromkeys(f"{add}{name}" for name in names if name))
 
 
-def _scoped(prefix: str) -> list[str]:
-    return ["--", prefix] if prefix else []
+def _scoped(strip: str) -> list[str]:
+    return ["--", strip] if strip else []
+
+
+async def repositories_of(folder: Path, lookup: RepositoryLookup) -> list[Repository]:
+    """The repositories the daemon's git may run in for a session started in `folder`: the one
+    holding the folder when `lookup` finds it usable, else the usable ones found at most two
+    levels below it (the depth `!bind` lists folders to), none of them inside another."""
+    held = usable(await lookup(folder, folder))
+    if held is not None:
+        return [held]
+    below = await asyncio.to_thread(_repository_folders, folder)
+    found = [usable(await lookup(candidate, folder)) for candidate in below]
+    return list({r.root: r for r in found if r is not None}.values())
+
+
+def _repository_folders(folder: Path) -> list[Path]:
+    """The folders under `folder`, as `!bind` lists them, that hold a `.git` entry."""
+    try:
+        below = folders_within(folder)
+    except OSError:
+        return []
+    return [path for path in below if path != folder and os.path.lexists(path / ".git")]
+
+
+def walk_files(root: Path, skip: frozenset[str], expired: Callable[[], bool]) -> list[str]:
+    """The regular files under `root` as paths from it, the shallower first: a symlink is neither
+    followed nor listed, no `.git` is entered, nor any folder in `skip` (paths). Stops when
+    `expired()` is true, with what it has found. Blocking: run it in a thread."""
+    found: list[str] = []
+    queue = deque([(str(root), "")])
+    while queue and not expired():
+        directory, prefix = queue.popleft()
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if entry.name == ".git":
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        if entry.path not in skip:
+                            queue.append((entry.path, f"{prefix}{entry.name}/"))
+                    elif entry.is_file(follow_symlinks=False):
+                        found.append(f"{prefix}{entry.name}")
+        except OSError as exc:
+            # A folder the daemon may not open (macOS privacy, permissions) lists nothing.
+            logger.debug("skipped an unreadable folder: %s", type(exc).__name__)
+    return found
 
 
 async def project_files(repository: Repository, folder: Path) -> list[str] | None:
-    """The tracked files and the untracked ones that are not ignored, under `folder`, as paths
-    from it; None when git fails. Not checked for existence: a tracked file deleted from the work
-    tree is listed (`regular_files` drops it)."""
-    prefix = await asyncio.to_thread(_prefix, repository, folder)
-    if prefix is None:
+    """The tracked files and the untracked ones that are not ignored, in the part of the
+    repository that is `folder` or inside it, as paths from `folder`; None when git fails. Not
+    checked for existence: a tracked file deleted from the work tree is listed (`regular_files`
+    drops it)."""
+    relation = await asyncio.to_thread(_relation, repository, folder)
+    if relation is None:
         return None
+    strip, add = relation
     out = await run_git(
         repository,
         # Literal: the folder's name is not a glob.
@@ -196,9 +264,77 @@ async def project_files(repository: Repository, folder: Path) -> list[str] | Non
         "--cached",
         "--others",
         "--exclude-standard",
-        *_scoped(prefix),
+        *_scoped(strip),
     )
-    return None if out is None else _under(out, prefix)
+    return None if out is None else _under(out, strip, add)
+
+
+async def folder_files(
+    folder: Path,
+    repositories: list[Repository],
+    budget: float,
+    clock: Callable[[], float] = time.monotonic,
+) -> list[str]:
+    """The files `!open` can name under `folder`, as paths from it: from git inside a repository
+    of `repositories`, the folder's own disk anywhere else. Within `budget` seconds: what is
+    found by then is returned, a repository whose listing is not done adding nothing."""
+    deadline = clock() + budget
+    real = await asyncio.to_thread(_real, folder)
+
+    async def listed(repository: Repository) -> list[str]:
+        try:
+            async with asyncio.timeout(budget):
+                return await project_files(repository, folder) or []
+        except TimeoutError:
+            return []
+
+    if any(real.is_relative_to(r.root) for r in repositories):
+        # Every file of the folder is in the repository that holds it.
+        return list(
+            dict.fromkeys(chain.from_iterable(await asyncio.gather(*map(listed, repositories))))
+        )
+    skip = frozenset(str(r.root) for r in repositories)
+    walked, *from_git = await asyncio.gather(
+        asyncio.to_thread(walk_files, real, skip, lambda: clock() >= deadline),
+        *map(listed, repositories),
+    )
+    return list(dict.fromkeys(chain(walked, *from_git)))
+
+
+class Listings:
+    """The files of a session's folder for the search, kept in memory for `ttl` seconds: Slack
+    asks again on every keystroke, and a folder is not walked each time."""
+
+    def __init__(
+        self,
+        lookup: RepositoryLookup,
+        *,
+        ttl: float = LISTING_TTL,
+        budget: float = LISTING_BUDGET,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._lookup = lookup
+        self._ttl = ttl
+        self._budget = budget
+        self._clock = clock
+        self._kept: dict[Path, tuple[float, list[str]]] = {}
+
+    async def of(self, folder: Path) -> list[str]:
+        """The folder's files as paths from it. Never raises: a listing that fails is empty and
+        not kept."""
+        now = self._clock()
+        kept = self._kept.get(folder)
+        if kept is not None and now - kept[0] < self._ttl:
+            return kept[1]
+        try:
+            files = await folder_files(
+                folder, await repositories_of(folder, self._lookup), self._budget, self._clock
+            )
+        except Exception as exc:  # a search that finds nothing beats a menu that never loads
+            logger.warning("could not list a folder's files: %s", describe(exc))
+            return []
+        self._kept[folder] = (now, files)
+        return files
 
 
 async def start_commit(repository: Repository) -> str | None:
@@ -213,14 +349,15 @@ async def start_commit(repository: Repository) -> str | None:
 async def changed_since(
     repository: Repository, folder: Path, start: str | None
 ) -> list[str] | None:
-    """The files under `folder` added or modified since `start`, committed or not, and the
-    untracked ones that are not ignored, as paths from it. Not checked for existence: a deleted
-    file may be named (`newest_first` drops it). With no `start`, only what is not committed.
-    None when git fails."""
-    prefix = await asyncio.to_thread(_prefix, repository, folder)
-    if prefix is None:
+    """The files in the part of the repository that is `folder` or inside it, added or modified
+    since `start`, committed or not, and the untracked ones that are not ignored, as paths from
+    `folder`. Not checked for existence: a deleted file may be named (`newest_first` drops it).
+    With no `start`, only what is not committed. None when git fails."""
+    relation = await asyncio.to_thread(_relation, repository, folder)
+    if relation is None:
         return None
-    scope = _scoped(prefix)
+    strip, add = relation
+    scope = _scoped(strip)
     status = await run_git(
         repository,
         "--literal-pathspecs",
@@ -253,36 +390,55 @@ async def changed_since(
         )
         # A start that no longer resolves (rewritten history): the uncommitted files alone.
         names += (committed or "").split("\0")
-    return _under("\0".join(names), prefix)
+    return _under("\0".join(names), strip, add)
+
+
+async def changed_in(
+    folder: Path,
+    repositories: list[Repository],
+    start_of: Callable[[Repository], str | None],
+) -> list[str]:
+    """The changed files of every repository of `repositories` (see `changed_since`, each from
+    its own start), as paths from `folder`, each once. A repository whose git fails or runs
+    over `GIT_TIMEOUT` adds none."""
+
+    async def changed(repository: Repository) -> list[str]:
+        try:
+            async with asyncio.timeout(GIT_TIMEOUT):
+                return await changed_since(repository, folder, start_of(repository)) or []
+        except TimeoutError:
+            return []
+
+    return list(
+        dict.fromkeys(chain.from_iterable(await asyncio.gather(*map(changed, repositories))))
+    )
 
 
 class Starts:
-    """The commit each thread's repository was on when this run first saw the thread, in memory
-    only: `!open` lists the changes made since. Set once, so a thread whose Claude Code process
-    closed after an idle hour and came back is still counted from its first sight."""
+    """The commit each repository of a thread's folder was on when this run first saw it in the
+    thread, in memory only: `!open` lists the changes made since. Set once, so a thread whose
+    Claude Code process closed after an idle hour and came back is still counted from its first
+    sight. A repository that appears later (a clone) starts from the sight that finds it."""
 
-    def __init__(self, lookup: Callable[[Path], Awaitable[Repository | None]]) -> None:
+    def __init__(self, lookup: RepositoryLookup) -> None:
         self._lookup = lookup
-        self._commits: dict[tuple[str, str], str] = {}
+        self._commits: dict[tuple[str, str, Path], str] = {}
 
-    def of(self, channel: str, thread_ts: str) -> str | None:
-        return self._commits.get((channel, thread_ts))
+    def of(self, channel: str, thread_ts: str, repository: Repository) -> str | None:
+        return self._commits.get((channel, thread_ts, repository.root))
 
     async def seen(self, channel: str, thread_ts: str, directory: Path) -> None:
-        """Note the start of a thread not seen yet. Never raises, and notes nothing where git
-        runs on no repository or fails: the next sight tries again."""
-        key = (channel, thread_ts)
-        if key in self._commits:
-            return
+        """Note the start of each repository of the folder not seen yet in this thread. Never
+        raises, and notes nothing where git runs on no repository or fails: the next sight tries
+        again."""
         try:
             async with asyncio.timeout(GIT_TIMEOUT):
-                found = usable(await self._lookup(directory))
-                commit = await start_commit(found) if found is not None else None
+                for repository in await repositories_of(directory, self._lookup):
+                    key = (channel, thread_ts, repository.root)
+                    if key not in self._commits and (commit := await start_commit(repository)):
+                        self._commits.setdefault(key, commit)
         except Exception as exc:  # a lookup that fails must not stop the message it came with
             logger.warning("could not read a thread's start commit: %s", describe(exc))
-            return
-        if commit is not None:
-            self._commits.setdefault(key, commit)
 
 
 def option(path: str) -> dict[str, Any] | None:
@@ -339,11 +495,6 @@ def picker_blocks(thread_ts: str, changed: list[str], count: int) -> list[dict[s
         {"type": "actions", "block_id": f"{BLOCK_PREFIX}{thread_ts}", "elements": elements},
         context_block(texts.OPEN_BY_NAME),
     ]
-
-
-def no_source_blocks() -> list[dict[str, Any]]:
-    """The picker of a folder git cannot list: the way to name a file, and no menu."""
-    return [_title(), context_block(texts.OPEN_NO_GIT)]
 
 
 def matches_blocks(words: str, found: list[str]) -> list[dict[str, Any]]:

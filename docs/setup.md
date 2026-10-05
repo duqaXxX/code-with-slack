@@ -194,8 +194,13 @@ repository's own hooks and apply its settings without asking. Before you bind a 
 repository, open `claude` at its root in the terminal once and accept the dialog. A trusted
 parent folder does not cover a git repository inside it, such as a clone. A worktree is covered
 by its main checkout while git registers it there: after moving a worktree's folder by hand, run
-`git worktree repair` in it. The footer and `!status` show the branch and the uncommitted lines
-only where the session works in a trusted repository.
+`git worktree repair` in it. The footer and `!status` show the branch and the uncommitted lines,
+and `!open` lists the changed files, only where git may run: in a repository you trusted, or in
+one inside the folder the session started in, which that folder's trust covers (Claude Code
+launched in a trusted folder works in its subfolders too). A repository outside the session's
+folder needs its own trust, since the agent may move anywhere. That covers a bound folder that is
+not a repository itself and holds one a level or two below it. Binding a channel is not widened:
+a repository that Claude Code does not trust is still refused.
 
 When Claude Code is logged out, a message in Slack replies with a note asking you to run `claude`
 and `/login` on the machine; the login is never done from Slack. `!login` and `!logout` typed in
@@ -342,6 +347,10 @@ The bot answers one person, and the rest of this list protects what that person 
   days, so a conversation resumed after a restart still finds them.
 - Trust a folder in Claude Code only after reading its `.claude/` settings and hooks: trusting it
   is what lets a session from Slack start there.
+- The footer, `!status` and `!open` run git in a repository inside the folder a session started in
+  without a trust of its own for it. A repository that ends up there (one Claude clones during the
+  session, say) can name filters in its config that git then runs, outside the approval prompt.
+  A repository outside that folder runs no git unless you trusted it.
 - With a static public IP, you can also restrict the tokens to it under **OAuth & Permissions**,
   **Restrict API Token Usage**. With a dynamic IP, the first address change stops the bot with
   `invalid_auth`.
@@ -509,8 +518,8 @@ top-level, not as a reply:
 | `!status` | The channel's directory, then every live session of it, each linked to its thread, busy, waiting or idle, its bypass and running tasks, and its folder when it moved elsewhere | That session's directory, session id, the command that continues it in the terminal, its mode, the folder it works in when it moved elsewhere, then the footer's values one per line, in an ephemeral message |
 | `!stop` | Stops every running session of the channel and its background tasks, and denies its pending approvals; the answer is `Stopped what was running in this channel.`, or `Nothing is running in this channel.`; each stopped session's root shows ✅ | Stops that session the same way; the answer is `Stopped.`, or `Nothing is running in this session.`, in a message that stays in the thread; ✅ on the session's root. A stop you gave is not an error, so it never shows ❌ |
 | `!help [text]` | Lists code-with-slack's own words; Claude Code's own commands are listed inside a session's thread | Lists code-with-slack's own words and every command that session offers now, in an ephemeral message; with a text, only the lines whose name or description contains it, for example `!help model` |
-| `!open` | Refused, in a post in the channel: ``Opening a file belongs to one session: send `!open` inside its thread.`` | Posts in the thread a message with a menu of the files changed in the session and a search over the folder's files; a file chosen in either is shared into the thread, where Slack opens it in its file viewer. In a folder that is not a git repository the message says so and takes only `!open <path>` |
-| `!open <path or words>` | Refused, as above | Shares the file at that path, relative to the session's folder, into the thread (no git needed). Words that are no path open the file whose path contains them, ignoring case; several matches are listed in a menu of up to 100. ``No file matches `<words>`.`` when none does. A path outside the folder, one that is no regular file, and a file over 1 MB are refused with a line only you see; `files:write` missing says so |
+| `!open` | Refused, in a post in the channel: ``Opening a file belongs to one session: send `!open` inside its thread.`` | Posts in the thread a message with a menu of the files changed in the session (left out when nothing changed or the folder holds no repository git may run in) and a search over the folder's files; a file chosen in either is shared into the thread, where Slack opens it in its file viewer |
+| `!open <path or words>` | Refused, as above | Shares the file at that path, relative to the session's folder, into the thread. Words that are no path open the file whose path contains them, in the same listing as the search, ignoring case; several matches are listed in a menu of up to 100. ``No file matches `<words>`.`` when none does. A path outside the folder, one that is no regular file, and a file over 1 MB are refused with a line only you see; `files:write` missing says so |
 | `!resume` | Lists the twenty newest sessions of the channel's directory that no thread holds (not of other worktrees), terminal and Slack alike, as a post in the channel, each with the first 8 characters of its session id and a **Resume** button. A session already open in a thread of any channel has no row: the twenty rows are sessions you can resume, and a line under the list counts the open ones (`3 more are open in their own threads.`). A click resumes the session in the thread of your `!resume` message and removes the list from the channel; a list posted before that change answers `This list is out of date: send !resume again for a current one.` | Refused, in an ephemeral message: `!resume works in the channel, not inside a thread.` |
 | `!resume <id or name>` | A Resume click, or the id (its first 8 characters, as the list shows them, or any longer start) or the name (set with `/rename` or generated by Claude Code, and must match one session), resumes that session in the thread of your `!resume` message, with bypass never chosen (the folder's own mode) and no `/effort` level set, whatever it had before; refused when the session is already open in another thread; it never touches or waits on any other thread | Same refusal as above |
 | `!clear` (or `!reset`, `!new`) | Opens a new session (harmless: nothing to clear yet) | Refused: `One thread is one session: send a new message in the channel to start a new one.` |
@@ -519,15 +528,24 @@ top-level, not as a reply:
 | a message, or one with files | Opens a new session, asks its model, effort and bypass, and after **Start** sends the message; the reply appears in the thread and grows as Claude works | Continues that session |
 | a question from Claude | Appears as one line with **Answer** and **Skip**; Answer opens a form with one question at a time, the options (one or several) and an **Other** field; **Next** moves on once the question has an answer, **Submit** on the last | Same |
 
-Where `!open` takes its files: from git, in a repository Claude Code trusts, as the footer does. The
-search covers the tracked files and the untracked ones that are not ignored, under the session's
-folder. The changed-files menu lists what was added or modified since the commit the thread's
-repository was on when the daemon first saw the thread (committed since or not, plus untracked
-files that are not ignored), newest first, at most 100 with the real count in its placeholder.
-That start is kept in memory only: after a restart of the daemon it is the repository's commit
-at the first message of the thread, and an idle close of the session does not reset it. Every git
-command is one that never writes the index, so it cannot leave an `index.lock` that stops your
-own `git`.
+Where `!open` takes its files. The search reads the session's folder from disk, so it is there in a
+folder that is not a repository too, and a path relative to the folder is what it lists and `!open`
+takes. The repositories of a folder are the one that holds it when git may run there (see
+`A session starts only in a folder you have trusted`, above), otherwise the ones that git may run
+in at most two levels below it, the depth `!bind` lists. Inside them the files are the tracked ones
+and the untracked ones that are not ignored (`git ls-files`), as the `@` file picker of Claude Code
+does with its `respectGitignore` setting at its default; everywhere else the folder is walked:
+regular files only, no symlinked folder entered, no `.git` entered. A repository deeper than two
+levels is walked like any folder. A listing stops after 2 seconds with the files found so far,
+and is kept for 30 seconds, so a folder is not walked again on every keystroke. The
+changed-files menu is the union over those repositories, each counted from the commit it was on
+when the daemon first saw the thread (committed since or not, plus untracked files that are not
+ignored), newest first, at most 100 with the real count in its placeholder, with paths relative
+to the session's folder. That start is kept in memory only: after a restart of the daemon it is
+the repository's commit at the first message of the thread, an idle close of the session does not
+reset it, and a repository that appears during the session (a clone) starts from the message
+that first finds it. Every git command is one that never writes the index, so it cannot leave an
+`index.lock` that stops your own `git`.
 
 A word typed in the channel is answered by a normal post in the channel, which stays there. A word
 typed inside a session's thread is answered by an ephemeral message under it: Slack shows it with
