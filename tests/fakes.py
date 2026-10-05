@@ -20,6 +20,7 @@ from claude_agent_sdk._internal.message_parser import parse_message
 from claude_agent_sdk.types import PermissionResult, ToolPermissionContext
 from slack_sdk.web.async_client import AsyncWebClient
 from slack_sdk.web.async_slack_response import AsyncSlackResponse
+from slack_sdk.web.file_upload_v2_result import FileUploadV2Result
 
 from code_with_slack.trust import Repository, Unkeyed, locate
 
@@ -70,6 +71,17 @@ def sdk_json(name: str) -> Any:
 def slack_payload(name: str) -> dict[str, Any]:
     data: dict[str, Any] = json.loads((FIXTURES / "slack" / f"{name}.json").read_text())
     return data
+
+
+# The answers of the two calls `files_upload_v2` makes, in the shape their reference examples give
+# (docs.slack.dev/reference/methods/files.getUploadURLExternal and files.completeUploadExternal,
+# read 2026-10-05). The third step posts the bytes to the URL the first returns.
+UPLOAD_URL = {
+    "ok": True,
+    "upload_url": "https://files.slack.com/upload/v1/ABC123...",
+    "file_id": "F000FILE",
+}
+UPLOAD_DONE = {"ok": True, "files": [{"id": "F000FILE", "title": "title"}]}
 
 
 class EndOfStream:
@@ -276,7 +288,17 @@ class FakeSlack(AsyncWebClient):
             "chat.postMessage": slack_payload("api-chat-postMessage"),
             "chat.startStream": slack_payload("api-chat-startStream"),
             "chat.getPermalink": slack_payload("api-chat-getPermalink"),
+            "files.getUploadURLExternal": UPLOAD_URL,
+            "files.completeUploadExternal": UPLOAD_DONE,
         }
+        # The bytes of every file posted to an upload URL, with that URL.
+        self.uploaded: list[tuple[str, bytes]] = []
+
+    async def _upload_file(  # type: ignore[override]
+        self, *, url: str, data: bytes, **_: Any
+    ) -> FileUploadV2Result:
+        self.uploaded.append((url, data))
+        return FileUploadV2Result(status=200, body="OK")
 
     def _new_ts(self) -> str:
         return f"1790000000.{len(self.created_ts) + 1:06d}"

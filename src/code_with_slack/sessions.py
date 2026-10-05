@@ -2332,6 +2332,11 @@ class SessionManager:
         thread = self._deps.state.open_thread(channel_id, thread_ts)
         return self._session(channel_id, thread_ts, thread.directory)
 
+    async def repository(self, directory: Path) -> Repository | None:
+        """The repository holding `directory` when the owner trusted it: the footer's own lookup,
+        so what runs git for `!open` is what runs it for the footer."""
+        return await self._deps.trusted_repository(directory)
+
     def wrote(self, channel_id: str, thread_ts: str) -> None:
         """Something of the app's was posted in this thread outside its session (the answer to a
         word, a notice): the live session's status line, which that post cleared, is set again.

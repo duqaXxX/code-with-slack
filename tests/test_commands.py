@@ -8,6 +8,7 @@ from code_with_slack.commands import (
     Bypass,
     Help,
     Invalid,
+    Open,
     Passthrough,
     Status,
     Stop,
@@ -28,6 +29,9 @@ from tests.fakes import sdk_json
         ("!bind", Bind("")),  # alone: the folders a session can start in
         ("!bypass on", Bypass(True)),
         ("!bypass OFF", Bypass(False)),
+        ("!open", Open()),  # alone: the picker
+        ("!OPEN  setup ", Open("setup")),
+        ("!open docs/my file.md", Open("docs/my file.md")),
         ("!bypass", Invalid()),
         ("!bypass maybe", Invalid()),
         ("!status", Status()),
@@ -48,7 +52,7 @@ def test_parse_bang(text: str, expected: object) -> None:
 def test_help_lists_the_daemon_words_and_every_session_command() -> None:
     commands = sdk_json("server-info")["commands"]
     text = help_text(commands)
-    for word in ("!help", "!status", "!stop", "!bind", "!bypass"):
+    for word in ("!help", "!status", "!stop", "!bind", "!bypass", "!open"):
         assert f"`{word}" in text
     assert all(f"`!{c['name']}" in text for c in commands if c["name"] != "clear")
 
@@ -116,7 +120,7 @@ def own_words() -> list[str]:
 def test_the_guide_and_the_help_explain_every_word_of_the_daemon() -> None:
     # A word added without its line in the guide and in !help fails here, so neither goes stale.
     words = own_words()
-    assert {"help", "guide", "bind", "bypass", "status", "stop", "resume"} <= set(words)
+    assert {"help", "guide", "bind", "bypass", "status", "stop", "resume", "open"} <= set(words)
     help_lines = "\n".join(texts.HELP_WORDS)
     for word in words:
         assert f"`!{word}" in texts.GUIDE, word

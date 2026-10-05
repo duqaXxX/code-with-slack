@@ -49,6 +49,28 @@ NOT_A_SESSION = (
     "This thread holds no session. In the channel, send a new message to start one, or "
     "`!resume` to continue an earlier one."
 )
+OPEN_TOP_LEVEL = "Opening a file belongs to one session: send `!open` inside its thread."
+OPEN_FALLBACK = "Open a file"
+OPEN_TITLE = "*Open a file*"
+OPEN_CHANGED = "Changed in this session ({count})"
+OPEN_SEARCH = "Search any file…"
+OPEN_BY_NAME = "Or type `!open setup` to open a file by name."
+OPEN_NO_GIT = (
+    "This folder is not a git repository, so there is no list to choose from. Type "
+    "`!open path/to/file` with the file's path inside the folder."
+)
+OPEN_NO_MATCH = "No file matches `{words}`."
+OPEN_UNREADABLE = "git could not list this folder's files."
+OPEN_MATCHES = "*{count} files match* `{words}`"
+OPEN_MATCH_PLACEHOLDER = "Choose a file"
+OPEN_MATCHES_CAPPED = "The first {shown} of {count} are listed: type more of the name to narrow it."
+OPEN_NOT_A_FILE = "`{path}` is not a file inside this session's folder."
+OPEN_TOO_LARGE = "`{path}` is larger than 1 MB, the most Slack opens in its file viewer."
+OPEN_NO_SCOPE = (
+    "Opening a file needs the `files:write` scope: add it to the app and reinstall it from "
+    "`slack-app-manifest.json` (docs/setup.md, Part 1)."
+)
+OPEN_FAILED = "Could not open `{path}`: {error}"
 WORD_IN_THREAD = "`!{word}` works in the channel, not inside a thread."
 CLEAR_IN_THREAD = "One thread is one session: send a new message in the channel to start a new one."
 UPGRADE_NOTICE = (
@@ -258,6 +280,9 @@ HELP_WORDS = (
     "restart; inside a thread, refused in the channel",
     "`!resume [session]` this directory's sessions, or resume one by id or name in the "
     "thread of your `!resume` message; in the channel, refused inside a thread",
+    "`!open [file]` share a file of the session's folder into the thread, where Slack opens it in "
+    "its file viewer: a picker alone, or a path or part of a name; inside a thread, refused in "
+    "the channel",
 )
 HELP_NO_MATCH = "No command matches `{query}`."
 HELP_CLAUDE = (
@@ -441,6 +466,13 @@ newest sessions, from the terminal too, each with the start of its id and a **Re
 `!resume <id>` (that start is enough), or `!resume <title>` for a session that has one, resumes \
 it in the thread of your `!resume` message. To continue a session in the terminal, run the \
 `Terminal:` command `!status` shows in its thread.
+
+**Files**
+`!open`, sent inside a session's thread, offers the files changed in that session and a search \
+over the folder's files; choosing one shares it into the thread, where Slack opens it in its \
+file viewer, with Markdown rendered. `!open <path>` opens that file, and `!open <words>` the file \
+whose name contains them, or lists the files that do. The lists come from git, so a folder that \
+is not a git repository takes only `!open <path>`. A file over 1 MB is not opened.
 
 **Bypass**
 `!bypass on`, sent inside a session's thread, lets Claude Code run every tool without asking in \

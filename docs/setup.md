@@ -44,17 +44,21 @@ not the `claude` on your `PATH`. Both read the same login, so logging in once wi
 4. Check the summary and choose **Create**.
 
 The manifest asks for private channels only (`groups:history`, `groups:read`,
-`message.groups`), `chat:write`, `files:read` to download the files you attach to a message, and
+`message.groups`), `chat:write`, `files:read` to download the files you attach to a message,
+`files:write` for `!open`, which shares a file of the session's folder into its thread, and
 `reactions:write` for the status reaction on a session's root message. It also switches on the
 app's **Home** tab, where code-with-slack keeps the list of your sessions; publishing it needs no
 scope and no event.
 The app registers no slash command: commands are typed as `!word` messages. Socket Mode is on,
 so the app needs no public URL and your machine opens no inbound port.
 
-An app created before `files:read` or `reactions:write` was added needs the scope too: on the
-app's **OAuth & Permissions** page add the missing bot scope, then reinstall the app to the
-workspace. Without `files:read`, every attached file is refused with `HTTP 302`; without
-`reactions:write`, the status reaction is silently skipped (logged, never surfaced).
+An app created before `files:read`, `files:write` or `reactions:write` was added needs the scope
+too: on the app's **OAuth & Permissions** page add the missing bot scope, then reinstall the app
+to the workspace. Without `files:read`, every attached file is refused with `HTTP 302`; without
+`files:write`, `!open` answers that it needs the scope; without `reactions:write`, the status
+reaction is silently skipped (logged, never surfaced). The search menu of `!open` needs nothing
+more in the manifest: Socket Mode delivers its requests over the same connection, and the
+manifest's Options Load URL belongs to the HTTP mode.
 
 The line under a thread (`Working…`, `1 shell still running`) is Slack's thread status
 (`assistant.threads.setStatus`), which Slack's reference lists under `chat:write`. When Slack
@@ -505,6 +509,8 @@ top-level, not as a reply:
 | `!status` | The channel's directory, then every live session of it, each linked to its thread, busy, waiting or idle, its bypass and running tasks, and its folder when it moved elsewhere | That session's directory, session id, the command that continues it in the terminal, its mode, the folder it works in when it moved elsewhere, then the footer's values one per line, in an ephemeral message |
 | `!stop` | Stops every running session of the channel and its background tasks, and denies its pending approvals; the answer is `Stopped what was running in this channel.`, or `Nothing is running in this channel.`; each stopped session's root shows ✅ | Stops that session the same way; the answer is `Stopped.`, or `Nothing is running in this session.`, in a message that stays in the thread; ✅ on the session's root. A stop you gave is not an error, so it never shows ❌ |
 | `!help [text]` | Lists code-with-slack's own words; Claude Code's own commands are listed inside a session's thread | Lists code-with-slack's own words and every command that session offers now, in an ephemeral message; with a text, only the lines whose name or description contains it, for example `!help model` |
+| `!open` | Refused, in a post in the channel: ``Opening a file belongs to one session: send `!open` inside its thread.`` | Posts in the thread a message with a menu of the files changed in the session and a search over the folder's files; a file chosen in either is shared into the thread, where Slack opens it in its file viewer. In a folder that is not a git repository the message says so and takes only `!open <path>` |
+| `!open <path or words>` | Refused, as above | Shares the file at that path, relative to the session's folder, into the thread (no git needed). Words that are no path open the file whose path contains them, ignoring case; several matches are listed in a menu of up to 100. ``No file matches `<words>`.`` when none does. A path outside the folder, one that is no regular file, and a file over 1 MB are refused with a line only you see; `files:write` missing says so |
 | `!resume` | Lists the twenty newest sessions of the channel's directory that no thread holds (not of other worktrees), terminal and Slack alike, as a post in the channel, each with the first 8 characters of its session id and a **Resume** button. A session already open in a thread of any channel has no row: the twenty rows are sessions you can resume, and a line under the list counts the open ones (`3 more are open in their own threads.`). A click resumes the session in the thread of your `!resume` message and removes the list from the channel; a list posted before that change answers `This list is out of date: send !resume again for a current one.` | Refused, in an ephemeral message: `!resume works in the channel, not inside a thread.` |
 | `!resume <id or name>` | A Resume click, or the id (its first 8 characters, as the list shows them, or any longer start) or the name (set with `/rename` or generated by Claude Code, and must match one session), resumes that session in the thread of your `!resume` message, with bypass never chosen (the folder's own mode) and no `/effort` level set, whatever it had before; refused when the session is already open in another thread; it never touches or waits on any other thread | Same refusal as above |
 | `!clear` (or `!reset`, `!new`) | Opens a new session (harmless: nothing to clear yet) | Refused: `One thread is one session: send a new message in the channel to start a new one.` |
@@ -512,6 +518,16 @@ top-level, not as a reply:
 | any other `!name [args]` | Opens a new session, asks its model, effort and bypass, and after **Start** runs `/name args` there if it offers that command, else sends the text as written | Runs `/name args` in that session if it offers the command, else sends the text as written |
 | a message, or one with files | Opens a new session, asks its model, effort and bypass, and after **Start** sends the message; the reply appears in the thread and grows as Claude works | Continues that session |
 | a question from Claude | Appears as one line with **Answer** and **Skip**; Answer opens a form with one question at a time, the options (one or several) and an **Other** field; **Next** moves on once the question has an answer, **Submit** on the last | Same |
+
+Where `!open` takes its files: from git, in a repository Claude Code trusts, as the footer does. The
+search covers the tracked files and the untracked ones that are not ignored, under the session's
+folder. The changed-files menu lists what was added or modified since the commit the thread's
+repository was on when the daemon first saw the thread (committed since or not, plus untracked
+files that are not ignored), newest first, at most 100 with the real count in its placeholder.
+That start is kept in memory only: after a restart of the daemon it is the repository's commit
+at the first message of the thread, and an idle close of the session does not reset it. Every git
+command is one that never writes the index, so it cannot leave an `index.lock` that stops your
+own `git`.
 
 A word typed in the channel is answered by a normal post in the channel, which stays there. A word
 typed inside a session's thread is answered by an ephemeral message under it: Slack shows it with

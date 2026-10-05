@@ -7,6 +7,21 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `!open`, sent inside a session's thread: a message with a menu of the files changed in the
+  session and a search menu over the folder's files, and `!open <path>` or `!open <words>` for a
+  file directly. The chosen file is shared into the thread with `files_upload_v2`, so Slack's own
+  file viewer opens it (a `.md` file with Markdown rendered) with the thread beside it. The new
+  module `openfile` holds the logic; the lists come from git on a repository Claude Code trusts,
+  through the footer's git helper (now `footer.run_git`), with commands measured never to write
+  the index (git 2.54.0, 2026-10-05): `ls-files` for the index, `status` under
+  `--no-optional-locks` and `diff-tree` from the commit the thread was on when the daemon first
+  saw it for the changed files. A folder with no repository takes only a path. The search is an
+  `external_select`, answered through `app.options` over Socket Mode, which needs nothing in the
+  manifest. A file over 1 MB, a path that leaves the folder and a click or a query from anyone
+  but the owner are refused. The bot needs the new scope `files:write`: an installed app is
+  reinstalled from `slack-app-manifest.json` (`docs/setup.md`, Part 1). The guide and `!help`
+  list the word, and the guide is now longer than the notification text Slack shows for a
+  message (3,000 characters), so that text is its first 3,000.
 - Cleaning up a channel from the Home tab (issue #146), with the optional `SLACK_USER_TOKEN`:
   in edit mode a **Clean up** button beside each channel's name, with a confirmation dialog
   that says what it deletes. `ThreadDeleter.clean` reads the channel's history and deletes what

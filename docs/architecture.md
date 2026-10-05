@@ -459,6 +459,36 @@ with the connect (measured 2026-09-26, same versions), so a client started by `!
 trusted, the status ends with the message a prompt would get there; when the client fails to start
 for another reason, it ends with the error line a prompt would get.
 
+## Opening a file
+
+`!open` shares a file of a session's folder into its thread, where Slack shows it in its own file
+viewer. `code_with_slack.openfile` holds the logic and `slack_app` the handlers (`open_word`,
+`open_file`, `on_open_choice`, `on_open_search`). The file goes up with
+`AsyncWebClient.files_upload_v2` (`files:write`): the file itself, its basename as the name and its
+path from the folder as the title, and nothing posted on success.
+
+The files come from git alone, through the footer's `run_git` on a repository
+`SessionManager.repository` (the footer's own `trusted_repository` lookup) found trusted:
+`ls-files --cached --others --exclude-standard` for the index, and for the changed files `status`
+under `--no-optional-locks` with `diff-tree` from the thread's start commit to `HEAD`. No command
+writes the index, and `status` does not report a file that was only touched
+(the measurements are in the `openfile` docstring and repeated by `tests/test_openfile.py`). The
+start commit is `openfile.Starts`: a dict by thread in memory, set the first time the daemon sees
+the thread (`submit_to_session` and `open_word` call `Starts.seen`) and never reset, so a session
+that closes when idle and comes back keeps it. A repository with no commit starts from the empty
+tree, as the footer compares what is staged.
+
+Slack's search menu is an `external_select`: each keystroke is a `block_suggestion` request that
+Socket Mode delivers over the same connection and that Bolt routes to `app.options`, answered by
+`ack(options=[...])` within 3 seconds. Its payload names the channel and the message and no thread,
+so the picker's actions block carries the thread in its `block_id` (`openfile.BLOCK_PREFIX`); the
+handler checks the owner and the workspace itself, then resolves the thread to the folder of its own
+entry in `state.json` (`slack_app.thread_folder`), never the channel's. A choice in any of the
+three menus is untrusted input resolved the same way: `openfile.openable` follows the links and
+refuses a path that leaves the folder, is no regular file or exceeds 1 MB. An option holds 75
+characters of text (a longer path is shortened from the left with `…`) and 150 of value (a path
+that cannot fit is left out of the menus and stays reachable by `!open <path>`).
+
 ## Sessions
 
 `code_with_slack.sessions.SessionManager` keeps one `ThreadSession` per open Slack thread, across
@@ -878,10 +908,10 @@ reads `sessions.get(channel, thread_ts)` for a reply (`None` for a thread that h
 and always `None` for a top-level one (`thread_ts == ts`), even in a channel that is bound.
 `code_with_slack.commands.parse_bang` reads a message starting with `!` (none for one
 carrying files, which is always a prompt): `help`, `guide`, `bind`, `bypass`, `status`, `stop`
-and `resume` are the daemon's own words (`commands.Word`), dispatched in `handle_word` by
+and `resume` and `open` are the daemon's own words (`commands.Word`), dispatched in `handle_word` by
 whether the lookup above found a session: `!bind` and `!resume` work only at the top level,
 refused inside a thread (`texts.WORD_IN_THREAD`); `!bypass` only inside a thread, refused at the
-top level (`texts.BYPASS_TOP_LEVEL`); `!guide` answers the same either way; `!help`, `!status`
+top level (`texts.BYPASS_TOP_LEVEL`), and so is `!open` (`texts.OPEN_TOP_LEVEL`); `!guide` answers the same either way; `!help`, `!status`
 and `!stop` answer both, but with different content: `!help` lists only the daemon's words at the
 top level and a session's own commands too inside its thread, except `clear`, which a thread
 refuses (`commands.refused_in_thread`); `!status` lists the channel's live

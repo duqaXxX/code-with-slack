@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import dataclasses
 import logging
+import posixpath
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import replace
@@ -47,6 +48,7 @@ from code_with_slack.commands import (
     Guide,
     Help,
     Invalid,
+    Open,
     Passthrough,
     Resume,
     Status,
@@ -59,6 +61,7 @@ from code_with_slack.commands import (
 )
 from code_with_slack.config import Config
 from code_with_slack.folders import BIND_ACTION, bind_blocks
+from code_with_slack.footer import GIT_TIMEOUT
 from code_with_slack.guards import (
     ChannelGuard,
     Identity,
@@ -79,8 +82,30 @@ from code_with_slack.home import (
     Home,
     read_filter,
 )
+from code_with_slack.openfile import (
+    OPEN_ACTIONS,
+    OPEN_SEARCH_ACTION,
+    OPTION_ROWS,
+    SUGGEST_TIMEOUT,
+    NotAFile,
+    Starts,
+    TooLarge,
+    changed_since,
+    matches_blocks,
+    newest_first,
+    no_source_blocks,
+    openable,
+    options,
+    picker_blocks,
+    project_files,
+    rank,
+    regular_files,
+    thread_of,
+    title_of,
+    usable,
+)
 from code_with_slack.prompt import Prompt
-from code_with_slack.render.escape import markdown_escape, mrkdwn_escape
+from code_with_slack.render.escape import markdown_escape, mrkdwn_escape, shown_as_written
 from code_with_slack.render.renderer import one_line
 from code_with_slack.render.sinks import (
     FALLBACK_LIMIT,
@@ -116,6 +141,7 @@ from code_with_slack.setup import (
 )
 from code_with_slack.setup import summary as setup_summary
 from code_with_slack.state import StateStore
+from code_with_slack.trust import Repository
 
 logger = logging.getLogger(__name__)
 # How a failure reaches the owner: the text of one line, delivered where the failed act answers.
@@ -234,6 +260,9 @@ def build_app(
         )
 
     app = AsyncApp(client=slack, authorize=authorize)
+    # What `!open` lists as changed is counted from where each thread's repository stood when this
+    # run first saw the thread (memory only).
+    starts = Starts(sessions.repository)
 
     async def deliver(
         channel: str,
@@ -459,6 +488,8 @@ def build_app(
         if in_thread and isinstance(command, Passthrough) and is_clear(command, session.commands):
             await tell_owner(channel, thread_ts, texts.CLEAR_IN_THREAD)
             return
+        # Before anything of this message can change a file: `!open` lists the changes made since.
+        await starts.seen(channel, thread_ts, session.directory)
         # Prompts and commands for Claude Code enter the queue in the order they were sent,
         # although files take a while to download. Every reply goes to the thread.
         async with arrival_lock((channel, thread_ts)):
@@ -879,6 +910,11 @@ def build_app(
                             texts.STOPPED_THREAD if stopped else texts.NOTHING_TO_STOP_THREAD,
                             stays=True,
                         )
+            case Open(target=words):
+                if session is None:
+                    await in_channel(channel, texts.OPEN_TOP_LEVEL)
+                else:
+                    await open_word(channel, thread_ts, session, words)
             case Resume(target=target):
                 if session is not None:
                     await tell_owner(
@@ -886,6 +922,173 @@ def build_app(
                     )
                 else:
                     await handle_resume(channel, thread_ts, target)
+
+    def thread_folder(channel: str, thread_ts: str) -> Path | None:
+        """The folder of the session that owns a thread, from its entry; None when the thread is
+        no session (or is being deleted). What a click or a typed query names is resolved here and
+        never against the channel's folder, which a later `!bind` may have moved."""
+        thread = state.thread(channel, thread_ts)
+        if thread is None or sessions.held(channel, thread_ts):
+            return None
+        return thread.directory
+
+    async def open_word(channel: str, thread_ts: str, session: ThreadSession, words: str) -> None:
+        """`!open` typed in a session's thread: a picker alone; with words, the file they name as
+        a path, else the file whose name contains them, else the files that do."""
+        folder = session.directory
+        await starts.seen(channel, thread_ts, folder)
+        repository = usable(await sessions.repository(folder))
+        if not words:
+            await post_picker(channel, thread_ts, folder, repository)
+            return
+        if await asyncio.to_thread(regular_files, folder, [words]):
+            await open_file(channel, thread_ts, folder, words)
+            return
+        shown = shown_as_written(words)
+        if repository is None:
+            await tell_owner(channel, thread_ts, texts.OPEN_NOT_A_FILE.format(path=shown))
+            return
+        index = await git_listing(project_files(repository, folder))
+        if index is None:
+            await tell_owner(channel, thread_ts, texts.OPEN_UNREADABLE)
+            return
+        found = await asyncio.to_thread(regular_files, folder, rank(index, words))
+        if not found:
+            await tell_owner(channel, thread_ts, texts.OPEN_NO_MATCH.format(words=shown))
+        elif len(found) == 1:
+            await open_file(channel, thread_ts, folder, found[0])
+        else:
+            await deliver(
+                channel,
+                thread_ts,
+                texts.OPEN_FALLBACK,
+                matches_blocks(words, found),
+                ephemeral=False,
+            )
+
+    async def git_listing(listing: Awaitable[list[str] | None]) -> list[str] | None:
+        """A git listing within the footer's time limit; None when it fails or runs over."""
+        try:
+            async with asyncio.timeout(GIT_TIMEOUT):
+                return await listing
+        except TimeoutError:
+            return None
+
+    async def post_picker(
+        channel: str, thread_ts: str, folder: Path, repository: Repository | None
+    ) -> None:
+        """The picker, a post in the thread that stays so another file can be chosen after
+        the first."""
+        if repository is None:
+            blocks = no_source_blocks()
+        else:
+            names = await git_listing(
+                changed_since(repository, folder, starts.of(channel, thread_ts))
+            )
+            changed = await asyncio.to_thread(newest_first, folder, names or [])
+            blocks = picker_blocks(thread_ts, changed, len(changed))
+        await deliver(channel, thread_ts, texts.OPEN_FALLBACK, blocks, ephemeral=False)
+
+    async def open_file(channel: str, thread_ts: str, folder: Path, relative: str) -> None:
+        """Share the file `relative` names under `folder` into the thread, which Slack shows
+        in its own viewer; no line of ours on success. `relative` is untrusted."""
+        shown = shown_as_written(relative)
+        try:
+            path = await asyncio.to_thread(openable, folder, relative)
+        except NotAFile:
+            await tell_owner(channel, thread_ts, texts.OPEN_NOT_A_FILE.format(path=shown))
+            return
+        except TooLarge:
+            await tell_owner(channel, thread_ts, texts.OPEN_TOO_LARGE.format(path=shown))
+            return
+        title = title_of(relative)
+        try:
+            await slack.files_upload_v2(
+                channel=channel,
+                thread_ts=thread_ts,
+                file=str(path),
+                filename=posixpath.basename(title),
+                title=title,
+            )
+        except Exception as exc:
+            error = describe(exc)
+            # Slack's own code, never the file or its path.
+            logger.warning("could not share a file in %s: %s", channel, error)
+            if error == "missing_scope":
+                text = texts.OPEN_NO_SCOPE
+            elif error == "snippet_too_large":
+                text = texts.OPEN_TOO_LARGE.format(path=shown)
+            else:
+                text = texts.OPEN_FAILED.format(path=shown, error=error)
+            await tell_owner(channel, thread_ts, text)
+            return
+        # Slack clears a thread's status line when the app shares into it.
+        sessions.wrote(channel, thread_ts)
+
+    async def on_open_choice(ack: AsyncAck, body: dict[str, Any]) -> None:
+        """A file chosen in the picker's changed-files menu, its search or a list of matches."""
+        await ack()
+        user, team = interaction_actor(body)
+        channel = (body.get("channel") or {}).get("id")
+        thread_ts = click_thread(body)
+        if not await admitted(user, team, channel, thread_ts):
+            return
+        assert channel is not None
+        # A menu cleared of its choice sends `null`.
+        relative = (body["actions"][0].get("selected_option") or {}).get("value")
+        if not isinstance(relative, str) or not relative:
+            return
+        folder = thread_folder(channel, thread_ts)
+        if folder is None:
+            await tell_owner(channel, thread_ts, texts.NOT_A_SESSION)
+            return
+
+        async def report(text: str) -> None:
+            await tell_owner(channel, thread_ts, text)
+
+        # The value is untrusted: `open_file` resolves it inside this thread's own folder.
+        await reply_on_failure(
+            channel, thread_ts, open_file(channel, thread_ts, folder, relative), report
+        )
+
+    for action_id in OPEN_ACTIONS:
+        app.action(action_id)(on_open_choice)
+
+    async def suggestions(body: dict[str, Any]) -> list[dict[str, Any]]:
+        """The files of a thread's folder whose path contains what the owner typed. The thread is
+        the one the picker's block id names (a `block_suggestion` carries none), and it is
+        resolved to its own folder as a click is."""
+        channel = (body.get("channel") or {}).get("id")
+        thread_ts = thread_of(str(body.get("block_id") or ""))
+        words = str(body.get("value") or "").strip()
+        folder = thread_folder(channel, thread_ts) if channel and thread_ts else None
+        if folder is None or not words:
+            return []
+        try:
+            repository = usable(await sessions.repository(folder))
+            if repository is None:
+                return []
+            async with asyncio.timeout(SUGGEST_TIMEOUT):
+                index = await project_files(repository, folder)
+                found = await asyncio.to_thread(
+                    regular_files, folder, rank(index or [], words), OPTION_ROWS
+                )
+        except Exception as exc:  # nothing to show beats a menu that never loads
+            logger.warning("could not list files for a search: %s", describe(exc))
+            return []
+        return options(found)
+
+    @app.options(OPEN_SEARCH_ACTION)
+    async def on_open_search(ack: AsyncAck, body: dict[str, Any]) -> None:
+        # The options are the answer to the ack, so Slack's three seconds start here. Checked
+        # for the owner and the workspace alone, with no call to Slack before the answer: the
+        # reply reaches only whoever is typing.
+        user, team = interaction_actor(body)
+        if not is_owner(identity, user, team):
+            logger.info("ignored an inbound event from someone other than the owner")
+            await ack(options=[])
+            return
+        await ack(options=await suggestions(body))
 
     async def acknowledge(channel: str, ts: str) -> None:
         """✅ on the owner's own message: the mark that a word took effect, which stays after a
