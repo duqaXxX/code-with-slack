@@ -152,6 +152,15 @@ def context_block(text: str) -> dict[str, Any]:
     return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
 
 
+def plain_text_object(text: str, *, emoji: bool | None = None) -> dict[str, Any]:
+    """A `plain_text` text object. `emoji` False says `:name:` in `text` is not to be turned into
+    an emoji (text object reference, read 2026-10-06); left out when None."""
+    shown: dict[str, Any] = {"type": "plain_text", "text": text}
+    if emoji is not None:
+        shown["emoji"] = emoji
+    return shown
+
+
 # A text object's limit, as a context block's mrkdwn element holds one (Block Kit reference).
 CONTEXT_LIMIT = 3000
 

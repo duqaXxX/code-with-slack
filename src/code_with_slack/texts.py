@@ -49,6 +49,40 @@ NOT_A_SESSION = (
     "This thread holds no session. In the channel, send a new message to start one, or "
     "`!resume` to continue an earlier one."
 )
+OPEN_TOP_LEVEL = "Opening a file belongs to one session: send `!open` inside its thread."
+OPEN_FALLBACK = "Open a file"
+OPEN_TITLE = "*Open a file*"
+OPEN_BUTTON = "Choose a file"
+OPEN_BY_NAME = "Or type `!open setup` to open a file by name."
+OPEN_NO_MATCH = "No file matches `{words}`."
+OPEN_NO_MATCH_PARTIAL = (
+    "No file matching `{words}` was found, but the folder could not be listed in full."
+)
+OPEN_MATCHES = "*{count} files match* `{words}`"
+OPEN_MATCHES_ONE = "*1 file matches* `{words}`"
+OPEN_PARTIAL = "The folder could not be listed in full, so some files may be missing here."
+OPEN_MATCHES_CAPPED = "The first {shown} of {count} are listed: type more of the name to narrow it."
+OPEN_MATCHES_TOO_LONG = "None of their paths is short enough to list: open one with `!open <path>`."
+OPEN_MODAL_TITLE = "Open a file"
+OPEN_MODAL_SUBMIT = "Open"
+OPEN_MODAL_CLOSE = "Close"
+OPEN_QUERY_LABEL = "Search any file"
+OPEN_QUERY_HINT = "Type part of a name"
+OPEN_ROWS_CHANGED = "Changed in this session ({count}), newest first"
+OPEN_ROWS_MATCH = "{count} files match"
+OPEN_ROWS_MATCH_ONE = "1 file matches"
+OPEN_TYPE_A_NAME = "No changed files to show. Type part of a name to find a file."
+OPEN_LOADING = "Looking for files…"
+OPEN_NONE_CHOSEN = "Choose a file first."
+OPEN_FORM_NOT_OPENED = "The file list could not open (`{error}`). Click Choose a file again."
+OPEN_NOT_A_FILE = "`{path}` is not a file inside this session's folder."
+OPEN_TOO_LARGE = "`{path}` is larger than 1 MB, the most Slack opens in its file viewer."
+OPEN_EMPTY = "`{path}` is empty: there is nothing to show."
+OPEN_NO_SCOPE = (
+    "Opening a file needs the `files:write` scope: add it to the app and reinstall it from "
+    "`slack-app-manifest.json` (docs/setup.md, Part 1)."
+)
+OPEN_FAILED = "Could not open `{path}`: {error}"
 WORD_IN_THREAD = "`!{word}` works in the channel, not inside a thread."
 CLEAR_IN_THREAD = "One thread is one session: send a new message in the channel to start a new one."
 UPGRADE_NOTICE = (
@@ -258,6 +292,9 @@ HELP_WORDS = (
     "restart; inside a thread, refused in the channel",
     "`!resume [session]` this directory's sessions, or resume one by id or name in the "
     "thread of your `!resume` message; in the channel, refused inside a thread",
+    "`!open [file]` share a file of the session's folder into the thread, where Slack opens it in "
+    "its file viewer: a picker alone, or a path or part of a name; inside a thread, refused in "
+    "the channel",
 )
 HELP_NO_MATCH = "No command matches `{query}`."
 HELP_CLAUDE = (
@@ -441,6 +478,13 @@ newest sessions, from the terminal too, each with the start of its id and a **Re
 `!resume <id>` (that start is enough), or `!resume <title>` for a session that has one, resumes \
 it in the thread of your `!resume` message. To continue a session in the terminal, run the \
 `Terminal:` command `!status` shows in its thread.
+
+**Files**
+`!open`, sent inside a session's thread, offers the files changed in that session and a search \
+over the folder's files; choosing one shares it into the thread, where Slack opens it in its \
+file viewer, with Markdown rendered. `!open <path>` opens that file, and `!open <words>` the file \
+whose path contains them, or lists the files that do. The search reads the folder from disk and \
+leaves out what `.gitignore` excludes inside a git repository. A file over 1 MB is not opened.
 
 **Bypass**
 `!bypass on`, sent inside a session's thread, lets Claude Code run every tool without asking in \

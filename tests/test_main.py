@@ -332,6 +332,7 @@ def test_the_manifest_asks_for_the_minimum() -> None:
     assert sorted(manifest["oauth_config"]["scopes"]["bot"]) == [
         "chat:write",
         "files:read",  # downloading the files attached to a message (the maintainer, 2026-09-25)
+        "files:write",  # `!open` shares a file of the session's folder into its thread
         "groups:history",
         "groups:read",
         "reactions:write",  # the status reaction on a session's root message (D10)

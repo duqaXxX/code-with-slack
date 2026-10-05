@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from code_with_slack.trust import workspace_trusted
+from code_with_slack.trust import trusted_repository, workspace_trusted
 from tests.git_layouts import (
     add_worktree,
     bare_layout,
@@ -500,6 +500,20 @@ async def test_a_registration_that_is_no_regular_file_registers_nothing(
     assert not await asyncio.wait_for(workspace_trusted(worktree, home), 2)
 
 
+@pytest.mark.parametrize("tail", [b"\r\n", b"\n\n"], ids=["crlf", "two-line-feeds"])
+async def test_a_registration_git_reads_through_other_line_ends_registers_the_worktree(
+    tail: bytes, app: Path, home: Path
+) -> None:
+    # git strips trailing whitespace from `worktrees/<id>/gitdir` (worktree.c,
+    # get_linked_worktree, v2.54.0); a file ending in a CRLF is still the worktree's.
+    registration = app / ".git" / "worktrees" / "wt" / "gitdir"
+    registration.write_bytes(registration.read_bytes().rstrip(b"\n") + tail)
+    listed = git(app, "worktree", "list", "--porcelain")
+    assert "wt" in listed and "prunable" not in listed  # the control: git still has it
+    trust(home, app)  # the folder `code` no longer, or it would cover the worktree as a folder
+    assert await workspace_trusted(app.parent / "wt", home)
+
+
 async def test_stricter_than_git_where_only_the_names_match(app: Path, home: Path) -> None:
     # Two readings kept on the closed side: entries named like a git dir's that git itself
     # rejects, and a `.git` symlink that names nothing.
@@ -513,3 +527,292 @@ async def test_stricter_than_git_where_only_the_names_match(app: Path, home: Pat
     assert not git_finds_a_repository(lookalike)
     assert not await workspace_trusted(lookalike, home)
     assert not await workspace_trusted(dangling, home)
+
+
+# --- the daemon's own git in a repository inside the session's folder ---
+
+
+@pytest.fixture
+def work(tmp_path: Path, home: Path) -> Path:
+    """The folder a session started in: not a repository, and trusted in Claude Code."""
+    folder = tmp_path / "work"
+    folder.mkdir()
+    trust(home, folder)
+    return folder.resolve()
+
+
+@pytest.mark.parametrize("depth", [1, 2, 3])
+@pytest.mark.parametrize("inside", [".", "src"], ids=["at-the-root", "in-a-subfolder"])
+async def test_a_repository_inside_the_session_s_folder_is_usable_without_its_own_trust(
+    work: Path, home: Path, depth: int, inside: str
+) -> None:
+    repo = git_init(work.joinpath(*"abc"[:depth]))
+    (repo / "src").mkdir()
+    assert not await workspace_trusted(repo, home)  # the start gate does not take it
+    found = await trusted_repository(repo / inside, work, home)
+    assert found is not None and found.root == repo.resolve()
+
+
+async def test_a_repository_outside_the_session_s_folder_needs_its_own_trust(
+    tmp_path: Path, work: Path, home: Path
+) -> None:
+    # The agent may `cd` anywhere: only what lies inside the folder it started in is covered.
+    outside = git_init(tmp_path / "elsewhere")
+    sibling = git_init(tmp_path / "work-sibling")  # the same prefix, not inside `work`
+    assert await trusted_repository(outside, work, home) is None
+    assert await trusted_repository(sibling, work, home) is None
+    trust(home, work, outside)
+    assert await trusted_repository(outside, work, home) is not None
+
+
+async def test_an_untrusted_session_folder_covers_nothing_inside_it(
+    tmp_path: Path, home: Path
+) -> None:
+    folder = tmp_path / "work"
+    repo = git_init(folder / "app")
+    assert await trusted_repository(repo, folder, home) is None  # no record at all
+    trust(home, folder, accepted=False)
+    assert await trusted_repository(repo, folder, home) is None
+    trust(home, folder)
+    assert await trusted_repository(repo, folder, home) is not None  # the control
+
+
+async def test_a_session_folder_that_is_a_repository_does_not_cover_itself(
+    tmp_path: Path, home: Path
+) -> None:
+    # Claude Code keys a repository on its own root: a trusted parent does not cover it, and the
+    # folder's own root is not "inside" it.
+    repo = git_init(tmp_path / "code" / "app")
+    trust(home, tmp_path / "code")
+    assert await trusted_repository(repo, repo, home) is None
+    assert await trusted_repository(repo / ".git", repo, home) is None
+    trust(home, repo)
+    assert await trusted_repository(repo, repo, home) is not None
+
+
+async def test_a_session_folder_inside_a_repository_covers_only_what_that_repository_trusts(
+    tmp_path: Path, home: Path
+) -> None:
+    # A session in a subfolder of a repository the owner never trusted: the folder fails the start
+    # gate, so a repository inside it is not covered either.
+    outer = git_init(tmp_path / "outer")
+    folder = outer / "packages"
+    inner = git_init(folder / "lib")
+    assert await trusted_repository(inner, folder, home) is None
+    trust(home, outer)
+    assert await trusted_repository(inner, folder, home) is not None
+
+
+async def test_a_symlink_in_the_session_s_folder_to_a_repository_elsewhere_is_not_inside(
+    tmp_path: Path, work: Path, home: Path
+) -> None:
+    elsewhere = git_init(tmp_path / "elsewhere" / "repo")
+    (elsewhere / "src").mkdir()
+    (work / "link").symlink_to(elsewhere)
+    assert await trusted_repository(work / "link", work, home) is None
+    assert await trusted_repository(work / "link" / "src", work, home) is None
+    # The control: the same repository really inside the folder.
+    git_init(work / "real")
+    assert await trusted_repository(work / "real", work, home) is not None
+
+
+async def test_a_session_folder_reached_through_a_symlink_covers_what_is_inside_it(
+    tmp_path: Path, work: Path, home: Path
+) -> None:
+    repo = git_init(work / "app")
+    (tmp_path / "via").symlink_to(work)
+    found = await trusted_repository(tmp_path / "via" / "app", tmp_path / "via", home)
+    assert found is not None and found.root == repo.resolve()
+
+
+async def test_a_worktree_is_inside_only_when_its_main_checkout_is(
+    tmp_path: Path, work: Path, home: Path
+) -> None:
+    # A worktree is keyed on its main checkout, wherever the worktree itself is.
+    main_outside = git_init(tmp_path / "main")
+    away = add_worktree(main_outside, work / "wt-of-an-outside-main")
+    assert await trusted_repository(away, work, home) is None
+    main_inside = git_init(work / "main")
+    beside = add_worktree(main_inside, work / "wt-of-an-inside-main")
+    found = await trusted_repository(beside, work, home)
+    assert found is not None and found.key == main_inside.resolve()
+    # The main checkout trusted by the owner covers its worktree wherever it is.
+    trust(home, work, main_outside)
+    assert await trusted_repository(away, work, home) is not None
+
+
+def a_gitfile_naming_an_outside_git_dir(work: Path, outside: Path) -> Path:
+    folder = work / "gitfile"
+    folder.mkdir()
+    (folder / ".git").write_text(f"gitdir: {outside}/.git\n")
+    return folder
+
+
+def a_gitfile_naming_an_outside_git_dir_by_a_relative_path(work: Path, outside: Path) -> Path:
+    folder = work / "gitfile"
+    folder.mkdir()
+    (folder / ".git").write_text(f"gitdir: {os.path.relpath(outside / '.git', folder)}\n")
+    return folder
+
+
+def a_git_symlink_to_an_outside_git_dir(work: Path, outside: Path) -> Path:
+    folder = work / "gitlink"
+    folder.mkdir()
+    (folder / ".git").symlink_to(outside / ".git")
+    return folder
+
+
+def a_worktree_of_an_outside_checkout_moved_in_by_hand(work: Path, outside: Path) -> Path:
+    moved = add_worktree(outside, outside.parent / "wt").rename(work / "wt-moved")
+    return moved
+
+
+def a_git_dir_whose_commondir_names_an_outside_repository(work: Path, outside: Path) -> Path:
+    folder = work / "commondir"
+    (folder / ".git").mkdir(parents=True)
+    (folder / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (folder / ".git" / "commondir").write_text(f"{outside}/.git\n")
+    return folder
+
+
+def a_git_dir_whose_commondir_is_a_symlink_to_an_outside_name(work: Path, outside: Path) -> Path:
+    folder = work / "commondir-link"
+    (folder / ".git").mkdir(parents=True)
+    (folder / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (folder.parent / "names-outside").write_text(f"{outside}/.git\n")
+    (folder / ".git" / "commondir").symlink_to(folder.parent / "names-outside")
+    return folder
+
+
+def a_commondir_naming_an_outside_repository_by_a_link_and_a_line_end(
+    work: Path, outside: Path, name: str, line_end: bytes
+) -> Path:
+    # git strips every trailing CR and LF from `commondir` (setup.c, get_common_dir_noenv,
+    # v2.54.0), so `link` is the name whatever follows it; a name that kept its `\r` would be a
+    # path that does not exist, which resolves to a place inside the folder.
+    folder = work / name
+    (folder / ".git").mkdir(parents=True)
+    (folder / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (folder / ".git" / "link").symlink_to(outside / ".git")
+    (folder / ".git" / "commondir").write_bytes(b"link" + line_end)
+    return folder
+
+
+def a_git_dir_whose_commondir_ends_in_crlf(work: Path, outside: Path) -> Path:
+    return a_commondir_naming_an_outside_repository_by_a_link_and_a_line_end(
+        work, outside, "commondir-crlf", b"\r\n"
+    )
+
+
+def a_git_dir_whose_commondir_ends_in_two_line_feeds(work: Path, outside: Path) -> Path:
+    return a_commondir_naming_an_outside_repository_by_a_link_and_a_line_end(
+        work, outside, "commondir-lflf", b"\n\n"
+    )
+
+
+LEADING_OUTSIDE = [
+    a_gitfile_naming_an_outside_git_dir,
+    a_gitfile_naming_an_outside_git_dir_by_a_relative_path,
+    a_git_symlink_to_an_outside_git_dir,
+    a_worktree_of_an_outside_checkout_moved_in_by_hand,
+    a_git_dir_whose_commondir_names_an_outside_repository,
+    a_git_dir_whose_commondir_is_a_symlink_to_an_outside_name,
+    a_git_dir_whose_commondir_ends_in_crlf,
+    a_git_dir_whose_commondir_ends_in_two_line_feeds,
+]
+
+
+@pytest.mark.parametrize("layout", LEADING_OUTSIDE, ids=lambda layout: layout.__name__)
+async def test_a_layout_inside_the_folder_that_leads_git_outside_it_is_not_covered(
+    tmp_path: Path, work: Path, home: Path, layout: Callable[[Path, Path], Path]
+) -> None:
+    # The folder's trust covers a repository inside it, and git must read that repository's own
+    # config: a `.git` that points elsewhere makes git read someone else's.
+    outside = committed(tmp_path / "outside")
+    assert await trusted_repository(outside, work, home) is None  # the control: nothing trusted
+    folder = layout(work, outside)
+    assert await trusted_repository(folder, work, home) is None
+    # The owner's own trust of the folder itself is the first way in, and stays as it was.
+    trust(home, work, folder)
+    assert await trusted_repository(folder, work, home) is not None
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [a_git_dir_whose_commondir_ends_in_crlf, a_git_dir_whose_commondir_ends_in_two_line_feeds],
+    ids=lambda layout: layout.__name__,
+)
+def test_git_reads_the_common_dir_through_those_line_ends(
+    tmp_path: Path, work: Path, layout: Callable[[Path, Path], Path]
+) -> None:
+    # The control of the layouts above: git itself ends up in the outside repository.
+    outside = committed(tmp_path / "outside").resolve()
+    folder = layout(work, outside)
+    assert git_takes_it_for(folder, "--git-common-dir", outside / ".git")
+
+
+async def test_a_commondir_git_cannot_read_covers_nothing(
+    tmp_path: Path, work: Path, home: Path
+) -> None:
+    # An empty `commondir` is a fatal error in git ("failed to read"): not a layout to guess at.
+    folder = work / "commondir-empty"
+    (folder / ".git").mkdir(parents=True)
+    (folder / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (folder / ".git" / "commondir").write_bytes(b"")
+    assert not git_finds_a_repository(folder)
+    assert await trusted_repository(folder, work, home) is None
+
+
+async def test_a_git_dir_outside_the_folder_that_the_owner_trusted_is_not_a_second_way_in(
+    tmp_path: Path, work: Path, home: Path
+) -> None:
+    outside = committed(tmp_path / "outside")
+    trust(home, work, outside)
+    folder = a_gitfile_naming_an_outside_git_dir(work, outside)
+    # The folder is no repository the owner trusted, and its git dir is not the folder's.
+    assert await trusted_repository(folder, work, home) is None
+    assert await trusted_repository(outside, work, home) is not None
+
+
+async def test_layouts_that_stay_inside_the_folder_are_covered(work: Path, home: Path) -> None:
+    gitfile = git_init(work / "elsewhere-inside" / "store")
+    (work / "viafile").mkdir()
+    (work / "viafile" / ".git").write_text(f"gitdir: {gitfile / '.git'}\n")
+    (work / "vialink").mkdir()
+    (work / "vialink" / ".git").symlink_to(gitfile / ".git")
+    for folder in (work / "viafile", work / "vialink"):
+        assert await trusted_repository(folder, work, home) is not None
+    # A worktree whose main checkout is inside: its git dir and its common dir are too.
+    main = committed(work / "main")
+    beside = add_worktree(main, work / "wt")
+    found = await trusted_repository(beside, work, home)
+    assert found is not None and found.key == main.resolve()
+
+
+async def test_the_start_gate_still_refuses_a_repository_the_owner_did_not_trust(
+    work: Path, home: Path
+) -> None:
+    repo = git_init(work / "app")
+    assert await trusted_repository(repo, work, home) is not None
+    assert not await workspace_trusted(
+        repo, home
+    )  # `!bind` and a session's start stay as they were
+    assert await workspace_trusted(work, home)
+
+
+async def test_a_layout_with_no_key_is_not_covered_inside_the_session_s_folder(
+    work: Path, home: Path
+) -> None:
+    layout = bare_layout(work / "vendor")
+    assert await trusted_repository(layout, work, home) is None
+    assert await trusted_repository(layout / "refs", work, home) is None
+
+
+async def test_the_inside_check_needs_no_git(
+    tmp_path: Path, work: Path, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = git_init(work / "app")
+    outside = git_init(tmp_path / "elsewhere")
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))  # no git anywhere
+    assert await trusted_repository(repo, work, home) is not None
+    assert await trusted_repository(outside, work, home) is None

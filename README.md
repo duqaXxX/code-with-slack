@@ -66,6 +66,12 @@ From then on:
   with a Bind button each; `!bind <folder>` binds one directly.
 - `!bypass on`, sent inside a session's thread, switches that session to `bypassPermissions`
   until `!bypass off`, as ticking Bypass at Start does; a restart of code-with-slack keeps it.
+- `!open`, sent inside a session's thread, posts a `Choose a file` button that opens a window
+  with a search field and one row for each file: the files changed in that session while the
+  field is empty, the files whose path contains what you type otherwise. The row you choose is
+  shared into the thread, where Slack opens it in its file viewer. `!open <path>` or
+  `!open <words>` opens one directly, or offers the same window on the matches. It needs the bot
+  scope `files:write`.
 
 The full list is in [docs/setup.md](docs/setup.md#using-it).
 

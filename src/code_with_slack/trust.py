@@ -11,11 +11,16 @@ already trusted the folder in the terminal, by the rules Claude Code documents:
 
 The record is `projects["<path>"].hasTrustDialogAccepted` in `~/.claude.json`.
 
+The daemon's own git (the footer, `!status`, `!open`) has a second way in, beside a trusted
+repository key: a repository inside the folder the session started in (`trusted_repository`).
+
 Which repository a folder belongs to is read from the filesystem and never asked of git there:
 git would answer from the folder's own `.git` file, `commondir` and `core.worktree`, which
 whoever supplied the folder wrote. The layout read here is the one gitrepository-layout(5) and
 git-worktree(1) document, and the bare-repository test follows `is_git_directory` in git's
-setup.c (git 2.54.0, read 2026-10-04).
+setup.c (git 2.54.0, read 2026-10-04). The three small files it reads (a `.git` file, a
+`commondir`, a worktree's `gitdir`) are cut at their line ends as git cuts them (setup.c and
+worktree.c, git 2.54.0, read 2026-10-06): a different cut names a different path than git's.
 """
 
 import asyncio
@@ -115,7 +120,9 @@ def _main_checkout(git_dir: Path, root: Path) -> Path | None:
     if content is None:
         return None
     # An absolute path, or one relative to this directory (`git worktree add --relative-paths`).
-    registered = git_dir / os.fsdecode(content.removesuffix(b"\n"))
+    # git strips trailing whitespace here (`strbuf_rtrim`, worktree.c get_linked_worktree), and
+    # whitespace is those four bytes for it (ctype.c, `sane_ctype`).
+    registered = git_dir / os.fsdecode(content.rstrip(b" \t\r\n"))
     # The two folders are compared as directories on disk: the same one whatever the case or
     # the Unicode form git wrote, another one for a name one space longer. Not the `.git` files:
     # a file can be hard-linked into a second folder.
@@ -236,12 +243,56 @@ def _trusted(path: Path, home: Path) -> bool:
     return False
 
 
-def _trusted_repository(directory: Path, home: Path) -> Repository | None:
+def _inside(path: Path, folder: Path) -> bool:
+    """Whether `path` lies strictly inside `folder`, both as they are on disk: a symlink in the
+    folder that leads elsewhere is not inside it."""
+    real = Path(os.path.realpath(folder))
+    resolved = Path(os.path.realpath(path))
+    return resolved != real and resolved.is_relative_to(real)
+
+
+def _common_dir(git_dir: Path) -> Path | None:
+    """The common git dir of `git_dir`: the directory its `commondir` file names, as git reads it
+    (relative to `git_dir`), else `git_dir` itself. None when the file cannot be read as git
+    would, so the answer is never a guess: git dies on an empty `commondir`, and it strips every
+    trailing CR and LF from a name (`get_common_dir_noenv`, setup.c, v2.54.0)."""
+    if not os.path.lexists(git_dir / "commondir"):
+        return git_dir
+    content = _regular_file(git_dir / "commondir")
+    if not content:
+        return None
+    try:
+        return Path(os.path.realpath(git_dir / os.fsdecode(content.rstrip(b"\r\n"))))
+    except (OSError, ValueError, RecursionError):
+        return None
+
+
+def _held_by(repository: Repository, session_folder: Path) -> bool:
+    """Whether everything git would read for `repository` lies strictly inside `session_folder`:
+    its key, its git dir and its common dir (a worktree's config and hooks live in the main
+    checkout's). A `.git` that leads out of the folder makes git read someone else's config."""
+    git_dir = repository.git_dir
+    if git_dir is None:
+        return False
+    common = _common_dir(git_dir)
+    return common is not None and all(
+        _inside(path, session_folder) for path in (repository.key, git_dir, common)
+    )
+
+
+def _trusted_repository(directory: Path, session_folder: Path, home: Path) -> Repository | None:
     try:
         repository = locate(directory)
     except Unkeyed:
         return None
-    return repository if repository and _trusted(repository.key, home) else None
+    if repository is None:
+        return None
+    if _trusted(repository.key, home):
+        return repository
+    # The second way in, for a repository the session's folder holds.
+    if _held_by(repository, session_folder) and _workspace_trusted(session_folder, home):
+        return repository
+    return None
 
 
 def _workspace_trusted(directory: Path, home: Path) -> bool:
@@ -255,10 +306,29 @@ def _workspace_trusted(directory: Path, home: Path) -> bool:
     return any(_trusted(path, home) for path in (folder, *folder.parents))
 
 
-async def trusted_repository(directory: Path, home: Path | None = None) -> Repository | None:
-    """The repository holding `directory` when the owner trusted it in Claude Code; None outside
-    git, in a repository not trusted, and where the layout has no key."""
-    return await asyncio.to_thread(_trusted_repository, directory, home or Path.home())
+async def trusted_repository(
+    directory: Path, session_folder: Path, home: Path | None = None
+) -> Repository | None:
+    """The repository holding `directory` when the daemon's own git may run in it; None outside
+    git, where the layout has no key, and in a repository neither of these covers:
+
+    - its key is a path the owner trusted in Claude Code (a worktree's key is its main checkout);
+    - its key, its git dir and its common dir all lie strictly inside `session_folder`, the
+      folder the session was started in, and that folder passes `workspace_trusted`.
+
+    The second is the owner's decision (2026-10-05): Slack is only an interface to Claude Code,
+    which, launched in a trusted folder, works in its subfolders. It reaches no further: a
+    repository outside `session_folder` needs its own trust since the agent may `cd` anywhere,
+    and `workspace_trusted`, which gates a session's start and `!bind`, is not widened. Inside is
+    decided on resolved paths, so a symlink in the folder that leads to a repository elsewhere,
+    and a worktree whose main checkout is elsewhere, are not inside. The git dir and the common
+    dir are held to it too, since a `.git` file, a `.git` symlink, a moved worktree or a
+    `commondir` inside the folder can name a repository outside it, whose config git would then
+    read. Nothing here runs git.
+    """
+    return await asyncio.to_thread(
+        _trusted_repository, directory, session_folder, home or Path.home()
+    )
 
 
 async def workspace_trusted(directory: Path, home: Path | None = None) -> bool:

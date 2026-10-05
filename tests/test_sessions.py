@@ -41,6 +41,7 @@ from code_with_slack.render.sinks import UpdateLimiter
 from code_with_slack.render.status import Status, ThreadStatus
 from code_with_slack.sessions import SessionDeps, SessionManager, resolve_directory
 from code_with_slack.state import StateStore
+from code_with_slack.trust import Repository
 from tests.fakes import (
     BOT,
     CHANNEL,
@@ -2295,7 +2296,7 @@ async def test_the_footer_leaves_out_the_branch_of_a_repository_not_trusted(
 ) -> None:
     # The session went into a repo the owner never trusted in Claude Code: no git runs there,
     # and neither the footer nor `!status` says anything in its place.
-    async def untrusted(directory: Path) -> None:
+    async def untrusted(directory: Path, session_folder: Path) -> None:
         return None
 
     moved = {**sdk_json("stop-hook"), "cwd": str(repo)}
@@ -2307,6 +2308,27 @@ async def test_the_footer_leaves_out_the_branch_of_a_repository_not_trusted(
     text = await session.status()
     assert f"Working in: `{repo}`" in text
     assert "Branch:" not in text and "Uncommitted:" not in text
+
+
+async def test_the_footer_asks_for_the_repository_with_the_folder_the_session_started_in(
+    harness_for: Callable[..., Harness], repo: Path
+) -> None:
+    # The agent moved into `repo`: the repository is looked up there, for the session whose
+    # folder is the bound one (a repository inside that folder is covered by its trust).
+    asked: list[tuple[Path, Path]] = []
+
+    async def recording(directory: Path, session_folder: Path) -> Repository | None:
+        asked.append((directory, session_folder))
+        return await any_repository(directory, session_folder)
+
+    moved = {**sdk_json("stop-hook"), "cwd": str(repo)}
+    h = harness_for({"turns": [with_stop_hook(sdk_messages("tools"), moved)]})
+    h.deps.trusted_repository = recording
+    session = h.session()
+    await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
+    await session.status()
+    assert asked and set(asked) == {(repo, session.directory)}
+    assert session.directory != repo
 
 
 async def test_a_restarted_client_starts_again_in_the_bound_folder(

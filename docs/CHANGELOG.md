@@ -7,6 +7,52 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `!open`, sent inside a session's thread: a message with one `Choose a file` button, and
+  `!open <path>` or `!open <words>` for a file directly. The button opens a modal with a search
+  field and one radio row for each file (its name as plain text, its folder below, at most 10, with a
+  line above them that says what they are): the files changed in the session, newest first, while
+  the field is empty, and the files whose path contains what is typed otherwise, updated on every
+  character (`dispatch_action_config` with `on_character_entered`, answered with `views.update`).
+  Several matches of `!open <words>` post the count with the same button, whose modal holds the
+  words. `Open` shares the chosen file into the thread with `files_upload_v2`, so Slack's own file
+  viewer opens it (a `.md` file with Markdown rendered) with the thread beside it, and the modal
+  closes; with no row chosen the modal shows an error (`response_action: "errors"`) and stays. The
+  modal opens at once when the rows are ready within one second and is filled by an update
+  otherwise, since a click's `trigger_id` lives 3 seconds: the listing starts at once, beside the
+  channel check, and the wait is counted from the click. The thread travels in the view's
+  `private_metadata` and is resolved to the folder of its own session by every handler; the
+  typed characters are checked for the owner and the workspace alone. An update that a newer
+  keystroke has overtaken is never sent (`openfile.ModalUpdates`, ordered by `action_ts`; no
+  update carries Slack's `hash`, the daemon being the view's only writer). The rows' block id
+  follows the rows and a row counts only when it is among the submitted view's own options, so a
+  choice Slack kept from other rows is never opened. The new module `openfile` holds the logic. The search reads the folder from disk:
+  inside a repository git may run in, git's own list (`ls-files`, which leaves out what
+  `.gitignore` excludes, as the terminal's `@` file picker does under `respectGitignore`),
+  everywhere else a walk of regular files that enters no symlinked folder and no `.git`. A
+  listing stops after 2 seconds with what it found and is kept for 30 seconds (3 when
+  incomplete), and at most 16 folders are kept; the repositories found in a folder are kept for
+  5 seconds, the lookups run together and git runs in at most 4 repositories at once. A kept
+  listing that finds no match is made again first, and a listing that was cut is said in the
+  answer, never answers "no match" alone and never opens its single match on its own. Typing
+  checks the disk only until the rows are full (past ten the count is the matches by name). The changed files come from git, through the
+  footer's git helper (now `footer.run_git`), with commands measured never to write the index
+  (git 2.54.0, 2026-10-05): `status` under `--no-optional-locks` and `diff-tree` from where each
+  repository's `HEAD` was when the thread started, read from the reflog at the thread's
+  `thread_ts` (`openfile.start_commit`, `rev-parse HEAD@{<seconds> +0000}`; nothing is kept in
+  memory, so a restart changes nothing), summed over the repositories of the folder (the one that
+  holds it, or those at most two levels below it), with paths from the session's folder; there are
+  none when there is no such repository or nothing changed, and they are what is uncommitted or
+  untracked where there is no reflog; a repository made or cloned after the thread began counts
+  every file (the start is the empty tree). An empty file is refused before any upload. The file
+  is opened once (`O_NOFOLLOW`, size from the
+  descriptor, at most 1 MB read) and its bytes are passed to `files_upload_v2`, so a path that
+  changes after the check is not followed. A file name over 75 characters is shortened in its
+  middle, a folder over 75 from the left, and a path over 150 gets no row and stays reachable by
+  `!open <path>`. A file over 1 MB, a path that leaves the folder and a click, a typed character
+  or a submit from anyone but the owner are refused. The bot needs the new scope `files:write`:
+  an installed app is reinstalled from `slack-app-manifest.json` (`docs/setup.md`, Part 1). The
+  guide and `!help` list the word, and the guide is now longer than the notification text Slack
+  shows for a message (3,000 characters), so that text is its first 3,000.
 - Cleaning up a channel from the Home tab (issue #146), with the optional `SLACK_USER_TOKEN`:
   in edit mode a **Clean up** button beside each channel's name, with a confirmation dialog
   that says what it deletes. `ThreadDeleter.clean` reads the channel's history and deletes what
@@ -153,6 +199,21 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The daemon's own git (the footer, `!status` and `!open`) also runs in a repository inside the
+  folder a session started in, when that folder passes `workspace_trusted`: Claude Code launched
+  in a trusted folder works in its subfolders, and a bound folder that is not a repository
+  itself, holding one a level or two down, now shows the branch and the changes there.
+  `trust.trusted_repository` takes the session's folder as a second argument; inside is decided
+  on resolved paths, so a symlink that leads to a repository elsewhere and a worktree whose main
+  checkout is elsewhere still need their own trust, as does any repository outside the folder.
+  So does a repository inside the folder whose `.git` leads out of it (a `.git` file or symlink
+  naming a git dir elsewhere, a worktree moved in by hand, a `commondir` naming another
+  repository): the key, the git dir and the common dir must all lie inside. The small files read
+  for that are cut at their line ends as git cuts them (a `commondir` ending in a CR and LF named
+  another place than git's), and an empty `commondir`, which git refuses, covers nothing.
+  `workspace_trusted`, the gate of a session's start and `!bind`, is unchanged. A repository
+  that ends up inside the session's folder (a clone made during the session, say) now has git
+  run under its own config, filters included, outside the approval prompt.
 - Session index (issue #101): a session's **Open** link in the Home tab opens the thread on its
   last reply, where it opened it on its first message. The link is the permalink of the message
   the root names in `latest_reply`, the owner's own messages included, and the root's permalink

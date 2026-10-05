@@ -54,7 +54,7 @@ from slack_sdk.web.async_client import AsyncWebClient
 from code_with_slack import texts
 from code_with_slack.render.escape import mrkdwn_escape, shown_as_written
 from code_with_slack.render.renderer import one_line
-from code_with_slack.render.sinks import context_block, describe
+from code_with_slack.render.sinks import context_block, describe, plain_text_object
 from code_with_slack.render.status import Status
 from code_with_slack.resume import ID_SHOWN, TITLE_LIMIT
 from code_with_slack.state import StateStore
@@ -327,10 +327,6 @@ def _controls(channels: dict[str, str], chosen: HomeFilter) -> list[dict[str, An
     ]
 
 
-def _plain(text: str) -> dict[str, Any]:
-    return {"type": "plain_text", "text": text}
-
-
 def _section(text: str) -> dict[str, Any]:
     return {"type": "section", "text": {"type": "mrkdwn", "text": text}}
 
@@ -352,7 +348,7 @@ def _header(time: str, *, editing: bool, can_edit: bool) -> dict[str, Any]:
     button: dict[str, Any] = {
         "type": "button",
         "action_id": EDIT_ACTION,
-        "text": _plain(texts.HOME_DONE if editing else texts.HOME_EDIT),
+        "text": plain_text_object(texts.HOME_DONE if editing else texts.HOME_EDIT),
         "value": EDIT_OFF if editing else EDIT_ON,
     }
     if editing:
@@ -366,13 +362,15 @@ def _clean_button(channel_id: str, channel_name: str) -> dict[str, Any]:
     return {
         "type": "button",
         "action_id": CLEAN_ACTION,
-        "text": _plain(texts.HOME_CLEAN),
+        "text": plain_text_object(texts.HOME_CLEAN),
         "value": channel_id,
         "confirm": {
-            "title": _plain(texts.HOME_CLEAN_TITLE),
-            "text": _plain(texts.HOME_CLEAN_TEXT.format(channel=one_line(channel_name, room))),
-            "confirm": _plain(texts.HOME_CLEAN_CONFIRM),
-            "deny": _plain(texts.HOME_DELETE_DENY),
+            "title": plain_text_object(texts.HOME_CLEAN_TITLE),
+            "text": plain_text_object(
+                texts.HOME_CLEAN_TEXT.format(channel=one_line(channel_name, room))
+            ),
+            "confirm": plain_text_object(texts.HOME_CLEAN_CONFIRM),
+            "deny": plain_text_object(texts.HOME_DELETE_DENY),
             "style": "danger",
         },
     }
@@ -422,16 +420,16 @@ def _delete_button(row: HomeRow, channel_name: str) -> dict[str, Any]:
         "type": "button",
         "action_id": DELETE_ACTION,
         "style": "danger",
-        "text": _plain(texts.HOME_DELETE),
+        "text": plain_text_object(texts.HOME_DELETE),
         "value": f"{row.channel_id}:{row.thread_ts}",
         "confirm": {
-            "title": _plain(texts.HOME_DELETE_TITLE),
-            "text": _plain(
+            "title": plain_text_object(texts.HOME_DELETE_TITLE),
+            "text": plain_text_object(
                 named.format(title=title, channel=channel_name, replies=replies)
                 + texts.HOME_DELETE_TEXT
             ),
-            "confirm": _plain(texts.HOME_DELETE_CONFIRM),
-            "deny": _plain(texts.HOME_DELETE_DENY),
+            "confirm": plain_text_object(texts.HOME_DELETE_CONFIRM),
+            "deny": plain_text_object(texts.HOME_DELETE_DENY),
             "style": "danger",
         },
     }

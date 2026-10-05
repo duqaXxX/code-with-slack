@@ -2,6 +2,7 @@ import asyncio
 import copy
 import itertools
 import json
+import os
 import time
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
@@ -11,7 +12,9 @@ import pytest
 from claude_agent_sdk import ClaudeAgentOptions, ResultError, SDKSessionInfo
 from slack_bolt.request.async_request import AsyncBoltRequest
 
+from code_with_slack import openfile as openfile_module
 from code_with_slack import sessions as sessions_module
+from code_with_slack import slack_app as slack_app_module
 from code_with_slack import texts
 from code_with_slack.approvals import Answer, Approvals, Draft
 from code_with_slack.attachments import DownloadFailed
@@ -36,11 +39,22 @@ from code_with_slack.home import (
     Home,
     HomeFilter,
 )
-from code_with_slack.render.sinks import UpdateLimiter
+from code_with_slack.openfile import (
+    CHOICE_ACTION,
+    CHOICE_BLOCK,
+    OPEN_BUTTON_ACTION,
+    OPEN_FORM,
+    QUERY_ACTION,
+    QUERY_BLOCK,
+    Listings,
+    Target,
+    modal_view,
+)
+from code_with_slack.render.sinks import FALLBACK_LIMIT, UpdateLimiter
 from code_with_slack.render.status import Status
 from code_with_slack.sessions import SessionDeps, SessionManager
 from code_with_slack.setup import SETUP_BYPASS, SETUP_EFFORT, SETUP_MODEL, SETUP_START, Choice
-from code_with_slack.slack_app import build_app, slack_unescape
+from code_with_slack.slack_app import action_key, build_app, slack_unescape
 from code_with_slack.state import StateStore
 from tests.fakes import (
     BOT,
@@ -61,6 +75,7 @@ from tests.fakes import (
     slack_payload,
     split_turns,
 )
+from tests.git_layouts import commit_at, committed, git, git_init
 from tests.test_sessions import until
 from tests.test_setup import controls as setup_controls
 from tests.test_setup import state as setup_state
@@ -1342,7 +1357,10 @@ async def test_a_failing_resume_click_tells_the_owner(world: World) -> None:
 async def test_bang_guide_works_in_an_unbound_channel(slack: FakeSlack, tmp_path: Path) -> None:
     world = World(slack, tmp_path, bound=False)
     await world.dispatch(message("!guide"))
-    assert said(world) == [texts.GUIDE] and world.clients == []
+    # The block holds the whole guide; `text` is its fallback, cut at FALLBACK_LIMIT.
+    (post,) = world.slack.calls_to("chat.postMessage")
+    assert post["blocks"] == [{"type": "markdown", "text": texts.GUIDE}]
+    assert post["text"] == texts.GUIDE[:FALLBACK_LIMIT] and world.clients == []
 
 
 async def test_bang_guide_inside_a_thread_is_for_the_owner_alone(world: World) -> None:
@@ -3252,3 +3270,1262 @@ async def test_a_model_change_keeps_a_supported_effort_and_the_tick(manual: Worl
     assert found[SETUP_MODEL]["initial_option"]["value"] == "opus"
     assert found[SETUP_EFFORT]["initial_option"]["value"] == "low"
     assert [o["value"] for o in found[SETUP_BYPASS]["initial_options"]] == ["on"]
+
+
+# --- `!open` ---
+
+# The payloads of the picker's modal follow the Slack reference, read 2026-10-05 on docs.slack.dev:
+# block_actions payload (an action from a view: `container.type` "view" with `view_id`, `view.id`,
+# `view.hash`, `view.private_metadata`, `view.state.values`, `actions[].action_ts`, and no
+# `channel`), view interaction payloads (`view_submission`, and the `response_action` "errors"),
+# views.open and views.update (`hash`, optional on an update, and the `hash_conflict` error of a
+# hash that is not the view's current one; read again 2026-10-06). The submit is the recorded
+# form-submit.json with the picker's view in it.
+VIEW_ID = "V000PICK"
+OPEN_TARGET = Target(CHANNEL, THREAD)
+
+
+class ModalSlack:
+    """Slack's side of one modal as the references describe it: `views.open` answers the view's
+    id and hash, `views.update` answers the new hash and rejects, with `hash_conflict`, a hash
+    that is not the view's current one (the daemon sends none). `view` is the view as it stands,
+    `written` every update that was accepted, `calls` every one that was made, with the hash
+    each carried."""
+
+    def __init__(self, slack: FakeSlack) -> None:
+        self.hash = "1790000000.h0"
+        self.view: dict[str, Any] = {}
+        self.written: list[dict[str, Any]] = []
+        self.calls: list[tuple[str | None, dict[str, Any]]] = []
+        self._count = 0
+        slack.responses["views.open"] = self._open
+        slack.responses["views.update"] = self._update
+
+    def _next(self) -> str:
+        self._count += 1
+        self.hash = f"1790000000.h{self._count}"
+        return self.hash
+
+    @staticmethod
+    def _view(args: dict[str, Any]) -> dict[str, Any]:
+        view = args["view"]
+        return json.loads(view) if isinstance(view, str) else view
+
+    def _open(self, args: dict[str, Any]) -> dict[str, Any]:
+        self.view = self._view(args)
+        return {"ok": True, "view": {"id": VIEW_ID, "hash": self._next()}}
+
+    def _update(self, args: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append((args.get("hash"), self._view(args)))
+        if args.get("hash") not in (None, self.hash) or args.get("view_id") != VIEW_ID:
+            return {"ok": False, "error": "hash_conflict"}
+        self.view = self._view(args)
+        self.written.append(self.view)
+        return {"ok": True, "view": {"id": VIEW_ID, "hash": self._next()}}
+
+    def labels(self) -> list[str]:
+        """What the view says about its rows: the radio group's label, else its context lines."""
+        found = []
+        for block in self.view["blocks"][1:]:
+            if block["type"] == "input":
+                found.append(block["label"]["text"])
+            else:
+                found.append(block["elements"][0]["text"])
+        return found
+
+    def rows(self, view: dict[str, Any] | None = None) -> list[str]:
+        """The paths of the radio group's rows, in order."""
+        for block in (view or self.view)["blocks"]:
+            if block.get("block_id", "").startswith(CHOICE_BLOCK):
+                return [o["value"] for o in block["element"]["options"]]
+        return []
+
+
+@pytest.fixture
+def modal(world: World) -> ModalSlack:
+    return ModalSlack(world.slack)
+
+
+def opened(world: World) -> list[dict[str, Any]]:
+    """The files the bot shared, as `files.completeUploadExternal` was asked to."""
+    return world.slack.calls_to("files.completeUploadExternal")
+
+
+def picker_posts(world: World) -> list[dict[str, Any]]:
+    """The messages the bot posted that hold the button of `!open`'s modal."""
+    return [
+        post
+        for post in world.slack.calls_to("chat.postMessage")
+        if any(
+            element.get("action_id") == OPEN_BUTTON_ACTION
+            for block in post.get("blocks") or []
+            for element in block.get("elements") or []
+        )
+    ]
+
+
+def made_before_the_thread(path: Path) -> Path:
+    """A repository with one commit, `README`, made long before THREAD began: what a session
+    started in an existing repository sees. (A repository made after the thread began counts
+    every file as changed.)"""
+    git_init(path)
+    commit_at(path, "README", int(THREAD.split(".")[0]) - 1000)
+    return path.resolve()
+
+
+@pytest.fixture
+def project(world: World) -> Path:
+    """The channel's folder as a repository with one commit, `README`."""
+    return made_before_the_thread(world.root / "app")
+
+
+def put(root: Path, name: str, text: str = "x\n") -> Path:
+    path = root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+
+
+def choose_click(words: str = "", **user: Any) -> dict[str, Any]:
+    """A click on the `Choose a file` button of a message in THREAD: the recorded button click
+    (`000-block_actions.json` shape), with the `trigger_id` a real click carries."""
+    body = click_in(OPEN_BUTTON_ACTION, words, CHANNEL, THREAD, **user)
+    body["actions"][0].pop("selected_option", None)
+    body["actions"][0]["type"] = "button"
+    if not words:
+        body["actions"][0].pop("value")
+    body["trigger_id"] = "0000000000.0000000000.fake"
+    return body
+
+
+def view_event(
+    kind: str,
+    values: dict[str, Any],
+    *,
+    metadata: str | None = None,
+    user: str = OWNER,
+    team: str = TEAM,
+    view_hash: str | None = None,
+    blocks: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """What Slack sends for the picker's modal: `view_submission` is the recorded Submit with the
+    picker's view in it, `block_actions` is built from the reference (no recording of one from a
+    modal exists)."""
+    metadata = OPEN_TARGET.dump() if metadata is None else metadata
+    view = {
+        "id": VIEW_ID,
+        "team_id": TEAM,
+        "type": "modal",
+        "blocks": blocks if blocks is not None else modal_view(OPEN_TARGET, "", ["a.py"])["blocks"],
+        "private_metadata": metadata,
+        "callback_id": OPEN_FORM,
+        "state": {"values": values},
+        "hash": view_hash or "1790000000.h0",
+    }
+    if kind == "view_submission":
+        body = recorded("submit")
+        body["view"].update(view)
+    else:
+        body = {
+            "type": "block_actions",
+            "team": {"id": TEAM, "domain": "example"},
+            "user": {"id": OWNER, "username": "alice", "name": "alice", "team_id": TEAM},
+            "api_app_id": "A000APP",
+            "container": {"type": "view", "view_id": VIEW_ID},
+            "trigger_id": "1.2.abc",
+            "view": view,
+        }
+    body["user"]["id"] = user
+    body["team"]["id"] = team
+    return body
+
+
+def typing(
+    text: str, at: float = 1790000100.0, *, hash_: str | None = None, **event: Any
+) -> dict[str, Any]:
+    """One character typed in the search field (`on_character_entered`): the action carries the
+    text and its `action_ts`, and the view's state carries the same text."""
+    values = {QUERY_BLOCK: {QUERY_ACTION: {"type": "plain_text_input", "value": text}}}
+    body = view_event("block_actions", values, view_hash=hash_, **event)
+    body["actions"] = [
+        {
+            "type": "plain_text_input",
+            "block_id": QUERY_BLOCK,
+            "action_id": QUERY_ACTION,
+            "value": text,
+            "action_ts": f"{at:.6f}",
+        }
+    ]
+    return body
+
+
+def shown_choice_id(blocks: list[dict[str, Any]]) -> str:
+    return next(b["block_id"] for b in blocks if b.get("block_id", "").startswith(CHOICE_BLOCK))
+
+
+def submitted(
+    path: str | None, *, rows: list[str] | None = None, under: str | None = None, **event: Any
+) -> dict[str, Any]:
+    """The Submit of the picker's modal with `path` chosen (a radio group's state as
+    form-submit.json records it), or nothing chosen. The view holds `rows` (just `path` by
+    default); the choice is in the state of the block `under` (the rows' own block by default:
+    Slack keeps the state of a block id from one update to the next)."""
+    shown = rows if rows is not None else ([] if path is None else [path])
+    blocks = event.pop("blocks", None) or modal_view(OPEN_TARGET, "", shown)["blocks"]
+    option = None if path is None else {"text": {"type": "plain_text", "text": path}, "value": path}
+    block_id = under or next(
+        (b["block_id"] for b in blocks if b.get("block_id", "").startswith(CHOICE_BLOCK)), None
+    )
+    values: dict[str, Any] = {
+        QUERY_BLOCK: {QUERY_ACTION: {"type": "plain_text_input", "value": None}}
+    }
+    if block_id is not None:
+        values[block_id] = {CHOICE_ACTION: {"type": "radio_buttons", "selected_option": option}}
+    return view_event("view_submission", values, blocks=blocks, **event)
+
+
+async def asked_open(world: World, text: str) -> None:
+    """`text` (an `!open` word) sent in THREAD, and the time its git commands need: `dispatch`
+    waits 50 ms, a listing runs several processes."""
+    await world.dispatch(reply(text, THREAD))
+    await world.settle(0.3)
+
+
+async def in_a_thread(world: World) -> None:
+    """A session in THREAD, whose first sight is now (its start commit)."""
+    await world.dispatch(message("hello", ts=THREAD))
+
+
+async def test_two_replies_sent_together_reach_the_queue_in_the_order_they_were_sent(
+    world: World, project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Nothing of `!open` runs when a prompt arrives: a slow repository lookup (a cold cache, a
+    # slow git) must not hold a prompt, or let a later one overtake it. With a lookup awaited
+    # before the arrival lock, the first reply here is overtaken by the second.
+    await in_a_thread(world)
+    session = world.sessions.get(CHANNEL, THREAD)
+    assert session is not None
+    queued: list[str] = []
+    submit = session.submit
+
+    async def spy(prompt: Any) -> Any:
+        queued.append(str(prompt))
+        return await submit(prompt)
+
+    monkeypatch.setattr(session, "submit", spy)
+    asked: list[Path] = []
+    real = world.sessions._deps.trusted_repository
+    delays = iter([0.15])
+
+    async def slow_lookup(directory: Path, session_folder: Path) -> Any:
+        asked.append(directory)
+        await asyncio.sleep(next(delays, 0.0))
+        return await real(directory, session_folder)
+
+    world.sessions._deps.trusted_repository = slow_lookup
+    first = asyncio.create_task(world.dispatch(reply("first", THREAD)))
+    await asyncio.sleep(0.03)
+    await world.dispatch(reply("second", THREAD))
+    await first
+    await world.settle(0.3)
+    assert queued == ["first", "second"]
+    looked_up = len(asked)  # the replies' own footers look a repository up when they end
+    await asked_open(world, "!open zzz")
+    assert len(asked) > looked_up  # the control: the lookup is counted, and a name makes one
+
+
+async def test_open_alone_posts_a_button_and_reads_nothing_of_the_folder(
+    world: World, project: Path
+) -> None:
+    await in_a_thread(world)
+    asked: list[Path] = []
+    real = world.sessions._deps.trusted_repository
+
+    async def counted(directory: Path, session_folder: Path) -> Any:
+        asked.append(directory)
+        return await real(directory, session_folder)
+
+    world.sessions._deps.trusted_repository = counted
+    await asked_open(world, "!open")
+    (post,) = picker_posts(world)
+    assert post["thread_ts"] == THREAD and post["channel"] == CHANNEL
+    section, actions, context = post["blocks"]
+    assert section["text"]["text"] == "*Open a file*"
+    (button,) = actions["elements"]
+    assert button["type"] == "button" and button["text"]["text"] == "Choose a file"
+    assert "value" not in button
+    assert context["elements"][0]["text"] == "Or type `!open setup` to open a file by name."
+    # The rows are read when the button is clicked, not when the message is posted.
+    assert asked == [] and world.slack.calls_to("views.open") == []
+
+
+async def test_the_button_opens_the_modal_with_the_files_changed_in_the_session(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    committed_since = put(project, "docs/guide.md")
+    git(project, "add", "-A")
+    git(project, "commit", "-q", "-m", "docs")
+    older = put(project, "notes.txt")
+    os.utime(committed_since, (1_790_000_100, 1_790_000_100))
+    os.utime(older, (1_790_000_000, 1_790_000_000))
+    body = choose_click()
+    await world.dispatch(body)
+    await world.settle(0.3)
+    (asked,) = world.slack.calls_to("views.open")
+    assert asked["trigger_id"] == body["trigger_id"]
+    assert modal.rows() == ["docs/guide.md", "notes.txt"]
+    assert modal.labels() == ["Changed in this session (2), newest first"]
+    assert modal.view["callback_id"] == OPEN_FORM
+    assert Target.load(modal.view["private_metadata"]) == OPEN_TARGET
+    assert modal.view["blocks"][0]["element"]["focus_on_load"] is True
+    assert "initial_value" not in modal.view["blocks"][0]["element"]
+    assert modal.calls == []  # the rows were ready: no update after it
+    assert world.ephemerals() == []
+
+
+async def test_a_session_that_changed_nothing_gets_the_line_that_says_to_type(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    await world.dispatch(choose_click())
+    await world.settle(0.3)
+    assert modal.rows() == []
+    assert modal.labels() == [texts.OPEN_TYPE_A_NAME]
+
+
+async def test_the_changes_are_counted_from_where_head_was_when_the_thread_started(
+    world: World, modal: ModalSlack
+) -> None:
+    # Nothing is remembered by the daemon: HEAD's log says where the repository stood at THREAD's
+    # time (an epoch second), so a daemon restarted since gives the same answer.
+    folder = world.root / "app"
+    start = int(THREAD.split(".")[0])
+    repo = git_init(folder / "workspace").resolve()
+    commit_at(repo, "base.py", start - 1000)
+    commit_at(repo, "before.py", start - 500)  # moved HEAD before the thread began
+    commit_at(repo, "made_by_claude.py", start + 500)
+    put(repo, "uncommitted.py")
+    await in_a_thread(world)
+    await world.dispatch(choose_click())
+    await world.settle(0.3)
+    assert sorted(modal.rows()) == ["workspace/made_by_claude.py", "workspace/uncommitted.py"]
+
+
+async def test_a_repository_made_after_the_thread_began_lists_every_file_as_changed(
+    world: World, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    made = committed(world.root / "app")  # THREAD is long past: the first commit is the session's
+    put(made, "new.py")
+    await world.dispatch(choose_click())
+    await world.settle(0.3)
+    assert sorted(modal.rows()) == ["README", "new.py"]
+
+
+async def test_a_folder_that_is_not_a_repository_has_no_changed_files(
+    world: World, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    put(world.root / "app", "plain.txt")
+    await world.dispatch(choose_click())
+    await world.settle(0.3)
+    assert modal.rows() == [] and modal.labels() == [texts.OPEN_TYPE_A_NAME]
+
+
+async def test_the_repositories_of_a_folder_are_looked_up_once_for_a_short_while(
+    world: World, modal: ModalSlack
+) -> None:
+    folder = world.root / "app"
+    made_before_the_thread(folder / "workspace")
+    await in_a_thread(world)
+    asked: list[Path] = []
+    real = world.sessions._deps.trusted_repository
+
+    async def counted(directory: Path, session_folder: Path) -> Any:
+        asked.append(directory)
+        return await real(directory, session_folder)
+
+    world.sessions._deps.trusted_repository = counted
+    await world.dispatch(choose_click())
+    await world.settle(0.3)
+    first = len(asked)
+    assert first > 0
+    await world.dispatch(choose_click())
+    await world.settle(0.3)
+    assert len(asked) == first  # the second click found them kept
+
+
+async def test_the_changes_of_a_repository_inside_the_folder_are_listed(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    # The channel's folder is a plain folder that holds a repository one level down.
+    folder = project.parent / "plain"
+    folder.mkdir()
+    world.state.bind(CHANNEL, folder)
+    nested = made_before_the_thread(folder / "workspace")
+    await in_a_thread(world)
+    put(nested, "docs/new.md")
+    put(folder, "notes.txt")  # outside any repository: not a change
+    await world.dispatch(choose_click())
+    await world.settle(0.3)
+    assert modal.rows() == ["workspace/docs/new.md"]
+    assert modal.labels() == ["Changed in this session (1), newest first"]
+
+
+async def test_a_name_that_matches_several_files_posts_the_count_and_the_button(
+    world: World, project: Path
+) -> None:
+    await in_a_thread(world)
+    for name in ("docs/setup.md", "src/setup.py", "setup/readme.md"):
+        put(project, name)
+    await asked_open(world, "!open setup")
+    assert opened(world) == []
+    (post,) = picker_posts(world)
+    assert post["thread_ts"] == THREAD
+    section, actions = post["blocks"]
+    assert section["text"]["text"] == "*3 files match* `setup`"
+    (button,) = actions["elements"]
+    assert button["text"]["text"] == "Choose a file" and button["value"] == "setup"
+    assert world.slack.calls_to("views.open") == []  # the rows come when it is clicked
+
+
+async def test_the_button_of_several_matches_opens_the_modal_on_them(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    for name in ("docs/setup.md", "src/setup.py", "setup/readme.md"):
+        put(project, name)
+    await world.dispatch(choose_click("setup"))
+    await world.settle(0.3)
+    field = modal.view["blocks"][0]["element"]
+    assert field["initial_value"] == "setup"
+    # The file names first, then the folder's file.
+    assert modal.rows() == ["src/setup.py", "docs/setup.md", "setup/readme.md"]
+    assert modal.labels() == ["3 files match"]
+
+
+async def test_the_modal_of_a_plain_folder_lists_what_its_disk_holds(
+    world: World, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    for name in ("a/setup.md", "b/setup.py"):
+        put(world.root / "app", name)
+    await asked_open(world, "!open setup")
+    (post,) = picker_posts(world)
+    await world.dispatch(choose_click(post["blocks"][1]["elements"][0]["value"]))
+    await world.settle(0.3)
+    assert sorted(modal.rows()) == ["a/setup.md", "b/setup.py"]
+
+
+async def test_more_than_ten_matches_list_ten_and_say_so(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    for i in range(130):
+        put(project, f"data/part{i:03}.csv")
+    await world.dispatch(choose_click("part"))
+    await world.settle(0.3)
+    assert len(modal.rows()) == 10
+    assert modal.labels() == [
+        "130 files match",
+        texts.OPEN_MATCHES_CAPPED.format(shown=10, count=130),
+    ]
+
+
+async def test_a_listing_that_comes_late_fills_the_modal_after_it_opens(
+    world: World, project: Path, modal: ModalSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The click's trigger_id lives 3 seconds (views.open reference): the modal opens without
+    # the rows when they are not ready, and an update fills it.
+    await in_a_thread(world)
+    put(project, "src/parser.py")
+    monkeypatch.setattr(slack_app_module, "OPEN_WAIT", 0.05)
+    real = world.sessions._deps.trusted_repository
+
+    async def slow(directory: Path, session_folder: Path) -> Any:
+        await asyncio.sleep(0.4)
+        return await real(directory, session_folder)
+
+    world.sessions._deps.trusted_repository = slow
+    await world.dispatch(choose_click("parser"))
+    await world.settle(0.2)
+    assert modal.labels() == [texts.OPEN_LOADING] and modal.written == []
+    assert modal.view["blocks"][0]["element"]["initial_value"] == "parser"
+    await world.settle(0.8)
+    assert modal.rows() == ["src/parser.py"] and len(modal.written) == 1
+    assert modal.calls[0][0] is None  # no hash: the daemon is the view's only writer
+    assert "initial_value" not in modal.view["blocks"][0]["element"]  # what was typed stays
+
+
+async def test_a_keystroke_typed_while_the_modal_is_still_filling_is_not_overwritten(
+    world: World, project: Path, modal: ModalSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await in_a_thread(world)
+    put(project, "src/parser.py")
+    put(project, "src/lexer.py")
+    monkeypatch.setattr(slack_app_module, "OPEN_WAIT", 0.05)
+    real = world.sessions._deps.trusted_repository
+
+    async def slow(directory: Path, session_folder: Path) -> Any:
+        await asyncio.sleep(0.4)
+        return await real(directory, session_folder)
+
+    world.sessions._deps.trusted_repository = slow
+    await world.dispatch(choose_click("src"))
+    await world.settle(0.1)
+    await world.dispatch(typing("lex", hash_=modal.hash))
+    await world.settle(1.0)
+    assert modal.rows() == ["src/lexer.py"]
+    assert [modal.rows(view) for _, view in modal.calls] == [["src/lexer.py"]]
+
+
+async def test_the_files_are_listed_while_the_channel_is_checked(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    # The checks before the modal make two calls to Slack; the listing does not wait for them.
+    await in_a_thread(world)
+    listing_started = asyncio.Event()
+    real = world.sessions._deps.trusted_repository
+
+    async def watching(directory: Path, session_folder: Path) -> Any:
+        listing_started.set()
+        return await real(directory, session_folder)
+
+    world.sessions._deps.trusted_repository = watching
+    world.slack.gate = asyncio.Event()
+    world.slack.gate_method = "conversations.info"
+    await world.dispatch(choose_click())
+    await asyncio.wait_for(world.slack.gated.wait(), 2)
+    await asyncio.wait_for(listing_started.wait(), 2)  # while the channel check is still waiting
+    assert world.slack.calls_to("views.open") == []
+    world.slack.gate.set()
+    await world.settle(0.3)
+    assert modal.rows() == []  # nothing changed in this session
+    (asked,) = world.slack.calls_to("views.open")
+    assert modal.labels() == [texts.OPEN_TYPE_A_NAME] and asked["trigger_id"]
+
+
+async def test_the_wait_for_the_rows_counts_from_the_click_and_not_from_the_channel_check(
+    world: World, project: Path, modal: ModalSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The click's trigger_id lives 3 seconds: the check, the wait and views.open share them.
+    await in_a_thread(world)
+    put(project, "src/parser.py")
+    monkeypatch.setattr(slack_app_module, "OPEN_WAIT", 0.5)
+    real = world.sessions._deps.trusted_repository
+
+    async def slow(directory: Path, session_folder: Path) -> Any:
+        await asyncio.sleep(1.5)
+        return await real(directory, session_folder)
+
+    world.sessions._deps.trusted_repository = slow
+    loop = asyncio.get_running_loop()
+    opened_at: list[float] = []
+
+    def stamped(args: dict[str, Any]) -> dict[str, Any]:
+        opened_at.append(loop.time())
+        return modal._open(args)
+
+    world.slack.responses["views.open"] = stamped
+    world.slack.gate = asyncio.Event()
+    world.slack.gate_method = "conversations.info"
+    clicked = loop.time()
+    await world.dispatch(choose_click("parser"))
+    await asyncio.sleep(0.35)  # the channel check takes this long
+    world.slack.gate.set()
+    await world.settle(2.0)
+    assert opened_at and opened_at[0] - clicked < 0.7  # the check, then the rest of the wait
+    assert modal.labels() == ["1 file matches"] and modal.rows() == ["src/parser.py"]
+
+
+async def test_a_form_that_cannot_open_tells_the_owner_of_the_picker(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    world.slack.responses["views.open"] = {"ok": False, "error": "expired_trigger_id"}
+    await world.dispatch(choose_click())
+    await world.settle(0.2)
+    assert world.ephemerals() == [texts.OPEN_FORM_NOT_OPENED.format(error="expired_trigger_id")]
+
+
+@pytest.mark.parametrize(("user", "team"), [(STRANGER, TEAM), (OWNER, OTHER_TEAM)])
+async def test_the_button_clicked_by_anyone_else_opens_nothing(
+    world: World, project: Path, modal: ModalSlack, user: str, team: str
+) -> None:
+    await in_a_thread(world)
+    asked: list[Path] = []
+    real = world.sessions._deps.trusted_repository
+
+    async def counted(directory: Path, session_folder: Path) -> Any:
+        asked.append(directory)
+        return await real(directory, session_folder)
+
+    world.sessions._deps.trusted_repository = counted
+    body = choose_click(id=user)
+    body["team"]["id"] = team
+    await world.dispatch(body)
+    await world.settle(0.2)
+    assert world.slack.calls_to("views.open") == [] and not world.ephemerals()
+    assert asked == []  # the listing that starts early is the owner's alone
+
+
+async def test_the_button_in_a_thread_that_holds_no_session_opens_nothing(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    await world.dispatch(choose_click())
+    assert world.slack.calls_to("views.open") == []
+    assert world.ephemerals() == [texts.NOT_A_SESSION]
+
+
+async def test_the_button_in_a_refused_channel_opens_nothing(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    world.slack.responses["conversations.members"] = {"ok": True, "members": [OWNER, BOT, STRANGER]}
+    await world.dispatch(choose_click())
+    assert world.slack.calls_to("views.open") == []
+    assert world.ephemerals() == [texts.CHANNEL_REFUSED.format(reason=texts.REASON_MEMBERS)]
+
+
+async def test_typing_puts_the_files_that_match_into_the_rows(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    put(project, "src/parser.py")
+    put(project, "src/lexer.py")
+    put(project, ".gitignore", "*.log\n")
+    put(project, "trace.log")
+    shown = modal.hash
+    await world.dispatch(typing("PARS", hash_=shown))
+    await world.settle(0.3)
+    assert modal.rows() == ["src/parser.py"] and modal.labels() == ["1 file matches"]
+    assert modal.calls[0][0] is None  # the hash is optional, and the daemon's ordering decides
+    # What the update sends keeps the field's ids and does not restate its text.
+    field = modal.view["blocks"][0]
+    assert (field["block_id"], field["element"]["action_id"]) == (QUERY_BLOCK, QUERY_ACTION)
+    assert "initial_value" not in field["element"]
+    await world.dispatch(typing("trace", 1790000101.0, hash_=modal.hash))  # there, and ignored
+    await world.settle(0.3)
+    assert modal.rows() == [] and modal.labels() == ["0 files match"]
+
+
+async def test_the_typed_text_is_read_from_the_state_when_the_action_has_none(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    put(project, "src/parser.py")
+    body = typing("pars", hash_=modal.hash)
+    body["actions"][0].pop("value")
+    await world.dispatch(body)
+    await world.settle(0.3)
+    assert modal.rows() == ["src/parser.py"]
+
+
+async def test_an_emptied_field_lists_the_changed_files_again(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    put(project, "new.py")
+    await world.dispatch(typing("", hash_=modal.hash))
+    await world.settle(0.3)
+    assert modal.rows() == ["new.py"]
+    assert modal.labels() == ["Changed in this session (1), newest first"]
+
+
+async def test_typing_lists_at_most_ten_files(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    for i in range(130):
+        put(project, f"data/part{i:03}.csv")
+    await world.dispatch(typing("part", hash_=modal.hash))
+    await world.settle(0.3)
+    assert len(modal.rows()) == 10 and modal.labels()[0] == "130 files match"
+
+
+async def test_typing_checks_the_disk_only_until_the_rows_are_full(
+    world: World, project: Path, modal: ModalSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await in_a_thread(world)
+    for i in range(300):
+        put(project, f"data/part{i:03}.csv")
+    checked: list[str] = []
+    real = openfile_module._locate
+
+    def counting(real_folder: Path, relative: str) -> Any:
+        checked.append(relative)
+        return real(real_folder, relative)
+
+    monkeypatch.setattr(openfile_module, "_locate", counting)
+    await world.dispatch(typing("part", 1790000100.0))
+    await world.settle(0.3)
+    assert len(modal.rows()) == 10
+    assert len(checked) == 10  # not one for each of the 300 matches
+    # The count is the matches by name once ten files are there to show.
+    assert modal.labels() == [
+        "300 files match",
+        texts.OPEN_MATCHES_CAPPED.format(shown=10, count=300),
+    ]
+
+
+async def test_a_count_below_the_rows_is_exact_even_when_a_match_is_gone(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    # `git ls-files` still names a tracked file deleted from the work tree.
+    await in_a_thread(world)
+    for name in ("keep-a.py", "keep-b.py", "gone.py"):
+        put(project, name)
+    git(project, "add", "-A")
+    git(project, "commit", "-q", "-m", "three")
+    (project / "gone.py").unlink()
+    await world.dispatch(typing(".py", 1790000100.0))
+    await world.settle(0.3)
+    assert sorted(modal.rows()) == ["keep-a.py", "keep-b.py"] and modal.labels() == [
+        "2 files match"
+    ]
+
+
+async def test_typing_leaves_out_a_file_whose_path_is_too_long_for_a_value(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    long_name = "z" * 140
+    put(project, f"{long_name}/{long_name}.py")
+    put(project, "short_z.py")
+    await world.dispatch(typing("z", hash_=modal.hash))
+    await world.settle(0.3)
+    assert modal.rows() == ["short_z.py"]
+
+
+async def test_typing_in_a_folder_with_no_repository_reads_the_disk(
+    world: World, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    plain = world.root / "app"
+    put(plain, "plain.txt")
+    put(plain, "sub/deep/plain-too.txt")
+    await world.dispatch(typing("plain", hash_=modal.hash))
+    await world.settle(0.3)
+    assert sorted(modal.rows()) == ["plain.txt", "sub/deep/plain-too.txt"]
+
+
+async def test_typing_in_a_repository_inside_the_folder_leaves_out_what_git_ignores(
+    world: World, modal: ModalSlack
+) -> None:
+    folder = world.root / "app"
+    nested = committed(folder / "workspace").resolve()
+    put(nested, ".gitignore", ".venv/\n")
+    put(nested, "docs/setup.md")
+    put(nested, ".venv/lib/setup_tools.py")
+    put(folder, "setup-notes.txt")
+    await in_a_thread(world)
+    await world.dispatch(typing("setup", hash_=modal.hash))
+    await world.settle(0.3)
+    assert sorted(modal.rows()) == ["setup-notes.txt", "workspace/docs/setup.md"]
+
+
+async def test_typing_makes_no_call_to_slack_about_the_channel(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    # Each character comes here: the checks are the owner and the workspace alone.
+    await in_a_thread(world)
+    before = len(world.slack.calls)
+    await world.dispatch(typing("read", hash_=modal.hash))
+    await world.settle(0.3)
+    assert modal.rows() == ["README"]
+    methods = [m for m, _ in world.slack.calls[before:]]
+    assert methods == ["views.update"]
+
+
+@pytest.mark.parametrize(("user", "team"), [(STRANGER, TEAM), (OWNER, OTHER_TEAM)])
+async def test_typing_by_anyone_else_updates_nothing(
+    world: World, project: Path, modal: ModalSlack, user: str, team: str
+) -> None:
+    await in_a_thread(world)
+    before = len(world.slack.calls)
+    await world.dispatch(typing("READ", user=user, team=team, hash_=modal.hash))
+    await world.settle(0.2)
+    assert modal.calls == [] and len(world.slack.calls) == before
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        "",
+        "not json",
+        '{"c": 1}',
+        Target("C000ELSEWHERE", THREAD).dump(),  # a thread of another channel
+        Target(CHANNEL, "1790000000.999999").dump(),  # a thread that is no session
+    ],
+)
+async def test_typing_in_a_modal_whose_thread_is_not_a_session_updates_nothing(
+    world: World, project: Path, modal: ModalSlack, metadata: str
+) -> None:
+    await in_a_thread(world)
+    await world.dispatch(typing("READ", metadata=metadata, hash_=modal.hash))
+    await world.settle(0.2)
+    assert modal.calls == []
+
+
+async def test_typing_resolves_in_the_folder_of_the_thread_s_own_session(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    # D5: the channel was bound to another folder after the thread began.
+    await in_a_thread(world)
+    elsewhere = world.root / "elsewhere"
+    put(elsewhere, "only_there.py")
+    put(project, "only_here.py")
+    world.state.bind(CHANNEL, elsewhere)
+    await world.dispatch(typing("only", hash_=modal.hash))
+    await world.settle(0.3)
+    assert modal.rows() == ["only_here.py"]
+
+
+def three_files(project: Path) -> None:
+    for name in ("one.py", "onetwo.py", "onetwothree.py"):
+        put(project, name)
+
+
+async def test_a_slow_update_is_followed_by_the_newest_text_and_never_by_an_older_one(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    # Two keystrokes whose payloads carry the same hash: the first update is slow, the second
+    # waits behind it and lands after it, and the view's last word is the newest text. No update
+    # is rejected: none carries a hash.
+    await in_a_thread(world)
+    three_files(project)
+    world.slack.gate = asyncio.Event()
+    world.slack.gate_method = "views.update"
+    shown = modal.hash
+    await world.dispatch(typing("one", 1790000100.0, hash_=shown))
+    await asyncio.wait_for(world.slack.gated.wait(), 2)
+    await world.dispatch(typing("onetwot", 1790000100.5, hash_=shown))
+    await world.settle(0.1)
+    assert modal.calls == []  # the first is still in flight
+    world.slack.gate.set()
+    await world.settle(0.4)
+    assert [modal.rows(view) for _, view in modal.calls] == [
+        ["one.py", "onetwo.py", "onetwothree.py"],
+        ["onetwothree.py"],
+    ]
+    assert modal.rows() == ["onetwothree.py"] and len(modal.written) == 2
+    assert {sent for sent, _ in modal.calls} == {None}
+
+
+async def test_an_update_waiting_behind_a_newer_keystroke_is_never_made(
+    world: World, project: Path, modal: ModalSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await in_a_thread(world)
+    three_files(project)
+    listed: list[Path] = []
+    listing = Listings.of
+
+    async def watched(self: Listings, folder: Path, **kwargs: Any) -> Any:
+        listed.append(folder)
+        return await listing(self, folder, **kwargs)
+
+    monkeypatch.setattr(Listings, "of", watched)
+    world.slack.gate = asyncio.Event()
+    world.slack.gate_method = "views.update"
+    shown = modal.hash
+    await world.dispatch(typing("one", 1790000100.0, hash_=shown))
+    await asyncio.wait_for(world.slack.gated.wait(), 2)
+    await world.dispatch(typing("onet", 1790000100.5, hash_=shown))
+    await world.dispatch(typing("onetwot", 1790000101.0, hash_=shown))
+    await world.settle(0.1)
+    world.slack.gate.set()
+    await world.settle(0.4)
+    shown_rows = [modal.rows(view) for _, view in modal.calls]
+    # The rows of "onet" (two files) were never written, nor even looked for.
+    assert ["onetwo.py", "onetwothree.py"] not in shown_rows
+    assert modal.rows() == ["onetwothree.py"]
+    assert len(listed) == 2  # the first keystroke and the last
+
+
+async def test_a_keystroke_that_arrives_after_a_newer_one_is_dropped(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    three_files(project)
+    await world.dispatch(typing("onetwot", 1790000101.0, hash_=modal.hash))
+    await world.settle(0.3)
+    assert modal.rows() == ["onetwothree.py"]
+    await world.dispatch(typing("one", 1790000100.0, hash_=modal.hash))  # older, delivered late
+    await world.settle(0.3)
+    assert len(modal.calls) == 1 and modal.rows() == ["onetwothree.py"]
+
+
+async def test_a_keystroke_delivered_twice_is_written_once(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    # Slack sends an interaction again when its acknowledgement was missed.
+    await in_a_thread(world)
+    three_files(project)
+    await world.dispatch(typing("onetwo", 1790000100.0, hash_=modal.hash))
+    await world.dispatch(typing("onetwo", 1790000100.0, hash_=modal.hash))
+    await world.settle(0.3)
+    assert len(modal.calls) == 1
+
+
+async def test_an_update_that_slack_rejects_for_any_other_reason_is_dropped_quietly(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    world.slack.responses["views.update"] = {"ok": False, "error": "not_found"}
+    await world.dispatch(typing("read", hash_=modal.hash))
+    await world.settle(0.2)
+    assert len(world.slack.calls_to("views.update")) == 1 and world.ephemerals() == []
+
+
+def test_an_interaction_is_dated_by_its_action_ts() -> None:
+    assert action_key({"action_ts": "1790000100.500000"}) == 1790000100.5
+    arrival = time.time()
+    for action in ({}, {"action_ts": None}, {"action_ts": "soon"}):
+        assert action_key(action) >= arrival
+
+
+async def test_a_keystroke_that_arrives_after_the_modal_was_submitted_updates_nothing(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    put(project, "src/app.py")
+    await world.dispatch(typing("src", 1790000100.0))
+    await world.settle(0.3)
+    assert len(modal.calls) == 1
+    await world.dispatch(submitted("src/app.py"))
+    await world.dispatch(typing("src/a", 1790000101.0))  # sent before the submit, delivered after
+    await world.settle(0.3)
+    assert len(modal.calls) == 1  # no update of a view that is closed
+
+
+async def test_open_shares_the_chosen_file_and_closes_the_modal(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    put(project, "src/app.py")
+    response = await world.dispatch(submitted("src/app.py"))
+    assert response.status == 200 and "response_action" not in (response.body or "")
+    (done,) = opened(world)
+    assert done["thread_ts"] == THREAD and done["channel_id"] == CHANNEL
+    assert json.loads(done["files"])[0]["title"] == "src/app.py"
+    assert world.ephemerals() == []
+
+
+async def test_open_with_no_row_chosen_shows_the_error_on_the_rows_and_shares_nothing(
+    world: World, project: Path
+) -> None:
+    await in_a_thread(world)
+    before = len(world.slack.calls)
+    response = await world.dispatch(submitted(None, rows=["a.py"]))
+    rows_block = shown_choice_id(modal_view(OPEN_TARGET, "", ["a.py"])["blocks"])
+    assert json.loads(response.body) == {
+        "response_action": "errors",
+        "errors": {rows_block: texts.OPEN_NONE_CHOSEN},
+    }
+    assert opened(world) == []
+    # The answer is the first thing sent, and nothing is sent after it.
+    assert len(world.slack.calls) == before
+
+
+async def test_open_with_no_rows_to_choose_from_shows_the_error_on_the_search_field(
+    world: World, project: Path
+) -> None:
+    await in_a_thread(world)
+    blocks = modal_view(OPEN_TARGET, "zz", [])["blocks"]  # no radio group in the view
+    response = await world.dispatch(submitted(None, blocks=blocks))
+    assert json.loads(response.body) == {
+        "response_action": "errors",
+        "errors": {QUERY_BLOCK: texts.OPEN_NONE_CHOSEN},
+    }
+    assert opened(world) == []
+
+
+async def test_a_row_chosen_before_the_rows_changed_is_never_opened(
+    world: World, project: Path
+) -> None:
+    # Slack keeps the state of an input block whose ids do not change across an update, so the
+    # Submit can carry a row the view no longer shows. Both ways it can: under the id the older
+    # rows had, and under the id of the rows now shown with a value that is not among them.
+    await in_a_thread(world)
+    put(project, "old.py")
+    put(project, "new.py")
+    now = ["new.py"]
+    older_id = shown_choice_id(modal_view(OPEN_TARGET, "", ["old.py", "other.py"])["blocks"])
+    now_id = shown_choice_id(modal_view(OPEN_TARGET, "", now)["blocks"])
+    assert older_id != now_id
+    for under in (older_id, now_id):
+        before = len(world.slack.calls)
+        response = await world.dispatch(submitted("old.py", rows=now, under=under))
+        assert json.loads(response.body) == {
+            "response_action": "errors",
+            "errors": {now_id: texts.OPEN_NONE_CHOSEN},
+        }
+        assert opened(world) == [] and len(world.slack.calls) == before
+    # The control: a row of the rows shown, chosen under their id, is opened.
+    await world.dispatch(submitted("new.py", rows=now))
+    assert len(opened(world)) == 1
+
+
+@pytest.mark.parametrize(("user", "team"), [(STRANGER, TEAM), (OWNER, OTHER_TEAM)])
+async def test_open_by_anyone_else_shares_nothing(
+    world: World, project: Path, user: str, team: str
+) -> None:
+    await in_a_thread(world)
+    put(project, "a.py")
+    assert (await world.dispatch(submitted("a.py", user=user, team=team))).status == 200
+    assert opened(world) == [] and world.slack.uploaded == [] and not world.ephemerals()
+    # With nothing chosen they get no error to read either: a plain acknowledgement.
+    unanswered = await world.dispatch(submitted(None, user=user, team=team))
+    assert "response_action" not in (unanswered.body or "")
+
+
+async def test_open_in_a_modal_with_metadata_that_is_not_ours_shares_nothing(
+    world: World, project: Path
+) -> None:
+    await in_a_thread(world)
+    put(project, "a.py")
+    for metadata in ("", "not json", '{"c": "C000CHAN"}'):
+        assert (await world.dispatch(submitted("a.py", metadata=metadata))).status == 200
+    assert opened(world) == [] and world.slack.uploaded == []
+
+
+async def test_open_in_a_thread_that_holds_no_session_shares_nothing(
+    world: World, project: Path
+) -> None:
+    put(project, "a.py")
+    await world.dispatch(submitted("a.py"))
+    assert opened(world) == []
+    assert world.ephemerals() == [texts.NOT_A_SESSION]
+
+
+async def test_open_in_a_refused_channel_shares_nothing(world: World, project: Path) -> None:
+    await in_a_thread(world)
+    put(project, "a.py")
+    world.slack.responses["conversations.members"] = {"ok": True, "members": [OWNER, BOT, STRANGER]}
+    await world.dispatch(submitted("a.py"))
+    assert opened(world) == []
+    assert world.ephemerals() == [texts.CHANNEL_REFUSED.format(reason=texts.REASON_MEMBERS)]
+
+
+@pytest.mark.parametrize(
+    "value", ["../outside.txt", "link.txt", "dir-link/secret.txt", "/etc/hosts", "docs"]
+)
+async def test_a_value_that_leaves_the_folder_or_is_no_file_is_refused(
+    world: World, project: Path, tmp_path: Path, value: str
+) -> None:
+    await in_a_thread(world)
+    secret = put(tmp_path, "outside.txt")
+    (project / "link.txt").symlink_to(secret)
+    (project / "dir-link").symlink_to(tmp_path)
+    (project / "docs").mkdir()
+    await world.dispatch(submitted(value))
+    assert opened(world) == [] and world.slack.uploaded == []
+    assert world.ephemerals() == [texts.OPEN_NOT_A_FILE.format(path=value)]
+
+
+async def test_open_resolves_in_the_folder_of_the_thread_s_own_session(
+    world: World, project: Path
+) -> None:
+    # D5: the channel was bound to another folder after the thread began.
+    await in_a_thread(world)
+    elsewhere = world.root / "elsewhere"
+    put(elsewhere, "only_there.py")
+    put(project, "only_here.py")
+    world.state.bind(CHANNEL, elsewhere)
+    await world.dispatch(submitted("only_there.py"))
+    assert opened(world) == []
+    await world.dispatch(submitted("only_here.py"))
+    assert len(opened(world)) == 1
+
+
+async def test_the_message_of_open_stays_so_another_file_can_be_chosen(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    put(project, "a.py")
+    put(project, "b.py")
+    await asked_open(world, "!open")
+    (post,) = picker_posts(world)
+    await world.dispatch(submitted("a.py"))
+    await world.dispatch(submitted("b.py"))
+    assert len(opened(world)) == 2
+    # Left as it was: neither deleted nor rewritten (the session's setup message is rewritten).
+    assert world.slack.calls_to("chat.delete") == []
+    rewritten = {call["ts"] for call in world.slack.calls_to("chat.update")}
+    assert world.slack.posted_ts[-1] not in rewritten
+    assert post["blocks"]
+
+
+async def test_open_with_the_path_of_a_file_shares_it_into_the_thread(
+    world: World, project: Path
+) -> None:
+    await in_a_thread(world)
+    put(project, "docs/guide.md", "# Guide\n")
+    posts = len(world.slack.calls_to("chat.postMessage"))
+    await asked_open(world, "!open docs/guide.md")
+    (asked,) = world.slack.calls_to("files.getUploadURLExternal")
+    assert asked["filename"] == "guide.md" and asked["length"] == len(b"# Guide\n")
+    assert [data for _, data in world.slack.uploaded] == [b"# Guide\n"]
+    (done,) = opened(world)
+    assert done["channel_id"] == CHANNEL and done["thread_ts"] == THREAD
+    assert json.loads(done["files"]) == [{"id": "F000FILE", "title": "docs/guide.md"}]
+    # No line of its own on success: the file is the answer.
+    assert len(world.slack.calls_to("chat.postMessage")) == posts
+    assert world.ephemerals() == []
+
+
+async def test_a_path_needs_no_git(world: World) -> None:
+    await in_a_thread(world)
+    put(world.root / "app", "plain.txt")
+    await asked_open(world, "!open plain.txt")
+    assert len(opened(world)) == 1
+
+
+async def test_a_name_that_matches_one_file_opens_it(world: World, project: Path) -> None:
+    await in_a_thread(world)
+    put(project, "src/Parser.py")
+    put(project, "src/lexer.py")
+    await asked_open(world, "!open PARS")
+    (done,) = opened(world)
+    assert json.loads(done["files"])[0]["title"] == "src/Parser.py"
+
+
+async def test_a_file_made_after_a_name_matched_nothing_is_found_by_the_next_search(
+    world: World, project: Path
+) -> None:
+    # A kept listing is never the reason for "no match": it is made again first.
+    await in_a_thread(world)
+    await asked_open(world, "!open zzz")
+    assert world.ephemerals() == [texts.OPEN_NO_MATCH.format(words="zzz")]
+    put(project, "src/zzz-made-since.py")
+    await asked_open(world, "!open zzz")
+    (done,) = opened(world)
+    assert json.loads(done["files"])[0]["title"] == "src/zzz-made-since.py"
+
+
+async def test_typing_finds_a_file_made_after_the_search_matched_nothing(
+    world: World, project: Path, modal: ModalSlack
+) -> None:
+    await in_a_thread(world)
+    await world.dispatch(typing("qqq", 1790000100.0))
+    await world.settle(0.3)
+    assert modal.rows() == [] and modal.labels() == ["0 files match"]
+    put(project, "qqq-made-since.py")
+    await world.dispatch(typing("qqq-", 1790000101.0))
+    await world.settle(0.3)
+    assert modal.rows() == ["qqq-made-since.py"]
+
+
+def cut_walk(monkeypatch: pytest.MonkeyPatch, found: list[str]) -> None:
+    """A walk of a plain folder that ran out of time with `found` in hand."""
+    monkeypatch.setattr(openfile_module, "walk_files", lambda root, skip, expired: (found, False))
+
+
+async def test_a_name_that_matches_nothing_in_a_listing_that_was_cut_says_so(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await in_a_thread(world)
+    cut_walk(monkeypatch, ["a/other.py"])
+    await asked_open(world, "!open nothing-like-it")
+    assert opened(world) == []
+    assert world.ephemerals() == [texts.OPEN_NO_MATCH_PARTIAL.format(words="nothing-like-it")]
+
+
+async def test_the_only_match_of_a_listing_that_was_cut_is_not_opened_on_its_own(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await in_a_thread(world)
+    put(world.root / "app", "a/one.py")
+    cut_walk(monkeypatch, ["a/one.py"])
+    await asked_open(world, "!open one")
+    assert opened(world) == []
+    (post,) = picker_posts(world)
+    section, actions, context = post["blocks"]
+    assert section["text"]["text"] == texts.OPEN_MATCHES_ONE.format(words="one")
+    assert context["elements"][0]["text"] == texts.OPEN_PARTIAL
+    assert actions["elements"][0]["value"] == "one"
+
+
+async def test_a_listing_that_was_cut_is_said_in_the_modal_too(
+    world: World, modal: ModalSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await in_a_thread(world)
+    put(world.root / "app", "a/one.py")
+    cut_walk(monkeypatch, ["a/one.py"])
+    await world.dispatch(typing("zzz", 1790000100.0))
+    await world.settle(0.3)
+    assert modal.labels() == ["0 files match", texts.OPEN_PARTIAL]
+    await world.dispatch(typing("one", 1790000101.0))
+    await world.settle(0.3)
+    assert modal.rows() == ["a/one.py"] and modal.labels() == ["1 file matches", texts.OPEN_PARTIAL]
+
+
+async def test_a_name_that_matches_nothing_says_so(world: World, project: Path) -> None:
+    await in_a_thread(world)
+    await asked_open(world, "!open nothing-like-it")
+    assert opened(world) == []
+    assert world.ephemerals() == [texts.OPEN_NO_MATCH.format(words="nothing-like-it")]
+
+
+async def test_a_file_over_one_megabyte_is_refused(world: World, project: Path) -> None:
+    await in_a_thread(world)
+    (project / "big.log").write_bytes(b"x" * ((1 << 20) + 1))
+    await asked_open(world, "!open big.log")
+    assert world.slack.calls_to("files.getUploadURLExternal") == []
+    assert world.ephemerals() == [texts.OPEN_TOO_LARGE.format(path="big.log")]
+
+
+async def test_an_empty_file_is_refused_before_anything_is_uploaded(
+    world: World, project: Path
+) -> None:
+    await in_a_thread(world)
+    put(project, "empty.txt", "")
+    await asked_open(world, "!open empty.txt")
+    assert world.slack.calls_to("files.getUploadURLExternal") == [] and world.slack.uploaded == []
+    assert world.ephemerals() == [texts.OPEN_EMPTY.format(path="empty.txt")]
+    # Chosen in the modal it is the same file, with the same answer.
+    await world.dispatch(submitted("empty.txt"))
+    assert world.slack.uploaded == []
+    assert world.ephemerals() == [texts.OPEN_EMPTY.format(path="empty.txt")] * 2
+
+
+async def test_without_the_files_write_scope_the_owner_is_told_what_to_do(
+    world: World, project: Path
+) -> None:
+    await in_a_thread(world)
+    put(project, "a.md")
+    world.slack.responses["files.getUploadURLExternal"] = {"ok": False, "error": "missing_scope"}
+    await asked_open(world, "!open a.md")
+    assert world.ephemerals() == [texts.OPEN_NO_SCOPE]
+    assert "files:write" in texts.OPEN_NO_SCOPE and "slack-app-manifest.json" in texts.OPEN_NO_SCOPE
+
+
+async def test_another_slack_failure_names_its_code_and_no_file_content(
+    world: World, project: Path
+) -> None:
+    await in_a_thread(world)
+    put(project, "a.md", "secret words\n")
+    world.slack.responses["files.completeUploadExternal"] = {"ok": False, "error": "ratelimited"}
+    await asked_open(world, "!open a.md")
+    assert world.ephemerals() == [texts.OPEN_FAILED.format(path="a.md", error="ratelimited")]
+
+
+async def test_a_word_outside_a_session_s_thread_is_answered_as_bypass_is(
+    world: World, project: Path
+) -> None:
+    await world.dispatch(message("!open"))
+    await world.dispatch(reply("!open", OTHER_THREAD))  # a thread that holds no session
+    assert said(world) == [texts.OPEN_TOP_LEVEL, texts.OPEN_TOP_LEVEL]
+    assert picker_posts(world) == [] and opened(world) == []
+
+
+async def test_a_name_is_looked_up_in_a_folder_with_no_repository(world: World) -> None:
+    await in_a_thread(world)
+    plain = world.root / "app"
+    put(plain, "docs/Guide.md")
+    put(plain, "other.txt")
+    await asked_open(world, "!open guide")
+    (done,) = opened(world)
+    assert json.loads(done["files"])[0]["title"] == "docs/Guide.md"
+    assert world.ephemerals() == []

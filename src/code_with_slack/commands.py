@@ -48,6 +48,12 @@ class Resume:
 
 
 @dataclass(frozen=True)
+class Open:
+    WORD: ClassVar[str] = "open"
+    target: str = ""  # a path or words in one; empty offers a picker
+
+
+@dataclass(frozen=True)
 class Guide:
     WORD: ClassVar[str] = "guide"
 
@@ -65,7 +71,7 @@ class Invalid:
 # The daemon's own words, answered without Claude Code; a Passthrough goes to the session. Each
 # word's class names it in WORD, and tests/test_commands.py checks that the guide (`!guide`)
 # and `!help` explain every one: a new word cannot ship without its line in both.
-Word = Help | Guide | Bind | Bypass | Status | Stop | Resume | Invalid
+Word = Help | Guide | Bind | Bypass | Status | Stop | Resume | Open | Invalid
 Command = Word | Passthrough
 DESCRIPTION_LIMIT = 100
 # Claude Code's `/clear` starts a new session under any of its names (aliases `/reset` and `/new`:
@@ -106,6 +112,8 @@ def parse_bang(text: str) -> Command | None:
             return Stop()
         case "resume":
             return Resume(rest)
+        case "open":
+            return Open(rest)
     return Passthrough(body)
 
 

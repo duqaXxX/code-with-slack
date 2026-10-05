@@ -159,9 +159,10 @@ class UsageProbe:
             await client.disconnect()
 
 
-async def _git(repository: Repository, *args: str) -> str | None:
-    """`git` on `repository`: its output, or None when it fails. `git_state` holds the time
-    limit."""
+async def run_git(repository: Repository, *args: str) -> str | None:
+    """`git` on `repository`: its output, or None when it fails. The caller holds the time
+    limit (`git_state` here, `code_with_slack.openfile` for `!open`), and chooses commands that
+    never write the index (see `_changes`)."""
     try:
         proc = await asyncio.create_subprocess_exec(
             "git",
@@ -210,17 +211,17 @@ async def _changes(repository: Repository) -> tuple[int, int] | None:
     `git status` inside every nested repository the index names, under that repository's own
     config and filters (measured on git 2.54, 2026-10-04).
     """
-    unstaged = await _git(repository, "diff-files", "--shortstat", "--ignore-submodules=dirty")
+    unstaged = await run_git(repository, "diff-files", "--shortstat", "--ignore-submodules=dirty")
     if unstaged is None:
         return None
     # `--`: git runs at the root, where a file named HEAD would make the revision ambiguous.
-    staged = await _git(repository, "diff-index", "--cached", "--shortstat", "HEAD", "--")
+    staged = await run_git(repository, "diff-index", "--cached", "--shortstat", "HEAD", "--")
     if staged is None:
         # No commit yet: what is staged is compared with the empty tree, as `git diff --cached`.
-        empty = await _git(repository, "hash-object", "-t", "tree", "/dev/null")
+        empty = await run_git(repository, "hash-object", "-t", "tree", "/dev/null")
         if empty is None:
             return None
-        staged = await _git(repository, "diff-index", "--cached", "--shortstat", empty.strip())
+        staged = await run_git(repository, "diff-index", "--cached", "--shortstat", empty.strip())
         if staged is None:
             return None
     (added, removed), (added_staged, removed_staged) = map(shortstat_lines, (unstaged, staged))
@@ -232,9 +233,10 @@ async def git_state(
 ) -> tuple[str | None, tuple[int, int] | None]:
     """The branch and the changes of the repository holding `here`, each None when unknown.
 
-    `repository` answers only for a repository the owner trusted in Claude Code
-    (`code_with_slack.trust.trusted_repository`): anywhere else no git runs, since a diff runs
-    the filters a repository's config names. Every call shares one `GIT_TIMEOUT`.
+    `repository` answers only for a repository the owner trusted in Claude Code, or one inside the
+    folder the session started in (`code_with_slack.trust.trusted_repository`): anywhere else no
+    git runs, since a diff runs the filters a repository's config names. Every call shares one
+    `GIT_TIMEOUT`.
     """
     branch: str | None = None
     changes: tuple[int, int] | None = None
@@ -243,7 +245,7 @@ async def git_state(
             found = await repository(here)
             if found is None or found.git_dir is None:
                 return None, None
-            out = await _git(found, "branch", "--show-current")
+            out = await run_git(found, "branch", "--show-current")
             branch = out.strip() or None if out else None
             if not found.inside_git_dir:
                 changes = await _changes(found)

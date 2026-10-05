@@ -295,8 +295,9 @@ class SessionDeps:
     holds: Holds = field(default_factory=Holds)
     client_factory: ClientFactory = default_client_factory
     workspace_trusted: Callable[[Path], Awaitable[bool]] = workspace_trusted
-    # The footer's git runs only on what this returns: a repository the owner trusted.
-    trusted_repository: Callable[[Path], Awaitable[Repository | None]] = trusted_repository
+    # The daemon's own git runs only on what this returns, for a directory and the folder the
+    # session started in: a repository the owner trusted, or one inside that folder.
+    trusted_repository: Callable[[Path, Path], Awaitable[Repository | None]] = trusted_repository
     sessions_of: Callable[[Path], list[SDKSessionInfo]] = directory_sessions
     # Shared by every ReplySink in the process, so their chat.update writes stay under one
     # app-wide budget together; a fresh default here gives each test its own.
@@ -2101,6 +2102,10 @@ class ThreadSession:
         data = await self._footer_data(tokens)
         return format_footer(data, datetime.now().astimezone()) or None
 
+    async def _repository(self, directory: Path) -> Repository | None:
+        """The footer's git lookup: for the folder this session started in (`self.directory`)."""
+        return await self._deps.trusted_repository(directory, self.directory)
+
     async def _footer_data(self, tokens: int | None) -> FooterData:
         """The footer's values from what the session knows now and `tokens`: the one source for
         both the footer and `!status`, so the two never disagree."""
@@ -2113,7 +2118,7 @@ class ThreadSession:
                     "could not read the context usage in %s: %s", self.channel_id, describe(exc)
                 )
         here = self.working_directory or self.directory
-        branch, changes = await git_state(here, self._deps.trusted_repository)
+        branch, changes = await git_state(here, self._repository)
         return FooterData(
             bypass=self.bypass,
             branch=branch,
@@ -2331,6 +2336,12 @@ class SessionManager:
             return None
         thread = self._deps.state.open_thread(channel_id, thread_ts)
         return self._session(channel_id, thread_ts, thread.directory)
+
+    async def repository(self, directory: Path, session_folder: Path) -> Repository | None:
+        """The repository holding `directory` when the daemon's git may run in it for a session
+        started in `session_folder`: the footer's own lookup, so what runs git for `!open` is what
+        runs it for the footer."""
+        return await self._deps.trusted_repository(directory, session_folder)
 
     def wrote(self, channel_id: str, thread_ts: str) -> None:
         """Something of the app's was posted in this thread outside its session (the answer to a

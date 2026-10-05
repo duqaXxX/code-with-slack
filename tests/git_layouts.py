@@ -3,6 +3,7 @@ an archive can carry (a `git clone` delivers no `.git` entry). Measured on git 2
 2026-10-04."""
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -24,6 +25,23 @@ def git(cwd: Path, *args: str) -> str:
         text=True,
     )
     return done.stdout.strip()
+
+
+def git_at(cwd: Path, when: int, *args: str) -> None:
+    """`git` run with the epoch second `when` as its committer and author date: the time the
+    reflog records for what it does."""
+    env = {**os.environ, "GIT_COMMITTER_DATE": f"{when} +0000", "GIT_AUTHOR_DATE": f"{when} +0000"}
+    identity = ["-c", "user.name=alice", "-c", "user.email=alice@example.com"]
+    subprocess.run(["git", *identity, *args], cwd=cwd, check=True, env=env, capture_output=True)
+
+
+def commit_at(root: Path, name: str, when: int) -> str:
+    """Commit a new file at the epoch second `when`; the commit's id."""
+    (root / name).parent.mkdir(parents=True, exist_ok=True)
+    (root / name).write_text("x\n")
+    git_at(root, when, "add", "-A")
+    git_at(root, when, "commit", "-q", "-m", name)
+    return git(root, "rev-parse", "HEAD")
 
 
 def git_init(path: Path) -> Path:
