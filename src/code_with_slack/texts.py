@@ -348,6 +348,24 @@ HOME_DELETE_TEXT = (
 )
 HOME_DELETE_CONFIRM = "Delete thread"
 HOME_DELETE_DENY = "Cancel"
+HOME_CLEAN = "Clean up"
+HOME_CLEAN_TITLE = "Clean up this channel?"
+HOME_CLEAN_TEXT = (
+    "Deletes from #{channel} what sits outside a thread: the commands you typed there (!stop, "
+    "!status and the like) and the bot's own messages, its answers to them included. Threads "
+    "and your other messages stay. This cannot be undone and can take a few minutes."
+)
+HOME_CLEAN_CONFIRM = "Clean up"
+HOME_CHANNEL_CLEANING = ":hourglass_flowing_sand: cleaning up…"
+HOME_CLEANING_ONE = (
+    ":hourglass_flowing_sand: *Cleaning up 1 channel.* Slack limits how fast messages are "
+    "deleted: this can take a few minutes."
+)
+HOME_CLEANING_MANY = (
+    ":hourglass_flowing_sand: *Cleaning up {count} channels, one at a time.* Slack limits how "
+    "fast messages are deleted: this can take a few minutes."
+)
+HOME_CLEAN_FAILED = "Could not clean up that channel (`{error}`). Clean it up again to continue."
 HOME_DELETE_BUSY = "Not deleted: that thread is working or waiting for you."
 HOME_DELETE_FAILED = (
     "Could not delete every message of that thread (`{error}`). Delete it again to continue."

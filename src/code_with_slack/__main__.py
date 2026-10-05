@@ -159,7 +159,12 @@ async def _deleter(
     if (str(who["user_id"]), str(who["team_id"])) != (identity.owner_user_id, identity.team_id):
         raise ConfigError("SLACK_USER_TOKEN must be the owner's own token, in the bot's workspace")
     return ThreadDeleter(
-        slack, owner, bot_user_id=identity.bot_user_id, state=state, release=sessions.release
+        slack,
+        owner,
+        bot_user_id=identity.bot_user_id,
+        owner_user_id=identity.owner_user_id,
+        state=state,
+        release=sessions.release,
     )
 
 
@@ -195,6 +200,7 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
             state=state,
             sessions_of=directory_sessions,
             delete=deleter.delete if deleter is not None else None,
+            clean=deleter.clean if deleter is not None else None,
         )
         app = build_app(
             slack=slack,

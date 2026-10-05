@@ -429,19 +429,35 @@ the thread, the first one last, and forgets the thread. The Claude Code session 
 `!resume` lists it again.
 
 A delete is not immediate: Slack limits how fast messages can be deleted, and a thread takes
-about a minute, more for a long one. From the click on, a line under the header says how many
-threads are being deleted (`Deleting 2 threads, one at a time.` and why it takes time), and the
-channel's name is followed by `deleting 2 threads…` for its own, and the
-session's small line reads `deleting…` in bold behind an hourglass, in place of its status,
-and has no Delete; the session
-leaves the page, and the count goes down, when its thread is gone. Threads are deleted one at a time, so several chosen in a row all read
-`deleting…` and go one after the other.
+about a minute, more for a long one. From the click on, three places say so. A line under the
+header counts the threads being deleted (`Deleting 2 threads, one at a time.`, and why it takes
+time). The channel's name is followed by `deleting 2 threads…` for its own. The session's small
+line reads `deleting…` in bold behind an hourglass, in place of its status, and has no Delete.
+The session leaves the page, and the counts go down, when its thread is gone. Threads are
+deleted one at a time, so several chosen in a row go one after the other.
 
 When a delete does not end, a line under the header says why:
 `Not deleted: that thread is working or waiting for you.`, or
 `` Could not delete every message of that thread (`<Slack's error>`). Delete it again to continue. ``
 The thread then stays on the page, and Delete continues with the messages that are left.
 Without the token the page has no Edit button.
+
+#### Cleaning up a channel
+
+In edit mode each channel's name carries a **Clean up** button, where **New thread** sits
+otherwise. It removes what piles up in a channel outside the threads: the words you typed there
+(`!stop`, `!status`) and the bot's messages, its answers to them included. It asks first, in a
+dialog titled `Clean up this channel?`:
+
+```
+Deletes from #cc-articles what sits outside a thread: the commands you typed there (!stop, !status and the like) and the bot's own messages, its answers to them included. Threads and your other messages stay. This cannot be undone and can take a few minutes.
+```
+
+What stays: every thread, with or without a session, your other messages, and Slack's own lines
+such as a member joining. While it runs the channel's name is followed by `cleaning up…`, a
+line under the header says so, and the button is gone; it runs after any delete already on its
+way. If Slack stops it, a line under the header says
+`` Could not clean up that channel (`<Slack's error>`). Clean it up again to continue. ``
 
 To keep the page one click away, star the app: open code-with-slack in Slack on desktop and
 click the star beside its name at the top of its page, or drag it from the apps list into

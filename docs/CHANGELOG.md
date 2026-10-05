@@ -7,6 +7,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Cleaning up a channel from the Home tab (issue #146), with the optional `SLACK_USER_TOKEN`:
+  in edit mode a **Clean up** button beside each channel's name, with a confirmation dialog
+  that says what it deletes. `ThreadDeleter.clean` reads the channel's history and deletes what
+  sits outside a thread: the owner's messages the daemon reads as a word (`!stop`, `!status`)
+  and the bot's own, its answers to them included. Threads, the owner's other messages and
+  Slack's own lines stay. While it runs the channel's name and a line under the header say so;
+  it shares one queue with the thread deletes.
 - Deleting a session's whole thread from the Home tab (issue #145), with a new optional
   variable, `SLACK_USER_TOKEN`: the owner's own user token with the user scope `chat:write`.
   Slack lets a bot delete only its own messages, and a thread's root and the owner's replies

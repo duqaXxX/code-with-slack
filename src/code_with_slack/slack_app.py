@@ -69,6 +69,7 @@ from code_with_slack.guards import (
 )
 from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, Pending, hold_blocks
 from code_with_slack.home import (
+    CLEAN_ACTION,
     DELETE_ACTION,
     EDIT_ACTION,
     EDIT_ON,
@@ -1071,6 +1072,14 @@ def build_app(
         # The value names the thread; `Home.delete` deletes only one `state.json` holds.
         channel, _, thread_ts = str(body["actions"][0].get("value")).partition(":")
         await home.delete(channel, thread_ts)
+
+    @app.action(CLEAN_ACTION)
+    async def on_home_clean(ack: AsyncAck, body: dict[str, Any]) -> None:
+        # Sent, like Delete, only once the owner confirmed in the button's own dialog.
+        await ack()
+        if not home_owner(body):
+            return
+        await home.clean(str(body["actions"][0].get("value")))
 
     async def on_decision(ack: AsyncAck, body: dict[str, Any]) -> None:
         await ack()

@@ -51,7 +51,12 @@ class World:
         self.free = True
         self.released: list[tuple[str, str]] = []
         self.deleter = ThreadDeleter(
-            self.bot, self.owner, bot_user_id=BOT, state=self.state, release=self.release
+            self.bot,
+            self.owner,
+            bot_user_id=BOT,
+            owner_user_id=OWNER,
+            state=self.state,
+            release=self.release,
         )
 
     async def release(self, channel_id: str, thread_ts: str) -> bool:
@@ -161,3 +166,64 @@ async def test_threads_are_deleted_one_at_a_time(world: World, tmp_path: Path) -
     world.owner.gate.set()
     assert await asyncio.gather(first, second, again) == [None, None, None]
     assert world.deleted(world.owner) == [ROOT, other]  # the repeated one found nothing left
+
+
+def loose(ts: str, user: str, text: str, **fields: Any) -> dict[str, Any]:
+    """A channel's message as `conversations.history` returns it: the message object of
+    006-event_callback-message.json, and for a thread's parent the `thread_ts` and
+    `reply_count` of api-conversations-replies-root.json (a threaded message is detected "by
+    looking for a `thread_ts` value", docs.slack.dev/messaging/retrieving-messages, read
+    2026-10-05)."""
+    found = {"type": "message", "ts": ts, "user": user, "text": text, **fields}
+    return {**found, "bot_id": "B000BOT"} if user == BOT else found
+
+
+async def test_a_clean_up_deletes_the_commands_and_the_bot_s_messages_outside_a_thread(
+    world: World,
+) -> None:
+    waiting = "1790000050.000001"
+    world.state.open_thread(CHANNEL, waiting)  # a thread of the daemon's, no reply yet
+    pages = (
+        [
+            loose("1790000010.000001", OWNER, "!stop"),
+            loose("1790000011.000001", BOT, "Stopped what was running in this channel."),
+            loose("1790000012.000001", OWNER, "a note to myself"),
+            loose(ROOT, OWNER, "fix the footer", thread_ts=ROOT, reply_count=19),
+            # A parent keeps `thread_ts` once every reply is deleted.
+            loose("1790000013.000001", OWNER, "!status", thread_ts="1790000013.000001"),
+        ],
+        [
+            loose("1790000014.000001", OWNER, "  !Status "),
+            loose("1790000015.000001", "U000BOB", "!stop"),
+            loose("1790000016.000001", BOT, "joined", subtype="channel_join"),
+            loose(waiting, OWNER, "!compact"),
+            # A reply also sent to the channel belongs to its thread.
+            loose("1790000017.000001", BOT, "done", thread_ts=ROOT, subtype="thread_broadcast"),
+        ],
+    )
+    world.bot.responses["conversations.history"] = paged(*pages)
+    assert await world.deleter.clean(CHANNEL) is None
+    asked = world.bot.calls_to("conversations.history")
+    assert [(a["channel"], a["limit"], a.get("cursor")) for a in asked] == [
+        (CHANNEL, PAGE, None),
+        (CHANNEL, PAGE, "1"),
+    ]
+    assert world.deleted(world.owner) == ["1790000010.000001", "1790000014.000001"]
+    assert world.deleted(world.bot) == ["1790000011.000001"]
+    assert world.state.thread(CHANNEL, ROOT) is not None  # no thread is touched
+    assert world.released == []
+
+
+async def test_a_clean_up_of_a_channel_that_is_not_bound_reads_nothing(world: World) -> None:
+    assert await world.deleter.clean("C000NOPE") is None
+    assert world.bot.calls == [] and world.owner.calls == []
+
+
+async def test_a_clean_up_that_slack_stops_says_so(world: World) -> None:
+    world.bot.responses["conversations.history"] = paged(
+        [loose("1790000010.000001", OWNER, "!stop"), loose("1790000011.000001", BOT, "Stopped.")]
+    )
+    world.owner.responses["chat.delete"] = slack_error("cant_delete_message")
+    notice = await world.deleter.clean(CHANNEL)
+    assert notice == texts.HOME_CLEAN_FAILED.format(error="cant_delete_message")
+    assert world.deleted(world.bot) == []  # it stopped at the first refusal

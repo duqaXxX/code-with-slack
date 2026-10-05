@@ -827,6 +827,17 @@ is, with a line under the page's header (`texts.HOME_DELETE_FAILED`, or `texts.H
 for a thread in use); the same click later continues with what is left. The Claude Code session
 and its transcript are not touched.
 
+**Clean up.** In edit mode a channel's header carries a button (`home.CLEAN_ACTION`) with a
+`confirm` dialog that says what it deletes; `Home.clean` acts only in edit mode and on a bound
+channel, marks the channel (its header reads `texts.HOME_CHANNEL_CLEANING`, a section under the
+page's header `texts.HOME_CLEANING_ONE`), and publishes before and after.
+`ThreadDeleter.clean` reads the channel page by page (`conversations.history`, cursor
+pagination) and keeps the messages that carry no `thread_ts` and no `subtype` and that
+`state.json` does not hold as a thread. Of those it deletes the bot's own, and the owner's that
+`commands.parse_bang` reads as a word, each with its author's token as a thread's messages are.
+It shares the deleter's lock, so one clean-up or delete runs at a time. A failure stops it with
+`texts.HOME_CLEAN_FAILED` under the header, and the same click later deletes what is left.
+
 `Home.publish` never raises. `not_enabled` (the Home tab is off in the Slack app's settings) is
 logged once and ends the publishing for that run; any other failure is logged by its error code
 and tried again after `home.RETRY_SECONDS`.

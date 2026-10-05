@@ -21,6 +21,7 @@ from code_with_slack.guards import ChannelGuard, Identity
 from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds
 from code_with_slack.home import (
     CHANNEL_ACTION,
+    CLEAN_ACTION,
     DELETE_ACTION,
     EDIT_ACTION,
     EDIT_OFF,
@@ -154,6 +155,12 @@ class World:
             self.deleted.append((channel_id, thread_ts))
             return None
 
+        self.cleaned: list[str] = []
+
+        async def clean(channel_id: str) -> str | None:
+            self.cleaned.append(channel_id)
+            return None
+
         self.home = Home(
             slack,
             owner_user_id=OWNER,
@@ -161,6 +168,7 @@ class World:
             state=self.state,
             sessions_of=lambda directory: self.stored_sessions,
             delete=delete,
+            clean=clean,
         )
         self.app = build_app(
             slack=slack,
@@ -845,10 +853,14 @@ async def test_edit_and_delete_reach_the_home(world: World) -> None:
     assert world.deleted == []
     await world.dispatch(home_action(delete))
     await until(lambda: world.deleted == [(CHANNEL, HOME_THREAD)])
+    clean = {"type": "button", "action_id": CLEAN_ACTION, "value": CHANNEL}
+    await world.dispatch(home_action(clean))
+    await until(lambda: world.cleaned == [CHANNEL])
     await world.dispatch(home_action({**edit, "value": EDIT_OFF}))
     await world.dispatch(home_action(delete))
+    await world.dispatch(home_action(clean))
     await asyncio.sleep(0.05)
-    assert world.deleted == [(CHANNEL, HOME_THREAD)]
+    assert world.deleted == [(CHANNEL, HOME_THREAD)] and world.cleaned == [CHANNEL]
 
 
 @pytest.mark.parametrize(("user", "team"), [(STRANGER, TEAM), (OWNER, OTHER_TEAM)])
@@ -860,12 +872,13 @@ async def test_edit_and_delete_from_anyone_else_do_nothing(
     for action in (
         {"type": "button", "action_id": EDIT_ACTION, "value": EDIT_OFF},
         {"type": "button", "action_id": DELETE_ACTION, "value": f"{CHANNEL}:{HOME_THREAD}"},
+        {"type": "button", "action_id": CLEAN_ACTION, "value": CHANNEL},
     ):
         body = home_action(action, user)
         body["team"]["id"] = team
         assert (await world.dispatch(body)).status == 200
     await asyncio.sleep(0.05)
-    assert world.deleted == []
+    assert world.deleted == [] and world.cleaned == []
     assert len(world.slack.calls_to("views.publish")) == published  # still in edit mode
 
 

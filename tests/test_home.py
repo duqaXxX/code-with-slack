@@ -14,6 +14,7 @@ from code_with_slack import texts
 from code_with_slack.home import (
     ALL,
     CHANNEL_ACTION,
+    CLEAN_ACTION,
     CONFIRM_TEXT,
     DATE_ACTION,
     DELETE_ACTION,
@@ -1281,3 +1282,69 @@ def test_a_channel_s_header_counts_its_threads_being_deleted_shown_or_not() -> N
     )
     # A channel with none says nothing.
     assert headers(view([row()], channels={CHANNEL: "cc-articles"})) == [f"*<#{CHANNEL}>*"]
+
+
+def test_edit_mode_offers_clean_up_beside_each_channel_when_it_can() -> None:
+    names = {CHANNEL: "cc-articles"}
+    assert buttons(view([row()], channels=names, can_edit=True, editing=True), CLEAN_ACTION) == []
+    assert buttons(view([row()], channels=names, can_edit=True, can_clean=True), CLEAN_ACTION) == []
+    page = view([row()], channels=names, can_edit=True, can_clean=True, editing=True)
+    (clean,) = buttons(page, CLEAN_ACTION)
+    assert (clean["text"]["text"], clean["value"]) == (texts.HOME_CLEAN, CHANNEL)
+    assert clean["confirm"] == {
+        "title": {"type": "plain_text", "text": "Clean up this channel?"},
+        "text": {"type": "plain_text", "text": texts.HOME_CLEAN_TEXT.format(channel="cc-articles")},
+        "confirm": {"type": "plain_text", "text": "Clean up"},
+        "deny": {"type": "plain_text", "text": "Cancel"},
+        "style": "danger",
+    }
+    long = view([row()], channels={CHANNEL: "c" * 80}, can_edit=True, can_clean=True, editing=True)
+    assert len(buttons(long, CLEAN_ACTION)[0]["confirm"]["text"]["text"]) <= CONFIRM_TEXT
+
+
+def test_a_channel_being_cleaned_says_so_and_has_no_button() -> None:
+    page = view(
+        [row()],
+        channels={CHANNEL: "cc-articles"},
+        can_edit=True,
+        can_clean=True,
+        editing=True,
+        cleaning={CHANNEL},
+    )
+    assert buttons(page, CLEAN_ACTION) == []
+    assert f"*<#{CHANNEL}>*   {texts.HOME_CHANNEL_CLEANING}" in titles(page)
+    assert texts.HOME_CLEANING_ONE in titles(page)
+
+
+async def test_clean_publishes_at_once_takes_no_second_click_and_shows_a_failure(
+    tmp_path: Path, slack: FakeSlack, state: StateStore
+) -> None:
+    started: list[str] = []
+    finish = asyncio.Event()
+
+    async def delete(channel_id: str, thread_ts: str) -> str | None:
+        return None
+
+    async def clean(channel_id: str) -> str | None:
+        started.append(channel_id)
+        await finish.wait()
+        return texts.HOME_CLEAN_FAILED.format(error="ratelimited")
+
+    home = make_home(slack, state, listing(tmp_path), delete=delete, clean=clean)
+    await home.clean(CHANNEL)  # out of edit mode: not a click the page offered
+    assert started == []
+    await home.edit(True)
+    await home.clean("C000NOPE")  # not a bound channel
+    assert started == []
+    running = asyncio.create_task(home.clean(CHANNEL))
+    await until(lambda: bool(started))
+    page = published(slack)[-1]
+    assert [b["value"] for b in buttons(page, CLEAN_ACTION)] == [OTHER_CHANNEL]
+    assert texts.HOME_CLEANING_ONE in titles(page)
+    await home.clean(CHANNEL)
+    assert started == [CHANNEL]
+    finish.set()
+    await running
+    page = published(slack)[-1]
+    assert texts.HOME_CLEAN_FAILED.format(error="ratelimited") in notes(page)
+    assert len(buttons(page, CLEAN_ACTION)) == 2 and texts.HOME_CLEANING_ONE not in titles(page)

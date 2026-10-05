@@ -1,4 +1,5 @@
-"""Deleting a session's whole thread from Slack, asked for from the Home tab's edit mode.
+"""Deleting from Slack what the Home tab's edit mode names: a session's whole thread, or what
+sits in a channel outside every thread (the commands typed there and the bot's own messages).
 
 `chat.delete` with a bot token "may delete only messages posted by that bot", and with a user
 token the messages that user can delete (docs.slack.dev/reference/methods/chat.delete, read
@@ -14,6 +15,15 @@ on a free workspace: 20 to 40 seconds a thread, with a rate limit met every few 
 threads are deleted one at a time. A delete that stops half way leaves the thread in `state.json`,
 so asking again continues with the messages that are left. The Claude Code session is not
 touched: its transcript stays, and `!resume` lists it again once no thread holds it.
+
+Cleaning up a channel reads its history (`conversations.history`, Tier 3, cursor pagination,
+read 2026-10-05) and deletes the messages that are no thread and belong to no thread: "Detect a
+threaded message by looking for a `thread_ts` value in the message object", and a parent keeps
+it "even if all its replies have been deleted" (docs.slack.dev/messaging/retrieving-messages,
+read 2026-10-05). Of those, the bot's own all go, and of the owner's only the ones the daemon
+reads as a word (`commands.parse_bang`). Anything else stays: a thread, the owner's other
+messages, a message with a `subtype`, and a message `state.json` holds as a thread whose first
+reply has not come yet.
 """
 
 import asyncio
@@ -25,6 +35,7 @@ from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
 from code_with_slack import texts
+from code_with_slack.commands import parse_bang
 from code_with_slack.render.sinks import describe
 from code_with_slack.state import StateStore
 
@@ -46,12 +57,14 @@ class ThreadDeleter:
         owner: AsyncWebClient,
         *,
         bot_user_id: str,
+        owner_user_id: str,
         state: StateStore,
         release: Callable[[str, str], Awaitable[bool]],
     ) -> None:
         self._bot = bot
         self._owner = owner
         self._bot_user_id = bot_user_id
+        self._owner_user_id = owner_user_id
         self._state = state
         self._release = release
         # One thread at a time: two deletes at once would share Slack's rate limit, and each
@@ -76,18 +89,60 @@ class ThreadDeleter:
             messages = await self._messages(channel_id, thread_ts)
             # The root last, so a delete that stops half way leaves a thread, not loose replies.
             for ts, author in sorted(messages.items(), key=lambda item: item[0] == thread_ts):
-                client = self._bot if author == self._bot_user_id else self._owner
-                try:
-                    await client.chat_delete(channel=channel_id, ts=ts)
-                except SlackApiError as exc:
-                    if describe(exc) != MESSAGE_NOT_FOUND:  # already gone is what was asked
-                        raise
+                await self._remove(channel_id, ts, author)
         except Exception as exc:
             logger.warning("could not delete %s/%s: %s", channel_id, thread_ts, describe(exc))
             return texts.HOME_DELETE_FAILED.format(error=describe(exc))
         self._state.remove_thread(channel_id, thread_ts)
         logger.info("deleted thread %s/%s", channel_id, thread_ts)
         return None
+
+    async def _remove(self, channel_id: str, ts: str, author: str) -> None:
+        client = self._bot if author == self._bot_user_id else self._owner
+        try:
+            await client.chat_delete(channel=channel_id, ts=ts)
+        except SlackApiError as exc:
+            if describe(exc) != MESSAGE_NOT_FOUND:  # already gone is what was asked
+                raise
+
+    async def clean(self, channel_id: str) -> str | None:
+        """Delete what sits in a bound channel outside every thread: the owner's messages the
+        daemon reads as a word, and the bot's own. Returns None when done (or for a channel that
+        is not bound), else the line that says why it stopped. Never raises."""
+        if channel_id not in self._state.channels():
+            return None  # not a channel of the daemon's: nothing a click may clean
+        async with self._one_at_a_time:
+            try:
+                loose = await self._loose(channel_id)
+                for ts, author in loose.items():
+                    await self._remove(channel_id, ts, author)
+            except Exception as exc:
+                logger.warning("could not clean up %s: %s", channel_id, describe(exc))
+                return texts.HOME_CLEAN_FAILED.format(error=describe(exc))
+        logger.info("cleaned up %s: %d messages", channel_id, len(loose))
+        return None
+
+    async def _loose(self, channel_id: str) -> dict[str, str]:
+        """The channel's messages a clean-up deletes, `ts` to author, read page by page."""
+        found: dict[str, str] = {}
+        cursor: str | None = None
+        while True:
+            extra: dict[str, Any] = {"cursor": cursor} if cursor else {}
+            page = await self._bot.conversations_history(channel=channel_id, limit=PAGE, **extra)
+            for message in page.get("messages") or []:
+                ts, author = str(message["ts"]), str(message.get("user") or "")
+                if message.get("thread_ts") or message.get("subtype"):
+                    continue  # a thread, or a reply shown in the channel; or Slack's own line
+                if self._state.thread(channel_id, ts) is not None:
+                    continue  # a thread of the daemon's with no reply yet
+                if author == self._bot_user_id or (
+                    author == self._owner_user_id
+                    and parse_bang(str(message.get("text") or "")) is not None
+                ):
+                    found[ts] = author
+            cursor = (page.get("response_metadata") or {}).get("next_cursor") or None
+            if not cursor:
+                return found
 
     async def _messages(self, channel_id: str, thread_ts: str) -> dict[str, str]:
         """Every message of the thread, its `ts` to its author's user id, read page by page

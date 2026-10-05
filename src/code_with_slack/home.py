@@ -41,7 +41,7 @@ import hashlib
 import logging
 import time
 from collections import Counter
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Collection, Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -90,6 +90,7 @@ SHOW_ALL_ACTION = "home_show_all"
 NEW_THREAD_ACTION = "home_new_thread"
 EDIT_ACTION = "home_edit"
 DELETE_ACTION = "home_delete"
+CLEAN_ACTION = "home_clean"
 # What the Edit button carries: the mode a click asks for, so a click sent twice asks the same.
 EDIT_ON, EDIT_OFF = "edit", "done"
 # A confirmation dialog's text holds 300 characters (confirmation dialog object reference).
@@ -336,6 +337,10 @@ def _deleting_line(count: int) -> str:
     return texts.HOME_DELETING_ONE if count == 1 else texts.HOME_DELETING_MANY.format(count=count)
 
 
+def _cleaning_line(count: int) -> str:
+    return texts.HOME_CLEANING_ONE if count == 1 else texts.HOME_CLEANING_MANY.format(count=count)
+
+
 def _header(time: str, *, editing: bool, can_edit: bool) -> dict[str, Any]:
     """The line above the sessions. It carries the Edit button when threads can be deleted: a
     context block holds no button (context block reference), so the line is a section then."""
@@ -353,12 +358,40 @@ def _header(time: str, *, editing: bool, can_edit: bool) -> dict[str, Any]:
     return {"type": "section", "text": {"type": "mrkdwn", "text": text}, "accessory": button}
 
 
+def _clean_button(channel_id: str, channel_name: str) -> dict[str, Any]:
+    """A channel's Clean up, with a confirmation dialog that says what it deletes."""
+    room = CONFIRM_TEXT - len(texts.HOME_CLEAN_TEXT.format(channel=""))
+    return {
+        "type": "button",
+        "action_id": CLEAN_ACTION,
+        "text": _plain(texts.HOME_CLEAN),
+        "value": channel_id,
+        "confirm": {
+            "title": _plain(texts.HOME_CLEAN_TITLE),
+            "text": _plain(texts.HOME_CLEAN_TEXT.format(channel=one_line(channel_name, room))),
+            "confirm": _plain(texts.HOME_CLEAN_CONFIRM),
+            "deny": _plain(texts.HOME_DELETE_DENY),
+            "style": "danger",
+        },
+    }
+
+
 def _channel_header(
-    team_id: str, channel_id: str, *, editing: bool, deleting: int = 0
+    team_id: str,
+    channel_id: str,
+    *,
+    editing: bool,
+    deleting: int = 0,
+    name: str = "",
+    can_clean: bool = False,
+    cleaning: bool = False,
 ) -> dict[str, Any]:
     """A channel's name, with how many of its threads are being deleted beside it: the rows
-    that say so can be among those the channel does not show."""
+    that say so can be among those the channel does not show. Its button is New thread, and in
+    edit mode Clean up, which gives way to a note while the channel is being cleaned."""
     text = f"*<#{channel_id}>*"
+    if cleaning:
+        text += f"   {texts.HOME_CHANNEL_CLEANING}"
     if deleting == 1:
         text += f"   {texts.HOME_CHANNEL_DELETING_ONE}"
     elif deleting:
@@ -370,6 +403,8 @@ def _channel_header(
             f"slack://channel?team={team_id}&id={channel_id}",
             NEW_THREAD_ACTION,
         )
+    elif can_clean and not cleaning:
+        header["accessory"] = _clean_button(channel_id, name)
     return header
 
 
@@ -434,6 +469,8 @@ def home_view(
     editing: bool = False,
     notice: str | None = None,
     deleting: int = 0,
+    can_clean: bool = False,
+    cleaning: Collection[str] = (),
 ) -> dict[str, Any]:
     """The Home tab's view. `rows` are newest first and `channels` maps each bound channel Slack
     still has to its name. Only the sessions of the chosen period are shown. With no channel,
@@ -450,6 +487,7 @@ def home_view(
         *_controls(channels, chosen),
         _header(_date(int(now.timestamp()), "time"), editing=editing, can_edit=can_edit),
         *([_section(_deleting_line(deleting))] if deleting else []),
+        *([_section(_cleaning_line(len(cleaning)))] if cleaning else []),
         *([context_block(notice)] if notice else []),
     ]
     if not channels:
@@ -477,11 +515,19 @@ def home_view(
         room = (HOME_BLOCKS - 1 - len(blocks) - 3) // CARD_BLOCKS
         if room < min(1, len(cards)) or HOME_BLOCKS - 1 - len(blocks) < 3:
             break
+        name = channels.get(channel_id, "")
         blocks += [
             {"type": "divider"},
-            _channel_header(team_id, channel_id, editing=editing, deleting=going[channel_id]),
+            _channel_header(
+                team_id,
+                channel_id,
+                editing=editing,
+                deleting=going[channel_id],
+                name=name,
+                can_clean=can_clean,
+                cleaning=channel_id in cleaning,
+            ),
         ]
-        name = channels.get(channel_id, "")
         for index, row in enumerate(cards[:room]):
             blocks += [
                 *([context_block(SPACER)] if index else []),
@@ -535,6 +581,7 @@ class Home:
         state: StateStore,
         sessions_of: Callable[[Path], list[SDKSessionInfo]],
         delete: Callable[[str, str], Awaitable[str | None]] | None = None,
+        clean: Callable[[str], Awaitable[str | None]] | None = None,
         debounce: float = DEBOUNCE_SECONDS,
         clock: Callable[[], float] = time.time,
     ) -> None:
@@ -554,6 +601,9 @@ class Home:
         # The threads a delete was asked for and has not ended: Slack's rate limit makes one
         # take from seconds to minutes, and the page says so from the click on.
         self._deleting: set[tuple[str, str]] = set()
+        # Cleans a channel up (`delete.ThreadDeleter.clean`), and the channels on their way.
+        self._clean = clean
+        self._cleaning: set[str] = set()
         self._debounce = debounce
         self._clock = clock
         self._task: asyncio.Task[None] | None = None
@@ -642,6 +692,22 @@ class Home:
         self._stale.add((channel_id, thread_ts))
         await self.publish()
 
+    async def clean(self, channel_id: str) -> None:
+        """Clean up a bound channel, as `delete` deletes a thread: the page says so at once,
+        and again when it ended; a second click while it runs does nothing."""
+        if self._clean is None or not self._editing or channel_id in self._cleaning:
+            return
+        if channel_id not in self._state.channels():
+            return  # the value of a click is untrusted
+        self._cleaning.add(channel_id)
+        self._notice = None
+        await self.publish()
+        try:
+            self._notice = await self._clean(channel_id)
+        finally:
+            self._cleaning.discard(channel_id)
+        await self.publish()
+
     async def close(self) -> None:
         """Publish what a pending request still owed, then stop: the page a stop leaves behind
         shows the sessions as the stop left them. Gives up after `CLOSE_SECONDS`."""
@@ -702,6 +768,8 @@ class Home:
             editing=self._editing,
             notice=self._notice,
             deleting=len(self._deleting),
+            can_clean=self._clean is not None,
+            cleaning=frozenset(self._cleaning),
         )
         await self._slack.views_publish(user_id=self._owner, view=view)
 
