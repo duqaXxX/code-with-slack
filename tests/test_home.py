@@ -14,7 +14,13 @@ from code_with_slack import texts
 from code_with_slack.home import (
     ALL,
     CHANNEL_ACTION,
+    CLEAN_ACTION,
+    CONFIRM_TEXT,
     DATE_ACTION,
+    DELETE_ACTION,
+    EDIT_ACTION,
+    EDIT_OFF,
+    EDIT_ON,
     FILTERS_BLOCK,
     HOME_BLOCKS,
     LAST_7,
@@ -577,11 +583,16 @@ def published(slack: FakeSlack) -> list[dict[str, Any]]:
 def test_a_root_is_read_as_slack_returns_it() -> None:
     recorded = slack_payload("api-conversations-replies-root")["messages"][0]
     assert thread_facts(recorded) == ThreadFacts(
-        replies=19, latest_reply=1789996400, reaction=Status.DONE.value
+        replies=19,
+        latest_reply=1789996400,
+        latest_ts="1789996400.000200",
+        reaction=Status.DONE.value,
     )
     # A root nobody replied to and nobody reacted to carries neither field.
     bare = root(OLD_THREAD, reply_count=None, latest_reply=None, reactions=None)
-    assert thread_facts(bare) == ThreadFacts(replies=0, latest_reply=None, reaction=None)
+    assert thread_facts(bare) == ThreadFacts(
+        replies=0, latest_reply=None, latest_ts=None, reaction=None
+    )
     # The owner's own reactions are not a status.
     assert thread_facts(root(OLD_THREAD, reactions=reacted("eyes"))).reaction is None
 
@@ -849,6 +860,51 @@ async def test_a_chosen_channel_slack_did_not_answer_about_stays_chosen(
     assert home.chosen.channel is None
 
 
+def reply_link(args: dict[str, Any]) -> dict[str, Any]:
+    """A permalink as `chat.getPermalink` forms it for the message asked about; a reply's carries
+    its thread and channel in the query (docs.slack.dev/reference/methods/chat.getPermalink, read
+    2026-10-05)."""
+    link = f"https://example.slack.com/archives/{args['channel']}/p{args['message_ts']}"
+    return {"ok": True, "channel": args["channel"], "permalink": link.replace(".", "")}
+
+
+async def test_open_links_to_the_thread_s_last_reply_and_to_the_root_while_it_has_none(
+    tmp_path: Path, slack: FakeSlack, state: StateStore, roots: dict[str, Any]
+) -> None:
+    roots[NEW_THREAD] = root(NEW_THREAD, reply_count=None, latest_reply=None)
+    slack.responses["chat.getPermalink"] = reply_link
+    home = make_home(slack, state, listing(tmp_path))
+    told_by_state(home, state)
+    await home.publish()
+    last = f"{EPOCH - 3600}.000200"
+    assert [(a["channel"], a["message_ts"]) for a in slack.calls_to("chat.getPermalink")] == [
+        (CHANNEL, last),
+        (OTHER_CHANNEL, NEW_THREAD),
+    ]
+    # The link on the page is the one Slack answered with for that message.
+    opens = f"<{reply_link({'channel': CHANNEL, 'message_ts': last})['permalink']}|"
+    assert any(opens in note for note in notes(published(slack)[-1]))
+
+    # A reply arrives in one thread: its link alone is asked again, for the new last reply.
+    newer = f"{EPOCH - 5}.000300"
+    roots[OLD_THREAD] = root(OLD_THREAD, reply_count=20, latest_reply=newer)
+    state.set_status_pending(CHANNEL, OLD_THREAD, Status.WORKING.value)
+    await home.publish()
+    await home.publish()
+    assert [a["message_ts"] for a in slack.calls_to("chat.getPermalink")][2:] == [newer]
+    opens = f"<{reply_link({'channel': CHANNEL, 'message_ts': newer})['permalink']}|"
+    assert any(opens in note for note in notes(published(slack)[-1]))
+
+
+def test_a_reply_s_permalink_is_written_as_mrkdwn_takes_it() -> None:
+    # `&` is markup in mrkdwn (docs.slack.dev/messaging/formatting-message-text, read 2026-10-05).
+    link = f"{LINK}?thread_ts=1789990000.000100&cid={CHANNEL}"
+    page = view([row(permalink=link)], channels={CHANNEL: "cc-articles"})
+    assert notes(page)[-1].endswith(
+        f" · <{LINK}?thread_ts=1789990000.000100&amp;cid={CHANNEL}|{texts.HOME_OPEN}>"
+    )
+
+
 async def test_a_permalink_slack_refuses_leaves_the_thread_out_for_the_run(
     tmp_path: Path, slack: FakeSlack, state: StateStore
 ) -> None:
@@ -1018,3 +1074,306 @@ async def test_close_gives_up_on_a_slack_that_does_not_answer(
     home.request()
     await asyncio.wait_for(home.close(), 1)  # returns: a stop never hangs on the page
     assert published(slack) == []
+
+
+def buttons(page: dict[str, Any], action_id: str) -> list[dict[str, Any]]:
+    """The section accessories of the page that carry `action_id`."""
+    found = [b.get("accessory") or {} for b in page["blocks"] if b["type"] == "section"]
+    return [a for a in found if a.get("action_id") == action_id]
+
+
+def test_a_page_that_cannot_delete_has_no_edit_button_even_when_asked_to_edit() -> None:
+    plain = view([row()], channels={CHANNEL: "cc-articles"})
+    asked = view([row()], channels={CHANNEL: "cc-articles"}, editing=True)
+    assert asked == plain
+    assert buttons(plain, EDIT_ACTION) == [] and buttons(plain, DELETE_ACTION) == []
+    assert texts.HOME_HEADER.split(" · ")[0] in notes(plain)[0]  # the header stays a small line
+
+
+def test_a_page_that_can_delete_carries_edit_on_its_header_line() -> None:
+    page = view([row()], channels={CHANNEL: "cc-articles"}, can_edit=True)
+    (edit,) = buttons(page, EDIT_ACTION)
+    assert (edit["text"]["text"], edit["value"]) == (texts.HOME_EDIT, EDIT_ON)
+    assert "style" not in edit
+    # Out of edit mode nothing else changes: New thread stays, no session carries a button.
+    assert len(buttons(page, NEW_THREAD_ACTION)) == 1
+    assert buttons(page, DELETE_ACTION) == []
+    assert len(cards(page)) == 1
+
+
+def test_edit_mode_shows_delete_on_each_session_and_no_new_thread() -> None:
+    rows = [
+        row("Fix the footer", thread_ts="1789990000.000100", status=Status.DONE.value, replies=19),
+        row("Still running", thread_ts="1789990000.000200", status=Status.WORKING.value),
+        row("Asked you", thread_ts="1789990000.000300", status=Status.WAITING.value),
+        row("Never replied", thread_ts="1789990000.000400", status=Status.ERROR.value, replies=0),
+    ]
+    page = view(rows, channels={CHANNEL: "cc-articles"}, can_edit=True, editing=True)
+    (done,) = buttons(page, EDIT_ACTION)
+    assert (done["text"]["text"], done["value"], done["style"]) == (
+        texts.HOME_DONE,
+        EDIT_OFF,
+        "primary",
+    )
+    assert buttons(page, NEW_THREAD_ACTION) == []
+    # A thread that is working or waiting for the owner is in use: no Delete.
+    deletes = buttons(page, DELETE_ACTION)
+    assert [d["value"] for d in deletes] == [
+        f"{CHANNEL}:1789990000.000100",
+        f"{CHANNEL}:1789990000.000400",
+    ]
+    first = deletes[0]
+    assert first["style"] == "danger" and first["text"]["text"] == texts.HOME_DELETE
+    # The button element and its confirm dialog: docs.slack.dev block-elements/button-element
+    # and composition-objects/confirmation-dialog-object, read 2026-10-05.
+    assert first["confirm"] == {
+        "title": {"type": "plain_text", "text": "Delete this thread?"},
+        "text": {
+            "type": "plain_text",
+            "text": "“Fix the footer” in #cc-articles, 19 replies. " + texts.HOME_DELETE_TEXT,
+        },
+        "confirm": {"type": "plain_text", "text": "Delete thread"},
+        "deny": {"type": "plain_text", "text": "Cancel"},
+        "style": "danger",
+    }
+    assert deletes[1]["confirm"]["text"]["text"].startswith("“Never replied” in #cc-articles. ")
+
+
+def test_a_confirmation_never_passes_the_dialog_s_limit() -> None:
+    long = row("word " * 100, replies=1234, status=Status.DONE.value)
+    page = view([long], channels={CHANNEL: "c" * 80}, can_edit=True, editing=True)
+    (delete,) = buttons(page, DELETE_ACTION)
+    text = delete["confirm"]["text"]["text"]
+    assert len(text) <= CONFIRM_TEXT
+    assert text.endswith(texts.HOME_DELETE_TEXT)
+
+
+def test_a_notice_shows_under_the_header() -> None:
+    said = [f"notice {n}" for n in range(7)]
+    page = view([row()], channels={CHANNEL: "cc-articles"}, can_edit=True, notices=said)
+    assert notes(page)[:6] == [*said[:5], notes(page)[5]]  # the five latest, then the session
+    assert "notice 5" not in notes(page)
+
+
+async def test_edit_and_delete_publish_the_page_and_keep_it_in_edit_mode(
+    tmp_path: Path, slack: FakeSlack, state: StateStore
+) -> None:
+    asked: list[tuple[str, str]] = []
+    answers: list[str | None] = [texts.HOME_DELETE_BUSY, None]
+
+    async def delete(channel_id: str, thread_ts: str) -> str | None:
+        asked.append((channel_id, thread_ts))
+        answer = answers.pop(0)
+        if answer is None:
+            state.remove_thread(channel_id, thread_ts)
+        return answer
+
+    home = make_home(slack, state, listing(tmp_path), delete=delete)
+    # A delete that arrives out of edit mode is not one the page offered.
+    await home.delete(CHANNEL, OLD_THREAD)
+    assert asked == [] and published(slack) == []
+
+    await home.edit(True)
+    assert len(buttons(published(slack)[-1], DELETE_ACTION)) == 1  # the other one waits for you
+    await home.delete(CHANNEL, OLD_THREAD)
+    page = published(slack)[-1]
+    assert f"“Fix the footer”: {texts.HOME_DELETE_BUSY}" in notes(page)  # it names the thread
+    assert len(buttons(page, DELETE_ACTION)) == 1  # still listed, still in edit mode
+
+    await home.delete(CHANNEL, OLD_THREAD)
+    page = published(slack)[-1]
+    assert asked == [(CHANNEL, OLD_THREAD)] * 2
+    assert not any(texts.HOME_DELETE_BUSY in note for note in notes(page))
+    assert buttons(page, DELETE_ACTION) == []  # gone from the page
+    assert buttons(page, EDIT_ACTION)[0]["value"] == EDIT_OFF
+
+    await home.edit(False)
+    assert buttons(published(slack)[-1], EDIT_ACTION)[0]["value"] == EDIT_ON
+
+
+async def test_a_home_with_no_deleter_never_enters_edit_mode(
+    tmp_path: Path, slack: FakeSlack, state: StateStore
+) -> None:
+    home = make_home(slack, state, listing(tmp_path))
+    await home.edit(True)
+    await home.delete(CHANNEL, OLD_THREAD)
+    page = published(slack)[-1]
+    assert buttons(page, EDIT_ACTION) == [] and buttons(page, DELETE_ACTION) == []
+    assert len(buttons(page, NEW_THREAD_ACTION)) == 2
+
+
+async def test_a_thread_being_deleted_says_so_from_the_click_on_and_takes_no_second_click(
+    tmp_path: Path, slack: FakeSlack, state: StateStore
+) -> None:
+    started: list[tuple[str, str]] = []
+    finish = asyncio.Event()
+
+    async def delete(channel_id: str, thread_ts: str) -> str | None:
+        started.append((channel_id, thread_ts))
+        await finish.wait()  # Slack's rate limit: a delete takes from seconds to minutes
+        state.remove_thread(channel_id, thread_ts)
+        return None
+
+    home = make_home(slack, state, listing(tmp_path), delete=delete)
+    await home.edit(True)
+    running = asyncio.create_task(home.delete(CHANNEL, OLD_THREAD))
+    await until(lambda: bool(started))
+    page = published(slack)[-1]
+    # Published before the delete ends: the row reads `deleting…` and offers no Delete.
+    assert any(note.startswith(f"{texts.HOME_DELETING} · 19 replies") for note in notes(page))
+    assert buttons(page, DELETE_ACTION) == []
+    # And the page says it in full size under the header, with how many are on their way.
+    assert texts.HOME_DELETING_ONE in titles(page)
+    await home.delete(CHANNEL, OLD_THREAD)  # a second click while it runs
+    assert started == [(CHANNEL, OLD_THREAD)]
+    # Leaving edit mode does not hide what is going on.
+    await home.edit(False)
+    assert any(note.startswith(texts.HOME_DELETING) for note in notes(published(slack)[-1]))
+    finish.set()
+    await running
+    assert texts.HOME_DELETING_ONE not in titles(published(slack)[-1])
+    assert not any("Fix the footer" in title for title in titles(published(slack)[-1]))
+
+
+async def test_done_brings_back_the_filters_the_page_had_before_edit(
+    tmp_path: Path, slack: FakeSlack, state: StateStore
+) -> None:
+    async def delete(channel_id: str, thread_ts: str) -> str | None:
+        return None
+
+    home = make_home(slack, state, listing(tmp_path), delete=delete)
+    before = HomeFilter(status=Status.DONE.value, date=LAST_7)
+    await home.choose(before)
+    await home.edit(True)
+    await home.edit(True)  # a click sent twice does not take the filters of edit mode as "before"
+    # Show all on the channel being cleaned chooses that channel: it lasts while edit mode does.
+    await home.choose(HomeFilter(channel=CHANNEL))
+    assert buttons(published(slack)[-1], EDIT_ACTION)[0]["value"] == EDIT_OFF  # still editing
+    await home.edit(False)
+    assert home.chosen == before
+    # The menus show the filters that are back (their block follows what is chosen).
+    assert control(published(slack)[-1], STATUS_ACTION)["initial_option"]["value"] == before.status
+    # Out of edit mode a filter is the owner's choice again, and a second Done changes nothing.
+    await home.choose(HomeFilter(channel=CHANNEL))
+    await home.edit(False)
+    assert home.chosen == HomeFilter(channel=CHANNEL)
+
+
+def test_the_page_counts_the_threads_being_deleted() -> None:
+    page = view([row()], channels={CHANNEL: "cc-articles"}, can_edit=True, deleting=3)
+    assert texts.HOME_DELETING_MANY.format(count=3) in titles(page)
+    assert "Deleting" not in str(view([row()], channels={CHANNEL: "cc-articles"}, can_edit=True))
+
+
+def test_a_channel_s_header_counts_its_threads_being_deleted_shown_or_not() -> None:
+    rows = [
+        row(f"Session {n}", thread_ts=f"17899900{n:02d}.000100", last_activity=EPOCH - n)
+        for n in range(PER_CHANNEL + 2)
+    ]
+    # The two oldest are the ones the channel does not show out of a filter.
+    rows[-1] = HomeRow(**{**rows[-1].__dict__, "deleting": True})
+    rows[-2] = HomeRow(**{**rows[-2].__dict__, "deleting": True})
+    other = row("Elsewhere", channel_id=OTHER_CHANNEL, deleting=True)
+    page = view([*rows, other], channels={CHANNEL: "cc-articles", OTHER_CHANNEL: "cc-shop"})
+    assert headers(page) == [
+        f"*<#{CHANNEL}>*   :hourglass_flowing_sand: deleting 2 threads…",
+        f"*<#{OTHER_CHANNEL}>*   :hourglass_flowing_sand: deleting 1 thread…",
+    ]
+    assert not any(
+        note.startswith(texts.HOME_DELETING) for note in notes(page)[1 : PER_CHANNEL + 1]
+    )
+    # A channel with none says nothing.
+    assert headers(view([row()], channels={CHANNEL: "cc-articles"})) == [f"*<#{CHANNEL}>*"]
+
+
+def test_edit_mode_offers_clean_up_beside_each_channel_when_it_can() -> None:
+    names = {CHANNEL: "cc-articles"}
+    assert buttons(view([row()], channels=names, can_edit=True, editing=True), CLEAN_ACTION) == []
+    assert buttons(view([row()], channels=names, can_edit=True, can_clean=True), CLEAN_ACTION) == []
+    page = view([row()], channels=names, can_edit=True, can_clean=True, editing=True)
+    (clean,) = buttons(page, CLEAN_ACTION)
+    assert (clean["text"]["text"], clean["value"]) == (texts.HOME_CLEAN, CHANNEL)
+    assert clean["confirm"] == {
+        "title": {"type": "plain_text", "text": "Clean up this channel?"},
+        "text": {"type": "plain_text", "text": texts.HOME_CLEAN_TEXT.format(channel="cc-articles")},
+        "confirm": {"type": "plain_text", "text": "Clean up"},
+        "deny": {"type": "plain_text", "text": "Cancel"},
+        "style": "danger",
+    }
+    long = view([row()], channels={CHANNEL: "c" * 80}, can_edit=True, can_clean=True, editing=True)
+    assert len(buttons(long, CLEAN_ACTION)[0]["confirm"]["text"]["text"]) <= CONFIRM_TEXT
+
+
+def test_a_channel_being_cleaned_says_so_and_has_no_button() -> None:
+    page = view(
+        [row()],
+        channels={CHANNEL: "cc-articles"},
+        can_edit=True,
+        can_clean=True,
+        editing=True,
+        cleaning={CHANNEL},
+    )
+    assert buttons(page, CLEAN_ACTION) == []
+    assert f"*<#{CHANNEL}>*   {texts.HOME_CHANNEL_CLEANING}" in titles(page)
+    assert texts.HOME_CLEANING_ONE in titles(page)
+
+
+async def test_clean_publishes_at_once_takes_no_second_click_and_shows_a_failure(
+    tmp_path: Path, slack: FakeSlack, state: StateStore
+) -> None:
+    started: list[str] = []
+    finish = asyncio.Event()
+
+    async def delete(channel_id: str, thread_ts: str) -> str | None:
+        return None
+
+    async def clean(channel_id: str) -> str | None:
+        started.append(channel_id)
+        await finish.wait()
+        return texts.HOME_CLEAN_FAILED.format(error="ratelimited")
+
+    home = make_home(slack, state, listing(tmp_path), delete=delete, clean=clean)
+    await home.clean(CHANNEL)  # out of edit mode: not a click the page offered
+    assert started == []
+    await home.edit(True)
+    await home.clean("C000NOPE")  # not a bound channel
+    assert started == []
+    running = asyncio.create_task(home.clean(CHANNEL))
+    await until(lambda: bool(started))
+    page = published(slack)[-1]
+    assert [b["value"] for b in buttons(page, CLEAN_ACTION)] == [OTHER_CHANNEL]
+    assert texts.HOME_CLEANING_ONE in titles(page)
+    await home.clean(CHANNEL)
+    assert started == [CHANNEL]
+    finish.set()
+    await running
+    page = published(slack)[-1]
+    name = slack_payload("api-conversations-info")["channel"]["name"]
+    failed = texts.HOME_CLEAN_FAILED.format(error="ratelimited")
+    assert f"#{name}: {failed}" in notes(page)  # it names the channel
+    assert len(buttons(page, CLEAN_ACTION)) == 2 and texts.HOME_CLEANING_ONE not in titles(page)
+
+
+async def test_one_delete_s_notice_is_not_erased_by_the_next_one_s_result(
+    tmp_path: Path, slack: FakeSlack, state: StateStore
+) -> None:
+    state.set_status_pending(OTHER_CHANNEL, NEW_THREAD, None, Status.DONE.value)
+    answers = {OLD_THREAD: texts.HOME_DELETE_FAILED.format(error="ratelimited"), NEW_THREAD: None}
+
+    async def delete(channel_id: str, thread_ts: str) -> str | None:
+        if answers[thread_ts] is None:
+            state.remove_thread(channel_id, thread_ts)
+        return answers[thread_ts]
+
+    home = make_home(slack, state, listing(tmp_path), delete=delete)
+    await home.edit(True)
+    await home.delete(CHANNEL, OLD_THREAD)  # fails
+    await home.delete(OTHER_CHANNEL, NEW_THREAD)  # succeeds
+    failed = f"“Fix the footer”: {answers[OLD_THREAD]}"
+    assert failed in notes(published(slack)[-1])  # still said: the row is still there
+    # A new try at the same thread takes its line away while it runs, and Done clears them all.
+    answers[OLD_THREAD] = texts.HOME_DELETE_BUSY
+    await home.delete(CHANNEL, OLD_THREAD)
+    assert failed not in notes(published(slack)[-1])
+    await home.edit(False)
+    assert not any(texts.HOME_DELETE_BUSY in note for note in notes(published(slack)[-1]))

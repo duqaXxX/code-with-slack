@@ -22,6 +22,9 @@ class Config:
     owner_user_id: str
     allowed_root: Path
     config_dir: Path
+    # The owner's own user token, optional: what deleting a thread's messages that are the
+    # owner's needs (`code_with_slack.delete`). None: the Home tab offers no delete.
+    user_token: str | None = field(default=None, repr=False)
 
 
 def load_config(config_dir: Path = CONFIG_DIR) -> Config:
@@ -47,6 +50,9 @@ def load_config(config_dir: Path = CONFIG_DIR) -> Config:
         raise ConfigError("SLACK_BOT_TOKEN must be the Bot User OAuth Token (xoxb-...)")
     if not values["SLACK_APP_TOKEN"].startswith("xapp-"):
         raise ConfigError("SLACK_APP_TOKEN must be the app-level token (xapp-...)")
+    user_token = values.get("SLACK_USER_TOKEN")
+    if user_token is not None and not user_token.startswith("xoxp-"):
+        raise ConfigError("SLACK_USER_TOKEN must be the User OAuth Token (xoxp-...)")
     root = Path(values["ALLOWED_ROOT"]).expanduser().resolve()
     if not root.is_dir():
         raise ConfigError(f"ALLOWED_ROOT is not a directory: {root}")
@@ -56,4 +62,5 @@ def load_config(config_dir: Path = CONFIG_DIR) -> Config:
         owner_user_id=values["SLACK_OWNER_USER_ID"],
         allowed_root=root,
         config_dir=config_dir,
+        user_token=user_token,
     )

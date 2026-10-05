@@ -7,6 +7,37 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Cleaning up a channel from the Home tab (issue #146), with the optional `SLACK_USER_TOKEN`:
+  in edit mode a **Clean up** button beside each channel's name, with a confirmation dialog
+  that says what it deletes. `ThreadDeleter.clean` reads the channel's history and deletes what
+  sits outside a thread: the owner's messages that have no reply (a word such as `!stop`, a
+  prompt never answered, the first message of a thread whose replies are gone) and the bot's
+  own. Every thread that has a reply stays, as do Slack's own lines; a message that carries
+  `thread_ts` is deleted only once Slack answered that its thread is empty. While it runs the channel's name and a line under the header say so;
+  it shares one queue with the thread deletes. A message Slack refuses to delete is counted
+  and the rest still goes.
+- Deleting a session's whole thread from the Home tab (issue #145), with a new optional
+  variable, `SLACK_USER_TOKEN`: the owner's own user token with the user scope `chat:write`.
+  Slack lets a bot delete only its own messages, and a thread's root and the owner's replies
+  are the owner's. With the token set, the line above the sessions carries **Edit**; in edit
+  mode each session that is not working or waiting for the owner carries a red **Delete** with
+  Slack's confirmation dialog, which names the thread, and the **New thread** buttons are left
+  out. **Done** brings back the filters the page had when **Edit** was pressed, so **Show all**
+  used in edit mode does not leave the page on one channel. Confirmed, the new module `delete` (`ThreadDeleter`) closes the thread's idle session
+  (`SessionManager.release`), deletes every message, the root last, and drops the thread from
+  `state.json`; the Claude Code session stays and `!resume` lists it again. Slack's rate limit
+  makes a delete take from seconds to minutes: from the click on a line under the header counts
+  the threads being deleted, a channel's name is followed by the count of its own, the
+  session's line reads `deleting…` and has no Delete, and
+  threads are deleted one at a time. While a thread is deleted it is held
+  (`SessionManager.release`, `.held`, `.free`): a message sent in it builds no session, and the
+  root goes only once a read of the thread shows no reply left. A message Slack refuses to
+  delete (`cant_delete_message`) is counted, and the root then stays. Each delete or clean-up
+  that did not end keeps its own line under the header, which names its thread. A delete that is
+  refused or stops half way leaves a line under the header and continues when asked again. The
+  daemon refuses to start with a user token that is not the owner's own in the bot's workspace.
+  Without the token nothing changes: no Edit button, and the header stays a small line. The
+  manifest does not ask for the user scope; `docs/setup.md` has the steps.
 - `!status` typed in a session's thread shows, under `Session:`, the command that continues
   that session in the terminal (issue #12, first step):
   `` Terminal: `cd <folder> && claude --resume <session id> --fork-session` ``, with the folder
@@ -122,6 +153,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Session index (issue #101): a session's **Open** link in the Home tab opens the thread on its
+  last reply, where it opened it on its first message. The link is the permalink of the message
+  the root names in `latest_reply`, the owner's own messages included, and the root's permalink
+  while the thread has no reply (`Home._permalink`). It is asked again only when the thread's
+  last reply changed, so each reply costs one `chat.getPermalink` call; `state.json` is
+  unchanged. Slack scrolling a thread to the reply its permalink names was seen in the Mac app
+  and on iOS on 2026-10-05.
 - An `Edit` or a `Write` that ended well is one row in a reply (issue #136): a collapsed
   container titled with the call's line in code style (`Update(notes.txt)`), with the sentence
   (`Added 1 line, removed 1 line`) as its subtitle and the diff inside, and no task card. A new

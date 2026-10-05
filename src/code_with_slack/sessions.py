@@ -2314,6 +2314,8 @@ class SessionManager:
     def __init__(self, deps: SessionDeps) -> None:
         self._deps = deps
         self._sessions: dict[tuple[str, str], ThreadSession] = {}
+        # The threads being deleted (`release`): no session is handed out or built in one.
+        self._held: set[tuple[str, str]] = set()
         self.draining = False
 
     @property
@@ -2347,7 +2349,7 @@ class SessionManager:
         back has just been touched (D9): its idle-close timer cannot fire before the caller's own
         next await, however slow (a download, a slow Slack call)."""
         thread = self._deps.state.thread(channel_id, thread_ts)
-        if thread is None:
+        if thread is None or (channel_id, thread_ts) in self._held:
             return None
         return self._session(channel_id, thread_ts, thread.directory)
 
@@ -2426,6 +2428,38 @@ class SessionManager:
             return False
         self._deps.state.bind(channel_id, directory)
         return True
+
+    async def release(self, channel_id: str, thread_ts: str) -> bool:
+        """Close the thread's live session so the thread can be deleted, and wait for its
+        teardown. False, with nothing closed, when the session is not idle or waits for the
+        owner: the same test D9's idle close makes, so the close is as silent. True holds the
+        thread until `free`: `get` answers None for it meanwhile and `held` says so, so a
+        message sent in a thread that is being deleted is told it holds no session."""
+        key = (channel_id, thread_ts)
+        session = self._sessions.get(key)
+        in_use = (
+            session is not None
+            and not session.closed
+            and (session.waiting_for_owner or not session.idle)
+        )
+        if in_use:
+            return False
+        # Held before the first await: a message that arrives while the session closes, or
+        # while the thread's messages are deleted, must not build a session in it.
+        self._held.add(key)
+        if session is not None:
+            if not session.closed:
+                await session.close(reason=texts.ENDED_IDLE)
+            await session.done_closing.wait()
+        return True
+
+    def held(self, channel_id: str, thread_ts: str) -> bool:
+        """Whether the thread is being deleted: it still has its entry, and takes no session."""
+        return (channel_id, thread_ts) in self._held
+
+    def free(self, channel_id: str, thread_ts: str) -> None:
+        """End the hold `release` put on a thread: its delete ended, either way."""
+        self._held.discard((channel_id, thread_ts))
 
     async def stop_channel(self, channel_id: str) -> bool | None:
         """`stop()` on every live session of the channel; True if any stopped something. None

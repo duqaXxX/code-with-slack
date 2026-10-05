@@ -69,6 +69,10 @@ from code_with_slack.guards import (
 )
 from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, Pending, hold_blocks
 from code_with_slack.home import (
+    CLEAN_ACTION,
+    DELETE_ACTION,
+    EDIT_ACTION,
+    EDIT_ON,
     FILTER_ACTIONS,
     NEW_THREAD_ACTION,
     SHOW_ALL_ACTION,
@@ -1052,6 +1056,31 @@ def build_app(
         channel = str(body["actions"][0].get("value"))
         await home.choose(dataclasses.replace(home.chosen, channel=channel))
 
+    @app.action(EDIT_ACTION)
+    async def on_home_edit(ack: AsyncAck, body: dict[str, Any]) -> None:
+        await ack()
+        if not home_owner(body):
+            return
+        await home.edit(str(body["actions"][0].get("value")) == EDIT_ON)
+
+    @app.action(DELETE_ACTION)
+    async def on_home_delete(ack: AsyncAck, body: dict[str, Any]) -> None:
+        # Slack sends this click only once the owner confirmed in the button's own dialog.
+        await ack()
+        if not home_owner(body):
+            return
+        # The value names the thread; `Home.delete` deletes only one `state.json` holds.
+        channel, _, thread_ts = str(body["actions"][0].get("value")).partition(":")
+        await home.delete(channel, thread_ts)
+
+    @app.action(CLEAN_ACTION)
+    async def on_home_clean(ack: AsyncAck, body: dict[str, Any]) -> None:
+        # Sent, like Delete, only once the owner confirmed in the button's own dialog.
+        await ack()
+        if not home_owner(body):
+            return
+        await home.clean(str(body["actions"][0].get("value")))
+
     async def on_decision(ack: AsyncAck, body: dict[str, Any]) -> None:
         await ack()
         user, team = interaction_actor(body)
@@ -1258,7 +1287,8 @@ def build_app(
         the `resume` they guard, so nothing can change between the checks and the call they
         protect. `list_ts`: the picker a click came from, removed once the confirmation is posted or
         has failed, so buttons never outlive a resume."""
-        if sessions.get(channel, thread_ts) is not None:
+        # A thread being deleted still holds its session's entry, and hands out no session.
+        if sessions.get(channel, thread_ts) is not None or sessions.held(channel, thread_ts):
             await in_channel(channel, texts.RESUME_HELD)
             return False
         holder = state.holder(chosen.session_id)

@@ -31,6 +31,19 @@ def test_loads_a_private_env(tmp_path: Path) -> None:
     assert config.config_dir == tmp_path
 
 
+def test_the_owner_s_user_token_is_optional_and_checked_by_its_prefix(tmp_path: Path) -> None:
+    write_env(tmp_path, tmp_path)
+    assert load_config(tmp_path).user_token is None
+    user = "xox" + "p-000-fake"
+    write_env(tmp_path, tmp_path, SLACK_USER_TOKEN=user)
+    config = load_config(tmp_path)
+    assert config.user_token == user
+    assert user not in repr(config)
+    write_env(tmp_path, tmp_path, SLACK_USER_TOKEN=BOT)
+    with pytest.raises(ConfigError, match="SLACK_USER_TOKEN"):
+        load_config(tmp_path)
+
+
 @pytest.mark.parametrize("mode", [0o640, 0o604, 0o660, 0o644])
 def test_refuses_an_env_readable_by_others(tmp_path: Path, mode: int) -> None:
     write_env(tmp_path, tmp_path, mode=mode)

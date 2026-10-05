@@ -3095,6 +3095,39 @@ async def test_an_idle_session_closes_itself_after_the_delay_and_posts_nothing(
     assert len(h.slack.calls) == calls_before  # a silent close
 
 
+async def test_release_closes_an_idle_session_silently_and_refuses_one_in_use(
+    harness_for: Callable[..., Harness],
+) -> None:
+    ask = CanUseToolCall("Bash", {"command": "ls"})
+    h = harness_for({"turns": [[ask, *sdk_messages("tools")]]})
+    assert await h.manager.release(CHANNEL, THREAD)  # no live session: the thread is free
+    h.manager.free(CHANNEL, THREAD)
+    session = h.session()
+    turn = await session.submit("list the files")
+    await until(lambda: bool(h.approvals._pending))
+    assert not await h.manager.release(CHANNEL, THREAD)  # waiting on the owner
+    assert not session.closed and h.clients[0].connected is True
+    assert not h.manager.held(CHANNEL, THREAD)  # refused: nothing is held
+    h.approvals.resolve(next(iter(h.approvals._pending)), CHANNEL, THREAD, Approve())
+    await asyncio.wait_for(turn.done.wait(), 2)
+    await until(lambda: session.idle)
+    await asyncio.sleep(0.02)  # the thread status's last write lands
+    calls_before = len(h.slack.calls)
+    assert await h.manager.release(CHANNEL, THREAD)
+    assert session.closed and session.done_closing.is_set()
+    assert not h.clients[0].connected
+    assert len(h.slack.calls) == calls_before  # as silent as the idle close
+    # Released, the thread is held: no session is rebuilt from the entry `state.json` still
+    # has, so a message sent while its messages are deleted starts nothing.
+    assert h.manager.held(CHANNEL, THREAD)
+    assert h.state.thread(CHANNEL, THREAD) is not None
+    assert h.manager.get(CHANNEL, THREAD) is None
+    assert len(h.clients) == 1
+    h.manager.free(CHANNEL, THREAD)
+    assert not h.manager.held(CHANNEL, THREAD)
+    assert h.manager.get(CHANNEL, THREAD) is not None  # a delete that failed: usable again
+
+
 async def test_the_idle_close_does_not_fire_while_a_turn_runs(
     harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
 ) -> None:

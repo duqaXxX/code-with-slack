@@ -322,6 +322,63 @@ HOME_NO_MATCH = "No session matches these filters."
 HOME_MORE = "Only the first {rows} sessions are shown: narrow the filters."
 HOME_OPEN = "Open"
 HOME_NEW_THREAD = "New thread"
+HOME_EDIT = "Edit"
+HOME_DONE = "Done"
+HOME_DELETE = "Delete"
+# Bold, behind the hourglass the other two notes carry: mrkdwn has no colour, and the plain
+# word was missed among the row's details.
+HOME_DELETING = ":hourglass_flowing_sand: *deleting…*"
+HOME_CHANNEL_DELETING_ONE = ":hourglass_flowing_sand: deleting 1 thread…"
+HOME_CHANNEL_DELETING_MANY = ":hourglass_flowing_sand: deleting {count} threads…"
+HOME_DELETING_ONE = (
+    ":hourglass_flowing_sand: *Deleting 1 thread.* Slack limits how fast messages are deleted: "
+    "a thread takes about a minute, and leaves this page when it is gone."
+)
+HOME_DELETING_MANY = (
+    ":hourglass_flowing_sand: *Deleting {count} threads, one at a time.* Slack limits how fast "
+    "messages are deleted: each takes about a minute, and leaves this page when it is gone."
+)
+HOME_DELETE_TITLE = "Delete this thread?"
+HOME_DELETE_NAMED = "“{title}” in #{channel}, {replies}. "
+HOME_DELETE_NAMED_BARE = "“{title}” in #{channel}. "
+HOME_DELETE_TEXT = (
+    "Every message of the thread is deleted from Slack, yours and the bot's. This cannot be "
+    "undone. The session stays in Claude Code and can be resumed with !resume. Deleting takes "
+    "about a minute."
+)
+HOME_DELETE_CONFIRM = "Delete thread"
+HOME_DELETE_DENY = "Cancel"
+HOME_CLEAN = "Clean up"
+HOME_CLEAN_TITLE = "Clean up this channel?"
+HOME_CLEAN_TEXT = (
+    "Deletes from #{channel} what sits outside a thread: your messages there that have no "
+    "reply, commands like !stop included, and the bot's own messages. Every thread that has a "
+    "reply stays. This cannot be undone and can take a few minutes."
+)
+HOME_CLEAN_CONFIRM = "Clean up"
+HOME_CHANNEL_CLEANING = ":hourglass_flowing_sand: cleaning up…"
+HOME_CLEANING_ONE = (
+    ":hourglass_flowing_sand: *Cleaning up 1 channel.* Slack limits how fast messages are "
+    "deleted: this can take a few minutes."
+)
+HOME_CLEANING_MANY = (
+    ":hourglass_flowing_sand: *Cleaning up {count} channels, one at a time.* Slack limits how "
+    "fast messages are deleted: this can take a few minutes."
+)
+HOME_CLEAN_FAILED = "Could not clean up that channel (`{error}`). Clean it up again to continue."
+HOME_DELETE_REFUSED = (
+    "Slack refused to delete {count} of that thread's messages (`cant_delete_message`): they "
+    "are not yours or the bot's, or your workspace does not let you delete them. Every other "
+    "message is gone and the thread is still listed."
+)
+HOME_CLEAN_REFUSED = (
+    "Slack refused to delete {count} of that channel's messages (`cant_delete_message`): your "
+    "workspace does not let you delete them. Every other one is gone."
+)
+HOME_DELETE_BUSY = "Not deleted: that thread is working or waiting for you."
+HOME_DELETE_FAILED = (
+    "Could not delete every message of that thread (`{error}`). Delete it again to continue."
+)
 HOME_SHOW_ALL = "Show all {count}"
 HOME_UNTITLED = "Session {id}"
 HOME_REPLY = "1 reply"

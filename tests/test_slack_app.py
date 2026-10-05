@@ -21,6 +21,11 @@ from code_with_slack.guards import ChannelGuard, Identity
 from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds
 from code_with_slack.home import (
     CHANNEL_ACTION,
+    CLEAN_ACTION,
+    DELETE_ACTION,
+    EDIT_ACTION,
+    EDIT_OFF,
+    EDIT_ON,
     FILTER_ACTIONS,
     FILTERS_BLOCK,
     NEW_THREAD_ACTION,
@@ -144,12 +149,26 @@ class World:
             allowed_root=self.root.resolve(),
             config_dir=tmp_path,
         )
+        self.deleted: list[tuple[str, str]] = []
+
+        async def delete(channel_id: str, thread_ts: str) -> str | None:
+            self.deleted.append((channel_id, thread_ts))
+            return None
+
+        self.cleaned: list[str] = []
+
+        async def clean(channel_id: str) -> str | None:
+            self.cleaned.append(channel_id)
+            return None
+
         self.home = Home(
             slack,
             owner_user_id=OWNER,
             team_id=TEAM,
             state=self.state,
             sessions_of=lambda directory: self.stored_sessions,
+            delete=delete,
+            clean=clean,
         )
         self.app = build_app(
             slack=slack,
@@ -292,6 +311,20 @@ async def test_a_reply_in_a_thread_that_holds_no_session_is_refused(world: World
     await world.dispatch(copy.deepcopy(thread_body))
     assert world.queries() == []
     assert world.ephemerals() == [texts.NOT_A_SESSION]
+
+
+async def test_a_reply_in_a_thread_being_deleted_starts_nothing(world: World) -> None:
+    # The thread still has its entry while its messages are deleted: a reply sent then must not
+    # rebuild a session from it (the delete would leave it running on a thread that is gone).
+    world.state.open_thread(CHANNEL, THREAD, session_id="68da9311-0000-4000-8000-00000000beef")
+    assert await world.sessions.release(CHANNEL, THREAD)
+    await world.dispatch(reply("one more thing", THREAD))
+    assert world.queries() == [] and world.clients == []
+    assert world.ephemerals() == [texts.NOT_A_SESSION]
+    # The delete failed and let the thread go: it takes a prompt again.
+    world.sessions.free(CHANNEL, THREAD)
+    await world.dispatch(reply("one more thing", THREAD))
+    await until(lambda: world.queries() == ["one more thing"])
 
 
 async def test_a_reply_after_a_gone_session_starts_nothing(world: World) -> None:
@@ -819,6 +852,48 @@ async def test_a_home_control_used_by_anyone_else_changes_nothing(
         assert response.status == 200
     assert world.home.chosen == HomeFilter()
     assert world.slack.calls_to("views.publish") == []
+
+
+HOME_THREAD = "1790000000.000001"
+
+
+async def test_edit_and_delete_reach_the_home(world: World) -> None:
+    edit = {"type": "button", "action_id": EDIT_ACTION, "value": EDIT_ON}
+    delete = {"type": "button", "action_id": DELETE_ACTION, "value": f"{CHANNEL}:{HOME_THREAD}"}
+    # Out of edit mode a Delete click is one the page did not offer.
+    await world.dispatch(home_action(delete))
+    await world.dispatch(home_action(edit))
+    await until(lambda: bool(world.slack.calls_to("views.publish")))
+    assert world.deleted == []
+    await world.dispatch(home_action(delete))
+    await until(lambda: world.deleted == [(CHANNEL, HOME_THREAD)])
+    clean = {"type": "button", "action_id": CLEAN_ACTION, "value": CHANNEL}
+    await world.dispatch(home_action(clean))
+    await until(lambda: world.cleaned == [CHANNEL])
+    await world.dispatch(home_action({**edit, "value": EDIT_OFF}))
+    await world.dispatch(home_action(delete))
+    await world.dispatch(home_action(clean))
+    await asyncio.sleep(0.05)
+    assert world.deleted == [(CHANNEL, HOME_THREAD)] and world.cleaned == [CHANNEL]
+
+
+@pytest.mark.parametrize(("user", "team"), [(STRANGER, TEAM), (OWNER, OTHER_TEAM)])
+async def test_edit_and_delete_from_anyone_else_do_nothing(
+    world: World, user: str, team: str
+) -> None:
+    await world.home.edit(True)
+    published = len(world.slack.calls_to("views.publish"))
+    for action in (
+        {"type": "button", "action_id": EDIT_ACTION, "value": EDIT_OFF},
+        {"type": "button", "action_id": DELETE_ACTION, "value": f"{CHANNEL}:{HOME_THREAD}"},
+        {"type": "button", "action_id": CLEAN_ACTION, "value": CHANNEL},
+    ):
+        body = home_action(action, user)
+        body["team"]["id"] = team
+        assert (await world.dispatch(body)).status == 200
+    await asyncio.sleep(0.05)
+    assert world.deleted == [] and world.cleaned == []
+    assert len(world.slack.calls_to("views.publish")) == published  # still in edit mode
 
 
 def click(action_id: str, value: str, **user: Any) -> dict[str, Any]:

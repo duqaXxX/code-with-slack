@@ -20,6 +20,7 @@ from code_with_slack.approvals import Approvals
 from code_with_slack.attachments import prepare_uploads, uploads_dir
 from code_with_slack.cleanup import CLEAN_EVERY_SECONDS, clean
 from code_with_slack.config import CONFIG_DIR, ConfigError, load_config
+from code_with_slack.delete import ThreadDeleter
 from code_with_slack.footer import UsageCache, UsageProbe
 from code_with_slack.guards import ChannelGuard, Identity
 from code_with_slack.hold import Holds
@@ -141,6 +142,33 @@ def make_clients(bot_token: str) -> tuple[AsyncWebClient, AsyncWebClient]:
     return shared, replies
 
 
+async def _deleter(
+    user_token: str | None,
+    slack: AsyncWebClient,
+    identity: Identity,
+    state: StateStore,
+    sessions: SessionManager,
+) -> ThreadDeleter | None:
+    """What deletes a thread for the Home tab, when the owner's user token is configured. The
+    token must be the owner's own, in the bot's workspace: it deletes as whoever it belongs to."""
+    if user_token is None:
+        return None
+    owner = AsyncWebClient(token=user_token)
+    owner.retry_handlers.append(AsyncRateLimitErrorRetryHandler(max_retry_count=3))
+    who = await owner.auth_test()
+    if (str(who["user_id"]), str(who["team_id"])) != (identity.owner_user_id, identity.team_id):
+        raise ConfigError("SLACK_USER_TOKEN must be the owner's own token, in the bot's workspace")
+    return ThreadDeleter(
+        slack,
+        owner,
+        bot_user_id=identity.bot_user_id,
+        owner_user_id=identity.owner_user_id,
+        state=state,
+        release=sessions.release,
+        free=sessions.free,
+    )
+
+
 async def run(config_dir: Path = CONFIG_DIR) -> None:
     config = load_config(config_dir)
     with single_instance(config_dir):
@@ -165,12 +193,15 @@ async def run(config_dir: Path = CONFIG_DIR) -> None:
                 client_factory=default_client_factory,
             )
         )
+        deleter = await _deleter(config.user_token, slack, identity, state, sessions)
         home = Home(
             slack,
             owner_user_id=identity.owner_user_id,
             team_id=identity.team_id,
             state=state,
             sessions_of=directory_sessions,
+            delete=deleter.delete if deleter is not None else None,
+            clean=deleter.clean if deleter is not None else None,
         )
         app = build_app(
             slack=slack,
