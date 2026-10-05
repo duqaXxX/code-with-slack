@@ -41,6 +41,11 @@ def paged(*pages: list[dict[str, Any]]) -> Any:
     return answer
 
 
+class Freed(list[tuple[str, str]]):
+    def append_pair(self, channel_id: str, thread_ts: str) -> None:
+        self.append((channel_id, thread_ts))
+
+
 class World:
     def __init__(self, tmp_path: Path) -> None:
         self.bot = FakeSlack()
@@ -50,6 +55,7 @@ class World:
         self.state.open_thread(CHANNEL, ROOT, session_id=SESSION)
         self.free = True
         self.released: list[tuple[str, str]] = []
+        self.freed = Freed()
         self.deleter = ThreadDeleter(
             self.bot,
             self.owner,
@@ -57,6 +63,7 @@ class World:
             owner_user_id=OWNER,
             state=self.state,
             release=self.release,
+            free=self.freed.append_pair,
         )
 
     async def release(self, channel_id: str, thread_ts: str) -> bool:
@@ -81,15 +88,24 @@ async def test_each_message_is_deleted_by_its_author_s_token_and_the_root_last(
         # Slack returns the root at the head of every page.
         [root, message("1790000003.000001", BOT)],
     )
+    first = world.bot.responses["conversations.replies"]
+    world.bot.responses["conversations.replies"] = lambda args: (
+        first(args)
+        if not world.deleted(world.bot)
+        else {"ok": True, "messages": [root], "has_more": False}
+    )
     assert await world.deleter.delete(CHANNEL, ROOT) is None
     asked = world.bot.calls_to("conversations.replies")
+    # Read page by page, then once more before the root goes: no reply is left.
     assert [(a["ts"], a["limit"], a.get("cursor")) for a in asked] == [
         (ROOT, PAGE, None),
         (ROOT, PAGE, "1"),
+        (ROOT, PAGE, None),
     ]
     assert world.deleted(world.bot) == ["1790000001.000001", "1790000003.000001"]
     assert world.deleted(world.owner) == ["1790000002.000001", ROOT]
     assert world.released == [(CHANNEL, ROOT)]
+    assert world.freed == [(CHANNEL, ROOT)]  # the hold on the thread ends with the delete
     assert world.state.thread(CHANNEL, ROOT) is None  # forgotten once the thread is gone
 
 
@@ -119,16 +135,57 @@ async def test_a_message_already_gone_does_not_stop_the_delete(world: World) -> 
     assert world.state.thread(CHANNEL, ROOT) is None
 
 
-async def test_a_delete_slack_refuses_stops_there_and_keeps_the_thread(world: World) -> None:
+async def test_a_failure_stops_the_delete_and_keeps_the_thread(world: World) -> None:
     world.bot.responses["conversations.replies"] = paged(
         [message(ROOT, OWNER), message("1790000001.000001", BOT), message("1790000002.000001", BOT)]
     )
-    world.bot.responses["chat.delete"] = slack_error("cant_delete_message")
+    world.bot.responses["chat.delete"] = slack_error("internal_error")
     notice = await world.deleter.delete(CHANNEL, ROOT)
-    assert notice == texts.HOME_DELETE_FAILED.format(error="cant_delete_message")
-    assert world.deleted(world.bot) == ["1790000001.000001"]  # nothing after the refusal
+    assert notice == texts.HOME_DELETE_FAILED.format(error="internal_error")
+    assert world.deleted(world.bot) == ["1790000001.000001"]  # nothing after the failure
     assert world.deleted(world.owner) == []  # the root stays while a reply does
     assert world.state.thread(CHANNEL, ROOT) is not None  # asked again, it continues
+    assert world.freed == [(CHANNEL, ROOT)]  # held no longer: the thread can be used again
+
+
+async def test_messages_slack_refuses_to_delete_are_counted_and_the_root_stays(
+    world: World,
+) -> None:
+    # Someone else's message: tried with the owner's token, which Slack refuses.
+    world.bot.responses["conversations.replies"] = paged(
+        [
+            message(ROOT, OWNER),
+            message("1790000001.000001", "U000BOB"),
+            message("1790000002.000001", BOT),
+            message("1790000003.000001", "U000OTHERAPP"),
+        ]
+    )
+    world.owner.responses["chat.delete"] = slack_error("cant_delete_message")
+    notice = await world.deleter.delete(CHANNEL, ROOT)
+    assert notice == texts.HOME_DELETE_REFUSED.format(count=2)
+    assert world.deleted(world.bot) == ["1790000002.000001"]  # the rest still goes
+    assert ROOT not in world.deleted(world.owner)  # no reply is left under a deleted root
+    assert world.state.thread(CHANNEL, ROOT) is not None
+
+
+async def test_a_message_that_arrives_while_the_thread_goes_is_deleted_before_the_root(
+    world: World,
+) -> None:
+    late = message("1790000009.000001", OWNER)
+    listed = [message(ROOT, OWNER), message("1790000001.000001", BOT)]
+    reads = 0
+
+    def answer(args: dict[str, Any]) -> dict[str, Any]:
+        nonlocal reads
+        reads += 1
+        # The owner replies after the first read: the second one shows it.
+        found = listed if reads == 1 else [listed[0], late] if reads == 2 else [listed[0]]
+        return {"ok": True, "messages": found, "has_more": False}
+
+    world.bot.responses["conversations.replies"] = answer
+    assert await world.deleter.delete(CHANNEL, ROOT) is None
+    assert world.deleted(world.bot) == ["1790000001.000001"]
+    assert world.deleted(world.owner) == [late["ts"], ROOT]  # the root last, with nothing under it
 
 
 async def test_a_failure_that_is_not_slack_s_answer_is_a_notice_too(world: World) -> None:
@@ -267,7 +324,16 @@ async def test_a_clean_up_that_slack_stops_says_so(world: World) -> None:
     world.bot.responses["conversations.history"] = paged(
         [loose("1790000010.000001", OWNER, "!stop"), loose("1790000011.000001", BOT, "Stopped.")]
     )
-    world.owner.responses["chat.delete"] = slack_error("cant_delete_message")
+    world.owner.responses["chat.delete"] = slack_error("internal_error")
     notice = await world.deleter.clean(CHANNEL)
-    assert notice == texts.HOME_CLEAN_FAILED.format(error="cant_delete_message")
-    assert world.deleted(world.bot) == []  # it stopped at the first refusal
+    assert notice == texts.HOME_CLEAN_FAILED.format(error="internal_error")
+    assert world.deleted(world.bot) == []  # it stopped at the failure
+
+
+async def test_a_clean_up_counts_what_slack_refuses_and_deletes_the_rest(world: World) -> None:
+    world.bot.responses["conversations.history"] = paged(
+        [loose("1790000010.000001", OWNER, "!stop"), loose("1790000011.000001", BOT, "Stopped.")]
+    )
+    world.owner.responses["chat.delete"] = slack_error("cant_delete_message")
+    assert await world.deleter.clean(CHANNEL) == texts.HOME_CLEAN_REFUSED.format(count=1)
+    assert world.deleted(world.bot) == ["1790000011.000001"]

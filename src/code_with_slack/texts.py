@@ -366,6 +366,15 @@ HOME_CLEANING_MANY = (
     "fast messages are deleted: this can take a few minutes."
 )
 HOME_CLEAN_FAILED = "Could not clean up that channel (`{error}`). Clean it up again to continue."
+HOME_DELETE_REFUSED = (
+    "Slack refused to delete {count} of that thread's messages (`cant_delete_message`): they "
+    "are not yours or the bot's, or your workspace does not let you delete them. Every other "
+    "message is gone and the thread is still listed."
+)
+HOME_CLEAN_REFUSED = (
+    "Slack refused to delete {count} of that channel's messages (`cant_delete_message`): your "
+    "workspace does not let you delete them. Every other one is gone."
+)
 HOME_DELETE_BUSY = "Not deleted: that thread is working or waiting for you."
 HOME_DELETE_FAILED = (
     "Could not delete every message of that thread (`{error}`). Delete it again to continue."

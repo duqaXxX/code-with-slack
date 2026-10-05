@@ -14,7 +14,8 @@ All notable changes to this project are documented here. The format follows
   prompt never answered, the first message of a thread whose replies are gone) and the bot's
   own. Every thread that has a reply stays, as do Slack's own lines; a message that carries
   `thread_ts` is deleted only once Slack answered that its thread is empty. While it runs the channel's name and a line under the header say so;
-  it shares one queue with the thread deletes.
+  it shares one queue with the thread deletes. A message Slack refuses to delete is counted
+  and the rest still goes.
 - Deleting a session's whole thread from the Home tab (issue #145), with a new optional
   variable, `SLACK_USER_TOKEN`: the owner's own user token with the user scope `chat:write`.
   Slack lets a bot delete only its own messages, and a thread's root and the owner's replies
@@ -28,7 +29,11 @@ All notable changes to this project are documented here. The format follows
   makes a delete take from seconds to minutes: from the click on a line under the header counts
   the threads being deleted, a channel's name is followed by the count of its own, the
   session's line reads `deleting…` and has no Delete, and
-  threads are deleted one at a time. A delete that is
+  threads are deleted one at a time. While a thread is deleted it is held
+  (`SessionManager.release`, `.held`, `.free`): a message sent in it builds no session, and the
+  root goes only once a read of the thread shows no reply left. A message Slack refuses to
+  delete (`cant_delete_message`) is counted, and the root then stays. Each delete or clean-up
+  that did not end keeps its own line under the header, which names its thread. A delete that is
   refused or stops half way leaves a line under the header and continues when asked again. The
   daemon refuses to start with a user token that is not the owner's own in the bot's workspace.
   Without the token nothing changes: no Edit button, and the header stays a small line. The

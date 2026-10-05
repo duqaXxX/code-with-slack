@@ -807,25 +807,41 @@ or `waiting for you` carries a `danger` button (`home.DELETE_ACTION`) with a `co
 that names the thread, cut to the dialog's 300 characters. Slack sends the click only after the
 owner confirmed. The listener checks the owner and the workspace, like every Home control, and
 `Home.delete` acts only in edit mode. It publishes at once with the thread marked
-(`HomeRow.deleting`: the row reads `texts.HOME_DELETING` in place of its status and has no
-button, and a section under the header counts the threads on their way, `texts.HOME_DELETING_ONE`
-or `texts.HOME_DELETING_MANY`, since such a row can be one a channel does not show; a channel's header says the same for its
-own threads, `texts.HOME_CHANNEL_DELETING_ONE` or `texts.HOME_CHANNEL_DELETING_MANY`), ignores a
-second click on a thread it is already deleting, and publishes again when
-the delete ended.
+(`HomeRow.deleting`): the row reads `texts.HOME_DELETING` in place of its status and has no
+button, a section under the header counts the threads on their way (`texts.HOME_DELETING_ONE`
+or `texts.HOME_DELETING_MANY`), and the channel's header counts its own
+(`texts.HOME_CHANNEL_DELETING_ONE` or `texts.HOME_CHANNEL_DELETING_MANY`), since such a row can
+be one a channel does not show. A second click on a thread already being deleted does nothing,
+and the page is published again when the delete ended. What a delete or a clean-up that did
+not end has to say is kept per thread or channel (`Home._notices`), so one's result does not
+erase another's: each is a context line under the header that names its thread or channel, the
+latest `home.NOTICES_SHOWN` of them, until the same one is tried again or edit mode is entered
+or left.
 
 `ThreadDeleter.delete` acts only on a thread `state.json` holds. It asks
-`SessionManager.release`, which closes the thread's live session when it is idle (the test the
-idle close makes, as silent) and answers False for one that is not. It then reads the thread
-page by page (`conversations.replies`, cursor pagination) and deletes each message with
-`chat.delete`: the bot's own with the bot token, every other with the owner's, the replies
-first and the root last; `message_not_found` counts as deleted. `chat.delete` is Tier 3 and both
-clients retry a rate limit, which is where a delete's time goes; threads are deleted one at a
-time, so two deletes never spend each other's retries. Only then is the thread dropped from `state.json`
+`SessionManager.release`, which answers False for a thread whose session is working or waits
+for the owner. Otherwise it holds the thread, closes its live session (the test the idle close
+makes, as silent) and waits for the teardown. While a thread is held `SessionManager.get`
+answers None for it, so a message sent in a thread that is being deleted builds no session from
+the entry `state.json` still has and is answered `texts.NOT_A_SESSION`; `!resume` refuses it
+too (`SessionManager.held`). `SessionManager.free` ends the hold when the delete ended, either
+way.
+
+`ThreadDeleter._empty` then reads the thread page by page (`conversations.replies`, cursor
+pagination) and deletes its replies with `chat.delete`: the bot's own with the bot token, every
+other with the owner's. It reads the thread again after each pass and deletes the root only
+once a read shows no reply left, so a message that arrived meanwhile goes too and no reply is
+left under a deleted root. `message_not_found` counts as deleted. `cant_delete_message` (a
+message that is neither the owner's nor the bot's, or a workspace that does not let the owner
+delete) is counted and the delete goes on: with any such message the root stays, the thread
+stays in `state.json`, and the page says `texts.HOME_DELETE_REFUSED` with the count.
+`chat.delete` is Tier 3 and both clients retry a rate limit, which is where a delete's time
+goes; threads are deleted one at a time, so two deletes never spend each other's retries. Only
+a thread emptied to its root and past it is dropped from `state.json`
 (`StateStore.remove_thread`). Any other failure stops the delete and leaves the thread where it
-is, with a line under the page's header (`texts.HOME_DELETE_FAILED`, or `texts.HOME_DELETE_BUSY`
-for a thread in use); the same click later continues with what is left. The Claude Code session
-and its transcript are not touched.
+is, with `texts.HOME_DELETE_FAILED` (or `texts.HOME_DELETE_BUSY` for a thread in use); the same
+click later continues with what is left. The Claude Code session and its transcript are not
+touched.
 
 **Clean up.** In edit mode a channel's header carries a button (`home.CLEAN_ACTION`) with a
 `confirm` dialog that says what it deletes; `Home.clean` acts only in edit mode and on a bound
@@ -837,9 +853,10 @@ of a thread, and that `state.json` does not hold as a thread. One that carries `
 taken only when `conversations.replies` on it, with `limit=1`, returns its root with no
 `reply_count` (`ThreadDeleter._has_replies`): a thread taken for a leftover would lose its
 root, so no answer, or one with no root, keeps the message. Each is deleted with its author's
-token, as a thread's messages are.
-It shares the deleter's lock, so one clean-up or delete runs at a time. A failure stops it with
-`texts.HOME_CLEAN_FAILED` under the header, and the same click later deletes what is left.
+token, as a thread's messages are. It shares the deleter's lock, so one clean-up or delete runs
+at a time. A message Slack refuses to delete (`cant_delete_message`) is counted and the rest
+still goes (`texts.HOME_CLEAN_REFUSED`); any other failure stops the clean-up with
+`texts.HOME_CLEAN_FAILED`, and the same click later deletes what is left.
 
 `Home.publish` never raises. `not_enabled` (the Home tab is off in the Slack app's settings) is
 logged once and ends the publishing for that run; any other failure is logged by its error code

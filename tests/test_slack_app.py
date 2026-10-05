@@ -313,6 +313,20 @@ async def test_a_reply_in_a_thread_that_holds_no_session_is_refused(world: World
     assert world.ephemerals() == [texts.NOT_A_SESSION]
 
 
+async def test_a_reply_in_a_thread_being_deleted_starts_nothing(world: World) -> None:
+    # The thread still has its entry while its messages are deleted: a reply sent then must not
+    # rebuild a session from it (the delete would leave it running on a thread that is gone).
+    world.state.open_thread(CHANNEL, THREAD, session_id="68da9311-0000-4000-8000-00000000beef")
+    assert await world.sessions.release(CHANNEL, THREAD)
+    await world.dispatch(reply("one more thing", THREAD))
+    assert world.queries() == [] and world.clients == []
+    assert world.ephemerals() == [texts.NOT_A_SESSION]
+    # The delete failed and let the thread go: it takes a prompt again.
+    world.sessions.free(CHANNEL, THREAD)
+    await world.dispatch(reply("one more thing", THREAD))
+    await until(lambda: world.queries() == ["one more thing"])
+
+
 async def test_a_reply_after_a_gone_session_starts_nothing(world: World) -> None:
     # D7 removes the thread's entry with its session, so the next reply finds a thread that
     # holds no session: it is refused, never treated as a fresh top-level message.

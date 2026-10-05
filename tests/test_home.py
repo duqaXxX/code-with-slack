@@ -1149,8 +1149,10 @@ def test_a_confirmation_never_passes_the_dialog_s_limit() -> None:
 
 
 def test_a_notice_shows_under_the_header() -> None:
-    page = view([row()], channels={CHANNEL: "cc-articles"}, can_edit=True, notice="Not deleted.")
-    assert notes(page)[0] == "Not deleted."
+    said = [f"notice {n}" for n in range(7)]
+    page = view([row()], channels={CHANNEL: "cc-articles"}, can_edit=True, notices=said)
+    assert notes(page)[:6] == [*said[:5], notes(page)[5]]  # the five latest, then the session
+    assert "notice 5" not in notes(page)
 
 
 async def test_edit_and_delete_publish_the_page_and_keep_it_in_edit_mode(
@@ -1175,13 +1177,13 @@ async def test_edit_and_delete_publish_the_page_and_keep_it_in_edit_mode(
     assert len(buttons(published(slack)[-1], DELETE_ACTION)) == 1  # the other one waits for you
     await home.delete(CHANNEL, OLD_THREAD)
     page = published(slack)[-1]
-    assert texts.HOME_DELETE_BUSY in notes(page)
+    assert f"“Fix the footer”: {texts.HOME_DELETE_BUSY}" in notes(page)  # it names the thread
     assert len(buttons(page, DELETE_ACTION)) == 1  # still listed, still in edit mode
 
     await home.delete(CHANNEL, OLD_THREAD)
     page = published(slack)[-1]
     assert asked == [(CHANNEL, OLD_THREAD)] * 2
-    assert texts.HOME_DELETE_BUSY not in notes(page)
+    assert not any(texts.HOME_DELETE_BUSY in note for note in notes(page))
     assert buttons(page, DELETE_ACTION) == []  # gone from the page
     assert buttons(page, EDIT_ACTION)[0]["value"] == EDIT_OFF
 
@@ -1346,5 +1348,32 @@ async def test_clean_publishes_at_once_takes_no_second_click_and_shows_a_failure
     finish.set()
     await running
     page = published(slack)[-1]
-    assert texts.HOME_CLEAN_FAILED.format(error="ratelimited") in notes(page)
+    name = slack_payload("api-conversations-info")["channel"]["name"]
+    failed = texts.HOME_CLEAN_FAILED.format(error="ratelimited")
+    assert f"#{name}: {failed}" in notes(page)  # it names the channel
     assert len(buttons(page, CLEAN_ACTION)) == 2 and texts.HOME_CLEANING_ONE not in titles(page)
+
+
+async def test_one_delete_s_notice_is_not_erased_by_the_next_one_s_result(
+    tmp_path: Path, slack: FakeSlack, state: StateStore
+) -> None:
+    state.set_status_pending(OTHER_CHANNEL, NEW_THREAD, None, Status.DONE.value)
+    answers = {OLD_THREAD: texts.HOME_DELETE_FAILED.format(error="ratelimited"), NEW_THREAD: None}
+
+    async def delete(channel_id: str, thread_ts: str) -> str | None:
+        if answers[thread_ts] is None:
+            state.remove_thread(channel_id, thread_ts)
+        return answers[thread_ts]
+
+    home = make_home(slack, state, listing(tmp_path), delete=delete)
+    await home.edit(True)
+    await home.delete(CHANNEL, OLD_THREAD)  # fails
+    await home.delete(OTHER_CHANNEL, NEW_THREAD)  # succeeds
+    failed = f"“Fix the footer”: {answers[OLD_THREAD]}"
+    assert failed in notes(published(slack)[-1])  # still said: the row is still there
+    # A new try at the same thread takes its line away while it runs, and Done clears them all.
+    answers[OLD_THREAD] = texts.HOME_DELETE_BUSY
+    await home.delete(CHANNEL, OLD_THREAD)
+    assert failed not in notes(published(slack)[-1])
+    await home.edit(False)
+    assert not any(texts.HOME_DELETE_BUSY in note for note in notes(published(slack)[-1]))

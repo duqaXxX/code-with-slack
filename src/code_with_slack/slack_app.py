@@ -1287,7 +1287,8 @@ def build_app(
         the `resume` they guard, so nothing can change between the checks and the call they
         protect. `list_ts`: the picker a click came from, removed once the confirmation is posted or
         has failed, so buttons never outlive a resume."""
-        if sessions.get(channel, thread_ts) is not None:
+        # A thread being deleted still holds its session's entry, and hands out no session.
+        if sessions.get(channel, thread_ts) is not None or sessions.held(channel, thread_ts):
             await in_channel(channel, texts.RESUME_HELD)
             return False
         holder = state.holder(chosen.session_id)

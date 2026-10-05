@@ -91,6 +91,8 @@ NEW_THREAD_ACTION = "home_new_thread"
 EDIT_ACTION = "home_edit"
 DELETE_ACTION = "home_delete"
 CLEAN_ACTION = "home_clean"
+# How many lines about deletes that did not end the page shows at once, the latest ones.
+NOTICES_SHOWN = 5
 # What the Edit button carries: the mode a click asks for, so a click sent twice asks the same.
 EDIT_ON, EDIT_OFF = "edit", "done"
 # A confirmation dialog's text holds 300 characters (confirmation dialog object reference).
@@ -467,7 +469,7 @@ def home_view(
     now: datetime,
     can_edit: bool = False,
     editing: bool = False,
-    notice: str | None = None,
+    notices: Collection[str] = (),
     deleting: int = 0,
     can_clean: bool = False,
     cleaning: Collection[str] = (),
@@ -479,7 +481,8 @@ def home_view(
     that channel); otherwise only what matches, with no such cut. Never past Slack's 100 blocks:
     the page says when it stops short. With `can_edit` the header line carries Edit; in
     `editing` each session that is not in use carries Delete and no channel carries New thread.
-    `notice` is the line a delete that did not end left, under the header; `deleting` is how
+    `notices` are the lines the deletes and clean-ups that did not end left, under the
+    header; `deleting` is how
     many threads are being deleted or wait for it, said in a line of full size under the
     header, since a row that says so can be one of those a channel does not show."""
     editing = editing and can_edit
@@ -488,7 +491,7 @@ def home_view(
         _header(_date(int(now.timestamp()), "time"), editing=editing, can_edit=can_edit),
         *([_section(_deleting_line(deleting))] if deleting else []),
         *([_section(_cleaning_line(len(cleaning)))] if cleaning else []),
-        *([context_block(notice)] if notice else []),
+        *(context_block(notice) for notice in list(notices)[:NOTICES_SHOWN]),
     ]
     if not channels:
         return {"type": "home", "blocks": [*blocks, context_block(texts.HOME_EMPTY)]}
@@ -597,7 +600,12 @@ class Home:
         self._editing = False
         # The filters as they were when edit mode was entered: Done brings them back.
         self._before_edit: HomeFilter | None = None
-        self._notice: str | None = None
+        # What each delete or clean-up that did not end left to say, by the thread
+        # (`channel:thread`) or the channel it was for, the latest first: one's result never
+        # erases another's. A new try at the same one, and leaving or entering edit mode, clear it.
+        self._notices: dict[str, str] = {}
+        # Each listed thread's title, for the line that names it.
+        self._labels: dict[tuple[str, str], str] = {}
         # The threads a delete was asked for and has not ended: Slack's rate limit makes one
         # take from seconds to minutes, and the page says so from the click on.
         self._deleting: set[tuple[str, str]] = set()
@@ -670,7 +678,7 @@ class Home:
             self._chosen = self._before_edit
             self._before_edit = None
         self._editing = on
-        self._notice = None
+        self._notices.clear()
         await self.publish()
 
     async def delete(self, channel_id: str, thread_ts: str) -> None:
@@ -682,15 +690,23 @@ class Home:
         if self._delete is None or not self._editing or key in self._deleting:
             return
         self._deleting.add(key)
-        self._notice = None
+        name = f"{channel_id}:{thread_ts}"
+        self._notices.pop(name, None)
         await self.publish()
         try:
-            self._notice = await self._delete(channel_id, thread_ts)
+            notice = await self._delete(channel_id, thread_ts)
         finally:
             self._deleting.discard(key)
+        if notice:
+            label = self._labels.get(key)
+            self._say(name, f"“{label}”: {notice}" if label else notice)
         # A delete that stopped half way changed the thread: its root is read again.
         self._stale.add((channel_id, thread_ts))
         await self.publish()
+
+    def _say(self, name: str, notice: str) -> None:
+        """Keep a notice under `name`, ahead of the ones already kept."""
+        self._notices = {name: notice, **{k: v for k, v in self._notices.items() if k != name}}
 
     async def clean(self, channel_id: str) -> None:
         """Clean up a bound channel, as `delete` deletes a thread: the page says so at once,
@@ -700,12 +716,15 @@ class Home:
         if channel_id not in self._state.channels():
             return  # the value of a click is untrusted
         self._cleaning.add(channel_id)
-        self._notice = None
+        self._notices.pop(channel_id, None)
         await self.publish()
         try:
-            self._notice = await self._clean(channel_id)
+            notice = await self._clean(channel_id)
         finally:
             self._cleaning.discard(channel_id)
+        if notice:
+            label = self._names.get(channel_id)
+            self._say(channel_id, f"#{label}: {notice}" if label else notice)
         await self.publish()
 
     async def close(self) -> None:
@@ -766,7 +785,7 @@ class Home:
             now=datetime.fromtimestamp(self._clock()).astimezone(),
             can_edit=self._delete is not None,
             editing=self._editing,
-            notice=self._notice,
+            notices=list(self._notices.values()),
             deleting=len(self._deleting),
             can_clean=self._clean is not None,
             cleaning=frozenset(self._cleaning),
@@ -834,6 +853,10 @@ class Home:
                 )
             )
         rows.sort(key=lambda row: row.last_activity, reverse=True)
+        self._labels = {
+            (row.channel_id, row.thread_ts): shown_as_written(one_line(row.title, TITLE_LIMIT))
+            for row in rows
+        }
         return rows
 
     def _titles(self, directories: set[Path]) -> dict[str, str]:

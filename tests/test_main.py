@@ -475,7 +475,7 @@ async def test_the_user_token_must_be_the_owner_s_own_in_the_bot_s_workspace(
 
     identity = Identity("U000ALICE", "T000TEAM", "U000BOT")
     state = StateStore(tmp_path / "state.json")
-    sessions: Any = SimpleNamespace(release=None)
+    sessions: Any = SimpleNamespace(release=None, free=None)
     bot = FakeSlack()
     # No token: nothing deletes, and Slack is not asked anything.
     assert await entry._deleter(None, bot, identity, state, sessions) is None

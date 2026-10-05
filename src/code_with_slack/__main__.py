@@ -165,6 +165,7 @@ async def _deleter(
         owner_user_id=identity.owner_user_id,
         state=state,
         release=sessions.release,
+        free=sessions.free,
     )
 
 

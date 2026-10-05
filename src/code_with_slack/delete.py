@@ -48,12 +48,14 @@ logger = logging.getLogger(__name__)
 # How many messages one `conversations.replies` page is asked for.
 PAGE = 200
 MESSAGE_NOT_FOUND = "message_not_found"
+CANT_DELETE = "cant_delete_message"
 THREAD_NOT_FOUND = "thread_not_found"
 
 
 class ThreadDeleter:
     """Deletes the threads the Home tab's Delete names. `release` closes the thread's live
-    session when it is idle and says whether the thread is free (`SessionManager.release`)."""
+    session when it is idle, holds the thread so that no session is built in it meanwhile, and
+    says whether it did; `free` ends the hold (`SessionManager.release` and `.free`)."""
 
     def __init__(
         self,
@@ -64,6 +66,7 @@ class ThreadDeleter:
         owner_user_id: str,
         state: StateStore,
         release: Callable[[str, str], Awaitable[bool]],
+        free: Callable[[str, str], None],
     ) -> None:
         self._bot = bot
         self._owner = owner
@@ -71,6 +74,7 @@ class ThreadDeleter:
         self._owner_user_id = owner_user_id
         self._state = state
         self._release = release
+        self._free = free
         # One thread at a time: two deletes at once would share Slack's rate limit, and each
         # would use up its retries on the other's calls.
         self._one_at_a_time = asyncio.Lock()
@@ -88,26 +92,59 @@ class ThreadDeleter:
         if self._state.thread(channel_id, thread_ts) is None:
             return None  # deleted while this call waited its turn
         try:
+            # From here until `free`, the thread is held: a message sent in it while its
+            # messages go finds no session, and none is rebuilt from the entry `state.json`
+            # still has (`SessionManager.release`).
             if not await self._release(channel_id, thread_ts):
                 return texts.HOME_DELETE_BUSY
-            messages = await self._messages(channel_id, thread_ts)
-            # The root last, so a delete that stops half way leaves a thread, not loose replies.
-            for ts, author in sorted(messages.items(), key=lambda item: item[0] == thread_ts):
-                await self._remove(channel_id, ts, author)
+            refused = await self._empty(channel_id, thread_ts)
+            if refused:
+                # The root stays while a reply does, so the thread can still be opened.
+                return texts.HOME_DELETE_REFUSED.format(count=refused)
+            self._state.remove_thread(channel_id, thread_ts)
         except Exception as exc:
             logger.warning("could not delete %s/%s: %s", channel_id, thread_ts, describe(exc))
             return texts.HOME_DELETE_FAILED.format(error=describe(exc))
-        self._state.remove_thread(channel_id, thread_ts)
+        finally:
+            self._free(channel_id, thread_ts)
         logger.info("deleted thread %s/%s", channel_id, thread_ts)
         return None
 
-    async def _remove(self, channel_id: str, ts: str, author: str) -> None:
+    async def _empty(self, channel_id: str, thread_ts: str) -> int:
+        """Delete the thread's replies, then its root. The thread is read again after each
+        pass, so a message that arrived meanwhile goes too, and the root goes only once a read
+        shows no reply left: a delete never leaves replies under a deleted root. Returns how
+        many messages Slack refused to delete; the root stays when it is not zero."""
+        handled: set[str] = set()
+        refused: set[str] = set()
+        while True:
+            messages = await self._messages(channel_id, thread_ts)
+            replies = {ts: a for ts, a in messages.items() if ts != thread_ts and ts not in handled}
+            if not replies:
+                break
+            for ts, author in replies.items():
+                handled.add(ts)
+                if not await self._remove(channel_id, ts, author):
+                    refused.add(ts)
+        root = None if refused else messages.get(thread_ts)
+        if root is not None and not await self._remove(channel_id, thread_ts, root):
+            refused.add(thread_ts)
+        return len(refused)
+
+    async def _remove(self, channel_id: str, ts: str, author: str) -> bool:
+        """Delete one message with its author's token; anyone else's is tried with the owner's,
+        which deletes what the owner may delete in Slack. False when Slack refuses this very
+        message (`cant_delete_message`): the caller goes on and counts it. A message already
+        gone is deleted; any other failure raises."""
         client = self._bot if author == self._bot_user_id else self._owner
         try:
             await client.chat_delete(channel=channel_id, ts=ts)
         except SlackApiError as exc:
-            if describe(exc) != MESSAGE_NOT_FOUND:  # already gone is what was asked
+            if describe(exc) == CANT_DELETE:
+                return False
+            if describe(exc) != MESSAGE_NOT_FOUND:
                 raise
+        return True
 
     async def clean(self, channel_id: str) -> str | None:
         """Delete what sits in a bound channel outside every thread: the owner's messages and
@@ -118,13 +155,14 @@ class ThreadDeleter:
         async with self._one_at_a_time:
             try:
                 loose = await self._loose(channel_id)
+                refused = 0
                 for ts, author in loose.items():
-                    await self._remove(channel_id, ts, author)
+                    refused += not await self._remove(channel_id, ts, author)
             except Exception as exc:
                 logger.warning("could not clean up %s: %s", channel_id, describe(exc))
                 return texts.HOME_CLEAN_FAILED.format(error=describe(exc))
-        logger.info("cleaned up %s: %d messages", channel_id, len(loose))
-        return None
+        logger.info("cleaned up %s: %d messages, %d refused", channel_id, len(loose), refused)
+        return texts.HOME_CLEAN_REFUSED.format(count=refused) if refused else None
 
     async def _loose(self, channel_id: str) -> dict[str, str]:
         """The channel's messages a clean-up deletes, `ts` to author, read page by page."""

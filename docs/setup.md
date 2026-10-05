@@ -82,7 +82,8 @@ regenerate it on the same page.
 ### Optional: a user token, to delete threads from the Home tab
 
 Skip this unless you want the Home tab's **Edit** mode, which deletes a session's whole thread
-(see "Deleting a thread" under "Using it"). Slack lets a bot delete only its own messages
+and cleans up a channel (see "Deleting a thread" and "Cleaning up a channel" under "Using
+it"). Slack lets a bot delete only its own messages
 (`chat.delete` reference), and the first message of a thread and your replies are yours, so
 deleting them takes a token that acts as you.
 
@@ -91,9 +92,11 @@ deleting them takes a token that acts as you.
 3. Copy the **User OAuth Token** (`xoxp-…`) into `.env` as `SLACK_USER_TOKEN` (Part 2).
 
 This token can post, edit and delete messages as you, anywhere you can. code-with-slack uses it
-for one call, `chat.delete`, on the messages of a thread you chose to delete. It is the one
-credential in `.env` that acts under your name: leave it out if you do not need the feature. The
-manifest does not ask for the scope, so an app created from it has no such token.
+for two calls: `auth.test` at startup, to check the token is yours, and `chat.delete`, on the
+messages that are not the bot's in a thread you chose to delete or a channel you chose to clean
+up. It is the one credential in `.env` that acts under your name: leave it out if you do not
+need those two features. The manifest does not ask for the scope, so an app created from it has
+no such token.
 
 ### Find your member ID
 
@@ -157,7 +160,7 @@ chmod 600 ~/.config/code-with-slack/.env
 | `SLACK_APP_TOKEN` | the `xapp-…` token |
 | `SLACK_OWNER_USER_ID` | your member ID, the only person the bot answers |
 | `ALLOWED_ROOT` | the directory `!bind` accepts paths under, for example `~/code` |
-| `SLACK_USER_TOKEN` | optional: your own `xoxp-…` token, for the Home tab's Delete |
+| `SLACK_USER_TOKEN` | optional: your own `xoxp-…` token, for the Home tab's Delete and Clean up |
 
 The workspace ID is not configured: code-with-slack reads it from Slack at startup with the bot
 token and rejects events from any other workspace.
@@ -329,7 +332,7 @@ The bot answers one person, and the rest of this list protects what that person 
 - The Slack MCP server stays off.
 - The Home tab is published to you alone: code-with-slack writes that page for no other member.
 - `~/.config/code-with-slack/.env` is mode `600`.
-- `SLACK_USER_TOKEN` is set only if you use the Home tab's Delete: it acts as you in the whole
+- `SLACK_USER_TOKEN` is set only if you use the Home tab's Delete or Clean up: it acts as you in the whole
   workspace, and whoever reads `.env` can post and delete under your name.
 - Files you attach are copied to `$TMPDIR/code-with-slack/` (mode `700`) and stay there for 3
   days, so a conversation resumed after a restart still finds them.
@@ -390,7 +393,7 @@ a blank row before the next:
 - the status reaction of the thread's root message and the title Claude Code gives the session;
 - in small text, the status in a word (`working`, `waiting for you`, `ended`, `error`), the
   thread's number of replies and the time since its last reply, as the channel shows them under
-  the root message, and an **Open** link to the thread.
+  the root message, and an **Open** link, which opens the thread on its last message.
 
 **New thread**, beside a channel's name, opens that channel: the message you send there starts a
 session.
@@ -436,11 +439,19 @@ line reads `deleting…` in bold behind an hourglass, in place of its status, an
 The session leaves the page, and the counts go down, when its thread is gone. Threads are
 deleted one at a time, so several chosen in a row go one after the other.
 
-When a delete does not end, a line under the header says why:
-`Not deleted: that thread is working or waiting for you.`, or
-`` Could not delete every message of that thread (`<Slack's error>`). Delete it again to continue. ``
-The thread then stays on the page, and Delete continues with the messages that are left.
-Without the token the page has no Edit button.
+When a delete does not end, a line under the header names the thread and says why. The thread
+then stays on the page:
+
+| Line | What happened |
+|---|---|
+| `Not deleted: that thread is working or waiting for you.` | A turn runs in the thread, or an approval or a question waits for you: let it end, or send `!stop` in the thread |
+| `` Could not delete every message of that thread (`<Slack's error>`). Delete it again to continue. `` | Slack or the network failed half way: Delete continues with the messages that are left |
+| `` Slack refused to delete 2 of that thread's messages (`cant_delete_message`): they are not yours or the bot's, or your workspace does not let you delete them. Every other message is gone and the thread is still listed. `` | The first message stays so the thread can still be opened: delete what is left by hand in Slack |
+
+A message you send in a thread while it is being deleted starts nothing: you are told
+``This thread holds no session.``, and the message goes with the rest. A restart of
+code-with-slack cuts a delete short; Delete continues it. Without the token the page has no
+Edit button.
 
 #### Cleaning up a channel
 
@@ -459,8 +470,10 @@ whose session is still being set up, and Slack's own lines such as a member join
 keep notes of your own in a bound channel outside a thread: a clean-up takes them for
 leftovers. While it runs the channel's name is followed by `cleaning up…`, a
 line under the header says so, and the button is gone; it runs after any delete already on its
-way. If Slack stops it, a line under the header says
+way. If Slack stops it, a line under the header names the channel and says
 `` Could not clean up that channel (`<Slack's error>`). Clean it up again to continue. ``
+If Slack refuses some messages, the rest still goes and the line reads
+`` Slack refused to delete 2 of that channel's messages (`cant_delete_message`): your workspace does not let you delete them. Every other one is gone. ``
 
 To keep the page one click away, star the app: open code-with-slack in Slack on desktop and
 click the star beside its name at the top of its page, or drag it from the apps list into
