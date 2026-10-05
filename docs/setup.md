@@ -445,16 +445,19 @@ Without the token the page has no Edit button.
 #### Cleaning up a channel
 
 In edit mode each channel's name carries a **Clean up** button, where **New thread** sits
-otherwise. It removes what piles up in a channel outside the threads: the words you typed there
-(`!stop`, `!status`) and the bot's messages, its answers to them included. It asks first, in a
-dialog titled `Clean up this channel?`:
+otherwise. It removes what piles up in a channel outside the threads: your messages there that
+have no reply (a word such as `!stop`, a prompt that was never answered, the first message of a
+thread whose replies are gone) and the bot's messages, its answers to your words included. It
+asks first, in a dialog titled `Clean up this channel?`:
 
 ```
-Deletes from #cc-articles what sits outside a thread: the commands you typed there (!stop, !status and the like) and the bot's own messages, its answers to them included. Threads and your other messages stay. This cannot be undone and can take a few minutes.
+Deletes from #cc-articles what sits outside a thread: your messages there that have no reply, commands like !stop included, and the bot's own messages. Every thread that has a reply stays. This cannot be undone and can take a few minutes.
 ```
 
-What stays: every thread, with or without a session, your other messages, and Slack's own lines
-such as a member joining. While it runs the channel's name is followed by `cleaning up…`, a
+What stays: every thread that has a reply, with or without a session, a message you just sent
+whose session is still being set up, and Slack's own lines such as a member joining. Do not
+keep notes of your own in a bound channel outside a thread: a clean-up takes them for
+leftovers. While it runs the channel's name is followed by `cleaning up…`, a
 line under the header says so, and the button is gone; it runs after any delete already on its
 way. If Slack stops it, a line under the header says
 `` Could not clean up that channel (`<Slack's error>`). Clean it up again to continue. ``

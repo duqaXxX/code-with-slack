@@ -178,40 +178,84 @@ def loose(ts: str, user: str, text: str, **fields: Any) -> dict[str, Any]:
     return {**found, "bot_id": "B000BOT"} if user == BOT else found
 
 
-async def test_a_clean_up_deletes_the_commands_and_the_bot_s_messages_outside_a_thread(
-    world: World,
-) -> None:
+async def test_a_clean_up_deletes_what_has_no_reply_outside_a_thread(world: World) -> None:
     waiting = "1790000050.000001"
+    emptied = "1790000013.000001"
+    orphan = "1790000014.000001"  # a thread with replies whose session is gone
     world.state.open_thread(CHANNEL, waiting)  # a thread of the daemon's, no reply yet
     pages = (
         [
             loose("1790000010.000001", OWNER, "!stop"),
             loose("1790000011.000001", BOT, "Stopped what was running in this channel."),
-            loose("1790000012.000001", OWNER, "a note to myself"),
+            loose("1790000012.000001", OWNER, "a prompt nobody answered"),
             loose(ROOT, OWNER, "fix the footer", thread_ts=ROOT, reply_count=19),
             # A parent keeps `thread_ts` once every reply is deleted.
-            loose("1790000013.000001", OWNER, "!status", thread_ts="1790000013.000001"),
+            loose(emptied, OWNER, "a prompt whose replies are gone", thread_ts=emptied),
         ],
         [
-            loose("1790000014.000001", OWNER, "  !Status "),
+            loose(orphan, OWNER, "an old thread", thread_ts=orphan, reply_count=4),
             loose("1790000015.000001", "U000BOB", "!stop"),
             loose("1790000016.000001", BOT, "joined", subtype="channel_join"),
-            loose(waiting, OWNER, "!compact"),
+            loose(waiting, OWNER, "a prompt whose setup is open"),
             # A reply also sent to the channel belongs to its thread.
             loose("1790000017.000001", BOT, "done", thread_ts=ROOT, subtype="thread_broadcast"),
         ],
     )
     world.bot.responses["conversations.history"] = paged(*pages)
+    # Asked of the thread itself, a root with a reply carries `reply_count` and one with none
+    # does not (api-conversations-replies-root.json, and the Home's measure of 2026-10-01).
+    roots = {
+        orphan: loose(orphan, OWNER, "an old thread", thread_ts=orphan, reply_count=4),
+        emptied: loose(emptied, OWNER, "a prompt whose replies are gone", thread_ts=emptied),
+    }
+    world.bot.responses["conversations.replies"] = lambda args: {
+        "ok": True,
+        "messages": [roots[str(args["ts"])]],
+        "has_more": False,
+    }
     assert await world.deleter.clean(CHANNEL) is None
     asked = world.bot.calls_to("conversations.history")
     assert [(a["channel"], a["limit"], a.get("cursor")) for a in asked] == [
         (CHANNEL, PAGE, None),
         (CHANNEL, PAGE, "1"),
     ]
-    assert world.deleted(world.owner) == ["1790000010.000001", "1790000014.000001"]
+    # Only a message that carries `thread_ts` and that `state.json` does not hold is asked
+    # about, its root alone.
+    checked = world.bot.calls_to("conversations.replies")
+    assert [(a["ts"], a["limit"]) for a in checked] == [(emptied, 1), (orphan, 1)]
+    assert world.deleted(world.owner) == ["1790000010.000001", "1790000012.000001", emptied]
     assert world.deleted(world.bot) == ["1790000011.000001"]
-    assert world.state.thread(CHANNEL, ROOT) is not None  # no thread is touched
+    assert world.state.thread(CHANNEL, ROOT) is not None
     assert world.released == []
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"ok": True, "messages": [], "has_more": False},  # no root in the answer: no proof
+        slack_error("thread_not_found"),  # gone meanwhile
+    ],
+)
+async def test_a_message_with_thread_ts_is_kept_unless_its_thread_is_known_empty(
+    world: World, answer: Any
+) -> None:
+    world.state.remove_thread(CHANNEL, ROOT)
+    world.bot.responses["conversations.history"] = paged(
+        [loose(ROOT, OWNER, "fix the footer", thread_ts=ROOT)]
+    )
+    world.bot.responses["conversations.replies"] = answer
+    assert await world.deleter.clean(CHANNEL) is None
+    assert world.deleted(world.owner) == [] and world.deleted(world.bot) == []
+
+
+async def test_a_thread_that_cannot_be_asked_about_stops_the_clean_up(world: World) -> None:
+    world.state.remove_thread(CHANNEL, ROOT)
+    world.bot.responses["conversations.history"] = paged(
+        [loose(ROOT, OWNER, "fix the footer", thread_ts=ROOT)]
+    )
+    world.bot.responses["conversations.replies"] = slack_error("ratelimited")
+    assert await world.deleter.clean(CHANNEL) == texts.HOME_CLEAN_FAILED.format(error="ratelimited")
+    assert world.deleted(world.owner) == []
 
 
 async def test_a_clean_up_of_a_channel_that_is_not_bound_reads_nothing(world: World) -> None:

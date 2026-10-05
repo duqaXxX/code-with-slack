@@ -20,10 +20,15 @@ Cleaning up a channel reads its history (`conversations.history`, Tier 3, cursor
 read 2026-10-05) and deletes the messages that are no thread and belong to no thread: "Detect a
 threaded message by looking for a `thread_ts` value in the message object", and a parent keeps
 it "even if all its replies have been deleted" (docs.slack.dev/messaging/retrieving-messages,
-read 2026-10-05). Of those, the bot's own all go, and of the owner's only the ones the daemon
-reads as a word (`commands.parse_bang`). Anything else stays: a thread, the owner's other
-messages, a message with a `subtype`, and a message `state.json` holds as a thread whose first
-reply has not come yet.
+read 2026-10-05). In a channel bound to a folder every message the owner sends outside a thread
+is a prompt or a word for the daemon, so one with no reply is a leftover whoever wrote it: the
+owner's and the bot's both go. What stays: a thread that has a reply, a message with a
+`subtype` (Slack's own lines), anyone else's message, and a message `state.json` holds as a
+thread whose first reply has not come yet. A message that carries `thread_ts` is deleted only
+after `conversations.replies` on it, with `limit=1`, returned its root with no `reply_count`
+(a root nobody replied to has none, measured 2026-10-01): the reference does not say what a
+parent's count reads in the channel's history once its replies are gone, and a thread taken for
+a leftover would lose its root.
 """
 
 import asyncio
@@ -35,7 +40,6 @@ from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
 from code_with_slack import texts
-from code_with_slack.commands import parse_bang
 from code_with_slack.render.sinks import describe
 from code_with_slack.state import StateStore
 
@@ -106,8 +110,8 @@ class ThreadDeleter:
                 raise
 
     async def clean(self, channel_id: str) -> str | None:
-        """Delete what sits in a bound channel outside every thread: the owner's messages the
-        daemon reads as a word, and the bot's own. Returns None when done (or for a channel that
+        """Delete what sits in a bound channel outside every thread: the owner's messages and
+        the bot's that have no reply. Returns None when done (or for a channel that
         is not bound), else the line that says why it stopped. Never raises."""
         if channel_id not in self._state.channels():
             return None  # not a channel of the daemon's: nothing a click may clean
@@ -131,18 +135,33 @@ class ThreadDeleter:
             page = await self._bot.conversations_history(channel=channel_id, limit=PAGE, **extra)
             for message in page.get("messages") or []:
                 ts, author = str(message["ts"]), str(message.get("user") or "")
-                if message.get("thread_ts") or message.get("subtype"):
-                    continue  # a thread, or a reply shown in the channel; or Slack's own line
+                threaded = message.get("thread_ts")
+                if message.get("subtype") or (threaded and str(threaded) != ts):
+                    continue  # Slack's own line; or a thread's reply shown in the channel
+                if author not in (self._bot_user_id, self._owner_user_id):
+                    continue
                 if self._state.thread(channel_id, ts) is not None:
                     continue  # a thread of the daemon's with no reply yet
-                if author == self._bot_user_id or (
-                    author == self._owner_user_id
-                    and parse_bang(str(message.get("text") or "")) is not None
-                ):
-                    found[ts] = author
+                if threaded and await self._has_replies(channel_id, ts):
+                    continue  # a thread
+                found[ts] = author
             cursor = (page.get("response_metadata") or {}).get("next_cursor") or None
             if not cursor:
                 return found
+
+    async def _has_replies(self, channel_id: str, ts: str) -> bool:
+        """Whether a message that carries `thread_ts` still has a reply, asked of the thread
+        itself. True as well for one that is gone meanwhile: there is nothing to delete."""
+        try:
+            answer = await self._bot.conversations_replies(channel=channel_id, ts=ts, limit=1)
+        except SlackApiError as exc:
+            if describe(exc) == THREAD_NOT_FOUND:
+                return True
+            raise
+        messages = answer.get("messages") or []
+        root = next((m for m in messages if str(m.get("ts")) == ts), None)
+        # No root in the answer is no proof of an empty thread: keep the message.
+        return root is None or bool(root.get("reply_count")) or len(messages) > 1
 
     async def _messages(self, channel_id: str, thread_ts: str) -> dict[str, str]:
         """Every message of the thread, its `ts` to its author's user id, read page by page

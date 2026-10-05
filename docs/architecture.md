@@ -832,9 +832,12 @@ and its transcript are not touched.
 channel, marks the channel (its header reads `texts.HOME_CHANNEL_CLEANING`, a section under the
 page's header `texts.HOME_CLEANING_ONE`), and publishes before and after.
 `ThreadDeleter.clean` reads the channel page by page (`conversations.history`, cursor
-pagination) and keeps the messages that carry no `thread_ts` and no `subtype` and that
-`state.json` does not hold as a thread. Of those it deletes the bot's own, and the owner's that
-`commands.parse_bang` reads as a word, each with its author's token as a thread's messages are.
+pagination) and takes the owner's and the bot's messages that carry no `subtype`, are no reply
+of a thread, and that `state.json` does not hold as a thread. One that carries `thread_ts` is
+taken only when `conversations.replies` on it, with `limit=1`, returns its root with no
+`reply_count` (`ThreadDeleter._has_replies`): a thread taken for a leftover would lose its
+root, so no answer, or one with no root, keeps the message. Each is deleted with its author's
+token, as a thread's messages are.
 It shares the deleter's lock, so one clean-up or delete runs at a time. A failure stops it with
 `texts.HOME_CLEAN_FAILED` under the header, and the same click later deletes what is left.
 

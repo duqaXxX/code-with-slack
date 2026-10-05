@@ -351,9 +351,9 @@ HOME_DELETE_DENY = "Cancel"
 HOME_CLEAN = "Clean up"
 HOME_CLEAN_TITLE = "Clean up this channel?"
 HOME_CLEAN_TEXT = (
-    "Deletes from #{channel} what sits outside a thread: the commands you typed there (!stop, "
-    "!status and the like) and the bot's own messages, its answers to them included. Threads "
-    "and your other messages stay. This cannot be undone and can take a few minutes."
+    "Deletes from #{channel} what sits outside a thread: your messages there that have no "
+    "reply, commands like !stop included, and the bot's own messages. Every thread that has a "
+    "reply stays. This cannot be undone and can take a few minutes."
 )
 HOME_CLEAN_CONFIRM = "Clean up"
 HOME_CHANNEL_CLEANING = ":hourglass_flowing_sand: cleaning up…"
