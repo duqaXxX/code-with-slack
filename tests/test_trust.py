@@ -500,6 +500,20 @@ async def test_a_registration_that_is_no_regular_file_registers_nothing(
     assert not await asyncio.wait_for(workspace_trusted(worktree, home), 2)
 
 
+@pytest.mark.parametrize("tail", [b"\r\n", b"\n\n"], ids=["crlf", "two-line-feeds"])
+async def test_a_registration_git_reads_through_other_line_ends_registers_the_worktree(
+    tail: bytes, app: Path, home: Path
+) -> None:
+    # git strips trailing whitespace from `worktrees/<id>/gitdir` (worktree.c,
+    # get_linked_worktree, v2.54.0); a file ending in a CRLF is still the worktree's.
+    registration = app / ".git" / "worktrees" / "wt" / "gitdir"
+    registration.write_bytes(registration.read_bytes().rstrip(b"\n") + tail)
+    listed = git(app, "worktree", "list", "--porcelain")
+    assert "wt" in listed and "prunable" not in listed  # the control: git still has it
+    trust(home, app)  # the folder `code` no longer, or it would cover the worktree as a folder
+    assert await workspace_trusted(app.parent / "wt", home)
+
+
 async def test_stricter_than_git_where_only_the_names_match(app: Path, home: Path) -> None:
     # Two readings kept on the closed side: entries named like a git dir's that git itself
     # rejects, and a `.git` symlink that names nothing.
@@ -670,6 +684,32 @@ def a_git_dir_whose_commondir_is_a_symlink_to_an_outside_name(work: Path, outsid
     return folder
 
 
+def a_commondir_naming_an_outside_repository_by_a_link_and_a_line_end(
+    work: Path, outside: Path, name: str, line_end: bytes
+) -> Path:
+    # git strips every trailing CR and LF from `commondir` (setup.c, get_common_dir_noenv,
+    # v2.54.0), so `link` is the name whatever follows it; a name that kept its `\r` would be a
+    # path that does not exist, which resolves to a place inside the folder.
+    folder = work / name
+    (folder / ".git").mkdir(parents=True)
+    (folder / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (folder / ".git" / "link").symlink_to(outside / ".git")
+    (folder / ".git" / "commondir").write_bytes(b"link" + line_end)
+    return folder
+
+
+def a_git_dir_whose_commondir_ends_in_crlf(work: Path, outside: Path) -> Path:
+    return a_commondir_naming_an_outside_repository_by_a_link_and_a_line_end(
+        work, outside, "commondir-crlf", b"\r\n"
+    )
+
+
+def a_git_dir_whose_commondir_ends_in_two_line_feeds(work: Path, outside: Path) -> Path:
+    return a_commondir_naming_an_outside_repository_by_a_link_and_a_line_end(
+        work, outside, "commondir-lflf", b"\n\n"
+    )
+
+
 LEADING_OUTSIDE = [
     a_gitfile_naming_an_outside_git_dir,
     a_gitfile_naming_an_outside_git_dir_by_a_relative_path,
@@ -677,6 +717,8 @@ LEADING_OUTSIDE = [
     a_worktree_of_an_outside_checkout_moved_in_by_hand,
     a_git_dir_whose_commondir_names_an_outside_repository,
     a_git_dir_whose_commondir_is_a_symlink_to_an_outside_name,
+    a_git_dir_whose_commondir_ends_in_crlf,
+    a_git_dir_whose_commondir_ends_in_two_line_feeds,
 ]
 
 
@@ -693,6 +735,32 @@ async def test_a_layout_inside_the_folder_that_leads_git_outside_it_is_not_cover
     # The owner's own trust of the folder itself is the first way in, and stays as it was.
     trust(home, work, folder)
     assert await trusted_repository(folder, work, home) is not None
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [a_git_dir_whose_commondir_ends_in_crlf, a_git_dir_whose_commondir_ends_in_two_line_feeds],
+    ids=lambda layout: layout.__name__,
+)
+def test_git_reads_the_common_dir_through_those_line_ends(
+    tmp_path: Path, work: Path, layout: Callable[[Path, Path], Path]
+) -> None:
+    # The control of the layouts above: git itself ends up in the outside repository.
+    outside = committed(tmp_path / "outside").resolve()
+    folder = layout(work, outside)
+    assert git_takes_it_for(folder, "--git-common-dir", outside / ".git")
+
+
+async def test_a_commondir_git_cannot_read_covers_nothing(
+    tmp_path: Path, work: Path, home: Path
+) -> None:
+    # An empty `commondir` is a fatal error in git ("failed to read"): not a layout to guess at.
+    folder = work / "commondir-empty"
+    (folder / ".git").mkdir(parents=True)
+    (folder / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (folder / ".git" / "commondir").write_bytes(b"")
+    assert not git_finds_a_repository(folder)
+    assert await trusted_repository(folder, work, home) is None
 
 
 async def test_a_git_dir_outside_the_folder_that_the_owner_trusted_is_not_a_second_way_in(

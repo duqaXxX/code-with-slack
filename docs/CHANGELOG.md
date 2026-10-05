@@ -9,7 +9,7 @@ All notable changes to this project are documented here. The format follows
 
 - `!open`, sent inside a session's thread: a message with one `Choose a file` button, and
   `!open <path>` or `!open <words>` for a file directly. The button opens a modal with a search
-  field and one radio row for each file (its name in bold, its folder below, at most 10, with a
+  field and one radio row for each file (its name as plain text, its folder below, at most 10, with a
   line above them that says what they are): the files changed in the session, newest first, while
   the field is empty, and the files whose path contains what is typed otherwise, updated on every
   character (`dispatch_action_config` with `on_character_entered`, answered with `views.update`).
@@ -18,17 +18,23 @@ All notable changes to this project are documented here. The format follows
   viewer opens it (a `.md` file with Markdown rendered) with the thread beside it, and the modal
   closes; with no row chosen the modal shows an error (`response_action: "errors"`) and stays. The
   modal opens at once when the rows are ready within one second and is filled by an update
-  otherwise, since a click's `trigger_id` lives 3 seconds. The thread travels in the view's
+  otherwise, since a click's `trigger_id` lives 3 seconds: the listing starts at once, beside the
+  channel check, and the wait is counted from the click. The thread travels in the view's
   `private_metadata` and is resolved to the folder of its own session by every handler; the
   typed characters are checked for the owner and the workspace alone. An update that a newer
-  keystroke has overtaken is never sent (`openfile.ModalUpdates`, ordered by `action_ts`), and
-  one that Slack rejects as outdated (`hash_conflict`) is built again once on the hash of the
-  last write. The new module `openfile` holds the logic. The search reads the folder from disk:
+  keystroke has overtaken is never sent (`openfile.ModalUpdates`, ordered by `action_ts`; no
+  update carries Slack's `hash`, the daemon being the view's only writer). The rows' block id
+  follows the rows and a row counts only when it is among the submitted view's own options, so a
+  choice Slack kept from other rows is never opened. The new module `openfile` holds the logic. The search reads the folder from disk:
   inside a repository git may run in, git's own list (`ls-files`, which leaves out what
   `.gitignore` excludes, as the terminal's `@` file picker does under `respectGitignore`),
   everywhere else a walk of regular files that enters no symlinked folder and no `.git`. A
   listing stops after 2 seconds with what it found and is kept for 30 seconds (3 when
-  incomplete), and at most 16 folders are kept. The changed files come from git, through the
+  incomplete), and at most 16 folders are kept; the repositories found in a folder are kept for
+  5 seconds, the lookups run together and git runs in at most 4 repositories at once. A kept
+  listing that finds no match is made again first, and a listing that was cut is said in the
+  answer, never answers "no match" alone and never opens its single match on its own. Typing
+  checks the disk only until the rows are full (past ten the count is the matches by name). The changed files come from git, through the
   footer's git helper (now `footer.run_git`), with commands measured never to write the index
   (git 2.54.0, 2026-10-05): `status` under `--no-optional-locks` and `diff-tree` from where each
   repository's `HEAD` was when the thread started, read from the reflog at the thread's
@@ -36,7 +42,9 @@ All notable changes to this project are documented here. The format follows
   memory, so a restart changes nothing), summed over the repositories of the folder (the one that
   holds it, or those at most two levels below it), with paths from the session's folder; there are
   none when there is no such repository or nothing changed, and they are what is uncommitted or
-  untracked where there is no reflog. The file is opened once (`O_NOFOLLOW`, size from the
+  untracked where there is no reflog; a repository made or cloned after the thread began counts
+  every file (the start is the empty tree). An empty file is refused before any upload. The file
+  is opened once (`O_NOFOLLOW`, size from the
   descriptor, at most 1 MB read) and its bytes are passed to `files_upload_v2`, so a path that
   changes after the check is not followed. A file name over 75 characters is shortened in its
   middle, a folder over 75 from the left, and a path over 150 gets no row and stays reachable by
@@ -200,7 +208,9 @@ All notable changes to this project are documented here. The format follows
   checkout is elsewhere still need their own trust, as does any repository outside the folder.
   So does a repository inside the folder whose `.git` leads out of it (a `.git` file or symlink
   naming a git dir elsewhere, a worktree moved in by hand, a `commondir` naming another
-  repository): the key, the git dir and the common dir must all lie inside.
+  repository): the key, the git dir and the common dir must all lie inside. The small files read
+  for that are cut at their line ends as git cuts them (a `commondir` ending in a CR and LF named
+  another place than git's), and an empty `commondir`, which git refuses, covers nothing.
   `workspace_trusted`, the gate of a session's start and `!bind`, is unchanged. A repository
   that ends up inside the session's folder (a clone made during the session, say) now has git
   run under its own config, filters included, outside the approval prompt.

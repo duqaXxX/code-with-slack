@@ -474,7 +474,10 @@ The search reads the folder from disk, and the changed files come from git. Whic
 the folder has is `openfile.repositories_of`: the one holding the folder when
 `SessionManager.repository` (the footer's own `trusted_repository` lookup, given the session's
 folder) finds it usable, otherwise the usable ones found at most two levels below it, by
-`folders.folders_within`, the walk `!bind` uses, which never enters a repository. Inside one the
+`folders.folders_within`, the walk `!bind` uses, which never enters a repository; the lookups of
+those candidates run together. `Listings.repositories` keeps the answer for a folder for
+`REPOSITORIES_TTL` seconds, so the listing and the changed files of one modal ask once. Where git
+runs in several repositories (the listing, `changed_in`), at most `GIT_CHAINS` run at once. Inside one the
 files come from git, through the footer's `run_git`: `ls-files --cached --others
 --exclude-standard`, which leaves out what `.gitignore` excludes, as the terminal's `@` file
 picker does under `respectGitignore`. Everywhere else `openfile.walk_files` reads the disk:
@@ -488,6 +491,16 @@ a folder being listed waits for that listing (a shielded task, so a request that
 stop it), and at most `LISTING_KEPT` folders are kept, the expired ones removed on
 the next request. Paths are relative to the session's folder.
 
+A kept listing is never the reason for "no match": `Listings.search` lists the folder again
+first when a kept listing finds none, so a file made since is found. The listing it answers from
+says whether it is complete (`Listing.complete`); a search over one that is not carries that into
+its answer (`Found.complete`): `!open <words>` says `texts.OPEN_NO_MATCH_PARTIAL` instead of "no
+match", posts the matches with `texts.OPEN_PARTIAL` instead of opening a single match on its own,
+and the modal adds the same line under its rows. The files that match are checked on disk
+(`regular_files`) only until the rows are full when a modal asks (`limit` of `ROW_LIMIT`), so
+typing costs ten checks and not one for each match; past ten the count in the heading is the
+matches by name, and below ten it is exact. `!open <words>` checks all of them.
+
 The changed files are the union over the same repositories (`openfile.changed_in`): `status`
 under `--no-optional-locks` with `diff-tree` from the repository's start commit to `HEAD`. No
 command writes the index, and `status` does not report a file that was only touched
@@ -497,8 +510,13 @@ started, from HEAD's reflog at the thread's `thread_ts` (`git rev-parse --verify
 HEAD@{<seconds> +0000}`, through `--git-dir`, so a linked worktree reads its own log). It is
 computed when `!open` builds the list and kept nowhere: no handler touches it when a prompt
 arrives, and a daemon restarted any number of times gives the same answer. A reflog that does not
-go back that far gives its oldest entry (git's own answer); with no reflog, or no commit yet,
-there is no start and the list is the uncommitted and untracked files.
+go back that far gives its oldest entry (git's own answer), unless that entry's old value is
+null, which means the repository was made or cloned since the thread began: then the start is the
+empty tree and every file counts (`rev-list -g --until` says whether the log begins after the
+thread, `rev-list -g --count` and `rev-parse HEAD@{<count>}` whether the oldest entry has an old
+value, `hash-object -t tree /dev/null` is the empty tree of the repository's hash algorithm). With
+no reflog, or no commit yet, there is no start and the list is the uncommitted and untracked
+files.
 
 `!open` alone posts a message with one button (`openfile.picker_blocks`, action
 `OPEN_BUTTON_ACTION`); `!open <words>` with several matches posts the count and the same button,
@@ -506,21 +524,26 @@ carrying the words (at most `QUERY_LIMIT` characters) as its value. The click is
 `on_open_choose`: it acknowledges, checks the owner, the workspace and the channel (`admitted`),
 resolves the thread to the folder of its own entry in `state.json` (`slack_app.thread_folder`),
 never the channel's, and opens the modal with `views.open`. The click's `trigger_id` lives 3
-seconds, so the rows are waited for at most `OPEN_WAIT` seconds: when they are ready the modal
-opens with them, else it opens with a line that says the files are being listed and an update
-fills it. The rows come from `slack_app.found_files`: the changed files, newest first, while the
-search field is empty, and `openfile.rank` over the folder's listing otherwise.
+seconds, which the channel check, the wait for the rows and `views.open` share: the owner check
+and the thread's folder are local, so the listing starts before the channel check's two calls to
+Slack, and the rows are waited for until `OPEN_WAIT` seconds after the click came in. When they
+are ready the modal opens with them, else it opens with a line that says the files are being
+listed and an update fills it. The rows come from `slack_app.found_files`: the changed files,
+newest first, while the search field is empty, and `Listings.search` over the folder's listing
+otherwise.
 
 `openfile.modal_view` builds the view: an input block holding the search field (`dispatch_action`
 with `trigger_actions_on: ["on_character_entered"]`, so each character is a `block_actions`
 event) and, when there are rows, an input block holding a radio button group of at most
-`ROW_LIMIT` (10) options, whose label says what the rows are. An option's text is the file name in
-bold (`mrkdwn`, shortened in its middle past 75 characters as Slack counts them, escapes
-included), its description the folder (shortened from the left past 75, left out for a file at the
-root), its value the path; a path over 150 characters gets no row. The two input blocks keep their
-`block_id` and `action_id` in every view, which is what makes Slack keep the typed text through
-`views.update` (the views.update reference, "Preserving input entry"); only the view
-`views.open` takes sets the field's initial value and focus. The thread travels in the view's
+`ROW_LIMIT` (10) options, whose label says what the rows are. An option's text is the file name
+as `plain_text` with `emoji` false (shortened in its middle past 75 characters), so a name is
+never read as formatting; its description is the folder (shortened from the left past 75, left out
+for a file at the root), its value the path; a path over 150 characters gets no row. The search
+field keeps its `block_id` and `action_id` in every view, which is what makes Slack keep the
+typed text through `views.update` (the views.update reference, "Preserving input entry"). The
+same rule keeps the state of the rows' radio group, a chosen row included, so its `block_id` is
+`open_choice_block:<mark>` with a mark of the rows' values: other rows, another id, and the old
+choice is dropped. Only the view `views.open` takes sets the field's initial value and focus. The thread travels in the view's
 `private_metadata` (`openfile.Target`) and comes back untrusted: each handler resolves it to the
 folder of that thread's own session and refuses anything else.
 
@@ -528,24 +551,24 @@ Each typed character reaches `on_open_query`, which checks the owner and the wor
 call to Slack for the channel: it runs once per character, and its rows reach only the owner's own
 modal), reads the text from the action's `value` (else from `view.state.values`) and calls
 `update_modal`. Characters are handled in tasks of their own and their updates can finish in any
-order, and Slack's `hash` cannot decide which wins: it rejects an update built on a view that
-changed since (`hash_conflict`), so of two updates built on the same view the second to land is
-rejected, newer or not. `openfile.ModalUpdates` therefore orders them by the event's `action_ts`
-(the first fill of a slow-opening modal has key 0): `claim` refuses an event not newer than one
-already taken, one update of a view runs at a time (`lock`), and each checks that it is still the
-newest when its turn comes and again before it writes, so an update made stale while it waited is
-never sent. The payload's `view.hash` is passed to `views.update`; when Slack rejects it as
-outdated, the newest update is built again once, on the hash the last write of ours came back
-with. A rejection for any other reason is logged by Slack's error code and dropped. At most
-`MODALS_KEPT` views are tracked.
+order. The daemon is the only writer of its modals, so an update carries no `hash` (optional in
+`views.update`); `openfile.ModalUpdates` orders them by the event's `action_ts` (the first fill of
+a slow-opening modal has key 0): `claim` refuses an event not newer than one already taken, one
+update of a view runs at a time (`lock`), and each checks that it is still the newest when its
+turn comes and again before it writes, so an update made stale while it waited is never sent. A
+rejection by Slack is logged by its error code and dropped. At most `MODALS_KEPT` views are
+tracked, and a view whose modal was submitted (`forget`) is never tracked again.
 
 `Open` is a `view_submission` handled by `on_open_submit`. The answer to Slack is the first thing
 sent and makes no call to it: with no row chosen it is `response_action: "errors"` on the radio
 block, or on the search field when the view has no radio block (nothing to choose from); with a
-row, a plain acknowledgement, which closes the modal. The row's value is untrusted input, and
+row, a plain acknowledgement, which closes the modal. A row counts only when it is among the
+options of the submitted view's own radio block (`openfile.chosen_in`), so a choice Slack kept
+from other rows is none. The row's value is untrusted input, and
 `openfile.read_openable` resolves the links, refuses a path that leaves the folder or is no
 regular file, then opens the resolved path once (`O_NOFOLLOW | O_NONBLOCK`), reads the size from
-that descriptor and reads at most 1 MB from it. Slack gets those bytes
+that descriptor and reads at most 1 MB from it; an empty file is refused before any upload
+(`texts.OPEN_EMPTY`). Slack gets those bytes
 (`files_upload_v2(content=...)`): handing it the path would let its SDK open the path again,
 following links and with no size limit.
 
@@ -589,7 +612,9 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   (`trust.trusted_repository`; the paths resolved, so a symlink that leads elsewhere and a
   worktree whose main checkout is elsewhere are not inside; a `.git` file or symlink naming a git
   dir elsewhere, a worktree moved in by hand and a `commondir` that leads out are not either,
-  since git would read that repository's config).
+  since git would read that repository's config). The small files read there (a `.git` file, a
+  `commondir`, a worktree's `gitdir`) are cut at their line ends as git cuts them, and an empty
+  `commondir`, which git refuses, covers nothing.
   The gate for a session's start and for `!bind` is `workspace_trusted` alone and does not take
   it. Trust is by path, as in Claude Code: a folder placed at a path the owner
   trusted, or at the path of a worktree deleted and not pruned, passes for it, and a repository

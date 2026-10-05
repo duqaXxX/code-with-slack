@@ -105,9 +105,9 @@ def test_ranking_ignores_case_and_leaves_out_what_does_not_contain_the_words() -
     assert rank(["Docs/Setup.md", "src/app.py"], "sETUP.m") == ["Docs/Setup.md"]
 
 
-def test_a_row_names_the_file_in_bold_with_its_folder_below_and_carries_the_path() -> None:
+def test_a_row_names_the_file_with_its_folder_below_and_carries_the_path() -> None:
     assert option("src/app/main.py") == {
-        "text": {"type": "mrkdwn", "text": "*main.py*"},
+        "text": {"type": "plain_text", "text": "main.py", "emoji": False},
         "description": {"type": "plain_text", "text": "src/app"},
         "value": "src/app/main.py",
     }
@@ -116,9 +116,20 @@ def test_a_row_names_the_file_in_bold_with_its_folder_below_and_carries_the_path
 def test_a_file_at_the_root_of_the_folder_has_no_description() -> None:
     # A text object is never empty: there is no folder to say.
     assert option("README.md") == {
-        "text": {"type": "mrkdwn", "text": "*README.md*"},
+        "text": {"type": "plain_text", "text": "README.md", "emoji": False},
         "value": "README.md",
     }
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["__init__.py", "*starred*.md", "~struck~.txt", "a<b>&c.txt", "x`y`.md", "_a_.py", ":tada:.md"],
+)
+def test_a_name_that_reads_as_formatting_is_shown_exactly(name: str) -> None:
+    # Plain text: nothing in a name is markup, so nothing is escaped, bolded or reinterpreted.
+    shown = option(f"pkg/{name}")
+    assert shown is not None and shown["text"]["text"] == name
+    assert shown["text"]["type"] == "plain_text" and shown["text"]["emoji"] is False
 
 
 def test_a_long_file_name_is_shortened_in_its_middle_and_keeps_its_end() -> None:
@@ -126,20 +137,12 @@ def test_a_long_file_name_is_shortened_in_its_middle_and_keeps_its_end() -> None
     shown = option(f"src/{name}")
     assert shown is not None
     text = shown["text"]["text"]
-    assert len(text) == 75 and text.startswith("*aaa") and text.endswith("b.test.py*")
+    assert len(text) == 75 and text.startswith("aaa") and text.endswith("b.test.py")
     assert "…" in text[1:-1]
     assert shown["value"] == f"src/{name}"
-
-
-def test_the_bold_name_is_counted_as_escaped_and_with_its_stars() -> None:
-    # `&` becomes `&amp;` in mrkdwn, and Slack counts the characters it is sent.
-    shown = option("&" * 100)
-    assert shown is not None
-    assert len(shown["text"]["text"]) <= 75
-    assert shown["text"]["text"].startswith("*&amp;") and "…" in shown["text"]["text"]
-    exact = option("n" * 73)  # 73 and the two stars: the limit, nothing cut
-    assert exact is not None and exact["text"]["text"] == f"*{'n' * 73}*"
-    assert option("n" * 74)["text"]["text"] == f"*{'n' * 36}…{'n' * 36}*"  # type: ignore[index]
+    exact = option("n" * 75)  # the limit itself: nothing cut
+    assert exact is not None and exact["text"]["text"] == "n" * 75
+    assert option("n" * 76)["text"]["text"] == f"{'n' * 37}…{'n' * 37}"  # type: ignore[index]
 
 
 def test_a_long_folder_is_shortened_from_the_left() -> None:
@@ -355,9 +358,43 @@ async def test_a_reflog_that_does_not_go_back_that_far_gives_its_oldest_entry(da
     assert await start_commit(repository(dated), started(T0 + 10)) == commit_of(dated, 2)
 
 
-async def test_a_thread_that_started_before_the_first_commit_counts_from_it(dated: Path) -> None:
-    # A repository made after the thread began: git has no earlier entry to give.
-    assert await start_commit(repository(dated), started(T0 + 10)) == commit_of(dated, 2)
+def empty_tree(repo: Path) -> str:
+    """The empty tree of the repository's own hash algorithm, as git computes it."""
+    return git(repo, "hash-object", "-t", "tree", "/dev/null")
+
+
+async def test_a_repository_made_after_the_thread_began_counts_every_file(dated: Path) -> None:
+    # git answers the first commit itself for a time before the log began, so the first commit's
+    # files would never be listed: the start is the empty tree.
+    found = repository(dated)
+    start = await start_commit(found, started(T0 + 10))
+    assert start == empty_tree(dated) and start != commit_of(dated, 2)
+    assert sorted(await changed_since(found, dated, start) or []) == ["c1.py", "c2.py", "c3.py"]
+    # A thread that began once the first commit was made counts from it, as before.
+    assert await start_commit(found, started(T0 + 100)) == commit_of(dated, 2)
+    assert await changed_in(dated, [found], started(T0 + 10)) == ["c1.py", "c2.py", "c3.py"]
+
+
+async def test_a_clone_made_after_the_thread_began_counts_every_file(
+    dated: Path, tmp_path: Path
+) -> None:
+    # The log of a clone starts with `clone: from ...`, whose old value is null as well.
+    clone = tmp_path / "clone"
+    git_at(tmp_path, T0 + 500, "clone", "-q", str(dated), str(clone))
+    found = repository(clone.resolve())
+    assert await start_commit(found, started(T0 + 400)) == empty_tree(clone)
+    assert await start_commit(found, started(T0 + 600)) == commit_of(clone, 0)
+
+
+async def test_the_empty_tree_is_the_one_of_the_repository_s_hash_algorithm(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "sha256"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main", "--object-format=sha256")
+    commit_at(repo, "a.py", T0 + 100)
+    start = await start_commit(repository(repo.resolve()), started(T0 + 10))
+    assert start == empty_tree(repo) and len(start or "") == 64
 
 
 async def test_without_a_reflog_there_is_no_start(tmp_path: Path) -> None:
@@ -562,8 +599,10 @@ async def test_no_command_of_open_writes_the_index_or_leaves_a_lock(
     change(app)
     before = index_state(app)
     found = repository(app)
-    # Each command ran and answered, so that an unchanged index is not a command that failed.
-    assert await start_commit(found, started(T0)) is not None
+    # Each command ran and answered, so that an unchanged index is not a command that failed:
+    # a thread that began before this repository was made runs every command of `start_commit`
+    # (the time, the entries up to it, all the entries, the first one's old value, the empty tree).
+    assert await start_commit(found, started(1)) == empty_tree(app)
     assert await start_commit(found, started(int(time.time()) + 1)) == git(app, "rev-parse", "HEAD")
     await project_files(found, app)
     await project_files(found, app / "sub")
@@ -643,6 +682,27 @@ async def test_a_plain_folder_has_the_usable_repositories_two_levels_below_it(
     assert await roots(work, lookup) == sorted([one, two])
 
 
+async def test_the_repositories_below_a_folder_are_looked_up_together(work: Path) -> None:
+    for name in ("a", "b", "c", "d"):
+        git_init(work / name)
+    active = peak = 0
+
+    async def slow(directory: Path, session_folder: Path) -> Repository | None:
+        nonlocal active, peak
+        if directory == session_folder:
+            return None
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.05)
+        active -= 1
+        return repository(directory)
+
+    assert sorted(r.root for r in await repositories_of(work, slow)) == [
+        work / name for name in ("a", "b", "c", "d")
+    ]
+    assert peak == 4  # not one after the other
+
+
 async def test_a_repository_that_is_not_usable_is_left_out(
     tmp_path: Path, work: Path, lookup: Callable[[Path, Path], Awaitable[Repository | None]]
 ) -> None:
@@ -684,6 +744,10 @@ async def test_a_folder_in_an_untrusted_repository_has_nothing_below_it(
 # --- what the folder offers to search ---
 
 
+async def files_of(listing: Listings, folder: Path) -> list[str]:
+    return (await listing.of(folder)).files
+
+
 def write_all(root: Path, *names: str) -> None:
     for name in names:
         write(root, name)
@@ -698,7 +762,7 @@ async def test_a_plain_folder_is_walked_for_regular_files_only(tmp_path: Path) -
     write_all(plain, ".git/config", "sub/.git/config")
     (plain / "empty-dir").mkdir()
     listing = Listings(any_repository)
-    assert sorted(await listing.of(plain)) == [
+    assert sorted(await files_of(listing, plain)) == [
         ".hidden/d.txt",
         "a.txt",
         "docs/b.md",
@@ -712,13 +776,13 @@ async def test_a_folder_inside_a_repository_lists_what_git_does_not_ignore(app: 
     commit_all(app)
     write_all(app, "src/new.py", ".venv/lib/pkg.py", "debug.log")
     listing = Listings(any_repository)
-    assert sorted(await listing.of(app)) == [
+    assert sorted(await files_of(listing, app)) == [
         ".gitignore",
         "README",
         "src/new.py",
         "src/tracked.py",
     ]
-    assert sorted(await Listings(any_repository).of(app / "src")) == ["new.py", "tracked.py"]
+    assert sorted(await files_of(Listings(any_repository), app / "src")) == ["new.py", "tracked.py"]
 
 
 async def test_the_files_of_nested_repositories_come_from_git_and_the_rest_from_disk(
@@ -733,7 +797,7 @@ async def test_the_files_of_nested_repositories_come_from_git_and_the_rest_from_
     write_all(deep, "x.txt", ".venv/y.txt")
     write_all(work, "notes.md", "a/readme.md")
     listing = Listings(lookup)
-    assert sorted(await listing.of(work)) == [
+    assert sorted(await files_of(listing, work)) == [
         "a/b/c/.venv/y.txt",
         "a/b/c/x.txt",
         "a/readme.md",
@@ -755,7 +819,7 @@ async def test_the_files_of_a_repository_that_is_not_usable_are_walked(
     async def trusted(directory: Path, session_folder: Path) -> Repository | None:
         return await trusted_repository(directory, session_folder, home)
 
-    assert await Listings(trusted).of(work) == ["plain.txt"]
+    assert await files_of(Listings(trusted), work) == ["plain.txt"]
 
 
 def test_a_walk_that_runs_out_of_time_returns_what_it_found_and_says_so(tmp_path: Path) -> None:
@@ -771,20 +835,20 @@ async def test_a_listing_is_kept_for_a_short_time(tmp_path: Path) -> None:
     write_all(plain, "first.txt")
     now = [100.0]
     listing = Listings(any_repository, ttl=10.0, clock=lambda: now[0])
-    assert await listing.of(plain) == ["first.txt"]
+    assert await files_of(listing, plain) == ["first.txt"]
     write_all(plain, "second.txt")
     now[0] = 105.0
-    assert await listing.of(plain) == ["first.txt"]  # a keystroke later: not walked again
+    assert await files_of(listing, plain) == ["first.txt"]  # a keystroke later: not walked again
     now[0] = 111.0
-    assert sorted(await listing.of(plain)) == ["first.txt", "second.txt"]
+    assert sorted(await files_of(listing, plain)) == ["first.txt", "second.txt"]
 
 
 async def test_the_listings_of_two_folders_are_kept_apart(tmp_path: Path) -> None:
     write_all(tmp_path / "x", "x.txt")
     write_all(tmp_path / "y", "y.txt")
     listing = Listings(any_repository)
-    assert await listing.of(tmp_path / "x") == ["x.txt"]
-    assert await listing.of(tmp_path / "y") == ["y.txt"]
+    assert await files_of(listing, tmp_path / "x") == ["x.txt"]
+    assert await files_of(listing, tmp_path / "y") == ["y.txt"]
 
 
 async def test_a_lookup_that_fails_lists_nothing_and_never_raises(tmp_path: Path) -> None:
@@ -794,7 +858,7 @@ async def test_a_lookup_that_fails_lists_nothing_and_never_raises(tmp_path: Path
     plain = tmp_path / "plain"
     write_all(plain, "a.txt")
     listing = Listings(broken)
-    assert await listing.of(plain) == []
+    assert await files_of(listing, plain) == []
 
 
 async def test_concurrent_requests_for_one_folder_share_one_listing(tmp_path: Path) -> None:
@@ -808,7 +872,7 @@ async def test_concurrent_requests_for_one_folder_share_one_listing(tmp_path: Pa
         return None
 
     listing = Listings(slow)
-    answers = await asyncio.gather(*(listing.of(plain) for _ in range(6)))
+    answers = await asyncio.gather(*(files_of(listing, plain) for _ in range(6)))
     assert answers == [["a.txt"]] * 6
     assert len(lookups) == 1  # one listing, not six
 
@@ -824,12 +888,12 @@ async def test_a_request_that_gives_up_does_not_stop_the_listing_the_others_wait
         return None
 
     listing = Listings(slow)
-    waiting = asyncio.create_task(listing.of(plain))
+    waiting = asyncio.create_task(files_of(listing, plain))
     with pytest.raises(TimeoutError):
         async with asyncio.timeout(0.02):
-            await listing.of(plain)  # a keystroke whose time ran out
+            await files_of(listing, plain)  # a keystroke whose time ran out
     assert await waiting == ["a.txt"]
-    assert await listing.of(plain) == ["a.txt"]  # kept: the listing finished all the same
+    assert await files_of(listing, plain) == ["a.txt"]  # kept: the listing finished all the same
 
 
 async def test_a_listing_that_ran_out_of_time_is_not_kept_as_complete(tmp_path: Path) -> None:
@@ -842,15 +906,23 @@ async def test_a_listing_that_ran_out_of_time_is_not_kept_as_complete(tmp_path: 
         lookups.append(directory)
         return None
 
-    # A budget of nothing: the walk is out of time at once and finds nothing.
-    listing = Listings(counting, ttl=30.0, partial_ttl=3.0, budget=0.0, clock=lambda: now[0])
-    assert await listing.of(plain) == []
+    # A budget of nothing: the walk is out of time at once and finds nothing. The repositories are
+    # not kept, so that each lookup counts a listing made.
+    listing = Listings(
+        counting,
+        ttl=30.0,
+        partial_ttl=3.0,
+        repositories_ttl=0.0,
+        budget=0.0,
+        clock=lambda: now[0],
+    )
+    assert await files_of(listing, plain) == []
     built = len(lookups)
     now[0] = 102.0
-    await listing.of(plain)
+    await files_of(listing, plain)
     assert len(lookups) == built  # a moment later: the same answer, not asked again
     now[0] = 104.0
-    await listing.of(plain)
+    await files_of(listing, plain)
     assert len(lookups) > built  # past its short life: built again, not kept for 30 seconds
 
 
@@ -867,12 +939,12 @@ async def test_a_listing_whose_git_part_timed_out_is_not_kept_as_complete(
     stub.chmod(0o755)
     path = os.environ["PATH"]
     monkeypatch.setenv("PATH", f"{stub.parent}:{path}")
-    assert await listing.of(app) == []  # git did not answer in time
+    assert await files_of(listing, app) == []  # git did not answer in time
     monkeypatch.setenv("PATH", path)
     now[0] = 102.0
-    assert await listing.of(app) == []  # still the short-lived answer
+    assert await files_of(listing, app) == []  # still the short-lived answer
     now[0] = 104.0
-    assert "src/found.py" in await listing.of(app)  # asked again, long before 30 seconds
+    assert "src/found.py" in await files_of(listing, app)  # asked again, long before 30 seconds
 
 
 async def test_a_listing_that_fails_is_not_kept(tmp_path: Path) -> None:
@@ -886,9 +958,9 @@ async def test_a_listing_that_fails_is_not_kept(tmp_path: Path) -> None:
         return None
 
     listing = Listings(flaky)
-    assert await listing.of(plain) == []
+    assert await files_of(listing, plain) == []
     failing[0] = False
-    assert await listing.of(plain) == ["a.txt"]
+    assert await files_of(listing, plain) == ["a.txt"]
 
 
 async def test_the_kept_listings_are_bounded_and_the_expired_ones_go(tmp_path: Path) -> None:
@@ -897,12 +969,103 @@ async def test_the_kept_listings_are_bounded_and_the_expired_ones_go(tmp_path: P
     folders = [tmp_path / f"f{i}" for i in range(5)]
     for folder in folders:
         write_all(folder, "a.txt")
-        await listing.of(folder)
-    assert len(listing._kept) == 3
-    assert set(listing._kept) == set(folders[2:])  # the oldest went first
+        await files_of(listing, folder)
+    assert len(listing._listed._kept) == 3
+    assert set(listing._listed._kept) == set(folders[2:])  # the oldest went first
     now[0] = 111.0
-    await listing.of(folders[0])
-    assert set(listing._kept) == {folders[0]}  # the others expired and were removed
+    await files_of(listing, folders[0])
+    assert set(listing._listed._kept) == {folders[0]}  # the others expired and were removed
+
+
+async def test_a_kept_listing_that_finds_no_match_is_made_again_before_saying_so(
+    tmp_path: Path,
+) -> None:
+    plain = tmp_path / "plain"
+    write_all(plain, "first.txt")
+    now = [100.0]
+    listing = Listings(any_repository, ttl=30.0, clock=lambda: now[0])
+    assert (await listing.search(plain, "second")).paths == []
+    write_all(plain, "second.txt")
+    now[0] = 105.0  # well inside the listing's life
+    found = await listing.search(plain, "second")
+    assert found.paths == ["second.txt"] and found.count == 1 and found.complete
+    # A match in the kept listing is answered from it, as before: no second walk.
+    write_all(plain, "second-more.txt")
+    now[0] = 106.0
+    assert (await listing.search(plain, "second")).paths == ["second.txt"]
+
+
+async def test_a_listing_made_for_the_request_is_not_made_again(tmp_path: Path) -> None:
+    plain = tmp_path / "plain"
+    write_all(plain, "first.txt")
+    walks: list[Path] = []
+
+    async def counting(directory: Path, session_folder: Path) -> Repository | None:
+        walks.append(directory)
+        return None
+
+    listing = Listings(counting, repositories_ttl=0.0)
+    assert (await listing.search(plain, "nothing")).paths == []
+    assert len(walks) == 1  # nothing was kept: the one listing is fresh, and it is the answer
+
+
+async def test_a_search_says_whether_the_listing_it_came_from_was_cut(tmp_path: Path) -> None:
+    plain = tmp_path / "plain"
+    write_all(plain, "first.txt")
+    cut = Listings(any_repository, budget=0.0)  # out of time at once
+    found = await cut.search(plain, "first")
+    assert found.paths == [] and not found.complete
+    whole = await Listings(any_repository).search(plain, "first")
+    assert whole.paths == ["first.txt"] and whole.complete
+
+
+async def test_a_search_checks_files_only_until_the_limit_and_counts_by_name_past_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plain = tmp_path / "plain"
+    write_all(plain, *(f"part{i:02}.csv" for i in range(40)))
+    listing = Listings(any_repository)
+    checked: list[str] = []
+    real = openfile._locate
+
+    def counting(folder: Path, relative: str) -> object:
+        checked.append(relative)
+        return real(folder, relative)
+
+    monkeypatch.setattr(openfile, "_locate", counting)
+    found = await listing.search(plain, "part", limit=10)
+    assert len(found.paths) == 10 and found.count == 40 and len(checked) == 10
+    checked.clear()
+    # Fewer files than the limit: every match was checked, so the count is exact.
+    few = await listing.search(plain, "part0", limit=20)
+    assert len(few.paths) == 10 and few.count == 10 and len(checked) == 10
+    checked.clear()
+    assert len((await listing.search(plain, "part")).paths) == 40  # no limit: all are checked
+    assert len(checked) == 40
+
+
+async def test_the_repositories_of_a_folder_are_kept_for_a_short_while(
+    work: Path, lookup: Callable[[Path, Path], Awaitable[Repository | None]]
+) -> None:
+    git_init(work / "one")
+    asked: list[Path] = []
+    now = [100.0]
+
+    async def counting(directory: Path, session_folder: Path) -> Repository | None:
+        asked.append(directory)
+        return await lookup(directory, session_folder)
+
+    listing = Listings(counting, repositories_ttl=5.0, clock=lambda: now[0])
+    first = await listing.repositories(work)
+    made = len(asked)
+    assert [r.root for r in first] == [work / "one"] and made > 0
+    now[0] = 104.0
+    assert await listing.repositories(work) == first and len(asked) == made
+    assert await listing.repositories(work, again=True) == first and len(asked) > made
+    made = len(asked)
+    now[0] = 110.0
+    await listing.repositories(work)
+    assert len(asked) > made  # past its short life
 
 
 async def test_a_nested_repository_s_index_is_relative_to_the_folder_above_it(
@@ -915,6 +1078,58 @@ async def test_a_nested_repository_s_index_is_relative_to_the_folder_above_it(
 
 
 # --- the changes of every repository of the folder ---
+
+
+def fake_repository(root: Path) -> Repository:
+    return Repository(root, root, root / ".git", False)
+
+
+async def test_git_runs_in_at_most_a_few_repositories_at_once(
+    work: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(openfile, "GIT_CHAINS", 3)
+    active = peak = done = 0
+
+    async def fake_start(repository: Repository, thread_ts: str) -> str | None:
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.02)
+        return None
+
+    async def fake_changes(repository: Repository, folder: Path, start: str | None) -> list[str]:
+        nonlocal active, done
+        active -= 1
+        done += 1
+        return [f"{repository.root.name}.py"]
+
+    monkeypatch.setattr(openfile, "start_commit", fake_start)
+    monkeypatch.setattr(openfile, "changed_since", fake_changes)
+    repositories = [fake_repository(work / f"r{i:02}") for i in range(12)]
+    found = await changed_in(work, repositories, started(T0))
+    assert done == 12 and len(found) == 12
+    assert peak == 3
+
+
+async def test_the_listing_runs_git_in_at_most_a_few_repositories_at_once(
+    work: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(openfile, "GIT_CHAINS", 2)
+    active = peak = 0
+
+    async def listed(repository: Repository, folder: Path) -> list[str] | None:
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.02)
+        active -= 1
+        return [f"{repository.root.name}/a.py"]
+
+    monkeypatch.setattr(openfile, "project_files", listed)
+    repositories = [fake_repository(work / f"r{i:02}") for i in range(8)]
+    files, complete = await openfile.folder_files(work, repositories, budget=5.0)
+    assert complete and len(files) == 8
+    assert peak == 2
 
 
 def dated_repo(path: Path) -> Path:
@@ -959,8 +1174,8 @@ async def test_a_repository_whose_git_fails_adds_no_changes(work: Path) -> None:
     write(one, "a.py")
     found = repository(one)
     broken = Repository(found.root, found.key, work / "no-such-git-dir", False)
-    assert await changed_in(work, [broken], started(T0)) == []
-    assert await changed_in(work, [found], started(T0)) == ["one/a.py"]
+    assert await changed_in(work, [broken], started(T0 + 150)) == []
+    assert await changed_in(work, [found], started(T0 + 150)) == ["one/a.py"]
 
 
 async def test_no_repository_has_no_changes(work: Path) -> None:
@@ -1001,6 +1216,16 @@ def test_several_matches_are_counted_and_the_button_carries_the_words() -> None:
     assert len(long["value"]) == 200
 
 
+def test_one_match_is_said_in_the_singular_and_a_cut_listing_is_said_last() -> None:
+    section, _ = matches_blocks("set", ["a/setup.py"])
+    assert section["text"]["text"] == "*1 file matches* `set`"
+    cut = matches_blocks("set", ["a/setup.py", "b/setup.md"], complete=False)
+    assert [b["type"] for b in cut] == ["section", "actions", "context"]
+    assert cut[2]["elements"][0]["text"] == texts.OPEN_PARTIAL
+    too_long = matches_blocks("zz", ["e" * 200], complete=False)
+    assert [b["type"] for b in too_long] == ["section", "context", "context"]
+
+
 def test_matches_none_of_which_fits_a_row_are_said_and_get_no_button() -> None:
     blocks = matches_blocks("zz", ["d" * 151 + "/a.py", "e" * 200])
     assert [b["type"] for b in blocks] == ["section", "context"]
@@ -1033,7 +1258,7 @@ def test_the_modal_is_a_search_field_and_a_row_for_each_changed_file() -> None:
             "dispatch_action_config": {"trigger_actions_on": ["on_character_entered"]},
         },
     }
-    assert choice["type"] == "input" and choice["block_id"] == CHOICE_BLOCK
+    assert choice["type"] == "input" and choice["block_id"] == choice_id(view)
     assert choice["label"]["text"] == "Changed in this session (2), newest first"
     assert choice.get("dispatch_action", False) is False  # a row chosen sends nothing
     radio = choice["element"]
@@ -1053,20 +1278,40 @@ def test_the_search_field_holds_the_words_only_in_the_opening_view() -> None:
     assert "initial_value" not in modal_view(TARGET, "", [], opening=True)["blocks"][0]["element"]
 
 
-def test_the_ids_of_the_input_blocks_do_not_change_from_one_view_to_the_next() -> None:
-    def ids(view: dict[str, object]) -> list[tuple[str, str]]:
-        return [
-            (b["block_id"], b["element"]["action_id"])  # type: ignore[index]
-            for b in blocks_of(view, "input")
-        ]
+def choice_id(view: dict[str, object]) -> str:
+    (block,) = [b for b in blocks_of(view, "input") if b["block_id"] != QUERY_BLOCK]
+    return block["block_id"]  # type: ignore[return-value]
+
+
+def test_the_search_field_keeps_its_ids_from_one_view_to_the_next() -> None:
+    # Slack keeps what was typed in an input block whose ids do not change (views.update).
+    def ids(view: dict[str, object]) -> tuple[str, str]:
+        (field,) = [b for b in blocks_of(view, "input") if b["block_id"] == QUERY_BLOCK]
+        return field["block_id"], field["element"]["action_id"]  # type: ignore[return-value,index]
 
     first = modal_view(TARGET, "", ["a.py"], opening=True)
-    for later in (modal_view(TARGET, "a", ["a.py", "b/a.py"]), modal_view(TARGET, "ab", ["ab.py"])):
-        assert (
-            ids(later) == ids(first) == [(QUERY_BLOCK, QUERY_ACTION), (CHOICE_BLOCK, CHOICE_ACTION)]
-        )
+    for later in (modal_view(TARGET, "a", ["a.py", "b/a.py"]), modal_view(TARGET, "zz", [])):
+        assert ids(later) == ids(first) == (QUERY_BLOCK, QUERY_ACTION)
+
+
+def test_the_rows_get_an_id_that_follows_them_so_a_selection_is_not_kept_across_other_rows() -> (
+    None
+):
+    # Slack keeps the state of an input block whose ids stay, a chosen row included, even when
+    # the rows it chose from are gone (views.update, "Preserving input entry"): the id follows
+    # the rows, as the Home tab's controls follow their choice.
+    first = modal_view(TARGET, "", ["a.py", "b.py"])
+    assert choice_id(first).startswith(f"{CHOICE_BLOCK}:")
+    assert choice_id(modal_view(TARGET, "a", ["a.py", "b.py"])) == choice_id(first)  # same rows
+    assert choice_id(modal_view(TARGET, "", ["a.py", "c.py"])) != choice_id(first)
+    assert choice_id(modal_view(TARGET, "", ["b.py", "a.py"])) != choice_id(first)
+    assert len(choice_id(first)) <= 255
+    (group,) = [b for b in blocks_of(first, "input") if b["block_id"] != QUERY_BLOCK]
+    assert group["element"]["action_id"] == CHOICE_ACTION  # type: ignore[index]
     # With no row there is no radio group (Slack wants an option in it), and the field stays.
-    assert ids(modal_view(TARGET, "zz", [])) == [(QUERY_BLOCK, QUERY_ACTION)]
+    assert [b["block_id"] for b in blocks_of(modal_view(TARGET, "zz", []), "input")] == [
+        QUERY_BLOCK
+    ]
 
 
 def test_what_the_rows_are_is_said_above_them() -> None:
@@ -1102,6 +1347,21 @@ def test_more_than_ten_matches_list_ten_and_say_how_many_there_are() -> None:
     assert len(choice["element"]["options"]) == 10
     assert choice["label"]["text"] == "137 files match"
     assert capped["elements"][0]["text"] == texts.OPEN_MATCHES_CAPPED.format(shown=10, count=137)
+
+
+def test_the_count_past_the_rows_is_the_one_given_and_a_cut_listing_is_said() -> None:
+    paths = [f"data/part{i:03}.csv" for i in range(10)]
+    view = modal_view(TARGET, "part", paths, count=137)
+    _, choice, capped = view["blocks"]
+    assert choice["label"]["text"] == "137 files match"
+    assert capped["elements"][0]["text"] == texts.OPEN_MATCHES_CAPPED.format(shown=10, count=137)
+    cut = modal_view(TARGET, "part", paths[:1], complete=False)
+    assert [b["type"] for b in cut["blocks"]] == ["input", "input", "context"]
+    assert cut["blocks"][2]["elements"][0]["text"] == texts.OPEN_PARTIAL
+    nothing = modal_view(TARGET, "zz", [], complete=False)
+    assert [b["type"] for b in nothing["blocks"]] == ["input", "context", "context"]
+    assert nothing["blocks"][2]["elements"][0]["text"] == texts.OPEN_PARTIAL
+    assert modal_view(TARGET, "zz", []) == modal_view(TARGET, "zz", [], complete=True)
 
 
 def test_matches_none_of_which_fits_a_row_get_the_line_and_no_group() -> None:
@@ -1153,31 +1413,60 @@ def test_metadata_that_is_not_ours_is_refused(text: object) -> None:
         Target.load(text)
 
 
-def state(**blocks: dict[str, object]) -> dict[str, object]:
-    return blocks
+def picked(block_id: str, value: str | None) -> dict[str, object]:
+    """The state of a radio group as form-submit.json records it: `selected_option` is None when
+    nothing was chosen."""
+    option_ = (
+        None if value is None else {"text": {"type": "plain_text", "text": value}, "value": value}
+    )
+    return {block_id: {CHOICE_ACTION: {"type": "radio_buttons", "selected_option": option_}}}
 
 
-def test_the_typed_text_and_the_row_chosen_are_read_from_the_views_state() -> None:
-    # The shapes form-submit.json records: a radio group and a plain-text input, `None` untouched.
-    values = {
-        QUERY_BLOCK: {QUERY_ACTION: {"type": "plain_text_input", "value": "setup"}},
-        CHOICE_BLOCK: {
-            CHOICE_ACTION: {"type": "radio_buttons", "selected_option": {"value": "docs/a.md"}}
-        },
-    }
-    assert typed_in(values) == "setup" and chosen_in(values) == "docs/a.md"
-    untouched = {
-        QUERY_BLOCK: {QUERY_ACTION: {"type": "plain_text_input", "value": None}},
-        CHOICE_BLOCK: {CHOICE_ACTION: {"type": "radio_buttons", "selected_option": None}},
-    }
-    assert typed_in(untouched) == "" and chosen_in(untouched) is None
+def view_with(blocks: list[dict[str, object]], values: dict[str, object]) -> dict[str, object]:
+    return {"blocks": blocks, "state": {"values": values}}
+
+
+def test_the_typed_text_is_read_from_the_views_state() -> None:
+    values = {QUERY_BLOCK: {QUERY_ACTION: {"type": "plain_text_input", "value": "setup"}}}
+    assert typed_in(values) == "setup"
+    untouched = {QUERY_BLOCK: {QUERY_ACTION: {"type": "plain_text_input", "value": None}}}
+    assert typed_in(untouched) == ""
+
+
+def test_the_row_chosen_is_read_from_the_views_state() -> None:
+    shown = modal_view(TARGET, "", ["docs/a.md", "b.md"])
+    block = choice_id(shown)
+    assert chosen_in(view_with(shown["blocks"], picked(block, "docs/a.md"))) == "docs/a.md"  # type: ignore[arg-type]
+    assert chosen_in(view_with(shown["blocks"], picked(block, None))) is None  # type: ignore[arg-type]
+
+
+def test_a_row_that_the_view_no_longer_shows_is_never_chosen() -> None:
+    # Slack kept the state of a radio group across an update; the rows have changed since.
+    older = modal_view(TARGET, "", ["old.md", "other.md"])
+    newer = modal_view(TARGET, "n", ["new.md"])
+    blocks = newer["blocks"]  # type: ignore[assignment]
+    # The selection sits under the id the older rows had: no such block is in this view.
+    assert chosen_in(view_with(blocks, picked(choice_id(older), "old.md"))) is None
+    # Under the id of the rows shown, but for a row that is not among them.
+    assert chosen_in(view_with(blocks, picked(choice_id(newer), "old.md"))) is None
+    # Under the id of the rows shown, and one of them: the control.
+    assert chosen_in(view_with(blocks, picked(choice_id(newer), "new.md"))) == "new.md"
 
 
 @pytest.mark.parametrize(
-    "values", [None, [], {}, {QUERY_BLOCK: None}, {CHOICE_BLOCK: {CHOICE_ACTION: 1}}]
+    "view",
+    [
+        None,
+        [],
+        {},
+        {"blocks": None, "state": None},
+        {"blocks": [None, 1, {"block_id": 5}], "state": {"values": {}}},
+        {"blocks": [{"block_id": f"{CHOICE_BLOCK}:x", "element": []}], "state": {"values": {}}},
+    ],
 )
-def test_a_state_of_a_shape_slack_does_not_send_reads_as_nothing(values: object) -> None:
-    assert typed_in(values) == "" and chosen_in(values) is None
+def test_a_view_of_a_shape_slack_does_not_send_chooses_nothing(view: object) -> None:
+    assert chosen_in(view) is None
+    assert typed_in(None) == "" and typed_in([]) == "" and typed_in({QUERY_BLOCK: None}) == ""
 
 
 # --- the updates of an open modal ---
@@ -1208,11 +1497,30 @@ def test_only_a_few_views_are_tracked_and_the_oldest_go_first() -> None:
     updates = ModalUpdates(limit=2)
     for view_id in ("V1", "V2", "V3"):
         updates.claim(view_id, 1.0)
-        updates.remember(view_id, f"hash-{view_id}")
-    assert updates.hash_of("V1") is None and updates.hash_of("V3") == "hash-V3"
     assert not updates.current("V1", 1.0) and updates.current("V2", 1.0)
-    updates.forget("V2")
-    assert updates.hash_of("V2") is None and updates.claim("V2", 1.0)
+    # One dropped to make room is not closed: a keystroke of it may still come.
+    assert updates.claim("V1", 2.0)
+
+
+def test_a_view_that_was_forgotten_is_never_tracked_again() -> None:
+    # The modal was submitted: an update still on its way (an event delivered after the Submit)
+    # must not put the view back into the maps.
+    updates = ModalUpdates()
+    updates.claim("V1", 1.0)
+    held = updates.lock("V1")
+    updates.forget("V1")
+    assert not updates.current("V1", 1.0)
+    assert not updates.claim("V1", 5.0) and not updates.current("V1", 5.0)
+    assert updates.lock("V1") is not held  # a lock of its own, kept nowhere
+    assert "V1" not in updates._newest and "V1" not in updates._locks
+
+
+def test_only_a_few_forgotten_views_are_remembered() -> None:
+    updates = ModalUpdates(limit=2)
+    for view_id in ("V1", "V2", "V3"):
+        updates.forget(view_id)
+    assert len(updates._gone) == 2
+    assert updates.claim("V1", 1.0) and not updates.claim("V3", 1.0)  # the oldest is let go
 
 
 def test_a_view_has_one_lock() -> None:

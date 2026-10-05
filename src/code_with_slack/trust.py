@@ -18,7 +18,9 @@ Which repository a folder belongs to is read from the filesystem and never asked
 git would answer from the folder's own `.git` file, `commondir` and `core.worktree`, which
 whoever supplied the folder wrote. The layout read here is the one gitrepository-layout(5) and
 git-worktree(1) document, and the bare-repository test follows `is_git_directory` in git's
-setup.c (git 2.54.0, read 2026-10-04).
+setup.c (git 2.54.0, read 2026-10-04). The three small files it reads (a `.git` file, a
+`commondir`, a worktree's `gitdir`) are cut at their line ends as git cuts them (setup.c and
+worktree.c, git 2.54.0, read 2026-10-06): a different cut names a different path than git's.
 """
 
 import asyncio
@@ -118,7 +120,9 @@ def _main_checkout(git_dir: Path, root: Path) -> Path | None:
     if content is None:
         return None
     # An absolute path, or one relative to this directory (`git worktree add --relative-paths`).
-    registered = git_dir / os.fsdecode(content.removesuffix(b"\n"))
+    # git strips trailing whitespace here (`strbuf_rtrim`, worktree.c get_linked_worktree), and
+    # whitespace is those four bytes for it (ctype.c, `sane_ctype`).
+    registered = git_dir / os.fsdecode(content.rstrip(b" \t\r\n"))
     # The two folders are compared as directories on disk: the same one whatever the case or
     # the Unicode form git wrote, another one for a name one space longer. Not the `.git` files:
     # a file can be hard-linked into a second folder.
@@ -250,14 +254,15 @@ def _inside(path: Path, folder: Path) -> bool:
 def _common_dir(git_dir: Path) -> Path | None:
     """The common git dir of `git_dir`: the directory its `commondir` file names, as git reads it
     (relative to `git_dir`), else `git_dir` itself. None when the file cannot be read as git
-    would, so the answer is never a guess."""
+    would, so the answer is never a guess: git dies on an empty `commondir`, and it strips every
+    trailing CR and LF from a name (`get_common_dir_noenv`, setup.c, v2.54.0)."""
     if not os.path.lexists(git_dir / "commondir"):
         return git_dir
     content = _regular_file(git_dir / "commondir")
-    if content is None:
+    if not content:
         return None
     try:
-        return Path(os.path.realpath(git_dir / os.fsdecode(content.removesuffix(b"\n"))))
+        return Path(os.path.realpath(git_dir / os.fsdecode(content.rstrip(b"\r\n"))))
     except (OSError, ValueError, RecursionError):
         return None
 
