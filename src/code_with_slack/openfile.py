@@ -32,6 +32,7 @@ untracked files. `tests/test_openfile.py` repeats the measurement on every run.
 """
 
 import asyncio
+import json
 import logging
 import os
 import posixpath
@@ -40,6 +41,7 @@ import stat
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
 from typing import Any
@@ -53,32 +55,42 @@ from code_with_slack.trust import Repository
 
 logger = logging.getLogger(__name__)
 
-# The picker's two menus and the message of several matches; a choice in either select is the
-# same act, so the three are answered by one handler.
-OPEN_CHANGED_ACTION = "open_changed"
-OPEN_SEARCH_ACTION = "open_search"
-OPEN_MATCH_ACTION = "open_match"
-OPEN_ACTIONS = (OPEN_CHANGED_ACTION, OPEN_SEARCH_ACTION, OPEN_MATCH_ACTION)
-# The picker's actions block carries its thread: a `block_suggestion` payload documents no thread
-# field, and the options it asks for are the folder's of that thread.
-BLOCK_PREFIX = "open-"
-THREAD_TS = re.compile(r"^\d+\.\d+$")
+# The button that opens the picker's modal (in the `!open` message and in the one of several
+# matches), the modal's callback id, and the ids of its two input blocks. The search field keeps
+# its block and action ids across every update: Slack keeps what was typed in an input block
+# whose ids do not change (views.update reference, read 2026-10-05).
+OPEN_BUTTON_ACTION = "open_choose"
+OPEN_FORM = "open_form"
+QUERY_BLOCK = "open_query_block"
+QUERY_ACTION = "open_query"
+CHOICE_BLOCK = "open_choice_block"
+CHOICE_ACTION = "open_choice"
 # Slack's documented limit for a snippet: `snippet_too_large` on `files.getUploadURLExternal`
 # (docs.slack.dev/reference/methods/files.getUploadURLExternal, read 2026-10-05).
 SNIPPET_LIMIT = 1 << 20
-# Block Kit's limits (select menu element and option object, read 2026-10-05).
-OPTION_ROWS = 100
+# Block Kit's limits, read 2026-10-05: a radio button group holds 10 options (radio button group
+# element); an option's `text` and its `description` 75 characters, its `value` 150 (option
+# object); a modal's `private_metadata` 3000 characters, its title, submit and close text 24, and
+# it holds 100 blocks (modal views).
+ROW_LIMIT = 10
 TEXT_LIMIT = 75
+DESCRIPTION_LIMIT = 75
 VALUE_LIMIT = 150
-# Slack wants the options of a typed query within 3 seconds: a listing stops at LISTING_BUDGET
-# and answers with what it found, SUGGEST_TIMEOUT backs it up. A folder's listing is kept for
-# LISTING_TTL (LISTING_PARTIAL_TTL when it is not complete), so the keystrokes of one query do not
-# walk the folder again; LISTING_KEPT folders are kept at most.
-SUGGEST_TIMEOUT = 2.5
+# The words a search carries: typed in the field, or in a button's value from `!open <words>`.
+QUERY_LIMIT = 200
+# A click waits this long for the rows before the modal opens without them: the click's
+# `trigger_id` lives 3 seconds (views.open reference, read 2026-10-05), and the rows are put in
+# by an update when they come later.
+OPEN_WAIT = 1.0
+# A folder's listing is kept for LISTING_TTL (LISTING_PARTIAL_TTL when it is not complete), so
+# the keystrokes of one search do not walk the folder again, and a listing stops at
+# LISTING_BUDGET with what it found; LISTING_KEPT folders are kept at most. MODALS_KEPT modals
+# are tracked at most (`ModalUpdates`).
 LISTING_BUDGET = 2.0
 LISTING_TTL = 30.0
 LISTING_PARTIAL_TTL = 3.0
 LISTING_KEPT = 16
+MODALS_KEPT = 16
 
 # Answers for a repository: the one holding a directory, usable for a session started in a folder
 # (`code_with_slack.trust.trusted_repository`, whose arguments they are).
@@ -486,21 +498,53 @@ async def changed_in(folder: Path, repositories: list[Repository], thread_ts: st
     )
 
 
+def _middle(text: str, room: int) -> str:
+    """`text` cut in its middle with `…` to `room` characters, its end kept longer than its
+    start so an extension stays."""
+    if len(text) <= room:
+        return text
+    end = (room - 1) // 2 + (room - 1) % 2
+    return f"{text[: room - 1 - end]}…{text[len(text) - end :]}"
+
+
+def _bold(name: str) -> str:
+    """The file's name in mrkdwn bold, within TEXT_LIMIT as Slack counts it: `*`, the name as
+    written (`&`, `<` and `>` escaped, which makes each of them longer) and `*`. The room the
+    name gets is found by trying: a name is at most VALUE_LIMIT characters."""
+    for room in range(len(name), 0, -1):
+        text = f"*{shown_as_written(_middle(name, room))}*"
+        if len(text) <= TEXT_LIMIT:
+            return text
+    return "*…*"
+
+
+def fits(path: str) -> bool:
+    """Whether a path can be an option's value; the file stays reachable by `!open <path>`."""
+    return len(path) <= VALUE_LIMIT
+
+
 def option(path: str) -> dict[str, Any] | None:
-    """A menu option for a path: its text shortened from the left with `…` past TEXT_LIMIT, the
-    path itself as the value. None when the value cannot fit (the file stays reachable by
-    `!open <path>`)."""
-    if len(path) > VALUE_LIMIT:
+    """A row for a path: the file's name in bold (shortened in its middle past TEXT_LIMIT), its
+    folder below it (shortened from the left past DESCRIPTION_LIMIT, left out for a file at the
+    root of the session's folder), the path itself as the value. None when the value cannot
+    fit."""
+    if not fits(path):
         return None
-    text = path if len(path) <= TEXT_LIMIT else "…" + path[-(TEXT_LIMIT - 1) :]
-    return {"text": _plain(text), "value": path}
+    folder, _, name = path.rpartition("/")
+    row: dict[str, Any] = {"text": {"type": "mrkdwn", "text": _bold(name)}, "value": path}
+    if folder:
+        shown = (
+            folder if len(folder) <= DESCRIPTION_LIMIT else "…" + folder[-(DESCRIPTION_LIMIT - 1) :]
+        )
+        row["description"] = _plain(shown)
+    return row
 
 
 def options(paths: Iterable[str]) -> list[dict[str, Any]]:
-    """The first OPTION_ROWS paths that make an option."""
+    """The first ROW_LIMIT paths that make a row."""
     found: list[dict[str, Any]] = []
     for path in paths:
-        if len(found) >= OPTION_ROWS:
+        if len(found) >= ROW_LIMIT:
             break
         if (shown := option(path)) is not None:
             found.append(shown)
@@ -511,72 +555,209 @@ def _plain(text: str) -> dict[str, str]:
     return {"type": "plain_text", "text": text}
 
 
-def _title() -> dict[str, Any]:
-    return {"type": "section", "text": {"type": "mrkdwn", "text": texts.OPEN_TITLE}}
+@dataclass(frozen=True)
+class Target:
+    """The thread a modal belongs to, carried by the modal itself (`private_metadata`). It comes
+    back from Slack and is untrusted: the handlers resolve it to the folder of that thread's own
+    session and refuse anything else."""
+
+    channel: str
+    thread_ts: str
+
+    def dump(self) -> str:
+        return json.dumps({"c": self.channel, "t": self.thread_ts}, separators=(",", ":"))
+
+    @classmethod
+    def load(cls, text: object) -> "Target":
+        """Raises `ValueError` for anything `dump` did not write."""
+        if not isinstance(text, str):
+            raise ValueError("no metadata")
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            raise ValueError("not an object")
+        channel, thread_ts = data.get("c"), data.get("t")
+        if not isinstance(channel, str) or not isinstance(thread_ts, str):
+            raise ValueError("no thread")
+        return cls(channel, thread_ts)
 
 
-def picker_blocks(thread_ts: str, changed: list[str], count: int) -> list[dict[str, Any]]:
-    """The picker: a menu of the files changed in the session (`count` of them, `changed` the
-    ones to offer; left out when none can be) and a search over the folder's files."""
-    elements: list[dict[str, Any]] = []
-    if shown := options(changed):
-        elements.append(
-            {
-                "type": "static_select",
-                "action_id": OPEN_CHANGED_ACTION,
-                "placeholder": _plain(texts.OPEN_CHANGED.format(count=count)),
-                "options": shown,
-            }
-        )
-    elements.append(
-        {
-            "type": "external_select",
-            "action_id": OPEN_SEARCH_ACTION,
-            "placeholder": _plain(texts.OPEN_SEARCH),
-        }
-    )
+def _field(values: object, block: str, action: str) -> dict[str, Any]:
+    """The state of one element in a view's `state.values` (block id, then action id), `{}` for
+    any shape Slack does not send."""
+    found = values.get(block) if isinstance(values, dict) else None
+    element = found.get(action) if isinstance(found, dict) else None
+    return element if isinstance(element, dict) else {}
+
+
+def typed_in(values: object) -> str:
+    """The text in the search field, from a view's `state.values`; `""` when there is none."""
+    value = _field(values, QUERY_BLOCK, QUERY_ACTION).get("value")
+    return value if isinstance(value, str) else ""
+
+
+def chosen_in(values: object) -> str | None:
+    """The value of the row chosen, from a view's `state.values`; None when none is."""
+    option_ = _field(values, CHOICE_BLOCK, CHOICE_ACTION).get("selected_option")
+    value = option_.get("value") if isinstance(option_, dict) else None
+    return value if isinstance(value, str) and value else None
+
+
+def _choose_button(words: str) -> dict[str, Any]:
+    button: dict[str, Any] = {
+        "type": "button",
+        "action_id": OPEN_BUTTON_ACTION,
+        "text": _plain(texts.OPEN_BUTTON),
+    }
+    if words:
+        button["value"] = words[:QUERY_LIMIT]
+    return button
+
+
+def picker_blocks() -> list[dict[str, Any]]:
+    """What `!open` alone posts: the button that opens the modal, and the way to open by name."""
     return [
-        _title(),
-        {"type": "actions", "block_id": f"{BLOCK_PREFIX}{thread_ts}", "elements": elements},
+        {"type": "section", "text": {"type": "mrkdwn", "text": texts.OPEN_TITLE}},
+        {"type": "actions", "elements": [_choose_button("")]},
         context_block(texts.OPEN_BY_NAME),
     ]
 
 
 def matches_blocks(words: str, found: list[str]) -> list[dict[str, Any]]:
-    """Several files match `words`: one menu of them, and a line when more than a menu holds, or
-    when none can be an option (the line alone)."""
-    shown = options(found)
+    """Several files match `words`: how many, and the button that opens the modal with `words`
+    in its field; or, when no path is short enough to be a row, the line that says so."""
+    heading = {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": texts.OPEN_MATCHES.format(count=len(found), words=shown_as_written(words)),
+        },
+    }
+    if not any(fits(path) for path in found):
+        return [heading, context_block(texts.OPEN_MATCHES_TOO_LONG)]
+    return [heading, {"type": "actions", "elements": [_choose_button(words)]}]
+
+
+def modal_view(
+    target: Target, words: str, paths: list[str] | None, *, opening: bool = False
+) -> dict[str, Any]:
+    """The picker's modal for `target`: the search field holding `words`, and one row for each of
+    the first ROW_LIMIT of `paths`, which are the session's changed files (newest first) while
+    `words` is empty and the files matching it otherwise; None while they are still being
+    listed. `opening` is the view `views.open` takes: it alone sets the field's initial value
+    and focus, since an update keeps what was typed through the field's ids and must not
+    restate it."""
+    field: dict[str, Any] = {
+        "type": "plain_text_input",
+        "action_id": QUERY_ACTION,
+        "max_length": QUERY_LIMIT,
+        "placeholder": _plain(texts.OPEN_QUERY_HINT),
+        "dispatch_action_config": {"trigger_actions_on": ["on_character_entered"]},
+    }
+    if opening:
+        field["focus_on_load"] = True
+        if words:
+            field["initial_value"] = words
     blocks: list[dict[str, Any]] = [
         {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": texts.OPEN_MATCHES.format(count=len(found), words=shown_as_written(words)),
-            },
-        },
-        {
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "static_select",
-                    "action_id": OPEN_MATCH_ACTION,
-                    "placeholder": _plain(texts.OPEN_MATCH_PLACEHOLDER),
-                    "options": shown,
-                }
-            ],
-        },
+            "type": "input",
+            "block_id": QUERY_BLOCK,
+            "dispatch_action": True,
+            "optional": True,
+            "label": _plain(texts.OPEN_QUERY_LABEL),
+            "element": field,
+        }
     ]
-    if not shown:
-        # Every path is too long for an option: a menu with no options would not open.
-        return [blocks[0], context_block(texts.OPEN_MATCHES_TOO_LONG)]
-    if len(found) > len(shown):
-        blocks.append(
-            context_block(texts.OPEN_MATCHES_CAPPED.format(shown=len(shown), count=len(found)))
-        )
-    return blocks
+    if paths is None:
+        blocks.append(context_block(texts.OPEN_LOADING))
+    else:
+        rows = options(paths)
+        if words:
+            heading = (
+                texts.OPEN_ROWS_MATCH_ONE if len(paths) == 1 else texts.OPEN_ROWS_MATCH
+            ).format(count=len(paths))
+        elif paths:
+            heading = texts.OPEN_ROWS_CHANGED.format(count=len(paths))
+        else:
+            heading = texts.OPEN_TYPE_A_NAME
+        if rows:
+            blocks.append(
+                {
+                    "type": "input",
+                    "block_id": CHOICE_BLOCK,
+                    "optional": True,
+                    "label": _plain(heading),
+                    "element": {
+                        "type": "radio_buttons",
+                        "action_id": CHOICE_ACTION,
+                        "options": rows,
+                    },
+                }
+            )
+        else:
+            blocks.append(context_block(heading))
+        if len(paths) > len(rows):
+            blocks.append(
+                context_block(
+                    texts.OPEN_MATCHES_CAPPED.format(shown=len(rows), count=len(paths))
+                    if rows
+                    else texts.OPEN_MATCHES_TOO_LONG
+                )
+            )
+    return {
+        "type": "modal",
+        "callback_id": OPEN_FORM,
+        "private_metadata": target.dump(),
+        "title": _plain(texts.OPEN_MODAL_TITLE),
+        "submit": _plain(texts.OPEN_MODAL_SUBMIT),
+        "close": _plain(texts.OPEN_MODAL_CLOSE),
+        "blocks": blocks,
+    }
 
 
-def thread_of(block_id: str) -> str | None:
-    """The thread a picker's block id names, or None for any other block."""
-    thread_ts = block_id.removeprefix(BLOCK_PREFIX)
-    return thread_ts if block_id.startswith(BLOCK_PREFIX) and THREAD_TS.match(thread_ts) else None
+class ModalUpdates:
+    """Which update of an open modal may still be written, so that an older one never overwrites
+    a newer one. Each keystroke reaches the daemon as its own `block_actions` event, handled in
+    its own task, and answers can finish in any order. Slack's `hash` alone cannot decide it: it
+    rejects an update built on a view that changed since, whichever of two updates built on the
+    same view lands second, newer or not (modals reference, read 2026-10-05). So an update takes
+    a `key` that orders it (the event's `action_ts`; 0 for the first fill), and:
+
+    - `claim` refuses a key that is not newer than one already taken;
+    - `lock` lets one update of a view run at a time, and `current` says, once its turn has
+      come and again before it writes, whether it is still the newest;
+    - `remember` keeps the hash each write of ours came back with, which is the view's own
+      state after it, for the update that was built on a view older than that.
+
+    At most `limit` modals are tracked, the oldest dropped first."""
+
+    def __init__(self, limit: int = MODALS_KEPT) -> None:
+        self._limit = limit
+        self._newest: dict[str, float] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._hashes: dict[str, str] = {}
+
+    def claim(self, view_id: str, key: float) -> bool:
+        """Takes `key` as the newest of the view; False when one as new was taken already."""
+        if key <= self._newest.get(view_id, float("-inf")):
+            return False
+        self._newest.pop(view_id, None)
+        self._newest[view_id] = key
+        while len(self._newest) > self._limit:
+            self.forget(next(iter(self._newest)))
+        return True
+
+    def current(self, view_id: str, key: float) -> bool:
+        return self._newest.get(view_id) == key
+
+    def lock(self, view_id: str) -> asyncio.Lock:
+        return self._locks.setdefault(view_id, asyncio.Lock())
+
+    def remember(self, view_id: str, view_hash: str) -> None:
+        self._hashes[view_id] = view_hash
+
+    def hash_of(self, view_id: str) -> str | None:
+        return self._hashes.get(view_id)
+
+    def forget(self, view_id: str) -> None:
+        for kept in (self._newest, self._locks, self._hashes):
+            kept.pop(view_id, None)

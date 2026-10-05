@@ -7,32 +7,44 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- `!open`, sent inside a session's thread: a message with a menu of the files changed in the
-  session and a search menu over the folder's files, and `!open <path>` or `!open <words>` for a
-  file directly. The chosen file is shared into the thread with `files_upload_v2`, so Slack's own
-  file viewer opens it (a `.md` file with Markdown rendered) with the thread beside it. The new
-  module `openfile` holds the logic. The search reads the folder from disk: inside a repository
-  git may run in, git's own list (`ls-files`, which leaves out what `.gitignore` excludes, as the
-  terminal's `@` file picker does under `respectGitignore`), everywhere else a walk of regular
-  files that enters no symlinked folder and no `.git`. A listing stops after 2 seconds with what
-  it found and is kept for 30 seconds. The changed files come from git, through the footer's git
-  helper (now `footer.run_git`), with commands measured never to write the index (git 2.54.0,
-  2026-10-05): `status` under `--no-optional-locks` and `diff-tree` from where each repository's
-  `HEAD` was when the thread started, read from the reflog at the thread's `thread_ts`
-  (`openfile.start_commit`, `rev-parse HEAD@{<seconds> +0000}`; nothing is kept in memory, so a
-  restart changes nothing), summed over the repositories of the folder (the one that holds it, or
-  those at most two levels below it), with paths from the session's folder; they are left out
-  when there is none or nothing changed, and are what is uncommitted or untracked where there is
-  no reflog. The file is opened once (`O_NOFOLLOW`, size from the descriptor, at most 1 MB read)
-  and its bytes are passed to `files_upload_v2`, so a path that changes after the check is not
-  followed. A search that Slack stops waiting for finishes and serves the next keystrokes, an
-  incomplete listing is kept for 3 seconds instead of 30, and at most 16 folders are kept. The search is an
-  `external_select`, answered through `app.options` over Socket Mode, which needs nothing in the
-  manifest. A file over 1 MB, a path that leaves the folder and a click or a query from anyone
-  but the owner are refused. The bot needs the new scope `files:write`: an installed app is
-  reinstalled from `slack-app-manifest.json` (`docs/setup.md`, Part 1). The guide and `!help`
-  list the word, and the guide is now longer than the notification text Slack shows for a
-  message (3,000 characters), so that text is its first 3,000.
+- `!open`, sent inside a session's thread: a message with one `Choose a file` button, and
+  `!open <path>` or `!open <words>` for a file directly. The button opens a modal with a search
+  field and one radio row for each file (its name in bold, its folder below, at most 10, with a
+  line above them that says what they are): the files changed in the session, newest first, while
+  the field is empty, and the files whose path contains what is typed otherwise, updated on every
+  character (`dispatch_action_config` with `on_character_entered`, answered with `views.update`).
+  Several matches of `!open <words>` post the count with the same button, whose modal holds the
+  words. `Open` shares the chosen file into the thread with `files_upload_v2`, so Slack's own file
+  viewer opens it (a `.md` file with Markdown rendered) with the thread beside it, and the modal
+  closes; with no row chosen the modal shows an error (`response_action: "errors"`) and stays. The
+  modal opens at once when the rows are ready within one second and is filled by an update
+  otherwise, since a click's `trigger_id` lives 3 seconds. The thread travels in the view's
+  `private_metadata` and is resolved to the folder of its own session by every handler; the
+  typed characters are checked for the owner and the workspace alone. An update that a newer
+  keystroke has overtaken is never sent (`openfile.ModalUpdates`, ordered by `action_ts`), and
+  one that Slack rejects as outdated (`hash_conflict`) is built again once on the hash of the
+  last write. The new module `openfile` holds the logic. The search reads the folder from disk:
+  inside a repository git may run in, git's own list (`ls-files`, which leaves out what
+  `.gitignore` excludes, as the terminal's `@` file picker does under `respectGitignore`),
+  everywhere else a walk of regular files that enters no symlinked folder and no `.git`. A
+  listing stops after 2 seconds with what it found and is kept for 30 seconds (3 when
+  incomplete), and at most 16 folders are kept. The changed files come from git, through the
+  footer's git helper (now `footer.run_git`), with commands measured never to write the index
+  (git 2.54.0, 2026-10-05): `status` under `--no-optional-locks` and `diff-tree` from where each
+  repository's `HEAD` was when the thread started, read from the reflog at the thread's
+  `thread_ts` (`openfile.start_commit`, `rev-parse HEAD@{<seconds> +0000}`; nothing is kept in
+  memory, so a restart changes nothing), summed over the repositories of the folder (the one that
+  holds it, or those at most two levels below it), with paths from the session's folder; there are
+  none when there is no such repository or nothing changed, and they are what is uncommitted or
+  untracked where there is no reflog. The file is opened once (`O_NOFOLLOW`, size from the
+  descriptor, at most 1 MB read) and its bytes are passed to `files_upload_v2`, so a path that
+  changes after the check is not followed. A file name over 75 characters is shortened in its
+  middle, a folder over 75 from the left, and a path over 150 gets no row and stays reachable by
+  `!open <path>`. A file over 1 MB, a path that leaves the folder and a click, a typed character
+  or a submit from anyone but the owner are refused. The bot needs the new scope `files:write`:
+  an installed app is reinstalled from `slack-app-manifest.json` (`docs/setup.md`, Part 1). The
+  guide and `!help` list the word, and the guide is now longer than the notification text Slack
+  shows for a message (3,000 characters), so that text is its first 3,000.
 - Cleaning up a channel from the Home tab (issue #146), with the optional `SLACK_USER_TOKEN`:
   in edit mode a **Clean up** button beside each channel's name, with a confirmation dialog
   that says what it deletes. `ThreadDeleter.clean` reads the channel's history and deletes what

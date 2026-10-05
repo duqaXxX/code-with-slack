@@ -56,9 +56,9 @@ An app created before `files:read`, `files:write` or `reactions:write` was added
 too: on the app's **OAuth & Permissions** page add the missing bot scope, then reinstall the app
 to the workspace. Without `files:read`, every attached file is refused with `HTTP 302`; without
 `files:write`, `!open` answers that it needs the scope; without `reactions:write`, the status
-reaction is silently skipped (logged, never surfaced). The search menu of `!open` needs nothing
-more in the manifest: Socket Mode delivers its requests over the same connection, and the
-manifest's Options Load URL belongs to the HTTP mode.
+reaction is silently skipped (logged, never surfaced). The modal of `!open` needs nothing
+more in the manifest: its clicks, typed characters and submit arrive as interactivity events over
+the same Socket Mode connection as the other buttons.
 
 The line under a thread (`Working…`, `1 shell still running`) is Slack's thread status
 (`assistant.threads.setStatus`), which Slack's reference lists under `chat:write`. When Slack
@@ -522,8 +522,8 @@ top-level, not as a reply:
 | `!status` | The channel's directory, then every live session of it, each linked to its thread, busy, waiting or idle, its bypass and running tasks, and its folder when it moved elsewhere | That session's directory, session id, the command that continues it in the terminal, its mode, the folder it works in when it moved elsewhere, then the footer's values one per line, in an ephemeral message |
 | `!stop` | Stops every running session of the channel and its background tasks, and denies its pending approvals; the answer is `Stopped what was running in this channel.`, or `Nothing is running in this channel.`; each stopped session's root shows ✅ | Stops that session the same way; the answer is `Stopped.`, or `Nothing is running in this session.`, in a message that stays in the thread; ✅ on the session's root. A stop you gave is not an error, so it never shows ❌ |
 | `!help [text]` | Lists code-with-slack's own words; Claude Code's own commands are listed inside a session's thread | Lists code-with-slack's own words and every command that session offers now, in an ephemeral message; with a text, only the lines whose name or description contains it, for example `!help model` |
-| `!open` | Refused, in a post in the channel: ``Opening a file belongs to one session: send `!open` inside its thread.`` | Posts in the thread a message with a menu of the files changed in the session (left out when nothing changed or the folder holds no repository git may run in) and a search over the folder's files; a file chosen in either is shared into the thread, where Slack opens it in its file viewer |
-| `!open <path or words>` | Refused, as above | Shares the file at that path, relative to the session's folder, into the thread. Words that are no path open the file whose path contains them, in the same listing as the search, ignoring case; several matches are listed in a menu of up to 100. ``No file matches `<words>`.`` when none does. A path outside the folder, one that is no regular file, and a file over 1 MB are refused with a line only you see; `files:write` missing says so |
+| `!open` | Refused, in a post in the channel: ``Opening a file belongs to one session: send `!open` inside its thread.`` | Posts in the thread a message with a `Choose a file` button. It opens a modal with a search field and up to 10 rows, one for each file (its name in bold, its folder below): the files changed in the session (left out when nothing changed or the folder holds no repository git may run in) while the field is empty, the files whose path contains what you type otherwise, updated on each character. `Open` shares the chosen row into the thread, where Slack opens it in its file viewer, and closes the modal; with no row chosen it says `Choose a file first.` and stays open |
+| `!open <path or words>` | Refused, as above | Shares the file at that path, relative to the session's folder, into the thread. Words that are no path open the file whose path contains them, in the same listing as the search, ignoring case; several matches post ``N files match `<words>` `` with the `Choose a file` button, which opens the modal with the words in its field. ``No file matches `<words>`.`` when none does. A path outside the folder, one that is no regular file, and a file over 1 MB are refused with a line only you see; `files:write` missing says so |
 | `!resume` | Lists the twenty newest sessions of the channel's directory that no thread holds (not of other worktrees), terminal and Slack alike, as a post in the channel, each with the first 8 characters of its session id and a **Resume** button. A session already open in a thread of any channel has no row: the twenty rows are sessions you can resume, and a line under the list counts the open ones (`3 more are open in their own threads.`). A click resumes the session in the thread of your `!resume` message and removes the list from the channel; a list posted before that change answers `This list is out of date: send !resume again for a current one.` | Refused, in an ephemeral message: `!resume works in the channel, not inside a thread.` |
 | `!resume <id or name>` | A Resume click, or the id (its first 8 characters, as the list shows them, or any longer start) or the name (set with `/rename` or generated by Claude Code, and must match one session), resumes that session in the thread of your `!resume` message, with bypass never chosen (the folder's own mode) and no `/effort` level set, whatever it had before; refused when the session is already open in another thread; it never touches or waits on any other thread | Same refusal as above |
 | `!clear` (or `!reset`, `!new`) | Opens a new session (harmless: nothing to clear yet) | Refused: `One thread is one session: send a new message in the channel to start a new one.` |
@@ -541,21 +541,26 @@ and the untracked ones that are not ignored (`git ls-files`), as the `@` file pi
 does with its `respectGitignore` setting at its default; everywhere else the folder is walked:
 regular files only, no symlinked folder entered, no `.git` entered. A repository deeper than two
 levels is walked like any folder. A listing stops after 2 seconds with the files found so far,
-and is kept for 30 seconds, so a folder is not walked again on every keystroke. A search that is
-still running when Slack stops waiting finishes anyway and answers the next keystrokes, and a
-listing that ran out of time or lost a repository's git list is kept for 3 seconds instead of 30.
-The changed-files menu is the union over those repositories, each counted from where its `HEAD`
+and is kept for 30 seconds, so a folder is not walked again on every character typed. A listing
+that ran out of time or lost a repository's git list is kept for 3 seconds instead of 30. The
+changed files are the union over those repositories, each counted from where its `HEAD`
 was when the thread started (committed since or not, plus untracked files that are not ignored),
-newest first, at most 100 with the real count in its placeholder, with paths relative to the
-session's folder. The start is read when the menu is built, from the repository's reflog at the
+newest first, with paths relative to the session's folder. The start is read when the modal's rows
+are built, from the repository's reflog at the
 time of the thread's first message (`git rev-parse HEAD@{<seconds> +0000}`), so a restart of the
 daemon changes nothing and a repository that appears during the session counts from its first
 commit. A reflog that does not go back that far gives its oldest entry. Where there is no reflog
-(`core.logAllRefUpdates` off, or no commit yet) the menu holds what is uncommitted or untracked
+(`core.logAllRefUpdates` off, or no commit yet) the rows hold what is uncommitted or untracked
 now. A thread that began on one branch and is now on another counts what the other branch holds
 beyond where `HEAD` was. Every git command is one that never writes the index, so it cannot leave
 an `index.lock` that stops your own `git`. The file is read once, from the path checked, never
 following a link or exceeding 1 MB, and handed to Slack as bytes.
+
+The modal shows 10 rows, the most a Slack radio group holds, with the real count in the line above
+them. A file name over 75 characters is shortened in its middle with `…`, a folder over 75 from the
+left, and a path over 150 characters gets no row (Slack's limit for a value) and stays reachable by
+`!open <path>`. Typing is checked for the owner and the workspace alone, with no call to Slack about
+the channel; the rows go only to your own modal. `Open` also checks the channel.
 
 A word typed in the channel is answered by a normal post in the channel, which stays there. A word
 typed inside a session's thread is answered by an ephemeral message under it: Slack shows it with

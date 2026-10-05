@@ -2,8 +2,13 @@
 which may be shared. Git is the real one on scratch repositories, and the trust lookups the real
 ones over a scratch `~/.claude.json`; nothing is mocked below the daemon's own helpers.
 
-Block shapes follow the Block Kit reference (select menu element, option object, read
-2026-10-05): an option's `text` holds 75 characters and its `value` 150, a select's `options` 100.
+Block shapes follow the Slack reference, read 2026-10-05 on docs.slack.dev: the radio button group
+element (at most 10 options), the option object (`text` and `description` at most 75 characters,
+`value` at most 150, `mrkdwn` text allowed in a radio group), the plain-text input element and the
+dispatch action configuration object (`trigger_actions_on`), the modal views page (at most 100
+blocks, `private_metadata` at most 3000 characters, `title`, `submit` and `close` at most 24), and
+the view interaction payloads (`view.state.values`, as `tests/fixtures/slack/form-submit.json`
+records it for a radio group and a plain-text input).
 """
 
 import asyncio
@@ -19,14 +24,24 @@ import pytest
 
 from code_with_slack import openfile, texts
 from code_with_slack.openfile import (
+    CHOICE_ACTION,
+    CHOICE_BLOCK,
+    OPEN_BUTTON_ACTION,
+    QUERY_ACTION,
+    QUERY_BLOCK,
     Listings,
+    ModalUpdates,
     NotAFile,
+    Target,
     TooLarge,
     changed_in,
     changed_since,
+    chosen_in,
     matches_blocks,
+    modal_view,
     newest_first,
     option,
+    options,
     picker_blocks,
     project_files,
     rank,
@@ -34,6 +49,7 @@ from code_with_slack.openfile import (
     regular_files,
     repositories_of,
     start_commit,
+    typed_in,
     usable,
     walk_files,
 )
@@ -89,25 +105,60 @@ def test_ranking_ignores_case_and_leaves_out_what_does_not_contain_the_words() -
     assert rank(["Docs/Setup.md", "src/app.py"], "sETUP.m") == ["Docs/Setup.md"]
 
 
-def test_an_option_shows_the_path_and_carries_it() -> None:
-    assert option("src/app.py") == {
-        "text": {"type": "plain_text", "text": "src/app.py"},
-        "value": "src/app.py",
+def test_a_row_names_the_file_in_bold_with_its_folder_below_and_carries_the_path() -> None:
+    assert option("src/app/main.py") == {
+        "text": {"type": "mrkdwn", "text": "*main.py*"},
+        "description": {"type": "plain_text", "text": "src/app"},
+        "value": "src/app/main.py",
     }
 
 
-def test_a_long_path_is_shortened_from_the_left_and_keeps_its_value() -> None:
-    path = "a/" * 40 + "tail.py"  # 87 characters
-    shown = option(path)
+def test_a_file_at_the_root_of_the_folder_has_no_description() -> None:
+    # A text object is never empty: there is no folder to say.
+    assert option("README.md") == {
+        "text": {"type": "mrkdwn", "text": "*README.md*"},
+        "value": "README.md",
+    }
+
+
+def test_a_long_file_name_is_shortened_in_its_middle_and_keeps_its_end() -> None:
+    name = "a" * 60 + "-middle-" + "b" * 30 + ".test.py"
+    shown = option(f"src/{name}")
     assert shown is not None
-    assert len(shown["text"]["text"]) == 75
-    assert shown["text"]["text"] == "…" + path[-74:]
-    assert shown["value"] == path
+    text = shown["text"]["text"]
+    assert len(text) == 75 and text.startswith("*aaa") and text.endswith("b.test.py*")
+    assert "…" in text[1:-1]
+    assert shown["value"] == f"src/{name}"
+
+
+def test_the_bold_name_is_counted_as_escaped_and_with_its_stars() -> None:
+    # `&` becomes `&amp;` in mrkdwn, and Slack counts the characters it is sent.
+    shown = option("&" * 100)
+    assert shown is not None
+    assert len(shown["text"]["text"]) <= 75
+    assert shown["text"]["text"].startswith("*&amp;") and "…" in shown["text"]["text"]
+    exact = option("n" * 73)  # 73 and the two stars: the limit, nothing cut
+    assert exact is not None and exact["text"]["text"] == f"*{'n' * 73}*"
+    assert option("n" * 74)["text"]["text"] == f"*{'n' * 36}…{'n' * 36}*"  # type: ignore[index]
+
+
+def test_a_long_folder_is_shortened_from_the_left() -> None:
+    folder = "dir/" * 30  # 120 characters
+    shown = option(f"{folder}x.py")
+    assert shown is not None
+    assert len(shown["description"]["text"]) == 75
+    assert shown["description"]["text"] == "…" + folder.rstrip("/")[-74:]
+    assert shown["value"] == f"{folder}x.py"
 
 
 def test_a_path_whose_value_cannot_fit_is_left_out() -> None:
     assert option("d" * 150) is not None
     assert option("d" * 151) is None
+
+
+def test_a_group_holds_ten_rows_and_skips_the_paths_that_cannot_fit() -> None:
+    paths = ["z" * 151, *[f"f{i}.py" for i in range(30)]]
+    assert [row["value"] for row in options(paths)] == [f"f{i}.py" for i in range(10)]
 
 
 # --- what may be shared ---
@@ -916,53 +967,254 @@ async def test_no_repository_has_no_changes(work: Path) -> None:
     assert await changed_in(work, [], started(T0)) == []
 
 
-# --- the picker ---
+# --- the picker and its modal ---
+
+TARGET = Target("C000CHAN", "1790000000.000001")
 
 
-def selects(blocks: list[dict[str, object]]) -> list[dict[str, object]]:
-    (actions,) = (b for b in blocks if b["type"] == "actions")
-    return list(actions["elements"])  # type: ignore[call-overload]
+def blocks_of(view: dict[str, object], kind: str) -> list[dict[str, object]]:
+    return [b for b in view["blocks"] if b["type"] == kind]  # type: ignore[attr-defined]
 
 
-def test_the_picker_offers_the_changed_files_and_a_search() -> None:
-    blocks = picker_blocks("1790000000.000001", ["a.py", "docs/b.md"], 2)
-    section, actions, context = blocks
+def test_the_message_of_open_alone_is_a_title_one_button_and_the_way_to_open_by_name() -> None:
+    section, actions, context = picker_blocks()
     assert section == {"type": "section", "text": {"type": "mrkdwn", "text": "*Open a file*"}}
-    assert actions["block_id"] == "open-1790000000.000001"
-    changed, search = selects(blocks)
-    assert changed["type"] == "static_select"
-    assert changed["placeholder"] == {"type": "plain_text", "text": "Changed in this session (2)"}
-    assert [o["value"] for o in changed["options"]] == ["a.py", "docs/b.md"]  # type: ignore[index]
-    assert search["type"] == "external_select"
-    assert search["placeholder"] == {"type": "plain_text", "text": "Search any file…"}
+    (button,) = actions["elements"]
+    assert button == {
+        "type": "button",
+        "action_id": OPEN_BUTTON_ACTION,
+        "text": {"type": "plain_text", "text": "Choose a file"},
+    }
     assert context == {
         "type": "context",
         "elements": [{"type": "mrkdwn", "text": "Or type `!open setup` to open a file by name."}],
     }
 
 
-def test_without_changed_files_the_picker_has_the_search_alone() -> None:
-    (search,) = selects(picker_blocks("1790000000.000001", [], 0))
-    assert search["type"] == "external_select"
+def test_several_matches_are_counted_and_the_button_carries_the_words() -> None:
+    section, actions = matches_blocks("set<up", ["a/setup.py", "b/setup.md"])
+    assert section["text"]["text"] == "*2 files match* `set&lt;up`"
+    (button,) = actions["elements"]
+    assert button["text"]["text"] == "Choose a file" and button["value"] == "set<up"
+    # The words a button carries are bounded: its value is at most 2000 characters in Slack.
+    (long,) = matches_blocks("w" * 5000, ["a.py", "b.py"])[1]["elements"]
+    assert len(long["value"]) == 200
 
 
-def test_matches_none_of_which_fits_a_menu_are_said_not_posted_as_an_empty_select() -> None:
+def test_matches_none_of_which_fits_a_row_are_said_and_get_no_button() -> None:
     blocks = matches_blocks("zz", ["d" * 151 + "/a.py", "e" * 200])
     assert [b["type"] for b in blocks] == ["section", "context"]
     assert "2 files match" in blocks[0]["text"]["text"]
     assert blocks[1]["elements"][0]["text"] == texts.OPEN_MATCHES_TOO_LONG
-    # The control: one that fits is a menu again, and the others are counted.
+    # The control: one that fits is a button again.
     fits = matches_blocks("zz", ["d" * 151, "ok.py"])
-    assert [b["type"] for b in fits] == ["section", "actions", "context"]
+    assert [b["type"] for b in fits] == ["section", "actions"]
 
 
-def test_the_changed_menu_holds_a_hundred_and_says_how_many_there_are() -> None:
-    changed_files = [f"f{i:03}.py" for i in range(137)]
-    changed, _ = selects(picker_blocks("1790000000.000001", changed_files, 137))
-    assert len(changed["options"]) == 100  # type: ignore[arg-type]
-    assert changed["placeholder"]["text"] == "Changed in this session (137)"  # type: ignore[index]
+def test_the_modal_is_a_search_field_and_a_row_for_each_changed_file() -> None:
+    view = modal_view(TARGET, "", ["docs/guide.md", "notes.txt"], opening=True)
+    assert view["type"] == "modal" and view["callback_id"] == "open_form"
+    assert view["title"] == {"type": "plain_text", "text": "Open a file"}
+    assert view["close"] == {"type": "plain_text", "text": "Close"}
+    assert view["submit"] == {"type": "plain_text", "text": "Open"}
+    query, choice = view["blocks"]
+    assert query == {
+        "type": "input",
+        "block_id": QUERY_BLOCK,
+        "dispatch_action": True,
+        "optional": True,
+        "label": {"type": "plain_text", "text": "Search any file"},
+        "element": {
+            "type": "plain_text_input",
+            "action_id": QUERY_ACTION,
+            "max_length": 200,
+            "focus_on_load": True,
+            "placeholder": {"type": "plain_text", "text": "Type part of a name"},
+            "dispatch_action_config": {"trigger_actions_on": ["on_character_entered"]},
+        },
+    }
+    assert choice["type"] == "input" and choice["block_id"] == CHOICE_BLOCK
+    assert choice["label"]["text"] == "Changed in this session (2), newest first"
+    assert choice.get("dispatch_action", False) is False  # a row chosen sends nothing
+    radio = choice["element"]
+    assert radio["type"] == "radio_buttons" and radio["action_id"] == CHOICE_ACTION
+    assert [o["value"] for o in radio["options"]] == ["docs/guide.md", "notes.txt"]
+    assert radio["options"][0] == option("docs/guide.md")
 
 
-def test_a_changed_menu_of_paths_that_cannot_fit_is_left_out() -> None:
-    (only,) = selects(picker_blocks("1790000000.000001", ["d" * 151], 1))
-    assert only["type"] == "external_select"
+def test_the_search_field_holds_the_words_only_in_the_opening_view() -> None:
+    # An update keeps what was typed through the field's ids; restating a value there could
+    # put an older text back (views.update reference: "Preserving input entry").
+    opening = modal_view(TARGET, "setup", ["a/setup.py"], opening=True)
+    update = modal_view(TARGET, "setup", ["a/setup.py"])
+    assert opening["blocks"][0]["element"]["initial_value"] == "setup"
+    assert "initial_value" not in update["blocks"][0]["element"]
+    assert "focus_on_load" not in update["blocks"][0]["element"]
+    assert "initial_value" not in modal_view(TARGET, "", [], opening=True)["blocks"][0]["element"]
+
+
+def test_the_ids_of_the_input_blocks_do_not_change_from_one_view_to_the_next() -> None:
+    def ids(view: dict[str, object]) -> list[tuple[str, str]]:
+        return [
+            (b["block_id"], b["element"]["action_id"])  # type: ignore[index]
+            for b in blocks_of(view, "input")
+        ]
+
+    first = modal_view(TARGET, "", ["a.py"], opening=True)
+    for later in (modal_view(TARGET, "a", ["a.py", "b/a.py"]), modal_view(TARGET, "ab", ["ab.py"])):
+        assert (
+            ids(later) == ids(first) == [(QUERY_BLOCK, QUERY_ACTION), (CHOICE_BLOCK, CHOICE_ACTION)]
+        )
+    # With no row there is no radio group (Slack wants an option in it), and the field stays.
+    assert ids(modal_view(TARGET, "zz", [])) == [(QUERY_BLOCK, QUERY_ACTION)]
+
+
+def test_what_the_rows_are_is_said_above_them() -> None:
+    def heading(words: str, paths: list[str]) -> str:
+        view = modal_view(TARGET, words, paths)
+        return view["blocks"][1]["label"]["text"]
+
+    assert heading("", ["a.py"]) == "Changed in this session (1), newest first"
+    assert heading("a", ["a.py", "b/a.py", "c/a.py"]) == "3 files match"
+    assert heading("a", ["a.py"]) == "1 file matches"
+
+
+def test_with_nothing_to_list_a_line_says_what_to_do_and_there_are_no_rows() -> None:
+    nothing = modal_view(TARGET, "", [])
+    assert [b["type"] for b in nothing["blocks"]] == ["input", "context"]
+    assert nothing["blocks"][1]["elements"][0]["text"] == (
+        "No changed files to show. Type part of a name to find a file."
+    )
+    none_match = modal_view(TARGET, "zz", [])
+    assert none_match["blocks"][1]["elements"][0]["text"] == "0 files match"
+
+
+def test_while_the_files_are_listed_the_modal_says_so() -> None:
+    loading = modal_view(TARGET, "", None, opening=True)
+    assert [b["type"] for b in loading["blocks"]] == ["input", "context"]
+    assert loading["blocks"][1]["elements"][0]["text"] == "Looking for files…"
+
+
+def test_more_than_ten_matches_list_ten_and_say_how_many_there_are() -> None:
+    paths = [f"data/part{i:03}.csv" for i in range(137)]
+    view = modal_view(TARGET, "part", paths)
+    _, choice, capped = view["blocks"]
+    assert len(choice["element"]["options"]) == 10
+    assert choice["label"]["text"] == "137 files match"
+    assert capped["elements"][0]["text"] == texts.OPEN_MATCHES_CAPPED.format(shown=10, count=137)
+
+
+def test_matches_none_of_which_fits_a_row_get_the_line_and_no_group() -> None:
+    view = modal_view(TARGET, "e", ["e" * 200])
+    assert [b["type"] for b in view["blocks"]] == ["input", "context", "context"]
+    assert view["blocks"][1]["elements"][0]["text"] == "1 file matches"
+    assert view["blocks"][2]["elements"][0]["text"] == texts.OPEN_MATCHES_TOO_LONG
+
+
+def test_a_view_stays_inside_what_slack_allows() -> None:
+    paths = [
+        path
+        for i in range(20)
+        for path in (
+            f"x{i}/" + "d" * 40 + "/" + "e" * 40 + "/" + "y" * 40 + ".py",  # a folder too long
+            f"x{i}/" + "y" * 80 + ".py",  # a name too long
+        )
+    ]
+    view = modal_view(TARGET, "x", paths, opening=True)
+    assert len(view["blocks"]) <= 100 and len(view["private_metadata"]) <= 3000  # type: ignore[arg-type]
+    for key in ("title", "submit", "close"):
+        assert len(view[key]["text"]) <= 24  # type: ignore[index]
+    for row in view["blocks"][1]["element"]["options"]:  # type: ignore[index]
+        assert len(row["text"]["text"]) <= 75 and len(row["value"]) <= 150
+        assert len(row["description"]["text"]) <= 75
+
+
+def test_the_thread_of_a_modal_comes_back_from_its_metadata() -> None:
+    view = modal_view(TARGET, "", [])
+    assert Target.load(view["private_metadata"]) == TARGET
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        None,
+        5,
+        "",
+        "not json",
+        "[]",
+        "null",
+        '{"c": "C1"}',
+        '{"c": 1, "t": "2"}',
+        '{"c": "C", "t": []}',
+    ],
+)
+def test_metadata_that_is_not_ours_is_refused(text: object) -> None:
+    with pytest.raises(ValueError):
+        Target.load(text)
+
+
+def state(**blocks: dict[str, object]) -> dict[str, object]:
+    return blocks
+
+
+def test_the_typed_text_and_the_row_chosen_are_read_from_the_views_state() -> None:
+    # The shapes form-submit.json records: a radio group and a plain-text input, `None` untouched.
+    values = {
+        QUERY_BLOCK: {QUERY_ACTION: {"type": "plain_text_input", "value": "setup"}},
+        CHOICE_BLOCK: {
+            CHOICE_ACTION: {"type": "radio_buttons", "selected_option": {"value": "docs/a.md"}}
+        },
+    }
+    assert typed_in(values) == "setup" and chosen_in(values) == "docs/a.md"
+    untouched = {
+        QUERY_BLOCK: {QUERY_ACTION: {"type": "plain_text_input", "value": None}},
+        CHOICE_BLOCK: {CHOICE_ACTION: {"type": "radio_buttons", "selected_option": None}},
+    }
+    assert typed_in(untouched) == "" and chosen_in(untouched) is None
+
+
+@pytest.mark.parametrize(
+    "values", [None, [], {}, {QUERY_BLOCK: None}, {CHOICE_BLOCK: {CHOICE_ACTION: 1}}]
+)
+def test_a_state_of_a_shape_slack_does_not_send_reads_as_nothing(values: object) -> None:
+    assert typed_in(values) == "" and chosen_in(values) is None
+
+
+# --- the updates of an open modal ---
+
+
+def test_an_update_older_than_one_already_taken_is_refused() -> None:
+    updates = ModalUpdates()
+    assert updates.claim("V1", 5.0)
+    assert not updates.claim("V1", 4.0)  # arrived late
+    assert not updates.claim("V1", 5.0)  # the same event, delivered twice
+    assert updates.claim("V1", 6.0)
+    assert not updates.current("V1", 5.0) and updates.current("V1", 6.0)
+
+
+def test_each_view_has_its_own_newest_update() -> None:
+    updates = ModalUpdates()
+    assert updates.claim("V1", 9.0) and updates.claim("V2", 1.0)
+    assert updates.current("V1", 9.0) and updates.current("V2", 1.0)
+
+
+def test_the_first_fill_of_a_view_is_older_than_any_keystroke() -> None:
+    updates = ModalUpdates()
+    assert updates.claim("V1", 1790000000.5)
+    assert not updates.claim("V1", 0.0)
+
+
+def test_only_a_few_views_are_tracked_and_the_oldest_go_first() -> None:
+    updates = ModalUpdates(limit=2)
+    for view_id in ("V1", "V2", "V3"):
+        updates.claim(view_id, 1.0)
+        updates.remember(view_id, f"hash-{view_id}")
+    assert updates.hash_of("V1") is None and updates.hash_of("V3") == "hash-V3"
+    assert not updates.current("V1", 1.0) and updates.current("V2", 1.0)
+    updates.forget("V2")
+    assert updates.hash_of("V2") is None and updates.claim("V2", 1.0)
+
+
+def test_a_view_has_one_lock() -> None:
+    updates = ModalUpdates()
+    assert updates.lock("V1") is updates.lock("V1") and updates.lock("V1") is not updates.lock("V2")

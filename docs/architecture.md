@@ -465,7 +465,8 @@ for another reason, it ends with the error line a prompt would get.
 
 `!open` shares a file of a session's folder into its thread, where Slack shows it in its own file
 viewer. `code_with_slack.openfile` holds the logic and `slack_app` the handlers (`open_word`,
-`open_file`, `on_open_choice`, `on_open_search`). The file goes up with
+`open_file`, `open_modal`, `update_modal`, `on_open_choose`, `on_open_query`, `on_open_submit`).
+The file goes up with
 `AsyncWebClient.files_upload_v2` (`files:write`): the file itself, its basename as the name and its
 path from the folder as the title, and nothing posted on success.
 
@@ -482,9 +483,9 @@ roots (git lists those). `openfile.Listings` joins the two for a folder, within
 `LISTING_BUDGET` seconds (what is found by then is the answer), and keeps the result for
 `LISTING_TTL` seconds (`LISTING_PARTIAL_TTL` when it ran out of time or a repository's git list
 failed or timed out, so an incomplete listing is not taken for a complete one) so the keystrokes
-of one query do not walk the folder again; `!open <words>` reads the same listing. A request for
-a folder being listed waits for that listing (a shielded task, so a keystroke whose 3 seconds ran
-out does not stop it), and at most `LISTING_KEPT` folders are kept, the expired ones removed on
+of one search do not walk the folder again; `!open <words>` reads the same listing. A request for
+a folder being listed waits for that listing (a shielded task, so a request that gives up does not
+stop it), and at most `LISTING_KEPT` folders are kept, the expired ones removed on
 the next request. Paths are relative to the session's folder.
 
 The changed files are the union over the same repositories (`openfile.changed_in`): `status`
@@ -499,20 +500,54 @@ arrives, and a daemon restarted any number of times gives the same answer. A ref
 go back that far gives its oldest entry (git's own answer); with no reflog, or no commit yet,
 there is no start and the list is the uncommitted and untracked files.
 
-Slack's search menu is an `external_select`: each keystroke is a `block_suggestion` request that
-Socket Mode delivers over the same connection and that Bolt routes to `app.options`, answered by
-`ack(options=[...])` within 3 seconds. Its payload names the channel and the message and no thread,
-so the picker's actions block carries the thread in its `block_id` (`openfile.BLOCK_PREFIX`); the
-handler checks the owner and the workspace itself, then resolves the thread to the folder of its own
-entry in `state.json` (`slack_app.thread_folder`), never the channel's. A choice in any of the
-three menus is untrusted input resolved the same way: `openfile.read_openable` resolves the links,
-refuses a path that leaves the folder or is no regular file, then opens the resolved path once
-(`O_NOFOLLOW | O_NONBLOCK`), reads the size from that descriptor and reads at most 1 MB from it.
-Slack gets those bytes (`files_upload_v2(content=...)`): handing it the path would let its SDK
-open the path again, following links and with no size limit. When no match fits an option
-(every path over 150 characters) the message says so and offers no menu. An option holds 75
-characters of text (a longer path is shortened from the left with `…`) and 150 of value (a path
-that cannot fit is left out of the menus and stays reachable by `!open <path>`).
+`!open` alone posts a message with one button (`openfile.picker_blocks`, action
+`OPEN_BUTTON_ACTION`); `!open <words>` with several matches posts the count and the same button,
+carrying the words (at most `QUERY_LIMIT` characters) as its value. The click is handled by
+`on_open_choose`: it acknowledges, checks the owner, the workspace and the channel (`admitted`),
+resolves the thread to the folder of its own entry in `state.json` (`slack_app.thread_folder`),
+never the channel's, and opens the modal with `views.open`. The click's `trigger_id` lives 3
+seconds, so the rows are waited for at most `OPEN_WAIT` seconds: when they are ready the modal
+opens with them, else it opens with a line that says the files are being listed and an update
+fills it. The rows come from `slack_app.found_files`: the changed files, newest first, while the
+search field is empty, and `openfile.rank` over the folder's listing otherwise.
+
+`openfile.modal_view` builds the view: an input block holding the search field (`dispatch_action`
+with `trigger_actions_on: ["on_character_entered"]`, so each character is a `block_actions`
+event) and, when there are rows, an input block holding a radio button group of at most
+`ROW_LIMIT` (10) options, whose label says what the rows are. An option's text is the file name in
+bold (`mrkdwn`, shortened in its middle past 75 characters as Slack counts them, escapes
+included), its description the folder (shortened from the left past 75, left out for a file at the
+root), its value the path; a path over 150 characters gets no row. The two input blocks keep their
+`block_id` and `action_id` in every view, which is what makes Slack keep the typed text through
+`views.update` (the views.update reference, "Preserving input entry"); only the view
+`views.open` takes sets the field's initial value and focus. The thread travels in the view's
+`private_metadata` (`openfile.Target`) and comes back untrusted: each handler resolves it to the
+folder of that thread's own session and refuses anything else.
+
+Each typed character reaches `on_open_query`, which checks the owner and the workspace alone (no
+call to Slack for the channel: it runs once per character, and its rows reach only the owner's own
+modal), reads the text from the action's `value` (else from `view.state.values`) and calls
+`update_modal`. Characters are handled in tasks of their own and their updates can finish in any
+order, and Slack's `hash` cannot decide which wins: it rejects an update built on a view that
+changed since (`hash_conflict`), so of two updates built on the same view the second to land is
+rejected, newer or not. `openfile.ModalUpdates` therefore orders them by the event's `action_ts`
+(the first fill of a slow-opening modal has key 0): `claim` refuses an event not newer than one
+already taken, one update of a view runs at a time (`lock`), and each checks that it is still the
+newest when its turn comes and again before it writes, so an update made stale while it waited is
+never sent. The payload's `view.hash` is passed to `views.update`; when Slack rejects it as
+outdated, the newest update is built again once, on the hash the last write of ours came back
+with. A rejection for any other reason is logged by Slack's error code and dropped. At most
+`MODALS_KEPT` views are tracked.
+
+`Open` is a `view_submission` handled by `on_open_submit`. The answer to Slack is the first thing
+sent and makes no call to it: with no row chosen it is `response_action: "errors"` on the radio
+block, or on the search field when the view has no radio block (nothing to choose from); with a
+row, a plain acknowledgement, which closes the modal. The row's value is untrusted input, and
+`openfile.read_openable` resolves the links, refuses a path that leaves the folder or is no
+regular file, then opens the resolved path once (`O_NOFOLLOW | O_NONBLOCK`), reads the size from
+that descriptor and reads at most 1 MB from it. Slack gets those bytes
+(`files_upload_v2(content=...)`): handing it the path would let its SDK open the path again,
+following links and with no size limit.
 
 ## Sessions
 
@@ -928,9 +963,9 @@ and tried again after `home.RETRY_SECONDS`.
 ## Slack handlers
 
 `code_with_slack.slack_app.build_app` registers one listener per inbound path: `message`
-events, the Approve, Deny, Answer and Skip buttons, the setup's Model select and Start, the question form's Next and Submit, and the session index's controls (its filters and Show all, and its New thread link button, which is only acknowledged). The app registers no slash command. Each
+events, the Approve, Deny, Answer and Skip buttons, the setup's Model select and Start, the question form's Next and Submit, `!open`'s Choose a file button with its modal's search field and Open, and the session index's controls (its filters and Show all, and its New thread link button, which is only acknowledged). The app registers no slash command. Each
 acknowledges Slack first, then checks the owner, the workspace and the channel itself; a control
-of the session index comes with no channel and checks the owner and the workspace. A failure
+of the session index, and a character typed in `!open`'s modal, come with no channel and check the owner and the workspace. A failure
 after the checks reaches the owner as an ephemeral error line.
 A link Slack made from a typed address (`<url|label>`, `<url>`) reaches Claude Code as typed; a
 link the owner named reaches it as `label (url)`, so the address is not lost; a mention stays in Slack's form (`<@U…>`), since naming the user would need a

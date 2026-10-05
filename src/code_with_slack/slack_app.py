@@ -6,6 +6,7 @@ import dataclasses
 import logging
 import posixpath
 import re
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import replace
 from datetime import datetime
@@ -82,24 +83,30 @@ from code_with_slack.home import (
     read_filter,
 )
 from code_with_slack.openfile import (
-    OPEN_ACTIONS,
-    OPEN_SEARCH_ACTION,
-    OPTION_ROWS,
-    SUGGEST_TIMEOUT,
+    CHOICE_BLOCK,
+    OPEN_BUTTON_ACTION,
+    OPEN_FORM,
+    OPEN_WAIT,
+    QUERY_ACTION,
+    QUERY_BLOCK,
+    QUERY_LIMIT,
     Listings,
+    ModalUpdates,
     NotAFile,
+    Target,
     TooLarge,
     changed_in,
+    chosen_in,
     matches_blocks,
+    modal_view,
     newest_first,
-    options,
     picker_blocks,
     rank,
     read_openable,
     regular_files,
     repositories_of,
-    thread_of,
     title_of,
+    typed_in,
 )
 from code_with_slack.prompt import Prompt
 from code_with_slack.render.escape import markdown_escape, mrkdwn_escape, shown_as_written
@@ -196,6 +203,15 @@ def click_thread(body: dict[str, Any]) -> str:
     return str(thread_ts)
 
 
+def action_key(action: dict[str, Any]) -> float:
+    """When an interaction happened, from its `action_ts`: what orders the updates it causes.
+    The arrival time for a payload that carries none."""
+    try:
+        return float(action["action_ts"])
+    except (KeyError, TypeError, ValueError):
+        return time.time()
+
+
 def is_clear(command: Passthrough, commands: list[dict[str, Any]]) -> bool:
     """Whether a passthrough is `!clear` under any of its names (`refused_in_thread`, given the
     session's `commands`): refused inside a thread (one thread is one session), left as an
@@ -258,6 +274,8 @@ def build_app(
     app = AsyncApp(client=slack, authorize=authorize)
     # `!open`'s search reads each folder's files from disk, kept for a few seconds.
     listings = Listings(sessions.repository)
+    # The open picker modals, so that an older update of one never overwrites a newer one.
+    modals = ModalUpdates()
 
     async def deliver(
         channel: str,
@@ -930,13 +948,12 @@ def build_app(
         a path, else the file whose name contains them, else the files that do."""
         folder = session.directory
         if not words:
-            await post_picker(channel, thread_ts, folder)
+            await deliver(channel, thread_ts, texts.OPEN_FALLBACK, picker_blocks(), ephemeral=False)
             return
         if await asyncio.to_thread(regular_files, folder, [words]):
             await open_file(channel, thread_ts, folder, words)
             return
-        index = await listings.of(folder)
-        found = await asyncio.to_thread(regular_files, folder, rank(index, words))
+        found = await found_files(folder, thread_ts, words)
         if not found:
             shown = shown_as_written(words)
             await tell_owner(channel, thread_ts, texts.OPEN_NO_MATCH.format(words=shown))
@@ -951,15 +968,21 @@ def build_app(
                 ephemeral=False,
             )
 
-    async def post_picker(channel: str, thread_ts: str, folder: Path) -> None:
-        """The picker, a post in the thread that stays so another file can be chosen after
-        the first. Its changed-files menu is the union over the folder's repositories, left out
-        when there is none or nothing changed."""
-        repositories = await repositories_of(folder, sessions.repository)
-        names = await changed_in(folder, repositories, thread_ts)
-        changed = await asyncio.to_thread(newest_first, folder, names)
-        blocks = picker_blocks(thread_ts, changed, len(changed))
-        await deliver(channel, thread_ts, texts.OPEN_FALLBACK, blocks, ephemeral=False)
+    async def found_files(folder: Path, thread_ts: str, words: str) -> list[str]:
+        """What the picker's rows are chosen from, as paths from `folder`: with no `words`, the
+        files changed in the session, newest first (the union over the folder's repositories,
+        none when there is no repository or nothing changed); else the files whose path contains
+        them, in `rank`'s order. Never raises: a listing that fails is empty."""
+        try:
+            if not words:
+                repositories = await repositories_of(folder, sessions.repository)
+                names = await changed_in(folder, repositories, thread_ts)
+                return await asyncio.to_thread(newest_first, folder, names)
+            index = await listings.of(folder)
+            return await asyncio.to_thread(lambda: regular_files(folder, rank(index, words)))
+        except Exception as exc:
+            logger.warning("could not list files for a search: %s", describe(exc))
+            return []
 
     async def open_file(channel: str, thread_ts: str, folder: Path, relative: str) -> None:
         """Share the file `relative` names under `folder` into the thread, which Slack shows
@@ -997,8 +1020,72 @@ def build_app(
         # Slack clears a thread's status line when the app shares into it.
         sessions.wrote(channel, thread_ts)
 
-    async def on_open_choice(ack: AsyncAck, body: dict[str, Any]) -> None:
-        """A file chosen in the picker's changed-files menu, its search or a list of matches."""
+    async def update_modal(
+        view_id: str,
+        key: float,
+        view_hash: str | None,
+        target: Target,
+        words: str,
+        paths: Callable[[], Awaitable[list[str]]],
+    ) -> None:
+        """Put the rows for `words` into the open modal `view_id`, unless a newer update has been
+        taken meanwhile (`ModalUpdates`): `key` orders them. Slack's `hash` is passed as its
+        reference asks, and an update built on a view that changed since is rejected with
+        `hash_conflict`; when that happens to the newest one (its payload was sent before the
+        last of our own writes landed) it is built again on the hash that write came back with."""
+        if not modals.claim(view_id, key):
+            return
+        async with modals.lock(view_id):
+            if not modals.current(view_id, key):
+                return
+            rows = await paths()
+            if not modals.current(view_id, key):
+                return
+            view = modal_view(target, words, rows)
+            # No hash to pass at all (a payload without one): one try with none.
+            stamps: list[str | None] = [
+                h for h in dict.fromkeys((view_hash, modals.hash_of(view_id))) if h
+            ] or [None]
+            for stamp in stamps:
+                try:
+                    done = await slack.views_update(view_id=view_id, hash=stamp, view=view)
+                except Exception as exc:
+                    error = describe(exc)
+                    if error != "hash_conflict":
+                        logger.warning("could not update the file picker: %s", error)
+                        return
+                    continue
+                if isinstance(new := (done.get("view") or {}).get("hash"), str):
+                    modals.remember(view_id, new)
+                return
+            logger.info("an update of the file picker lost to a newer view")
+
+    async def open_modal(
+        channel: str, thread_ts: str, folder: Path, trigger_id: str, words: str
+    ) -> None:
+        """Open the picker's modal on the click `trigger_id` came with, which lives 3 seconds:
+        with the rows when they come within OPEN_WAIT, else without them and filled by an update."""
+        target = Target(channel, thread_ts)
+        finding = asyncio.create_task(found_files(folder, thread_ts, words))
+        done, _ = await asyncio.wait({finding}, timeout=OPEN_WAIT)
+        paths = finding.result() if done else None
+        try:
+            opened = await slack.views_open(
+                trigger_id=trigger_id, view=modal_view(target, words, paths, opening=True)
+            )
+        except Exception as exc:  # an expired trigger_id, say
+            finding.cancel()
+            message = texts.OPEN_FORM_NOT_OPENED.format(error=describe(exc))
+            await tell_owner(channel, thread_ts, message)
+            return
+        shown = opened.get("view") or {}
+        if paths is None and isinstance(view_id := shown.get("id"), str):
+            # Key 0: any keystroke typed meanwhile is newer.
+            await update_modal(view_id, 0.0, shown.get("hash"), target, words, lambda: finding)
+
+    @app.action(OPEN_BUTTON_ACTION)
+    async def on_open_choose(ack: AsyncAck, body: dict[str, Any]) -> None:
+        """The `Choose a file` button, of `!open` or of its several matches: opens the modal."""
         await ack()
         user, team = interaction_actor(body)
         channel = (body.get("channel") or {}).get("id")
@@ -1006,9 +1093,87 @@ def build_app(
         if not await admitted(user, team, channel, thread_ts):
             return
         assert channel is not None
-        # A menu cleared of its choice sends `null`.
-        relative = (body["actions"][0].get("selected_option") or {}).get("value")
-        if not isinstance(relative, str) or not relative:
+        folder = thread_folder(channel, thread_ts)
+        if folder is None:
+            await tell_owner(channel, thread_ts, texts.NOT_A_SESSION)
+            return
+        # The words only fill the field: what is listed is what they match in this thread's folder.
+        words = body["actions"][0].get("value")
+        words = words.strip()[:QUERY_LIMIT] if isinstance(words, str) else ""
+
+        async def report(text: str) -> None:
+            await tell_owner(channel, thread_ts, text)
+
+        # trigger_id lives 3 seconds: nothing but the checks above comes before the call.
+        await reply_on_failure(
+            channel,
+            thread_ts,
+            open_modal(channel, thread_ts, folder, body["trigger_id"], words),
+            report,
+        )
+
+    @app.action(QUERY_ACTION)
+    async def on_open_query(ack: AsyncAck, body: dict[str, Any]) -> None:
+        """A character typed in the modal's search field: its rows follow what is typed. Checked
+        for the owner and the workspace alone, with no call to Slack for the channel: each
+        character comes here, and the rows reach only the owner's own modal."""
+        await ack()
+        user, team = interaction_actor(body)
+        if not is_owner(identity, user, team):
+            logger.info("ignored an inbound event from someone other than the owner")
+            return
+        view = body.get("view") or {}
+        try:
+            target = Target.load(view.get("private_metadata"))
+        except ValueError:
+            return
+        view_id = view.get("id")
+        folder = thread_folder(target.channel, target.thread_ts)
+        if folder is None or not isinstance(view_id, str):
+            return
+        action = (body.get("actions") or [{}])[0]
+        typed = action.get("value")
+        if not isinstance(typed, str):
+            typed = typed_in((view.get("state") or {}).get("values"))
+        words = typed.strip()[:QUERY_LIMIT]
+        await update_modal(
+            view_id,
+            action_key(action),
+            view.get("hash"),
+            target,
+            words,
+            lambda: found_files(folder, target.thread_ts, words),
+        )
+
+    @app.view(OPEN_FORM)
+    async def on_open_submit(ack: AsyncAck, body: dict[str, Any]) -> None:
+        """Open, in the picker's modal: the row chosen is shared into the thread as a menu
+        choice was, and the modal closes. The answer to Slack comes first and makes no call to
+        it; the value and the metadata are untrusted, and the file is read from the folder of
+        the thread's own session."""
+        user, team = interaction_actor(body)
+        view = body.get("view") or {}
+        try:
+            target = Target.load(view.get("private_metadata"))
+        except ValueError:
+            await ack()
+            return
+        if not is_owner(identity, user, team):
+            await ack()
+            logger.info("ignored an inbound event from someone other than the owner")
+            return
+        relative = chosen_in((view.get("state") or {}).get("values"))
+        if relative is None:
+            # With no row there is no choice block to carry the error: the search field does.
+            shown = {b.get("block_id") for b in view.get("blocks") or [] if isinstance(b, dict)}
+            block = CHOICE_BLOCK if CHOICE_BLOCK in shown else QUERY_BLOCK
+            await ack(response_action="errors", errors={block: texts.OPEN_NONE_CHOSEN})
+            return
+        await ack()
+        if isinstance(view_id := view.get("id"), str):
+            modals.forget(view_id)
+        channel, thread_ts = target.channel, target.thread_ts
+        if not await admitted(user, team, channel, thread_ts):
             return
         folder = thread_folder(channel, thread_ts)
         if folder is None:
@@ -1018,46 +1183,9 @@ def build_app(
         async def report(text: str) -> None:
             await tell_owner(channel, thread_ts, text)
 
-        # The value is untrusted: `open_file` resolves it inside this thread's own folder.
         await reply_on_failure(
             channel, thread_ts, open_file(channel, thread_ts, folder, relative), report
         )
-
-    for action_id in OPEN_ACTIONS:
-        app.action(action_id)(on_open_choice)
-
-    async def suggestions(body: dict[str, Any]) -> list[dict[str, Any]]:
-        """The files of a thread's folder whose path contains what the owner typed. The thread is
-        the one the picker's block id names (a `block_suggestion` carries none), and it is
-        resolved to its own folder as a click is."""
-        channel = (body.get("channel") or {}).get("id")
-        thread_ts = thread_of(str(body.get("block_id") or ""))
-        words = str(body.get("value") or "").strip()
-        folder = thread_folder(channel, thread_ts) if channel and thread_ts else None
-        if folder is None or not words:
-            return []
-        try:
-            async with asyncio.timeout(SUGGEST_TIMEOUT):
-                index = await listings.of(folder)
-                found = await asyncio.to_thread(
-                    lambda: regular_files(folder, rank(index, words), OPTION_ROWS)
-                )
-        except Exception as exc:  # nothing to show beats a menu that never loads
-            logger.warning("could not list files for a search: %s", describe(exc))
-            return []
-        return options(found)
-
-    @app.options(OPEN_SEARCH_ACTION)
-    async def on_open_search(ack: AsyncAck, body: dict[str, Any]) -> None:
-        # The options are the answer to the ack, so Slack's three seconds start here. Checked
-        # for the owner and the workspace alone, with no call to Slack before the answer: the
-        # reply reaches only whoever is typing.
-        user, team = interaction_actor(body)
-        if not is_owner(identity, user, team):
-            logger.info("ignored an inbound event from someone other than the owner")
-            await ack(options=[])
-            return
-        await ack(options=await suggestions(body))
 
     async def acknowledge(channel: str, ts: str) -> None:
         """✅ on the owner's own message: the mark that a word took effect, which stays after a
