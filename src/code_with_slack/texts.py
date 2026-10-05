@@ -325,7 +325,9 @@ HOME_NEW_THREAD = "New thread"
 HOME_EDIT = "Edit"
 HOME_DONE = "Done"
 HOME_DELETE = "Delete"
-HOME_DELETING = "deleting…"
+# Bold, behind the hourglass the other two notes carry: mrkdwn has no colour, and the plain
+# word was missed among the row's details.
+HOME_DELETING = ":hourglass_flowing_sand: *deleting…*"
 HOME_CHANNEL_DELETING_ONE = ":hourglass_flowing_sand: deleting 1 thread…"
 HOME_CHANNEL_DELETING_MANY = ":hourglass_flowing_sand: deleting {count} threads…"
 HOME_DELETING_ONE = (

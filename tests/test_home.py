@@ -1217,7 +1217,7 @@ async def test_a_thread_being_deleted_says_so_from_the_click_on_and_takes_no_sec
     await until(lambda: bool(started))
     page = published(slack)[-1]
     # Published before the delete ends: the row reads `deleting…` and offers no Delete.
-    assert any(note.startswith("deleting… · 19 replies") for note in notes(page))
+    assert any(note.startswith(f"{texts.HOME_DELETING} · 19 replies") for note in notes(page))
     assert buttons(page, DELETE_ACTION) == []
     # And the page says it in full size under the header, with how many are on their way.
     assert texts.HOME_DELETING_ONE in titles(page)
@@ -1225,7 +1225,7 @@ async def test_a_thread_being_deleted_says_so_from_the_click_on_and_takes_no_sec
     assert started == [(CHANNEL, OLD_THREAD)]
     # Leaving edit mode does not hide what is going on.
     await home.edit(False)
-    assert any(note.startswith("deleting…") for note in notes(published(slack)[-1]))
+    assert any(note.startswith(texts.HOME_DELETING) for note in notes(published(slack)[-1]))
     finish.set()
     await running
     assert texts.HOME_DELETING_ONE not in titles(published(slack)[-1])
@@ -1276,6 +1276,8 @@ def test_a_channel_s_header_counts_its_threads_being_deleted_shown_or_not() -> N
         f"*<#{CHANNEL}>*   :hourglass_flowing_sand: deleting 2 threads…",
         f"*<#{OTHER_CHANNEL}>*   :hourglass_flowing_sand: deleting 1 thread…",
     ]
-    assert not any(note.startswith("deleting…") for note in notes(page)[1 : PER_CHANNEL + 1])
+    assert not any(
+        note.startswith(texts.HOME_DELETING) for note in notes(page)[1 : PER_CHANNEL + 1]
+    )
     # A channel with none says nothing.
     assert headers(view([row()], channels={CHANNEL: "cc-articles"})) == [f"*<#{CHANNEL}>*"]
