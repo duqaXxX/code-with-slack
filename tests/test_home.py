@@ -1260,3 +1260,22 @@ def test_the_page_counts_the_threads_being_deleted() -> None:
     page = view([row()], channels={CHANNEL: "cc-articles"}, can_edit=True, deleting=3)
     assert texts.HOME_DELETING_MANY.format(count=3) in titles(page)
     assert "Deleting" not in str(view([row()], channels={CHANNEL: "cc-articles"}, can_edit=True))
+
+
+def test_a_channel_s_header_counts_its_threads_being_deleted_shown_or_not() -> None:
+    rows = [
+        row(f"Session {n}", thread_ts=f"17899900{n:02d}.000100", last_activity=EPOCH - n)
+        for n in range(PER_CHANNEL + 2)
+    ]
+    # The two oldest are the ones the channel does not show out of a filter.
+    rows[-1] = HomeRow(**{**rows[-1].__dict__, "deleting": True})
+    rows[-2] = HomeRow(**{**rows[-2].__dict__, "deleting": True})
+    other = row("Elsewhere", channel_id=OTHER_CHANNEL, deleting=True)
+    page = view([*rows, other], channels={CHANNEL: "cc-articles", OTHER_CHANNEL: "cc-shop"})
+    assert headers(page) == [
+        f"*<#{CHANNEL}>*   :hourglass_flowing_sand: deleting 2 threads…",
+        f"*<#{OTHER_CHANNEL}>*   :hourglass_flowing_sand: deleting 1 thread…",
+    ]
+    assert not any(note.startswith("deleting…") for note in notes(page)[1 : PER_CHANNEL + 1])
+    # A channel with none says nothing.
+    assert headers(view([row()], channels={CHANNEL: "cc-articles"})) == [f"*<#{CHANNEL}>*"]

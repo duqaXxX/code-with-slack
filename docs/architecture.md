@@ -809,7 +809,8 @@ owner confirmed. The listener checks the owner and the workspace, like every Hom
 `Home.delete` acts only in edit mode. It publishes at once with the thread marked
 (`HomeRow.deleting`: the row reads `texts.HOME_DELETING` in place of its status and has no
 button, and a section under the header counts the threads on their way, `texts.HOME_DELETING_ONE`
-or `texts.HOME_DELETING_MANY`, since such a row can be one a channel does not show), ignores a
+or `texts.HOME_DELETING_MANY`, since such a row can be one a channel does not show; a channel's header says the same for its
+own threads, `texts.HOME_CHANNEL_DELETING_ONE` or `texts.HOME_CHANNEL_DELETING_MANY`), ignores a
 second click on a thread it is already deleting, and publishes again when
 the delete ended.
 

@@ -326,6 +326,8 @@ HOME_EDIT = "Edit"
 HOME_DONE = "Done"
 HOME_DELETE = "Delete"
 HOME_DELETING = "deleting…"
+HOME_CHANNEL_DELETING_ONE = ":hourglass_flowing_sand: deleting 1 thread…"
+HOME_CHANNEL_DELETING_MANY = ":hourglass_flowing_sand: deleting {count} threads…"
 HOME_DELETING_ONE = (
     ":hourglass_flowing_sand: *Deleting 1 thread.* Slack limits how fast messages are deleted: "
     "a thread takes about a minute, and leaves this page when it is gone."

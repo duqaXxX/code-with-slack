@@ -431,6 +431,7 @@ the thread, the first one last, and forgets the thread. The Claude Code session 
 A delete is not immediate: Slack limits how fast messages can be deleted, and a thread takes
 about a minute, more for a long one. From the click on, a line under the header says how many
 threads are being deleted (`Deleting 2 threads, one at a time.` and why it takes time), and the
+channel's name is followed by `deleting 2 threads…` for its own, and the
 session's small line reads `deleting…` in place of its status and has no Delete; the session
 leaves the page, and the count goes down, when its thread is gone. Threads are deleted one at a time, so several chosen in a row all read
 `deleting…` and go one after the other.

@@ -40,6 +40,7 @@ import dataclasses
 import hashlib
 import logging
 import time
+from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -352,11 +353,17 @@ def _header(time: str, *, editing: bool, can_edit: bool) -> dict[str, Any]:
     return {"type": "section", "text": {"type": "mrkdwn", "text": text}, "accessory": button}
 
 
-def _channel_header(team_id: str, channel_id: str, *, editing: bool) -> dict[str, Any]:
-    header: dict[str, Any] = {
-        "type": "section",
-        "text": {"type": "mrkdwn", "text": f"*<#{channel_id}>*"},
-    }
+def _channel_header(
+    team_id: str, channel_id: str, *, editing: bool, deleting: int = 0
+) -> dict[str, Any]:
+    """A channel's name, with how many of its threads are being deleted beside it: the rows
+    that say so can be among those the channel does not show."""
+    text = f"*<#{channel_id}>*"
+    if deleting == 1:
+        text += f"   {texts.HOME_CHANNEL_DELETING_ONE}"
+    elif deleting:
+        text += f"   {texts.HOME_CHANNEL_DELETING_MANY.format(count=deleting)}"
+    header: dict[str, Any] = {"type": "section", "text": {"type": "mrkdwn", "text": text}}
     if not editing:
         header["accessory"] = _link_button(
             texts.HOME_NEW_THREAD,
@@ -459,6 +466,8 @@ def home_view(
     if not groups:
         blocks.append(context_block(texts.HOME_NO_MATCH))
     with_sessions = {row.channel_id for row in rows}
+    # Counted over every session of the channel, shown or not, whatever the filters.
+    going = Counter(row.channel_id for row in rows if row.deleting)
     wanted = {c: found if chosen.narrowed else found[:PER_CHANNEL] for c, found in groups.items()}
     shown = 0
     for channel_id, found in groups.items():
@@ -468,7 +477,10 @@ def home_view(
         room = (HOME_BLOCKS - 1 - len(blocks) - 3) // CARD_BLOCKS
         if room < min(1, len(cards)) or HOME_BLOCKS - 1 - len(blocks) < 3:
             break
-        blocks += [{"type": "divider"}, _channel_header(team_id, channel_id, editing=editing)]
+        blocks += [
+            {"type": "divider"},
+            _channel_header(team_id, channel_id, editing=editing, deleting=going[channel_id]),
+        ]
         name = channels.get(channel_id, "")
         for index, row in enumerate(cards[:room]):
             blocks += [
