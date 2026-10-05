@@ -8,7 +8,9 @@ footer's `run_git`: the tracked ones and the untracked ones that are not ignored
 terminal's `@` file picker does, since its setting `respectGitignore` defaults to `true` and
 leaves out the files that match `.gitignore` patterns (code.claude.com/docs/en/settings-reference,
 read 2026-10-05). Everywhere else the folder is walked: regular files only, no symlinked folder
-entered, no `.git` entered. The changed files come from git alone.
+entered, no `.git` entered. The changed files come from git alone, each repository counted from
+where its HEAD was when the thread started: the reflog read at the thread's `thread_ts`
+(`start_commit`), computed when the list is built and kept nowhere.
 
 Every git command here is plumbing or `status` under `--no-optional-locks`, because `git diff`
 refreshes and rewrites the index under `index.lock` (see `footer._changes`), and a lock left by
@@ -17,9 +19,9 @@ a killed command would stop the owner's own `git add` and commit. Measured on gi
 and after, in four states of the work tree (clean; a tracked file touched and left unchanged,
 which is a stat-dirty file; a tracked file edited; an untracked file):
 
-- never written, in any state: `rev-parse --verify HEAD`, `hash-object -t tree /dev/null`,
-  `ls-files --cached --others --exclude-standard`, `diff-tree -r`, `diff-files`, `diff-index`
-  and `--no-optional-locks status`;
+- never written, in any state: `rev-parse --verify HEAD@{<time>}`, `ls-files --cached --others
+  --exclude-standard`, `diff-tree -r`, `diff-files`, `diff-index` and `--no-optional-locks
+  status`;
 - written for the stat-dirty file: `status` without `--no-optional-locks`, `diff --name-only`
   and `--no-optional-locks diff --name-only`;
 - reported as changed when only touched: `diff-files` and `diff-index` (the footer's commands);
@@ -70,11 +72,13 @@ TEXT_LIMIT = 75
 VALUE_LIMIT = 150
 # Slack wants the options of a typed query within 3 seconds: a listing stops at LISTING_BUDGET
 # and answers with what it found, SUGGEST_TIMEOUT backs it up. A folder's listing is kept for
-# LISTING_TTL, so the keystrokes of one query do not walk the folder again.
+# LISTING_TTL (LISTING_PARTIAL_TTL when it is not complete), so the keystrokes of one query do not
+# walk the folder again; LISTING_KEPT folders are kept at most.
 SUGGEST_TIMEOUT = 2.5
 LISTING_BUDGET = 2.0
 LISTING_TTL = 30.0
-EMPTY_TREE_COMMAND = ("hash-object", "-t", "tree", "/dev/null")
+LISTING_PARTIAL_TTL = 3.0
+LISTING_KEPT = 16
 
 # Answers for a repository: the one holding a directory, usable for a session started in a folder
 # (`code_with_slack.trust.trusted_repository`, whose arguments they are).
@@ -117,13 +121,39 @@ def title_of(relative: str) -> str:
     return posixpath.normpath(relative)
 
 
-def openable(folder: Path, relative: str) -> Path:
-    """The file to share for `relative` under `folder`. Raises `NotAFile` or `TooLarge`.
-    Blocking: run it in a thread."""
-    target, found = _locate(_real(folder), relative)
-    if found.st_size > SNIPPET_LIMIT:
+def read_openable(folder: Path, relative: str) -> bytes:
+    """The content of the file `relative` names under `folder`. Raises `NotAFile` or `TooLarge`.
+    Blocking: run it in a thread.
+
+    The path is resolved and checked, then opened once, and everything after is read from that
+    descriptor: `O_NOFOLLOW` refuses a file that became a link in between, `O_NONBLOCK` never
+    waits on a FIFO, and the size is read from the descriptor (`fstat`) and the read stops past
+    SNIPPET_LIMIT, so what was checked is what is read. Slack gets these bytes: its SDK would
+    open a path again, following links and with no size limit."""
+    target, _ = _locate(_real(folder), relative)
+    try:
+        fd = os.open(target, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise NotAFile from exc
+    try:
+        found = os.fstat(fd)
+        if not stat.S_ISREG(found.st_mode):
+            raise NotAFile
+        if found.st_size > SNIPPET_LIMIT:
+            raise TooLarge
+        content = b""
+        while len(content) <= SNIPPET_LIMIT:
+            chunk = os.read(fd, SNIPPET_LIMIT + 1 - len(content))
+            if not chunk:
+                break
+            content += chunk
+    except OSError as exc:
+        raise NotAFile from exc
+    finally:
+        os.close(fd)
+    if len(content) > SNIPPET_LIMIT:
         raise TooLarge
-    return target
+    return content
 
 
 def regular_files(folder: Path, relatives: Iterable[str], limit: int | None = None) -> list[str]:
@@ -222,10 +252,13 @@ def _repository_folders(folder: Path) -> list[Path]:
     return [path for path in below if path != folder and os.path.lexists(path / ".git")]
 
 
-def walk_files(root: Path, skip: frozenset[str], expired: Callable[[], bool]) -> list[str]:
+def walk_files(
+    root: Path, skip: frozenset[str], expired: Callable[[], bool]
+) -> tuple[list[str], bool]:
     """The regular files under `root` as paths from it, the shallower first: a symlink is neither
     followed nor listed, no `.git` is entered, nor any folder in `skip` (paths). Stops when
-    `expired()` is true, with what it has found. Blocking: run it in a thread."""
+    `expired()` is true, with what it has found; the flag says the walk reached its end.
+    Blocking: run it in a thread."""
     found: list[str] = []
     queue = deque([(str(root), "")])
     while queue and not expired():
@@ -243,7 +276,7 @@ def walk_files(root: Path, skip: frozenset[str], expired: Callable[[], bool]) ->
         except OSError as exc:
             # A folder the daemon may not open (macOS privacy, permissions) lists nothing.
             logger.debug("skipped an unreadable folder: %s", type(exc).__name__)
-    return found
+    return found, not queue
 
 
 async def project_files(repository: Repository, folder: Path) -> list[str] | None:
@@ -274,76 +307,118 @@ async def folder_files(
     repositories: list[Repository],
     budget: float,
     clock: Callable[[], float] = time.monotonic,
-) -> list[str]:
+) -> tuple[list[str], bool]:
     """The files `!open` can name under `folder`, as paths from it: from git inside a repository
     of `repositories`, the folder's own disk anywhere else. Within `budget` seconds: what is
-    found by then is returned, a repository whose listing is not done adding nothing."""
+    found by then is returned, a repository whose listing is not done adding nothing. The flag
+    says nothing was left out: no walk or git listing ran out of time or failed."""
     deadline = clock() + budget
     real = await asyncio.to_thread(_real, folder)
 
-    async def listed(repository: Repository) -> list[str]:
+    async def listed(repository: Repository) -> tuple[list[str], bool]:
         try:
             async with asyncio.timeout(budget):
-                return await project_files(repository, folder) or []
+                found = await project_files(repository, folder)
         except TimeoutError:
-            return []
+            return [], False
+        return found or [], found is not None
 
     if any(real.is_relative_to(r.root) for r in repositories):
         # Every file of the folder is in the repository that holds it.
-        return list(
-            dict.fromkeys(chain.from_iterable(await asyncio.gather(*map(listed, repositories))))
+        parts = await asyncio.gather(*map(listed, repositories))
+        walked: list[str] = []
+        walk_done = True
+    else:
+        skip = frozenset(str(r.root) for r in repositories)
+        (walked, walk_done), *parts = await asyncio.gather(
+            asyncio.to_thread(walk_files, real, skip, lambda: clock() >= deadline),
+            *map(listed, repositories),
         )
-    skip = frozenset(str(r.root) for r in repositories)
-    walked, *from_git = await asyncio.gather(
-        asyncio.to_thread(walk_files, real, skip, lambda: clock() >= deadline),
-        *map(listed, repositories),
-    )
-    return list(dict.fromkeys(chain(walked, *from_git)))
+    files = list(dict.fromkeys(chain(walked, *(found for found, _ in parts))))
+    return files, walk_done and all(done for _, done in parts)
 
 
 class Listings:
-    """The files of a session's folder for the search, kept in memory for `ttl` seconds: Slack
-    asks again on every keystroke, and a folder is not walked each time."""
+    """The files of a session's folder for the search, kept in memory: Slack asks again on every
+    keystroke, and a folder is not walked each time. A listing is kept `ttl` seconds when it is
+    complete and `partial_ttl` when it ran out of time or git failed for part of it, so a
+    folder too large for the budget is not walked on each keystroke but is not taken for
+    complete either. At most `limit` folders are kept (the oldest go first), and the expired
+    ones are removed on the next request. Requests for a folder that is being listed wait for
+    that listing."""
 
     def __init__(
         self,
         lookup: RepositoryLookup,
         *,
         ttl: float = LISTING_TTL,
+        partial_ttl: float = LISTING_PARTIAL_TTL,
         budget: float = LISTING_BUDGET,
+        limit: int = LISTING_KEPT,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._lookup = lookup
         self._ttl = ttl
+        self._partial_ttl = partial_ttl
         self._budget = budget
+        self._limit = limit
         self._clock = clock
-        self._kept: dict[Path, tuple[float, list[str]]] = {}
+        self._kept: dict[Path, tuple[float, list[str]]] = {}  # until, files
+        self._running: dict[Path, asyncio.Task[list[str]]] = {}
 
     async def of(self, folder: Path) -> list[str]:
         """The folder's files as paths from it. Never raises: a listing that fails is empty and
         not kept."""
         now = self._clock()
-        kept = self._kept.get(folder)
-        if kept is not None and now - kept[0] < self._ttl:
+        for stale in [path for path, (until, _) in self._kept.items() if until <= now]:
+            del self._kept[stale]
+        if (kept := self._kept.get(folder)) is not None:
             return kept[1]
+        task = self._running.get(folder)
+        if task is None:
+            task = self._running[folder] = asyncio.create_task(self._list(folder))
+            task.add_done_callback(lambda done: self._running.pop(folder, None))
+        # Shielded: a request that gives up (Slack's 3 seconds) leaves the listing to the others.
+        return await asyncio.shield(task)
+
+    async def _list(self, folder: Path) -> list[str]:
+        started = self._clock()
         try:
-            files = await folder_files(
+            files, complete = await folder_files(
                 folder, await repositories_of(folder, self._lookup), self._budget, self._clock
             )
         except Exception as exc:  # a search that finds nothing beats a menu that never loads
             logger.warning("could not list a folder's files: %s", describe(exc))
             return []
-        self._kept[folder] = (now, files)
+        self._kept[folder] = (started + (self._ttl if complete else self._partial_ttl), files)
+        while len(self._kept) > self._limit:
+            del self._kept[next(iter(self._kept))]
         return files
 
 
-async def start_commit(repository: Repository) -> str | None:
-    """What a thread's changes are counted from: `HEAD`, or the empty tree in a repository with
-    no commit yet, as the footer compares what is staged there; None when git fails."""
-    head = await run_git(repository, "rev-parse", "--verify", "--quiet", "HEAD")
-    if head is None:
-        head = await run_git(repository, *EMPTY_TREE_COMMAND)
-    return (head or "").strip() or None
+EPOCH_SECONDS = re.compile(r"^(\d+)(?:\.\d+)?$")
+
+
+async def start_commit(repository: Repository, thread_ts: str) -> str | None:
+    """Where the repository's HEAD was when the thread started, which `thread_ts` (the Slack ts
+    of its root, epoch seconds) says: `HEAD@{<seconds> +0000}`, read from HEAD's own reflog (a
+    linked worktree has its own). None when git has no answer: no reflog (a repository with
+    `core.logAllRefUpdates` off, or a first commit not made yet), or a `thread_ts` that is no
+    time. A reflog that does not go back that far gives its oldest entry, git's own answer (it
+    warns on stderr, which `run_git` discards).
+
+    Measured on git 2.54.0 (2026-10-05). The bare number is read as a time (`HEAD@{1790000150}`)
+    and so is the internal format with its zone, which is the one used: it leaves no room for
+    git's approximate dates. A time before the oldest entry gives that entry's old commit (a log
+    that `git reflog expire` shortened) or, when the log starts with the first commit, that
+    commit; no reflog at all and a repository with no commit are exit status 1."""
+    seconds = EPOCH_SECONDS.match(thread_ts)
+    if seconds is None:
+        return None
+    found = await run_git(
+        repository, "rev-parse", "--verify", "--quiet", f"HEAD@{{{seconds[1]} +0000}}"
+    )
+    return (found or "").strip() or None
 
 
 async def changed_since(
@@ -393,52 +468,22 @@ async def changed_since(
     return _under("\0".join(names), strip, add)
 
 
-async def changed_in(
-    folder: Path,
-    repositories: list[Repository],
-    start_of: Callable[[Repository], str | None],
-) -> list[str]:
-    """The changed files of every repository of `repositories` (see `changed_since`, each from
-    its own start), as paths from `folder`, each once. A repository whose git fails or runs
-    over `GIT_TIMEOUT` adds none."""
+async def changed_in(folder: Path, repositories: list[Repository], thread_ts: str) -> list[str]:
+    """The changed files of every repository of `repositories` (see `changed_since`), each from
+    where its own HEAD was when the thread `thread_ts` started (`start_commit`), as paths from
+    `folder`, each once. A repository whose git fails or runs over `GIT_TIMEOUT` adds none."""
 
     async def changed(repository: Repository) -> list[str]:
         try:
             async with asyncio.timeout(GIT_TIMEOUT):
-                return await changed_since(repository, folder, start_of(repository)) or []
+                start = await start_commit(repository, thread_ts)
+                return await changed_since(repository, folder, start) or []
         except TimeoutError:
             return []
 
     return list(
         dict.fromkeys(chain.from_iterable(await asyncio.gather(*map(changed, repositories))))
     )
-
-
-class Starts:
-    """The commit each repository of a thread's folder was on when this run first saw it in the
-    thread, in memory only: `!open` lists the changes made since. Set once, so a thread whose
-    Claude Code process closed after an idle hour and came back is still counted from its first
-    sight. A repository that appears later (a clone) starts from the sight that finds it."""
-
-    def __init__(self, lookup: RepositoryLookup) -> None:
-        self._lookup = lookup
-        self._commits: dict[tuple[str, str, Path], str] = {}
-
-    def of(self, channel: str, thread_ts: str, repository: Repository) -> str | None:
-        return self._commits.get((channel, thread_ts, repository.root))
-
-    async def seen(self, channel: str, thread_ts: str, directory: Path) -> None:
-        """Note the start of each repository of the folder not seen yet in this thread. Never
-        raises, and notes nothing where git runs on no repository or fails: the next sight tries
-        again."""
-        try:
-            async with asyncio.timeout(GIT_TIMEOUT):
-                for repository in await repositories_of(directory, self._lookup):
-                    key = (channel, thread_ts, repository.root)
-                    if key not in self._commits and (commit := await start_commit(repository)):
-                        self._commits.setdefault(key, commit)
-        except Exception as exc:  # a lookup that fails must not stop the message it came with
-            logger.warning("could not read a thread's start commit: %s", describe(exc))
 
 
 def option(path: str) -> dict[str, Any] | None:
@@ -498,7 +543,8 @@ def picker_blocks(thread_ts: str, changed: list[str], count: int) -> list[dict[s
 
 
 def matches_blocks(words: str, found: list[str]) -> list[dict[str, Any]]:
-    """Several files match `words`: one menu of them, and a line when more than a menu holds."""
+    """Several files match `words`: one menu of them, and a line when more than a menu holds, or
+    when none can be an option (the line alone)."""
     shown = options(found)
     blocks: list[dict[str, Any]] = [
         {
@@ -520,6 +566,9 @@ def matches_blocks(words: str, found: list[str]) -> list[dict[str, Any]]:
             ],
         },
     ]
+    if not shown:
+        # Every path is too long for an option: a menu with no options would not open.
+        return [blocks[0], context_block(texts.OPEN_MATCHES_TOO_LONG)]
     if len(found) > len(shown):
         blocks.append(
             context_block(texts.OPEN_MATCHES_CAPPED.format(shown=len(shown), count=len(found)))

@@ -88,15 +88,14 @@ from code_with_slack.openfile import (
     SUGGEST_TIMEOUT,
     Listings,
     NotAFile,
-    Starts,
     TooLarge,
     changed_in,
     matches_blocks,
     newest_first,
-    openable,
     options,
     picker_blocks,
     rank,
+    read_openable,
     regular_files,
     repositories_of,
     thread_of,
@@ -257,10 +256,7 @@ def build_app(
         )
 
     app = AsyncApp(client=slack, authorize=authorize)
-    # What `!open` lists as changed is counted from where each of a thread's repositories stood
-    # when this run first saw the thread (memory only); its search reads each folder's files from
-    # disk, kept for a few seconds.
-    starts = Starts(sessions.repository)
+    # `!open`'s search reads each folder's files from disk, kept for a few seconds.
     listings = Listings(sessions.repository)
 
     async def deliver(
@@ -487,8 +483,6 @@ def build_app(
         if in_thread and isinstance(command, Passthrough) and is_clear(command, session.commands):
             await tell_owner(channel, thread_ts, texts.CLEAR_IN_THREAD)
             return
-        # Before anything of this message can change a file: `!open` lists the changes made since.
-        await starts.seen(channel, thread_ts, session.directory)
         # Prompts and commands for Claude Code enter the queue in the order they were sent,
         # although files take a while to download. Every reply goes to the thread.
         async with arrival_lock((channel, thread_ts)):
@@ -935,7 +929,6 @@ def build_app(
         """`!open` typed in a session's thread: a picker alone; with words, the file they name as
         a path, else the file whose name contains them, else the files that do."""
         folder = session.directory
-        await starts.seen(channel, thread_ts, folder)
         if not words:
             await post_picker(channel, thread_ts, folder)
             return
@@ -963,9 +956,7 @@ def build_app(
         the first. Its changed-files menu is the union over the folder's repositories, left out
         when there is none or nothing changed."""
         repositories = await repositories_of(folder, sessions.repository)
-        names = await changed_in(
-            folder, repositories, lambda repository: starts.of(channel, thread_ts, repository)
-        )
+        names = await changed_in(folder, repositories, thread_ts)
         changed = await asyncio.to_thread(newest_first, folder, names)
         blocks = picker_blocks(thread_ts, changed, len(changed))
         await deliver(channel, thread_ts, texts.OPEN_FALLBACK, blocks, ephemeral=False)
@@ -975,7 +966,7 @@ def build_app(
         in its own viewer; no line of ours on success. `relative` is untrusted."""
         shown = shown_as_written(relative)
         try:
-            path = await asyncio.to_thread(openable, folder, relative)
+            content = await asyncio.to_thread(read_openable, folder, relative)
         except NotAFile:
             await tell_owner(channel, thread_ts, texts.OPEN_NOT_A_FILE.format(path=shown))
             return
@@ -987,7 +978,7 @@ def build_app(
             await slack.files_upload_v2(
                 channel=channel,
                 thread_ts=thread_ts,
-                file=str(path),
+                content=content,
                 filename=posixpath.basename(title),
                 title=title,
             )

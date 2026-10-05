@@ -59,6 +59,9 @@ OPEN_NO_MATCH = "No file matches `{words}`."
 OPEN_MATCHES = "*{count} files match* `{words}`"
 OPEN_MATCH_PLACEHOLDER = "Choose a file"
 OPEN_MATCHES_CAPPED = "The first {shown} of {count} are listed: type more of the name to narrow it."
+OPEN_MATCHES_TOO_LONG = (
+    "None of their paths is short enough for a menu: open one with `!open <path>`."
+)
 OPEN_NOT_A_FILE = "`{path}` is not a file inside this session's folder."
 OPEN_TOO_LARGE = "`{path}` is larger than 1 MB, the most Slack opens in its file viewer."
 OPEN_NO_SCOPE = (

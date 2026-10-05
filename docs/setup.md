@@ -198,8 +198,11 @@ by its main checkout while git registers it there: after moving a worktree's fol
 and `!open` lists the changed files, only where git may run: in a repository you trusted, or in
 one inside the folder the session started in, which that folder's trust covers (Claude Code
 launched in a trusted folder works in its subfolders too). A repository outside the session's
-folder needs its own trust, since the agent may move anywhere. That covers a bound folder that is
-not a repository itself and holds one a level or two below it. Binding a channel is not widened:
+folder needs its own trust, since the agent may move anywhere. A repository inside the folder is
+covered only if everything git reads for it lies inside the folder too: a `.git` file or symlink
+that names a git dir elsewhere, a worktree of a checkout elsewhere (one moved in by hand, say) and
+a `commondir` that leads out are not covered. That covers a bound folder that is not a repository
+itself and holds one a level or two below it. Binding a channel is not widened:
 a repository that Claude Code does not trust is still refused.
 
 When Claude Code is logged out, a message in Slack replies with a note asking you to run `claude`
@@ -350,7 +353,8 @@ The bot answers one person, and the rest of this list protects what that person 
 - The footer, `!status` and `!open` run git in a repository inside the folder a session started in
   without a trust of its own for it. A repository that ends up there (one Claude clones during the
   session, say) can name filters in its config that git then runs, outside the approval prompt.
-  A repository outside that folder runs no git unless you trusted it.
+  A repository outside that folder runs no git unless you trusted it, and a repository inside
+  whose `.git` leads outside it is treated as outside.
 - With a static public IP, you can also restrict the tokens to it under **OAuth & Permissions**,
   **Restrict API Token Usage**. With a dynamic IP, the first address change stops the bot with
   `invalid_auth`.
@@ -537,15 +541,21 @@ and the untracked ones that are not ignored (`git ls-files`), as the `@` file pi
 does with its `respectGitignore` setting at its default; everywhere else the folder is walked:
 regular files only, no symlinked folder entered, no `.git` entered. A repository deeper than two
 levels is walked like any folder. A listing stops after 2 seconds with the files found so far,
-and is kept for 30 seconds, so a folder is not walked again on every keystroke. The
-changed-files menu is the union over those repositories, each counted from the commit it was on
-when the daemon first saw the thread (committed since or not, plus untracked files that are not
-ignored), newest first, at most 100 with the real count in its placeholder, with paths relative
-to the session's folder. That start is kept in memory only: after a restart of the daemon it is
-the repository's commit at the first message of the thread, an idle close of the session does not
-reset it, and a repository that appears during the session (a clone) starts from the message
-that first finds it. Every git command is one that never writes the index, so it cannot leave an
-`index.lock` that stops your own `git`.
+and is kept for 30 seconds, so a folder is not walked again on every keystroke. A search that is
+still running when Slack stops waiting finishes anyway and answers the next keystrokes, and a
+listing that ran out of time or lost a repository's git list is kept for 3 seconds instead of 30.
+The changed-files menu is the union over those repositories, each counted from where its `HEAD`
+was when the thread started (committed since or not, plus untracked files that are not ignored),
+newest first, at most 100 with the real count in its placeholder, with paths relative to the
+session's folder. The start is read when the menu is built, from the repository's reflog at the
+time of the thread's first message (`git rev-parse HEAD@{<seconds> +0000}`), so a restart of the
+daemon changes nothing and a repository that appears during the session counts from its first
+commit. A reflog that does not go back that far gives its oldest entry. Where there is no reflog
+(`core.logAllRefUpdates` off, or no commit yet) the menu holds what is uncommitted or untracked
+now. A thread that began on one branch and is now on another counts what the other branch holds
+beyond where `HEAD` was. Every git command is one that never writes the index, so it cannot leave
+an `index.lock` that stops your own `git`. The file is read once, from the path checked, never
+following a link or exceeding 1 MB, and handed to Slack as bytes.
 
 A word typed in the channel is answered by a normal post in the channel, which stays there. A word
 typed inside a session's thread is answered by an ephemeral message under it: Slack shows it with

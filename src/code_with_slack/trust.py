@@ -247,6 +247,34 @@ def _inside(path: Path, folder: Path) -> bool:
     return resolved != real and resolved.is_relative_to(real)
 
 
+def _common_dir(git_dir: Path) -> Path | None:
+    """The common git dir of `git_dir`: the directory its `commondir` file names, as git reads it
+    (relative to `git_dir`), else `git_dir` itself. None when the file cannot be read as git
+    would, so the answer is never a guess."""
+    if not os.path.lexists(git_dir / "commondir"):
+        return git_dir
+    content = _regular_file(git_dir / "commondir")
+    if content is None:
+        return None
+    try:
+        return Path(os.path.realpath(git_dir / os.fsdecode(content.removesuffix(b"\n"))))
+    except (OSError, ValueError, RecursionError):
+        return None
+
+
+def _held_by(repository: Repository, session_folder: Path) -> bool:
+    """Whether everything git would read for `repository` lies strictly inside `session_folder`:
+    its key, its git dir and its common dir (a worktree's config and hooks live in the main
+    checkout's). A `.git` that leads out of the folder makes git read someone else's config."""
+    git_dir = repository.git_dir
+    if git_dir is None:
+        return False
+    common = _common_dir(git_dir)
+    return common is not None and all(
+        _inside(path, session_folder) for path in (repository.key, git_dir, common)
+    )
+
+
 def _trusted_repository(directory: Path, session_folder: Path, home: Path) -> Repository | None:
     try:
         repository = locate(directory)
@@ -257,7 +285,7 @@ def _trusted_repository(directory: Path, session_folder: Path, home: Path) -> Re
     if _trusted(repository.key, home):
         return repository
     # The second way in, for a repository the session's folder holds.
-    if _inside(repository.key, session_folder) and _workspace_trusted(session_folder, home):
+    if _held_by(repository, session_folder) and _workspace_trusted(session_folder, home):
         return repository
     return None
 
@@ -280,15 +308,18 @@ async def trusted_repository(
     git, where the layout has no key, and in a repository neither of these covers:
 
     - its key is a path the owner trusted in Claude Code (a worktree's key is its main checkout);
-    - its key lies strictly inside `session_folder`, the folder the session was started in, and
-      that folder passes `workspace_trusted`.
+    - its key, its git dir and its common dir all lie strictly inside `session_folder`, the
+      folder the session was started in, and that folder passes `workspace_trusted`.
 
     The second is the owner's decision (2026-10-05): Slack is only an interface to Claude Code,
     which, launched in a trusted folder, works in its subfolders. It reaches no further: a
     repository outside `session_folder` needs its own trust since the agent may `cd` anywhere,
     and `workspace_trusted`, which gates a session's start and `!bind`, is not widened. Inside is
     decided on resolved paths, so a symlink in the folder that leads to a repository elsewhere,
-    and a worktree whose main checkout is elsewhere, are not inside. Nothing here runs git.
+    and a worktree whose main checkout is elsewhere, are not inside. The git dir and the common
+    dir are held to it too, since a `.git` file, a `.git` symlink, a moved worktree or a
+    `commondir` inside the folder can name a repository outside it, whose config git would then
+    read. Nothing here runs git.
     """
     return await asyncio.to_thread(
         _trusted_repository, directory, session_folder, home or Path.home()

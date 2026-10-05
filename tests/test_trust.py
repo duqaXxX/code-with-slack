@@ -627,6 +627,100 @@ async def test_a_worktree_is_inside_only_when_its_main_checkout_is(
     assert await trusted_repository(away, work, home) is not None
 
 
+def a_gitfile_naming_an_outside_git_dir(work: Path, outside: Path) -> Path:
+    folder = work / "gitfile"
+    folder.mkdir()
+    (folder / ".git").write_text(f"gitdir: {outside}/.git\n")
+    return folder
+
+
+def a_gitfile_naming_an_outside_git_dir_by_a_relative_path(work: Path, outside: Path) -> Path:
+    folder = work / "gitfile"
+    folder.mkdir()
+    (folder / ".git").write_text(f"gitdir: {os.path.relpath(outside / '.git', folder)}\n")
+    return folder
+
+
+def a_git_symlink_to_an_outside_git_dir(work: Path, outside: Path) -> Path:
+    folder = work / "gitlink"
+    folder.mkdir()
+    (folder / ".git").symlink_to(outside / ".git")
+    return folder
+
+
+def a_worktree_of_an_outside_checkout_moved_in_by_hand(work: Path, outside: Path) -> Path:
+    moved = add_worktree(outside, outside.parent / "wt").rename(work / "wt-moved")
+    return moved
+
+
+def a_git_dir_whose_commondir_names_an_outside_repository(work: Path, outside: Path) -> Path:
+    folder = work / "commondir"
+    (folder / ".git").mkdir(parents=True)
+    (folder / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (folder / ".git" / "commondir").write_text(f"{outside}/.git\n")
+    return folder
+
+
+def a_git_dir_whose_commondir_is_a_symlink_to_an_outside_name(work: Path, outside: Path) -> Path:
+    folder = work / "commondir-link"
+    (folder / ".git").mkdir(parents=True)
+    (folder / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (folder.parent / "names-outside").write_text(f"{outside}/.git\n")
+    (folder / ".git" / "commondir").symlink_to(folder.parent / "names-outside")
+    return folder
+
+
+LEADING_OUTSIDE = [
+    a_gitfile_naming_an_outside_git_dir,
+    a_gitfile_naming_an_outside_git_dir_by_a_relative_path,
+    a_git_symlink_to_an_outside_git_dir,
+    a_worktree_of_an_outside_checkout_moved_in_by_hand,
+    a_git_dir_whose_commondir_names_an_outside_repository,
+    a_git_dir_whose_commondir_is_a_symlink_to_an_outside_name,
+]
+
+
+@pytest.mark.parametrize("layout", LEADING_OUTSIDE, ids=lambda layout: layout.__name__)
+async def test_a_layout_inside_the_folder_that_leads_git_outside_it_is_not_covered(
+    tmp_path: Path, work: Path, home: Path, layout: Callable[[Path, Path], Path]
+) -> None:
+    # The folder's trust covers a repository inside it, and git must read that repository's own
+    # config: a `.git` that points elsewhere makes git read someone else's.
+    outside = committed(tmp_path / "outside")
+    assert await trusted_repository(outside, work, home) is None  # the control: nothing trusted
+    folder = layout(work, outside)
+    assert await trusted_repository(folder, work, home) is None
+    # The owner's own trust of the folder itself is the first way in, and stays as it was.
+    trust(home, work, folder)
+    assert await trusted_repository(folder, work, home) is not None
+
+
+async def test_a_git_dir_outside_the_folder_that_the_owner_trusted_is_not_a_second_way_in(
+    tmp_path: Path, work: Path, home: Path
+) -> None:
+    outside = committed(tmp_path / "outside")
+    trust(home, work, outside)
+    folder = a_gitfile_naming_an_outside_git_dir(work, outside)
+    # The folder is no repository the owner trusted, and its git dir is not the folder's.
+    assert await trusted_repository(folder, work, home) is None
+    assert await trusted_repository(outside, work, home) is not None
+
+
+async def test_layouts_that_stay_inside_the_folder_are_covered(work: Path, home: Path) -> None:
+    gitfile = git_init(work / "elsewhere-inside" / "store")
+    (work / "viafile").mkdir()
+    (work / "viafile" / ".git").write_text(f"gitdir: {gitfile / '.git'}\n")
+    (work / "vialink").mkdir()
+    (work / "vialink" / ".git").symlink_to(gitfile / ".git")
+    for folder in (work / "viafile", work / "vialink"):
+        assert await trusted_repository(folder, work, home) is not None
+    # A worktree whose main checkout is inside: its git dir and its common dir are too.
+    main = committed(work / "main")
+    beside = add_worktree(main, work / "wt")
+    found = await trusted_repository(beside, work, home)
+    assert found is not None and found.key == main.resolve()
+
+
 async def test_the_start_gate_still_refuses_a_repository_the_owner_did_not_trust(
     work: Path, home: Path
 ) -> None:

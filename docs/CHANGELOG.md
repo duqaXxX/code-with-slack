@@ -17,10 +17,16 @@ All notable changes to this project are documented here. The format follows
   files that enters no symlinked folder and no `.git`. A listing stops after 2 seconds with what
   it found and is kept for 30 seconds. The changed files come from git, through the footer's git
   helper (now `footer.run_git`), with commands measured never to write the index (git 2.54.0,
-  2026-10-05): `status` under `--no-optional-locks` and `diff-tree` from the commit each
-  repository was on when the daemon first saw the thread, summed over the repositories of the
-  folder (the one that holds it, or those at most two levels below it), with paths from the
-  session's folder; they are left out when there is none or nothing changed. The search is an
+  2026-10-05): `status` under `--no-optional-locks` and `diff-tree` from where each repository's
+  `HEAD` was when the thread started, read from the reflog at the thread's `thread_ts`
+  (`openfile.start_commit`, `rev-parse HEAD@{<seconds> +0000}`; nothing is kept in memory, so a
+  restart changes nothing), summed over the repositories of the folder (the one that holds it, or
+  those at most two levels below it), with paths from the session's folder; they are left out
+  when there is none or nothing changed, and are what is uncommitted or untracked where there is
+  no reflog. The file is opened once (`O_NOFOLLOW`, size from the descriptor, at most 1 MB read)
+  and its bytes are passed to `files_upload_v2`, so a path that changes after the check is not
+  followed. A search that Slack stops waiting for finishes and serves the next keystrokes, an
+  incomplete listing is kept for 3 seconds instead of 30, and at most 16 folders are kept. The search is an
   `external_select`, answered through `app.options` over Socket Mode, which needs nothing in the
   manifest. A file over 1 MB, a path that leaves the folder and a click or a query from anyone
   but the owner are refused. The bot needs the new scope `files:write`: an installed app is
@@ -180,6 +186,9 @@ All notable changes to this project are documented here. The format follows
   `trust.trusted_repository` takes the session's folder as a second argument; inside is decided
   on resolved paths, so a symlink that leads to a repository elsewhere and a worktree whose main
   checkout is elsewhere still need their own trust, as does any repository outside the folder.
+  So does a repository inside the folder whose `.git` leads out of it (a `.git` file or symlink
+  naming a git dir elsewhere, a worktree moved in by hand, a `commondir` naming another
+  repository): the key, the git dir and the common dir must all lie inside.
   `workspace_trusted`, the gate of a session's start and `!bind`, is unchanged. A repository
   that ends up inside the session's folder (a clone made during the session, say) now has git
   run under its own config, filters included, outside the approval prompt.

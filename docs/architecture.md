@@ -480,17 +480,24 @@ picker does under `respectGitignore`. Everywhere else `openfile.walk_files` read
 regular files, no symlinked folder entered, no `.git` entered, none of the usable repositories'
 roots (git lists those). `openfile.Listings` joins the two for a folder, within
 `LISTING_BUDGET` seconds (what is found by then is the answer), and keeps the result for
-`LISTING_TTL` seconds so the keystrokes of one query do not walk the folder again; `!open <words>`
-reads the same listing. Paths are relative to the session's folder.
+`LISTING_TTL` seconds (`LISTING_PARTIAL_TTL` when it ran out of time or a repository's git list
+failed or timed out, so an incomplete listing is not taken for a complete one) so the keystrokes
+of one query do not walk the folder again; `!open <words>` reads the same listing. A request for
+a folder being listed waits for that listing (a shielded task, so a keystroke whose 3 seconds ran
+out does not stop it), and at most `LISTING_KEPT` folders are kept, the expired ones removed on
+the next request. Paths are relative to the session's folder.
 
 The changed files are the union over the same repositories (`openfile.changed_in`): `status`
 under `--no-optional-locks` with `diff-tree` from the repository's start commit to `HEAD`. No
 command writes the index, and `status` does not report a file that was only touched
 (the measurements are in the `openfile` docstring and repeated by `tests/test_openfile.py`). The
-start commit is `openfile.Starts`: a dict by thread and repository in memory, set the first time
-the daemon sees the repository in the thread (`submit_to_session` and `open_word` call
-`Starts.seen`) and never reset, so a session that closes when idle and comes back keeps it. A
-repository with no commit starts from the empty tree, as the footer compares what is staged.
+start commit is `openfile.start_commit`: where the repository's `HEAD` was when the thread
+started, from HEAD's reflog at the thread's `thread_ts` (`git rev-parse --verify --quiet
+HEAD@{<seconds> +0000}`, through `--git-dir`, so a linked worktree reads its own log). It is
+computed when `!open` builds the list and kept nowhere: no handler touches it when a prompt
+arrives, and a daemon restarted any number of times gives the same answer. A reflog that does not
+go back that far gives its oldest entry (git's own answer); with no reflog, or no commit yet,
+there is no start and the list is the uncommitted and untracked files.
 
 Slack's search menu is an `external_select`: each keystroke is a `block_suggestion` request that
 Socket Mode delivers over the same connection and that Bolt routes to `app.options`, answered by
@@ -498,8 +505,12 @@ Socket Mode delivers over the same connection and that Bolt routes to `app.optio
 so the picker's actions block carries the thread in its `block_id` (`openfile.BLOCK_PREFIX`); the
 handler checks the owner and the workspace itself, then resolves the thread to the folder of its own
 entry in `state.json` (`slack_app.thread_folder`), never the channel's. A choice in any of the
-three menus is untrusted input resolved the same way: `openfile.openable` follows the links and
-refuses a path that leaves the folder, is no regular file or exceeds 1 MB. An option holds 75
+three menus is untrusted input resolved the same way: `openfile.read_openable` resolves the links,
+refuses a path that leaves the folder or is no regular file, then opens the resolved path once
+(`O_NOFOLLOW | O_NONBLOCK`), reads the size from that descriptor and reads at most 1 MB from it.
+Slack gets those bytes (`files_upload_v2(content=...)`): handing it the path would let its SDK
+open the path again, following links and with no size limit. When no match fits an option
+(every path over 150 characters) the message says so and offers no menu. An option holds 75
 characters of text (a longer path is shortened from the left with `…`) and 150 of value (a path
 that cannot fit is left out of the menus and stays reachable by `!open <path>`).
 
@@ -538,9 +549,12 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   names of its entries alone (a `HEAD`, with `objects` and `refs` or a `commondir`), so a folder
   that only looks like a git dir counts too. The check runs no command, so nothing in a folder
   can hold it. The daemon's own git (footer, `!status`, `!open`) has a second way in beside a
-  trusted key: a repository whose key lies strictly inside the folder the session started in,
-  when that folder passes `workspace_trusted` (`trust.trusted_repository`; both paths resolved, so
-  a symlink that leads elsewhere and a worktree whose main checkout is elsewhere are not inside).
+  trusted key: a repository whose key, git dir and common dir all lie strictly inside the folder
+  the session started in, when that folder passes `workspace_trusted`
+  (`trust.trusted_repository`; the paths resolved, so a symlink that leads elsewhere and a
+  worktree whose main checkout is elsewhere are not inside; a `.git` file or symlink naming a git
+  dir elsewhere, a worktree moved in by hand and a `commondir` that leads out are not either,
+  since git would read that repository's config).
   The gate for a session's start and for `!bind` is `workspace_trusted` alone and does not take
   it. Trust is by path, as in Claude Code: a folder placed at a path the owner
   trusted, or at the path of a worktree deleted and not pruned, passes for it, and a repository

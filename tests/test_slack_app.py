@@ -67,7 +67,7 @@ from tests.fakes import (
     slack_payload,
     split_turns,
 )
-from tests.git_layouts import committed, git
+from tests.git_layouts import commit_at, committed, git, git_init
 from tests.test_sessions import until
 from tests.test_setup import controls as setup_controls
 from tests.test_setup import state as setup_state
@@ -3357,9 +3357,54 @@ async def suggested(world: World, body: dict[str, Any]) -> list[str]:
     return [o["value"] for o in json.loads(response.body)["options"]]
 
 
+async def asked_open(world: World, text: str) -> None:
+    """`text` (an `!open` word) sent in THREAD, and the time its git commands need: `dispatch`
+    waits 50 ms, a listing runs several processes."""
+    await world.dispatch(reply(text, THREAD))
+    await world.settle(0.3)
+
+
 async def in_a_thread(world: World) -> None:
     """A session in THREAD, whose first sight is now (its start commit)."""
     await world.dispatch(message("hello", ts=THREAD))
+
+
+async def test_two_replies_sent_together_reach_the_queue_in_the_order_they_were_sent(
+    world: World, project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Nothing of `!open` runs when a prompt arrives: a slow repository lookup (a cold cache, a
+    # slow git) must not hold a prompt, or let a later one overtake it. With a lookup awaited
+    # before the arrival lock, the first reply here is overtaken by the second.
+    await in_a_thread(world)
+    session = world.sessions.get(CHANNEL, THREAD)
+    assert session is not None
+    queued: list[str] = []
+    submit = session.submit
+
+    async def spy(prompt: Any) -> Any:
+        queued.append(str(prompt))
+        return await submit(prompt)
+
+    monkeypatch.setattr(session, "submit", spy)
+    asked: list[Path] = []
+    real = world.sessions._deps.trusted_repository
+    delays = iter([0.15])
+
+    async def slow_lookup(directory: Path, session_folder: Path) -> Any:
+        asked.append(directory)
+        await asyncio.sleep(next(delays, 0.0))
+        return await real(directory, session_folder)
+
+    world.sessions._deps.trusted_repository = slow_lookup
+    first = asyncio.create_task(world.dispatch(reply("first", THREAD)))
+    await asyncio.sleep(0.03)
+    await world.dispatch(reply("second", THREAD))
+    await first
+    await world.settle(0.3)
+    assert queued == ["first", "second"]
+    looked_up = len(asked)  # the replies' own footers look a repository up when they end
+    await asked_open(world, "!open")
+    assert len(asked) > looked_up  # the control: the lookup is counted, and `!open` makes one
 
 
 async def test_open_alone_posts_the_picker_with_what_changed_in_the_session(
@@ -3372,7 +3417,7 @@ async def test_open_alone_posts_the_picker_with_what_changed_in_the_session(
     older = put(project, "notes.txt")
     os.utime(committed_since, (1_790_000_100, 1_790_000_100))
     os.utime(older, (1_790_000_000, 1_790_000_000))
-    await world.dispatch(reply("!open", THREAD))
+    await asked_open(world, "!open")
     (post,) = picker_posts(world)
     assert post["thread_ts"] == THREAD and post["channel"] == CHANNEL
     section, actions, context = post["blocks"]
@@ -3390,31 +3435,36 @@ async def test_a_session_that_changed_nothing_gets_the_search_alone(
     world: World, project: Path
 ) -> None:
     await in_a_thread(world)
-    await world.dispatch(reply("!open", THREAD))
+    await asked_open(world, "!open")
     (post,) = picker_posts(world)
     assert list(menus(post)) == [OPEN_SEARCH_ACTION]
 
 
-async def test_the_changes_are_counted_from_the_first_sight_even_after_the_process_closed(
-    world: World, project: Path
+async def test_the_changes_are_counted_from_where_head_was_when_the_thread_started(
+    world: World,
 ) -> None:
+    # Nothing is remembered by the daemon: HEAD's log says where the repository stood at THREAD's
+    # time (an epoch second), so a daemon restarted since gives the same answer.
+    folder = world.root / "app"
+    start = int(THREAD.split(".")[0])
+    repo = git_init(folder / "workspace").resolve()
+    commit_at(repo, "base.py", start - 1000)
+    commit_at(repo, "before.py", start - 500)  # moved HEAD before the thread began
+    commit_at(repo, "made_by_claude.py", start + 500)
+    put(repo, "uncommitted.py")
     await in_a_thread(world)
-    put(project, "made_by_claude.py")
-    git(project, "add", "-A")
-    git(project, "commit", "-q", "-m", "claude's commit")  # HEAD moves on after the first sight
-    session = world.sessions.get(CHANNEL, THREAD)
-    assert session is not None
-    await session.close()  # D9's idle close: the thread's entry stays, a session is rebuilt
-    await world.dispatch(reply("!open", THREAD))
+    await asked_open(world, "!open")
     (post,) = picker_posts(world)
-    assert [o["value"] for o in menus(post)[OPEN_CHANGED_ACTION]["options"]] == [
-        "made_by_claude.py"
+    changed = menus(post)[OPEN_CHANGED_ACTION]
+    assert sorted(o["value"] for o in changed["options"]) == [
+        "workspace/made_by_claude.py",
+        "workspace/uncommitted.py",
     ]
 
 
 async def test_a_folder_that_is_not_a_repository_gets_the_search_alone(world: World) -> None:
     await in_a_thread(world)
-    await world.dispatch(reply("!open", THREAD))
+    await asked_open(world, "!open")
     (post,) = picker_posts(world)
     assert list(menus(post)) == [OPEN_SEARCH_ACTION]
     assert post["blocks"][0]["text"]["text"] == "*Open a file*"
@@ -3432,7 +3482,7 @@ async def test_the_changes_of_a_repository_inside_the_folder_are_offered(
     await in_a_thread(world)
     put(nested, "docs/new.md")
     put(folder, "notes.txt")  # outside any repository: not a change
-    await world.dispatch(reply("!open", THREAD))
+    await asked_open(world, "!open")
     (post,) = picker_posts(world)
     changed = menus(post)[OPEN_CHANGED_ACTION]
     assert [o["value"] for o in changed["options"]] == ["workspace/docs/new.md"]
@@ -3445,7 +3495,7 @@ async def test_open_with_the_path_of_a_file_shares_it_into_the_thread(
     await in_a_thread(world)
     put(project, "docs/guide.md", "# Guide\n")
     posts = len(world.slack.calls_to("chat.postMessage"))
-    await world.dispatch(reply("!open docs/guide.md", THREAD))
+    await asked_open(world, "!open docs/guide.md")
     (asked,) = world.slack.calls_to("files.getUploadURLExternal")
     assert asked["filename"] == "guide.md" and asked["length"] == len(b"# Guide\n")
     assert [data for _, data in world.slack.uploaded] == [b"# Guide\n"]
@@ -3460,7 +3510,7 @@ async def test_open_with_the_path_of_a_file_shares_it_into_the_thread(
 async def test_a_path_needs_no_git(world: World) -> None:
     await in_a_thread(world)
     put(world.root / "app", "plain.txt")
-    await world.dispatch(reply("!open plain.txt", THREAD))
+    await asked_open(world, "!open plain.txt")
     assert len(opened(world)) == 1
 
 
@@ -3468,14 +3518,14 @@ async def test_a_name_that_matches_one_file_opens_it(world: World, project: Path
     await in_a_thread(world)
     put(project, "src/Parser.py")
     put(project, "src/lexer.py")
-    await world.dispatch(reply("!open PARS", THREAD))
+    await asked_open(world, "!open PARS")
     (done,) = opened(world)
     assert json.loads(done["files"])[0]["title"] == "src/Parser.py"
 
 
 async def test_a_name_that_matches_nothing_says_so(world: World, project: Path) -> None:
     await in_a_thread(world)
-    await world.dispatch(reply("!open nothing-like-it", THREAD))
+    await asked_open(world, "!open nothing-like-it")
     assert opened(world) == []
     assert world.ephemerals() == [texts.OPEN_NO_MATCH.format(words="nothing-like-it")]
 
@@ -3484,7 +3534,7 @@ async def test_a_name_that_matches_several_files_offers_them(world: World, proje
     await in_a_thread(world)
     for name in ("docs/setup.md", "src/setup.py", "setup/readme.md"):
         put(project, name)
-    await world.dispatch(reply("!open setup", THREAD))
+    await asked_open(world, "!open setup")
     assert opened(world) == []
     (post,) = picker_posts(world)
     assert post["thread_ts"] == THREAD
@@ -3505,7 +3555,7 @@ async def test_more_than_a_hundred_matches_list_a_hundred_and_say_so(
     await in_a_thread(world)
     for i in range(130):
         put(project, f"data/part{i:03}.csv")
-    await world.dispatch(reply("!open part", THREAD))
+    await asked_open(world, "!open part")
     (post,) = picker_posts(world)
     (menu,) = menus(post).values()
     assert len(menu["options"]) == 100
@@ -3518,7 +3568,7 @@ async def test_more_than_a_hundred_matches_list_a_hundred_and_say_so(
 async def test_a_file_over_one_megabyte_is_refused(world: World, project: Path) -> None:
     await in_a_thread(world)
     (project / "big.log").write_bytes(b"x" * ((1 << 20) + 1))
-    await world.dispatch(reply("!open big.log", THREAD))
+    await asked_open(world, "!open big.log")
     assert world.slack.calls_to("files.getUploadURLExternal") == []
     assert world.ephemerals() == [texts.OPEN_TOO_LARGE.format(path="big.log")]
 
@@ -3529,7 +3579,7 @@ async def test_without_the_files_write_scope_the_owner_is_told_what_to_do(
     await in_a_thread(world)
     put(project, "a.md")
     world.slack.responses["files.getUploadURLExternal"] = {"ok": False, "error": "missing_scope"}
-    await world.dispatch(reply("!open a.md", THREAD))
+    await asked_open(world, "!open a.md")
     assert world.ephemerals() == [texts.OPEN_NO_SCOPE]
     assert "files:write" in texts.OPEN_NO_SCOPE and "slack-app-manifest.json" in texts.OPEN_NO_SCOPE
 
@@ -3540,7 +3590,7 @@ async def test_another_slack_failure_names_its_code_and_no_file_content(
     await in_a_thread(world)
     put(project, "a.md", "secret words\n")
     world.slack.responses["files.completeUploadExternal"] = {"ok": False, "error": "ratelimited"}
-    await world.dispatch(reply("!open a.md", THREAD))
+    await asked_open(world, "!open a.md")
     assert world.ephemerals() == [texts.OPEN_FAILED.format(path="a.md", error="ratelimited")]
 
 
@@ -3570,7 +3620,7 @@ async def test_the_picker_stays_so_another_file_can_be_chosen(world: World, proj
     await in_a_thread(world)
     put(project, "a.py")
     put(project, "b.py")
-    await world.dispatch(reply("!open", THREAD))
+    await asked_open(world, "!open")
     (post,) = picker_posts(world)
     await world.dispatch(chosen_file(OPEN_SEARCH_ACTION, "a.py"))
     await world.dispatch(chosen_file(OPEN_SEARCH_ACTION, "b.py"))
@@ -3716,7 +3766,7 @@ async def test_a_name_is_looked_up_in_a_folder_with_no_repository(world: World) 
     plain = world.root / "app"
     put(plain, "docs/Guide.md")
     put(plain, "other.txt")
-    await world.dispatch(reply("!open guide", THREAD))
+    await asked_open(world, "!open guide")
     (done,) = opened(world)
     assert json.loads(done["files"])[0]["title"] == "docs/Guide.md"
     assert world.ephemerals() == []
@@ -3728,7 +3778,7 @@ async def test_a_name_that_matches_several_files_of_a_plain_folder_offers_them(
     await in_a_thread(world)
     for name in ("a/setup.md", "b/setup.py"):
         put(world.root / "app", name)
-    await world.dispatch(reply("!open setup", THREAD))
+    await asked_open(world, "!open setup")
     assert opened(world) == []
     (post,) = [p for p in world.slack.calls_to("chat.postMessage") if OPEN_MATCH_ACTION in str(p)]
     (select,) = menus(post).values()
