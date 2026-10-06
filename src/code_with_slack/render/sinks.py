@@ -55,7 +55,12 @@ UPDATE_WINDOW_SECONDS = 60.0
 # that just started to show its first few lines without waiting on threads that were already busy.
 UPDATE_BURST = 5
 # A message holds at most 12,000 characters and 50 blocks or task cards (measured 2026-09-28);
-# the margins keep a preview that arrives after its card, and the footer, inside them.
+# the margins keep a preview that arrives after its card, and the footer, inside them. A stream
+# and a post count the text of a collapsed container toward that cap; `chat.update` does not
+# (measured 2026-10-06, slack-sdk 3.44.1: 50 containers of 10,000 characters taken, nothing ever
+# refused). A message written by update therefore counts a container as its block only: at most
+# BLOCKS_LIMIT containers of MESSAGE_LIMIT characters, 495,000, which is what was measured in the
+# shape of a call with no card (45 of 11,000, taken).
 MESSAGE_LIMIT = 11_000
 BLOCKS_LIMIT = 45
 FALLBACK_LIMIT = 3_000
@@ -486,13 +491,22 @@ def piece_blocks(tool: _Tool, index: int) -> list[dict[str, Any]]:
     body = tool.pieces()[index - 1]
     if view.plain:
         return [context_block(body)]
+    if not piece_collapsed(tool):
+        return preview_blocks(body)
     if tool.cardless:
         return preview_containers(
             view.title, body, subtitle=view.summary, language=view.language, as_code=True
         )
-    if view.language == "diff":
-        return preview_containers(view.summary, body)
-    return preview_blocks(body)
+    return preview_containers(view.summary, body)
+
+
+def piece_collapsed(tool: _Tool) -> bool:
+    """Whether `piece_blocks` draws the tool's preview as collapsed containers, whose text a
+    `chat.update` does not count toward MESSAGE_LIMIT. A context block and code blocks (markdown)
+    always count."""
+    view = tool.update.shown_preview
+    assert view is not None
+    return not view.plain and (tool.cardless or view.language == "diff")
 
 
 def piece_chunk(tool: _Tool, index: int) -> dict[str, Any]:
@@ -1114,21 +1128,23 @@ class ReplySink:
     # What a message shows once it is no longer a stream: blocks.
 
     def _blocks(
-        self, message: _Message, end: Cursor | None
+        self, message: _Message, end: Cursor | None, *, posting: bool = False
     ) -> tuple[list[dict[str, Any]], Cursor | None]:
         """The blocks of the message's span: Claude's text as markdown, the tools' task cards
         (`_card_blocks`), the preview blocks after a card. With no `end` (the reply's last
         message) only as many as fit MESSAGE_LIMIT and BLOCKS_LIMIT, and where the reply goes on
         if it does not all fit. Once the reply's end has landed nothing opens a message after
         it: what arrives late is shown when it all fits, and else not at all, the last message
-        keeping what it showed (`_Held`) and no cursor being returned."""
-        blocks, overflow = self._render(message, end, None)
+        keeping what it showed (`_Held`) and no cursor being returned. The blocks are counted for
+        a `chat.update`, which takes a collapsed container's text without counting it; `posting`
+        counts it, as a `chat.postMessage` does."""
+        blocks, overflow = self._render(message, end, None, posting=posting)
         if overflow is None or end is not None or self._held is None:
             return blocks, overflow
         return self._render(message, None, self._held)[0], None
 
     def _render(
-        self, message: _Message, end: Cursor | None, held: _Held | None
+        self, message: _Message, end: Cursor | None, held: _Held | None, *, posting: bool = False
     ) -> tuple[list[dict[str, Any]], Cursor | None]:
         """`_blocks` for one reading of the span: with `held`, only what the message showed when
         the reply's end landed, as the span is now, and the note for a preview of a card of it
@@ -1171,7 +1187,7 @@ class ReplySink:
                         return blocks, (index, 0)
                     blocks += self._card_blocks(part.update)
                 for piece in pieces:
-                    length = len(part.pieces()[piece - 1])
+                    length = self._weight(part, piece, posting)
                     if held is not None and (index, piece) not in held.pieces:
                         # Late: left out, with the note when its card was shown, once.
                         if note_room and not noted and part.update.id in held.cards:
@@ -1220,6 +1236,14 @@ class ReplySink:
                 held.pieces |= {(index, piece) for piece in pieces}
         return held
 
+    @staticmethod
+    def _weight(tool: _Tool, piece: int, posting: bool) -> int:
+        """The characters a preview piece counts toward MESSAGE_LIMIT in a message: its text,
+        unless it is drawn as collapsed containers and the message is written by `chat.update`."""
+        if not posting and piece_collapsed(tool):
+            return 0
+        return len(tool.pieces()[piece - 1])
+
     def _cut_pieces(
         self, message: _Message, end: Cursor, base_blocks: int, base_size: int
     ) -> set[tuple[int, int]]:
@@ -1232,7 +1256,7 @@ class ReplySink:
                 if not isinstance(part, _Tool):
                     continue
                 for piece in self._tool_elements(part, floor, ceil)[1]:
-                    length = len(part.pieces()[piece - 1])
+                    length = self._weight(part, piece, False)
                     if (
                         base_blocks + used_blocks + 1 + reserved > BLOCKS_LIMIT
                         or base_size + used_size + length > MESSAGE_LIMIT
@@ -1258,12 +1282,13 @@ class ReplySink:
         return blocks, size
 
     async def _update_step(
-        self, message: _Message, end: Cursor | None
+        self, message: _Message, end: Cursor | None, left_out: Cursor | None = None
     ) -> tuple[bool, Cursor | None]:
         """Bring a stopped message to what the model says, with a `chat.update` when it shows
         something else: (written, where the reply goes on past the message). An update never
         notifies (measured 2026-09-29). Nothing is written for a message whose stream already
-        shows the model."""
+        shows the model. `left_out` is where the reply goes on if Slack refuses the content
+        (`_post_step`: the message holds what its post took, and no more)."""
         assert message.ts is not None
         blocks, overflow = self._blocks(message, end)
         footer = self._footer_of(message)
@@ -1304,7 +1329,7 @@ class ReplySink:
                 # else would say the message is short of the model, so that is kept.
                 message.shown, message.exact, message.footer = blocks, False, footer
                 message.short = message.refused
-                return True, overflow
+                return True, overflow if left_out is None else left_out
             return False, None
         message.shown, message.exact, message.footer = blocks, False, footer
         message.short = False
@@ -1344,8 +1369,12 @@ class ReplySink:
         return True
 
     async def _post_step(self, message: _Message) -> tuple[bool, Cursor | None]:
-        """Post the message that continues a stopped one, with the blocks of its span."""
-        blocks, overflow = self._blocks(message, None)
+        """Post the message that continues a stopped one, with the blocks of its span as a post
+        takes them, then bring it to what an update takes: a container's text counts toward a
+        post's limit and not toward an update's, so what the post left out of its span reaches
+        the same message and no further one is opened for it. If that update is refused, the
+        reply goes on from where the post stopped."""
+        blocks, overflow = self._blocks(message, None, posting=True)
         footer = self._footer_of(message)
         blocks += footer
         if not blocks:
@@ -1388,7 +1417,7 @@ class ReplySink:
         message.ts = str(posted["ts"])
         message.shown, message.footer = blocks, footer
         self._retrack()
-        return True, overflow
+        return await self._update_step(message, None, overflow)
 
     @staticmethod
     def _first_words(plan: _Plan) -> str:
