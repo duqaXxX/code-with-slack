@@ -15,7 +15,14 @@ from code_with_slack.approvals import Approve
 from code_with_slack.render import sinks
 from code_with_slack.render.status import Status
 from tests.fakes import CHANNEL, THREAD, CanUseToolCall, FakeClock, sdk_messages, split_turns
-from tests.test_sessions import Harness, is_report, split_background, until
+from tests.test_sessions import (
+    Harness,
+    footer_writes,
+    is_report,
+    nested_background_ending_mid_turn,
+    split_background,
+    until,
+)
 
 WRITES = ("chat.postMessage", "chat.startStream", "chat.appendStream", "chat.stopStream")
 
@@ -319,6 +326,31 @@ async def test_a_reply_whose_appends_slack_refuses_ends_whole_with_the_checkmark
     assert h.state.thread(CHANNEL, THREAD).open_replies == ()
     # the footer is in the closing message, as for a reply past STREAM_SECONDS
     assert h.slack.calls_to("chat.postMessage")[-1]["blocks"][-1]["type"] == "context"
+
+
+async def test_a_reply_whose_stream_slack_stopped_is_not_ended_while_its_turn_is_still_active(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # Issue #149 as it was seen live: a refused append had already stopped the stream, so the
+    # early end took the form of a closing message with nothing in it, and no footer followed.
+    head, command_end, tail = nested_background_ending_mid_turn()
+    h = harness_for({"turns": [head]})
+    h.slack.responses["chat.appendStream"] = {"ok": False, "error": "msg_too_long"}
+    session = h.session()
+    turn = await session.submit("start it")
+    await until(lambda: bool(h.slack.calls_to("chat.startStream")))
+    h.clients[0].inject(command_end)  # its card is the append Slack refuses
+    await until(lambda: len(h.slack.calls_to("chat.stopStream")) == 1)  # which stops the stream
+    await asyncio.sleep(0.3)
+    assert session._active is not None and not turn.done.is_set()
+    assert h.slack.calls_to("chat.postMessage") == []  # no closing message before the turn ends
+
+    h.clients[0].inject(tail)
+    await asyncio.wait_for(turn.done.wait(), 2)
+    await until(lambda: h.reactions()[-1] == Status.DONE.value)
+    assert len(footer_writes(h)) == 1  # the turn's own end wrote the footer, once
+    empty = [sinks.context_block(sinks.ZERO_WIDTH_SPACE)]
+    assert all(a.get("blocks") != empty for _, a in h.slack.calls)
 
 
 async def test_a_reply_slack_refuses_to_grow_by_append_and_by_update_shows_the_cross(

@@ -1509,7 +1509,11 @@ class ThreadSession:
             # D1: the task that just ended may have been the last thing keeping this reply's
             # stream open; `_notified` above, if it fired, already re-armed the wait.
             owed = self._still_owed(holder) or self._injected_expected or not self._settled.is_set()
-            if not owed:
+            # A task promoted out of a subagent's call sits here while its turn still runs: that
+            # turn's own `_close_reply` ends the reply, with the footer, as `_sweep_closed_out`
+            # also leaves it to.
+            writing = self._active.renderer if self._active is not None else None
+            if not owed and holder is not writing:
                 self._track_landing(await holder.close_out(), holder.sink)
                 self._show_thread_status()  # its footer may be what counts the tasks now
                 # D10: `!stop` already reacted ✅ itself; skipped so a stopped task's end does
@@ -1755,6 +1759,36 @@ class ThreadSession:
         ):
             self._note_status(Status.DONE)
             await self._status.show(Status.DONE)
+            return
+        logger.info(
+            "no done reaction in %s/%s, held by: %s",
+            self.channel_id,
+            self.thread_ts,
+            ", ".join(self._done_held_by()),
+        )
+
+    def _done_held_by(self) -> list[str]:
+        """What keeps `_react_done_if_idle` from ✅ right now, as flag names and counts, never
+        content: every condition it and `_quiet` read, so a root left on ⏳ can be traced to one
+        of them from the log."""
+        counts = {
+            "waiting_for_owner": len(self._waiting),
+            "sent": len(self._sent),
+            "pending_submits": self._pending_submits,
+            "queued": self._queue.qsize(),
+            "unlanded": len(self._unlanded),
+        }
+        flags = {
+            "active": self._active is not None,
+            "taken": self._taken is not None,
+            "unsettled": not self._settled.is_set(),
+            "error_standing": self._error_standing,
+        }
+        held = [f"{name}={count}" for name, count in counts.items() if count]
+        held += [name for name, on in flags.items() if on]
+        if running := self._running_kinds():
+            held.append(f"running={running}")
+        return held
 
     def _track_landing(self, landed: bool, reply: Sink) -> None:
         """A reply whose end failed is not done: no ✅ until its one retry lands, ❌ if that

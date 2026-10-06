@@ -4202,6 +4202,61 @@ async def test_a_subagent_s_command_that_outlives_its_call_is_a_running_shell(
     assert h.clients[0].stopped_tasks == [command]
 
 
+def nested_background_ending_mid_turn() -> tuple[list[Any], list[Any], list[Any]]:
+    """The recorded subagent whose command outlives it, reordered as when the owner's turn goes
+    on working meanwhile (issue #149): the turn up to the end of the agent's work; the end of
+    the command the agent left running; the turn's last text and its result. Only the order is
+    arranged by hand; every frame is recorded."""
+    first, work, _report, later, _second = split_nested_background()
+    launched = next(
+        i
+        for i, m in enumerate(first)
+        if isinstance(m, UserMessage)
+        and isinstance(m.content, list)
+        and any(isinstance(b, ToolResultBlock) for b in m.content)
+    )
+    command_end = next(i for i, m in enumerate(later) if isinstance(m, TaskNotificationMessage))
+    return [*first[: launched + 1], *work], later[: command_end + 1], first[launched + 1 :]
+
+
+def footer_writes(h: Harness) -> list[str]:
+    """The Slack methods whose blocks carried a reply's footer, in call order."""
+    return [m for m, a in h.slack.calls if {"type": "divider"} in (a.get("blocks") or [])]
+
+
+async def test_a_reply_s_end_that_brings_no_checkmark_logs_what_held_it(
+    harness_for: Callable[..., Harness], caplog: pytest.LogCaptureFixture
+) -> None:
+    # Issue #160: a root left on ⏳ could not be traced, since the check returned in silence.
+    first = split_background()[0]
+    h = harness_for({"turns": [first]})
+    with caplog.at_level(logging.INFO, logger="code_with_slack.sessions"):
+        await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
+        await asyncio.sleep(0.1)
+    held = [r.getMessage() for r in caplog.records if "no done reaction" in r.getMessage()]
+    assert held and all("running=1 shell" in line for line in held)  # the command still runs
+    assert h.reactions()[-1] == Status.WORKING.value
+
+
+async def test_the_reply_is_not_ended_while_its_turn_is_still_active(
+    harness_for: Callable[..., Harness],
+) -> None:
+    head, command_end, tail = nested_background_ending_mid_turn()
+    h = harness_for({"turns": [[*head, *command_end]]})
+    session = h.session()
+    turn = await session.submit("start it")
+    await until(lambda: bool(h.slack.calls_to("chat.startStream")))
+    await asyncio.sleep(0.2)
+    # The turn has no result yet: the end of the subagent's command may not end its reply.
+    assert session._active is not None and not turn.done.is_set()
+    assert h.slack.calls_to("chat.stopStream") == []
+
+    h.clients[0].inject(tail)
+    await asyncio.wait_for(turn.done.wait(), 2)
+    await until(lambda: h.reactions()[-1] == Status.DONE.value)
+    assert footer_writes(h) == ["chat.stopStream"]  # ended once, by its own turn, with the footer
+
+
 async def test_a_subagent_s_command_and_the_agent_s_second_end_close_the_reply_as_before(
     harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
 ) -> None:
