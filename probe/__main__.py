@@ -26,6 +26,9 @@ from claude_agent_sdk._cli_version import __cli_version__
 from probe.claims import CLAIMS, broken, can_certify, certificate, checklist, evaluate, report
 from probe.features import by_hand
 from probe.scenes import run_scenes
+from probe.surface import check as check_surface
+from probe.surface import read_reference, set_aside, surface
+from probe.surface import report as surface_report
 
 REPO = Path(__file__).resolve().parents[1]
 CERTIFIED = Path(__file__).resolve().parent / "certified-versions.json"
@@ -105,6 +108,13 @@ def run(path: Path, force: bool) -> int:
     # Read before the scenes: a broken map stops the run before it spends tokens, and cannot
     # come between a finished run and its verdict.
     left = by_hand()
+    # The SDK surface map, on the release this run is on: a symbol the package no longer defines
+    # needs no scene to be known, so it stops the run here.
+    mapped = check_surface(surface(), read_reference(), set_aside())
+    print(surface_report(mapped) + "\n")
+    if mapped.broken:
+        print("Not certified: the package no longer defines a symbol the daemon uses.")
+        return 3
     seen = asyncio.run(run_scenes(log))
     results = [evaluate(claim, seen.get(claim.id)) for claim in CLAIMS]
     print(report(results, __cli_version__, sdk))
