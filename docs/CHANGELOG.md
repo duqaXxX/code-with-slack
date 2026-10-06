@@ -199,6 +199,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `ThreadSession._react_done_if_idle` logs one line at INFO when a reply's end does not bring
+  ✅ (issue #160): `no done reaction in <channel>/<thread>, held by: …`, with the conditions
+  that held it as flag names and counts (`running=1 shell`, `sent=1`, `unsettled`), never
+  content. The check returned in silence before, so a root left on ⏳ could not be traced.
 - A reply Claude Code wrote itself about a failure (an `AssistantMessage` with `error`) shows its
   text, as the terminal does: for a 529, a sentence that starts `API Error: 529 Overloaded.` and
   says to try again, where the thread showed only the category,
@@ -466,6 +470,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A reply is no longer ended while the turn that writes it still runs (issue #149). A command a
+  subagent starts and that outlives the subagent's Bash call becomes a task of the reply, and
+  when it ended the task branch of `ThreadSession._dispatch` ended that reply without checking
+  that its turn was over: the stream stopped with no footer, or, when Slack had already stopped
+  the stream, a closing message with nothing in it was posted, and the turn's own end then
+  wrote no footer. The branch now leaves the active turn's reply to that turn's
+  `_close_reply`, as `_sweep_closed_out` does. Replayed in `tests/test_sessions.py` and
+  `tests/test_sessions_stream.py` from the recorded `subagent-nested-background.jsonl`, with
+  the turn's last text and result moved after the command's end.
 - An agent continued with `SendMessage` in a daemon restarted since the agent's first run no
   longer starts a turn of its own (issue #150). Its frames name the `Agent` call that first
   started it, which the restarted daemon never saw, so `ThreadSession._dispatch` opened a turn
