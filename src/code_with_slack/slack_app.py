@@ -769,7 +769,7 @@ def build_app(
             body["actions"][0].get("action_id"),
             (body.get("channel") or {}).get("id"),
             click_thread(body),
-            body["message"]["ts"],
+            (body.get("message") or {}).get("ts"),
             ", ".join(f"{name}={value}" for name, value in facts.items()),
         )
 
@@ -828,7 +828,7 @@ def build_app(
             "accepted a setup start in %s/%s on message %s",
             channel,
             thread_ts,
-            body["message"]["ts"],
+            (body.get("message") or {}).get("ts"),
         )
 
     async def on_setup_model(ack: AsyncAck, body: dict[str, Any]) -> None:
