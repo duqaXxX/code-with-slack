@@ -10,6 +10,7 @@ from claude_agent_sdk.types import (
     TaskNotificationMessage,
     TaskStartedMessage,
     TaskUpdatedMessage,
+    TextBlock,
     ToolUseBlock,
 )
 
@@ -135,6 +136,52 @@ async def test_logged_out_cli_gets_the_login_instructions() -> None:
     sink, renderer = await render(sdk_messages("auth-failed"))
     assert renderer.auth_failed
     assert texts.AUTH_FAILED in "".join(sink.texts)
+
+
+def error_reply(messages: list[Message]) -> AssistantMessage:
+    """The reply Claude Code wrote itself after the API refused the turn."""
+    (reply,) = [m for m in messages if isinstance(m, AssistantMessage) and m.error is not None]
+    return reply
+
+
+async def test_an_api_error_shows_the_text_claude_code_wrote() -> None:
+    # Recorded on SDK 0.2.163 (CLI 2.1.286) against a local endpoint answering 529 (issue #157).
+    messages = sdk_messages("server-error")
+    reply = error_reply(messages)
+    assert reply.error == "server_error"
+    (block,) = reply.content
+    assert isinstance(block, TextBlock) and block.text.startswith("API Error: 529")
+    sink, renderer = await render(messages)
+    # Once: the result repeats the same sentence, and the category is not shown beside it.
+    assert "".join(sink.texts) == block.text
+    assert sink.notices == sink.texts
+    assert renderer.error == "server_error" and not renderer.auth_failed
+
+
+async def test_an_api_error_with_no_words_of_its_own_lets_the_result_speak() -> None:
+    # No such message was recorded: the recorded one, with its blocks taken out. The result is
+    # the recorded one, and carries the sentence.
+    messages = sdk_messages("server-error")
+    reply = error_reply(messages)
+    bare = [dataclasses.replace(m, content=[]) if m is reply else m for m in messages]
+    sink, renderer = await render(bare)
+    assert renderer.result is not None and renderer.result.result
+    assert "".join(sink.texts) == renderer.result.result
+
+
+async def test_an_api_error_with_no_words_anywhere_shows_its_category() -> None:
+    messages = sdk_messages("server-error")
+    reply = error_reply(messages)
+    silent = [
+        dataclasses.replace(m, content=[])
+        if m is reply
+        else dataclasses.replace(m, result=None)
+        if isinstance(m, ResultMessage)
+        else m
+        for m in messages
+    ]
+    sink, _ = await render(silent)
+    assert "".join(sink.texts) == texts.ERROR_REPLY.format(error="server_error")
 
 
 async def test_an_interrupted_turn_closes_every_open_line_without_error() -> None:

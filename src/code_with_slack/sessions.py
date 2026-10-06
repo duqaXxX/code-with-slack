@@ -1562,6 +1562,14 @@ class ThreadSession:
             # A report turn has no prompt behind it: only now does `_thread_line` read it.
             self._show_thread_status()
         active = self._active
+        if isinstance(message, AssistantMessage) and message.error is not None:
+            # The category only: the words Claude Code wrote about it go to the thread.
+            logger.warning(
+                "Claude Code reported an error in %s/%s: %s",
+                self.channel_id,
+                self.thread_ts,
+                message.error,
+            )
         await active.renderer.feed(message)
         await self._adopt_promoted(active.renderer)
         if isinstance(message, ResultMessage):

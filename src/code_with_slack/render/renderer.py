@@ -22,6 +22,7 @@ from claude_agent_sdk.types import (
     TaskProgressMessage,
     TaskStartedMessage,
     TaskUpdatedMessage,
+    TextBlock,
     ToolResultBlock,
     ToolUseBlock,
 )
@@ -150,6 +151,8 @@ class TurnRenderer:
         self._break_due = False  # the text block that just started follows text directly
         self.result: ResultMessage | None = None
         self.auth_failed = False
+        # The category of the last reply Claude Code wrote itself about a failure, if any.
+        self.error: str | None = None
         # The reply's footer, as decided by the turn(s) that have closed it so far (a report
         # turn can close it again): `close_out` ends the reply with it once nothing is owed.
         self._footer: str | None = None
@@ -198,6 +201,8 @@ class TurnRenderer:
                 self.result = message
                 if not self._wrote_text and message.result:
                     await self._text(message.result)
+                elif not self._wrote_text and self.error is not None:
+                    await self._text(texts.ERROR_REPLY.format(error=self.error), notice=True)
             case _:
                 pass
 
@@ -321,7 +326,14 @@ class TurnRenderer:
             await self._text(texts.AUTH_FAILED, notice=True)
             return
         if message.error is not None:
-            await self._text(texts.ERROR_REPLY.format(error=message.error), notice=True)
+            # Claude Code wrote this reply itself: its words name the failure and what to do
+            # next, as the terminal shows them. In the recorded 529 they come in this message
+            # with no stream event of their own, so they are read from its blocks. With no words
+            # here the result speaks: it repeats them, and `feed` falls back to the category.
+            self.error = message.error
+            words = "".join(b.text for b in message.content if isinstance(b, TextBlock)).strip()
+            if words:
+                await self._text(("\n\n" if self._wrote_text else "") + words, notice=True)
             return
         for block in message.content:
             await self._block(block, message.parent_tool_use_id)

@@ -199,7 +199,7 @@ for a run of calls and one for a line with a view of its own (see below).
 | `TaskProgressMessage` | the line shows the task's description |
 | `TaskNotificationMessage`, a terminal `TaskUpdatedMessage` | the line completes, shows an error when the task failed, or completes with `Stopped` |
 | `AssistantMessage.error` `authentication_failed` | a note asking to run `claude` and `/login` on the host |
-| any other `AssistantMessage.error` | `Claude Code reported an error` with the error code |
+| any other `AssistantMessage.error` | the text of the message, which Claude Code wrote itself (for a 529, `API Error: 529 Overloaded.` and what to do next), as a notice. With no text block the turn's result speaks, and `Claude Code reported an error` with the error code shows only when the result has no text either. The session logs a warning with the channel, the thread and the code |
 | `SystemMessage` `compact_boundary` | `Compacted the conversation: 15.0k → 2.0k tokens.`, from its `compact_metadata`, whether the owner asked (`!compact`) or Claude Code compacted on its own |
 | `ResultMessage` | its text, when nothing else was written (local commands such as `/usage` send no deltas) |
 
