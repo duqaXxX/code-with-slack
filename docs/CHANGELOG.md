@@ -199,6 +199,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `docs/features.md` and `docs/setup.md` say what a `!stop` rings as measured (issue #67): typed
+  in the thread, one push that shows `Stopped.`; typed in the channel, none. Both said that a
+  `!stop` rings once wherever it is typed, through the stop of the reply's stream.
 - The case of issue #149 is also replayed from a recording in the order the CLI sent it:
   `tests/fixtures/sdk/subagent-nested-background-mid-turn.jsonl` (CLI 2.1.286, recorded
   2026-10-06). A subagent leaves `sleep 15` running and the owner's turn runs a 40-second
