@@ -199,6 +199,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- A reply Claude Code wrote itself about a failure (an `AssistantMessage` with `error`) shows its
+  text, as the terminal does: for a 529, a sentence that starts `API Error: 529 Overloaded.` and
+  says to try again, where the thread showed only the category,
+  ``Claude Code reported an error: `server_error` ``. The rule covers every category except
+  `authentication_failed`, which keeps its login note. A message with no text block leaves the
+  word to the turn's result, which repeats the sentence, and the category line shows only when
+  the result has no text either (`TurnRenderer._assistant`, `TurnRenderer.feed`). The daemon log
+  gets a warning with the channel, the thread and the category, never the text
+  (`ThreadSession`, issue #157). Recorded for `server_error` on a 529 against a local endpoint,
+  SDK 0.2.163 with CLI 2.1.286, on 2026-10-06 (fixture `server-error.jsonl`). The text for the
+  other categories that CLI can send has not been recorded: `billing_error`, `rate_limit`,
+  `overloaded`, `invalid_request`, `model_not_found`, `max_output_tokens`, `unknown`,
+  `oauth_org_not_allowed`, `account_on_hold`, `verification_required` and
+  `cloud_credential_error`.
 - A message written by `chat.update` no longer counts the text of its collapsed containers (an
   Edit's diff, with a card or without) toward the 11,000 characters a message holds, only the
   block each takes of the 45. A stopped message, or a message whose span is fixed, holds several

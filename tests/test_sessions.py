@@ -822,6 +822,23 @@ async def test_logs_hold_no_message_content(
     assert "SECRET-PROMPT-CONTENT" not in caplog.text
 
 
+async def test_an_api_error_is_logged_by_category_and_thread_never_by_its_text(
+    harness_for: Callable[..., Harness], caplog: pytest.LogCaptureFixture
+) -> None:
+    messages = sdk_messages("server-error")
+    (words,) = [m.result for m in messages if isinstance(m, ResultMessage)]
+    assert words
+    h = harness_for({"turns": [messages]})
+    with caplog.at_level(logging.DEBUG, logger="code_with_slack"):
+        session = h.session()
+        turn = await session.submit("hello")
+        await asyncio.wait_for(turn.done.wait(), 2)
+    logged = [r.getMessage() for r in caplog.records if r.name == "code_with_slack.sessions"]
+    (line,) = [m for m in logged if "reported an error" in m]
+    assert line.endswith(f"{session.channel_id}/{session.thread_ts}: server_error")
+    assert not any(words in m for m in logged)
+
+
 async def test_bind_is_refused_while_a_thread_of_the_channel_is_busy(
     harness_for: Callable[..., Harness], tmp_path: Path
 ) -> None:
