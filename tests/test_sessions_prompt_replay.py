@@ -205,6 +205,88 @@ async def test_a_prompt_not_taken_in_gets_its_own_turn_and_reply(
     await assert_stop_has_nothing_to_stop(h, session)
 
 
+async def own_turn_follows(h: Harness, session: Any, r: Scene, prompt: Any) -> None:
+    """The report turn has ended with no replay of the prompt in it: the prompt is still owed a
+    turn, which Claude Code starts and replays it at (`at-init`, `after-tools`)."""
+    await until(lambda: session._active is None)
+    assert not prompt.done.is_set()
+    assert list(session._sent) == [prompt]  # held across the report's result
+    play(h, r.own)
+    await asyncio.wait_for(prompt.done.wait(), 2)
+    await until(lambda: session._active is None)
+    assert_nothing_runs(h, session)
+    assert texts.TAKEN_INTO_REPLY_ONE not in said(h)
+    assert "PINEAPPLE" in said(h)
+    # The first reply (which the report also renders into), and the prompt's own.
+    assert len(h.slack.calls_to("chat.startStream")) == 3
+    await assert_stop_has_nothing_to_stop(h, session)
+
+
+@pytest.mark.parametrize("name", ["at-init", "after-tools"])
+async def test_a_prompt_sent_into_a_report_turn_but_not_taken_in_keeps_its_place(
+    harness_for: Callable[..., Harness], name: str
+) -> None:
+    r = scene(name)
+    if r.call_id is None:  # `at-init` makes no call: the prompt goes in once the turn runs
+        h = harness_for({})
+        session = h.session()
+        await first_turn(h, session, r)
+        h.clients[0].inject(r.head)
+        await until(lambda: session._active is not None)
+        h.clients[0].inject(r.notice)
+        await until(lambda: not session._tasks)
+        prompt = await send(h, session, PROMPT)
+    else:
+        h = harness_for({})
+        session = h.session()
+        prompt = await prompt_during_the_report_turn(h, session, r)
+    play(h, r.rest)  # the report's one result, no replay in it
+    await own_turn_follows(h, session, r, prompt)
+
+
+@pytest.mark.parametrize("name", ["at-init", "after-tools"])
+async def test_a_prompt_given_to_a_report_turn_that_did_not_take_it_is_put_back(
+    harness_for: Callable[..., Harness], name: str
+) -> None:
+    # `_start_turn` makes the prompt the report turn's owner; with no replay in the turn the
+    # result's origin sends it back to wait for its own turn.
+    r = scene(name)
+    h = harness_for({})
+    session = h.session()
+    await first_turn(h, session, r)
+    prompt = await send(h, session, PROMPT)
+    play(h, [*r.notice, *r.head, *r.rest])
+    await until(lambda: session._active is None and prompt in session._sent)
+    await own_turn_follows(h, session, r, prompt)
+
+
+async def test_stop_after_a_prompt_was_taken_in_releases_it_once(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # Assembled from two recordings, not recorded as one: `during-tool` up to the replay, then
+    # the interrupted ending of `stop-queued`. What Claude Code does with a prompt it took in
+    # when an interrupt arrives is not measured; this pins what the daemon does if the result is
+    # the interrupted one with an injected origin.
+    r = scene("during-tool")
+    ending = scene("stop-queued").rest[-3:]  # the result of the cut command, the note, the result
+    assert isinstance(ending[-1], ResultMessage) and ending[-1].terminal_reason == "aborted_tools"
+    h = harness_for({})
+    session = h.session()
+    prompt = await prompt_during_the_report_turn(h, session, r)
+    replayed = next(
+        i for i, f in enumerate(r.rest) if isinstance(f, UserMessage) and isinstance(f.content, str)
+    )
+    play(h, r.rest[: replayed + 1])
+    await until(lambda: bool(session._active.taken))
+    assert await session.stop() is True
+    h.clients[0].inject(ending)
+    await asyncio.wait_for(prompt.done.wait(), 2)
+    await until(lambda: session._active is None)
+    assert_nothing_runs(h, session)
+    assert said(h).count(texts.TAKEN_INTO_REPLY_ONE) == 1
+    await assert_stop_has_nothing_to_stop(h, session)
+
+
 async def test_stop_during_a_report_turn_with_a_prompt_queued_leaves_nothing_behind(
     harness_for: Callable[..., Harness],
 ) -> None:

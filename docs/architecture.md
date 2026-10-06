@@ -347,7 +347,11 @@ adds the note `texts.TAKEN_INTO_REPLY_ONE` to the reply, through the same end no
 restart's `N messages were not sent`. A prompt whose replay did not come during the turn waits
 for its own turn. The worker sends one prompt at a time, so a turn takes in at most one today.
 An `interrupt()` with such a prompt queued ends the report turn with `error_during_execution`,
-and the prompt then runs as a turn of its own.
+and the prompt then runs as a turn of its own. A prompt already taken in when `!stop` ends the turn with an injected result is
+released with the note like any other (not measured: what Claude Code does with it on an
+interrupt). If the session is abandoned first (`ThreadSession._abandon`: a client error, a close,
+a restart), the prompt is listed among the messages not sent, whether or not Claude Code had
+taken it in; its replay is not kept.
 
 `!stop`, a restart, an error that cuts a turn, an idle close and `SessionGone` end the reply
 through the same path, at once: the stream stops with the footer and, for `!stop`, the stopped
