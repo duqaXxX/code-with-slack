@@ -2341,6 +2341,7 @@ async def test_a_late_preview_never_opens_a_message_after_the_ending(slack: Fake
     await sink.close_out("footer")
     [ending] = slack.calls_to("chat.postMessage")
     updates = len(slack.calls_to("chat.update"))
+    await sink.task(tool("late", "Write", "in_progress"))
     await sink.task(tool("late", "Write", preview=late_preview()))
     await settled()
     assert slack.calls_to("chat.postMessage") == [ending]
@@ -2378,7 +2379,7 @@ async def test_late_words_never_remove_a_preview_that_was_shown(slack: FakeSlack
     await settled()
     await sink.finish([])
     await sink.close_out("footer")
-    await sink.text("late " * 600)  # 3,000 characters, with room for about a third: none shows
+    await sink.text("late " * 1_200)  # 6,000 characters, with room for 5,000: none shows
     await settled()
     assert len(slack.created_ts) == 1
     blocks = slack.calls_to("chat.update")[-1]["blocks"]
@@ -2408,20 +2409,27 @@ async def test_late_cards_never_remove_a_preview_that_was_shown(slack: FakeSlack
 async def test_a_late_preview_never_removes_the_one_a_later_call_showed(
     slack: FakeSlack,
 ) -> None:
-    sink = reply(slack)
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("w" * 9_000)  # b's container adds no characters to an update: the words do
     await sink.task(tool("a", "Write", "in_progress", task=True))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
     await sink.task(tool("b", "Write", preview=preview_of(95)))  # about 9,000 characters
     await settled()
     await sink.finish([])
     await sink.close_out("footer")
     await sink.task(tool("a", "Write", preview=preview_of(32)))  # about 3,000: no room left
     await settled()
-    assert len(slack.created_ts) == 1
-    blocks = slack.calls_to("chat.update")[-1]["blocks"]
+    assert len(slack.stream_ts) == 1 and len(slack.posted_ts) == 1  # and the closing message
+    blocks = [u for u in slack.calls_to("chat.update") if u["ts"] == slack.stream_ts[0]][-1][
+        "blocks"
+    ]
     assert shows(blocks, marker(94))  # b's preview, whole
     assert cards_of(blocks) == {"a": "complete"}  # b never had a card
     assert CUT_NOTE in blocks
-    assert sum(len(sinks.block_text(b)) for b in blocks) <= sinks.MESSAGE_LIMIT + 100
+    counted = [b for b in blocks if b["type"] != "container"]
+    assert sum(len(sinks.block_text(b)) for b in counted) <= sinks.MESSAGE_LIMIT + 100
 
 
 async def test_a_failed_closing_post_is_not_a_written_end(
@@ -2479,7 +2487,7 @@ async def test_late_text_past_the_limit_is_cut_and_never_opens_a_message(
     await settled()
     assert len(slack.calls_to("chat.postMessage")) == posted
     for update in slack.calls_to("chat.update"):
-        assert sum(len(sinks.block_text(b)) for b in update["blocks"]) <= sinks.MESSAGE_LIMIT
+        assert sum(len(sinks.block_text(b)) for b in update["blocks"]) <= 12_000  # Slack's cap
 
 
 async def test_the_running_counts_after_the_end_edit_the_message_that_carries_the_footer(
@@ -2626,3 +2634,239 @@ async def test_a_refused_post_logs_the_method_and_the_sizes_without_content(
     assert 0 < sent < sinks.MESSAGE_LIMIT
     assert f"text {sent}, elements 1, cards 0" in line
     assert "secret" not in caplog.text and "start" not in caplog.text
+
+
+# What a message written by `chat.update` holds: a collapsed container's text does not count
+# toward MESSAGE_LIMIT there (measured 2026-10-06, slack-sdk 3.44.1: `chat.update` took 50
+# containers of 10,000 characters and refused nothing; a stream and a post count the text).
+
+
+def large_diff(i: int, chars: int = 9_000) -> Preview:
+    """A diff of about `chars` characters: the size of the largest Edit previews, which a
+    message of MESSAGE_LIMIT cannot hold two of."""
+    body = "\n".join(f"+{n:>4} {'x' * 90}" for n in range(chars // 96))
+    return Preview(f"Update(f{i}.txt)", "Added lines", body, "diff")
+
+
+def containers_of(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [b for b in blocks if b["type"] == "container"]
+
+
+async def test_a_stopped_message_holds_large_diffs_a_stream_would_continue(
+    slack: FakeSlack,
+) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.task(tool("e0", "Edit", preview=large_diff(0)))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    for i in range(1, 4):
+        await sink.task(tool(f"e{i}", "Edit", preview=large_diff(i)))
+    await settled()
+    assert slack.calls_to("chat.postMessage") == [] and len(slack.stream_ts) == 1
+    update = slack.calls_to("chat.update")[-1]
+    assert update["ts"] == slack.stream_ts[0]
+    assert [b["title"]["text"] for b in containers_of(update["blocks"])] == [
+        f"Update(f{i}.txt)" for i in range(4)
+    ]
+
+
+async def test_a_stream_still_continues_in_a_new_message_past_the_limit_with_diffs(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)  # no stop: the diffs go to a stream, which counts their text
+    for i in range(4):
+        await sink.task(tool(f"e{i}", "Edit", preview=large_diff(i)))
+    await settled()
+    assert len(slack.stream_ts) >= 2
+    for chunks in slack.calls_to("chat.startStream") + slack.calls_to("chat.appendStream"):
+        shown = sum(
+            len(sinks.block_text(b))
+            for c in chunks.get("chunks", [])
+            if c["type"] == "blocks"
+            for b in c["blocks"]
+        )
+        assert shown <= sinks.MESSAGE_LIMIT
+
+
+async def test_a_fixed_span_no_longer_cuts_a_late_diff_for_its_size(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.task(tool("t0", "Edit", "in_progress"))
+    await sink.text("w" * (sinks.MESSAGE_LIMIT - 200))
+    await settled()
+    await sink.text("v" * 1_000)  # does not fit: the reply goes on in a second stream
+    await settled()
+    assert len(slack.stream_ts) == 2
+    await sink.task(tool("t0", "Edit", preview=large_diff(0)))
+    await settled()
+    blocks = [u for u in slack.calls_to("chat.update") if u["ts"] == slack.stream_ts[0]][-1][
+        "blocks"
+    ]
+    assert len(containers_of(blocks)) == 1 and CUT_NOTE not in blocks
+
+
+async def test_a_fixed_span_still_cuts_a_late_diff_for_the_blocks_limit(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.task(tool("t0", "Edit", "in_progress"))
+    for i in range(1, 60):
+        await sink.task(tool(f"t{i}", "Agent", task=True))
+    await settled()
+    first = slack.stream_ts[0]
+    await sink.task(tool("t0", "Edit", preview=large_diff(0)))
+    await settled()
+    blocks = [u for u in slack.calls_to("chat.update") if u["ts"] == first][-1]["blocks"]
+    assert len(blocks) <= 50
+    assert CUT_NOTE in blocks and containers_of(blocks) == []
+
+
+async def test_a_preview_in_markdown_still_counts_toward_the_limit_on_an_update(
+    slack: FakeSlack,
+) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.task(tool("a", "Write", "in_progress"))
+    await sink.text("w" * 6_000)
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.task(tool("a", "Write", preview=preview_of(95)))  # about 9,000 characters
+    await settled()
+    assert len(slack.calls_to("chat.postMessage")) == 1  # it did not fit the first message
+    for update in slack.calls_to("chat.update"):
+        assert sum(len(sinks.block_text(b)) for b in update["blocks"]) <= 12_000  # Slack's cap
+
+
+async def continuation_with_diffs(slack: FakeSlack, clock: FakeClock) -> ReplySink:
+    """A stopped first message of 45 blocks, and a continuation that gets three large diffs."""
+    sink = reply(slack, clock=clock)
+    await sink.text("start\n")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    for i in range(50):
+        await sink.task(tool(f"c{i}", "Agent", task=True))
+    for i in range(3):
+        await sink.task(tool(f"e{i}", "Edit", preview=large_diff(i)))
+    return sink
+
+
+async def test_a_continuation_post_grows_by_update_to_what_an_update_holds(
+    slack: FakeSlack,
+) -> None:
+    clock = FakeClock()
+    await continuation_with_diffs(slack, clock)
+    await settled()
+    [post] = slack.calls_to("chat.postMessage")  # the post counts a container: one fits
+    assert len(containers_of(post["blocks"])) == 1
+    ts = slack.posted_ts[0]
+    update = [u for u in slack.calls_to("chat.update") if u["ts"] == ts][-1]
+    assert len(containers_of(update["blocks"])) == 3  # the other two reached it by update
+
+
+async def test_a_refused_growth_of_a_continuation_goes_on_in_a_new_message(
+    slack: FakeSlack,
+) -> None:
+    clock = FakeClock()
+    refused: list[str] = []
+
+    def refuse_the_first_growth(args: dict[str, Any]) -> Any:
+        if args["ts"] in slack.posted_ts and not refused:
+            refused.append(args["ts"])
+            return rejected("invalid_blocks")
+        return {"ok": True}
+
+    slack.responses["chat.update"] = refuse_the_first_growth
+    await continuation_with_diffs(slack, clock)
+    await settled()
+    first, second = slack.calls_to("chat.postMessage")  # what the update was refused went on
+    assert [len(containers_of(p["blocks"])) for p in (first, second)] == [1, 1]
+    update = [u for u in slack.calls_to("chat.update") if u["ts"] == slack.posted_ts[1]][-1]
+    assert len(containers_of(update["blocks"])) == 2  # and it took the last by update
+    # the refused update is the only one of the posted message: it is not rewritten with what
+    # its post already holds
+    assert len([u for u in slack.calls_to("chat.update") if u["ts"] == slack.posted_ts[0]]) == 1
+
+
+def refusing_containers(slack: FakeSlack, code: str = "msg_too_long") -> list[dict[str, Any]]:
+    """Slack refuses every `chat.update` that carries more than one container; the refused
+    updates are listed."""
+    refused: list[dict[str, Any]] = []
+
+    def answer(args: dict[str, Any]) -> Any:
+        if len(containers_of(args["blocks"])) > 1:
+            refused.append(args)
+            return rejected(code)
+        return {"ok": True}
+
+    slack.responses["chat.update"] = answer
+    return refused
+
+
+async def test_a_refused_update_with_containers_counts_them_from_then_on(
+    slack: FakeSlack,
+) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.task(tool("e0", "Edit", preview=large_diff(0)))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    refused = refusing_containers(slack)
+    for i in range(1, 3):
+        await sink.task(tool(f"e{i}", "Edit", preview=large_diff(i)))
+    await settled()
+    await sink.finish([])
+    assert await sink.close_out("footer") is True  # the reply's outcome is not an error
+    # what fits by the post's counting stays, the rest went on in new messages, each shown whole
+    assert refused and len(slack.posted_ts) >= 2
+    titles = [
+        b["title"]["text"] for blocks in slack.message_blocks() for b in containers_of(blocks)
+    ]
+    assert titles == [f"Update(f{i}.txt)" for i in range(3)]
+    assert any(
+        b == sinks.context_block("footer") for blocks in slack.message_blocks() for b in blocks
+    )
+    await sink.task(tool("e3", "Edit", preview=large_diff(3)))  # a later diff, in the last message
+    await settled()
+    tried = len(refused)  # that message was refused once too, and counts from then on
+    await sink.set_running("1 agent")  # a later change to it: no refused blocks again
+    await settled()
+    assert len(refused) == tried
+
+
+async def test_a_refused_update_of_a_fixed_span_cuts_the_late_diff_with_the_note(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.task(tool("t0", "Edit", "in_progress"))
+    await sink.text("w" * (sinks.MESSAGE_LIMIT - 200))
+    await settled()
+    await sink.text("v" * 1_000)
+    await settled()
+    first = slack.stream_ts[0]
+    slack.responses["chat.update"] = lambda args: (
+        rejected("invalid_blocks") if containers_of(args["blocks"]) else {"ok": True}
+    )
+    await sink.task(tool("t0", "Edit", preview=large_diff(0)))
+    await settled()
+    blocks = [u for u in slack.calls_to("chat.update") if u["ts"] == first][-1]["blocks"]
+    assert containers_of(blocks) == [] and CUT_NOTE in blocks
+    assert list(cards_of(blocks).values()) == ["complete"]  # card and words updated
+    assert shows(blocks, "w" * (sinks.MESSAGE_LIMIT - 200))
+
+
+async def test_a_refused_update_with_no_container_is_dropped_as_before(
+    slack: FakeSlack,
+) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("partial")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    slack.responses["chat.update"] = rejected("invalid_blocks")
+    await sink.text(" more")
+    await settled()
+    assert len(slack.calls_to("chat.update")) == 1  # no second try with other counting
+    slack.responses["chat.update"] = {"ok": True}
+    await sink.text(" again")
+    await settled()
+    assert len(slack.calls_to("chat.update")) == 2  # the next change is tried

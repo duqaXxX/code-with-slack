@@ -267,7 +267,8 @@ diff's container is the whole numbered diff in a rich text preformatted element 
 `diff`, which Slack desktop colours; each changed line also carries a red or green square after
 its sign, since Slack mobile colours nothing. A new file's container holds its first 10 lines and
 `… +N lines`. A body longer than `sinks.MESSAGE_LIMIT` continues in a second container with the
-same title, in the next message. One that failed joins its run as a call that ended, with the
+same title; both sit in one message when it is written by update, and in the next message
+when it is streamed or posted. One that failed joins its run as a call that ended, with the
 reason in its title; one that was stopped has a card of its own; one whose preview has no lines
 (an empty new file) has a card that says the sentence. A card the sink already drew for the call
 stays (`_Tool.cardless`), and the diff under it is then titled with the sentence alone.
@@ -307,7 +308,16 @@ little earlier itself.
 
 A message holds 12,000 characters and 50 blocks or task cards (measured 2026-09-28); a reply past
 `sinks.MESSAGE_LIMIT` or `sinks.BLOCKS_LIMIT` continues in a new message, a new stream while the
-first one still streams, else a post. Every message a reply adds notifies once.
+first one still streams, else a post. Every message a reply adds notifies once. A stream and a
+post count the text of a collapsed container toward those 12,000 characters; `chat.update` does
+not (measured 2026-10-06, slack-sdk 3.44.1: 50 containers of 10,000 characters accepted, nothing
+refused). A message written by update therefore counts a container as one block and no
+characters (`ReplySink._weight`), so a stopped message holds several large diffs where a stream
+would have continued. A continuation is posted with the characters a post takes, then brought to
+what an update takes by a `chat.update` of the same message (`ReplySink._post_step`). An update
+refused for content that held a container is tried once more with the containers counted, as a
+post counts them (`_Message.containers_counted`, kept for the message): what fits is written,
+and the rest goes on in a new message, or is cut with the preview note when the span is fixed.
 
 The reply ends once its turn has ended and none of its tasks still runs or still waits on a turn
 Claude Code starts to report it (D1): a task the turn started keeps its card open and updating

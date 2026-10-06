@@ -603,7 +603,7 @@ new file's first lines. When the reply ends, a divider and the footer close the 
 each pair of cards gives way to one line (`✓ Ran 2 shell commands · Read 1 file`). A reply still
 running 280 seconds after it started stops being a stream (Slack closes streams at 5 minutes) and
 goes on in the same message, updated instead of streamed; what Claude wrote after its last call
-then arrives in a new message, with the footer under it. A reply longer than one Slack message (12,000 characters or 50 cards) continues in the next one.
+then arrives in a new message, with the footer under it. A reply longer than one Slack message (12,000 characters or 50 cards) continues in the next one; the text inside collapsed diffs counts toward the 12,000 only while the message is a stream or a post, not once it is edited.
 
 An approval request is a message of its own in the thread, below the reply, and rings, as a
 question does; once you decide, it disappears and the tool's line in the reply records the call.
