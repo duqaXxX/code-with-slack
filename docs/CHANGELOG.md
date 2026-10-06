@@ -210,7 +210,8 @@ All notable changes to this project are documented here. The format follows
   the preview note in a message whose span is fixed. Measured on 2026-10-06 (slack-sdk 3.44.1, free plan, one
   run per row): `chat.update` accepted 50 containers of 10,000 characters (500,000), and 45 of
   11,000 in the shape a call with no card gets (a rich title and a subtitle), which is the most
-  the counting lets a message hold, and never refused one, while `chat.appendStream` and `chat.postMessage` count a container's text toward
+  the counting lets a message hold, and a message born as a stream (text, three cards, one
+  container) grown to 45 blocks and 444,823 characters, and never refused one, while `chat.appendStream` and `chat.postMessage` count a container's text toward
   the same cap as the reply's words (about 13,200 characters in all). The stream path is
   unchanged. How a message with that much collapsed diff opens on desktop and on iOS is not
   checked yet. A new file's first lines and a question's answers still count (#52).
