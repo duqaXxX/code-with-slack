@@ -151,7 +151,7 @@ class Stage:
         async def trusted(directory: Path) -> bool:
             return directory == workdir
 
-        async def repository(directory: Path) -> Repository | None:
+        async def repository(directory: Path, session_folder: Path) -> Repository | None:
             # The probe's own folders stand for trusted ones: the "working folder" scene makes
             # its repo there, and the owner's record of trusted folders knows none of them.
             try:
@@ -353,7 +353,8 @@ def models_listed(models: list[dict[str, Any]]) -> Observation:
 async def image_turn(s: Stage) -> dict[str, Observation]:
     mark = s.mark()
     image = [("image/png", one_pixel_png())]
-    await s.turn(prompt_for("Reply with one word: what colour is this image?", image, []))
+    # In English: the owner's settings load here, and may ask for answers in another language.
+    await s.turn(prompt_for("Reply with one English word: what colour is this image?", image, []))
     reply = s.replies_since(mark)
     # The pixel is red: naming its colour shows Claude received the image. A reply alone does not,
     # since an error such as `API Error: 400` is a reply too.
