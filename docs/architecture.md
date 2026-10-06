@@ -314,8 +314,10 @@ not (measured 2026-10-06, slack-sdk 3.44.1: 50 containers of 10,000 characters a
 refused). A message written by update therefore counts a container as one block and no
 characters (`ReplySink._weight`), so a stopped message holds several large diffs where a stream
 would have continued. A continuation is posted with the characters a post takes, then brought to
-what an update takes by a `chat.update` of the same message (`ReplySink._post_step`); if that
-update is refused, the reply goes on in a new message from where the post stopped.
+what an update takes by a `chat.update` of the same message (`ReplySink._post_step`). An update
+refused for content that held a container is tried once more with the containers counted, as a
+post counts them (`_Message.containers_counted`, kept for the message): what fits is written,
+and the rest goes on in a new message, or is cut with the preview note when the span is fixed.
 
 The reply ends once its turn has ended and none of its tasks still runs or still waits on a turn
 Claude Code starts to report it (D1): a task the turn started keeps its card open and updating

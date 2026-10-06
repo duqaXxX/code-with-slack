@@ -204,8 +204,10 @@ All notable changes to this project are documented here. The format follows
   block each takes of the 45. A stopped message, or a message whose span is fixed, holds several
   large diffs where it used to continue in a second one or cut a late preview, and a continuation
   that is posted is brought to what an update takes by a `chat.update` of the same message, so it
-  opens no message of its own for them; if that update is refused, the reply goes on in a new
-  message from where the post stopped. Measured on 2026-10-06 (slack-sdk 3.44.1, free plan, one
+  opens no message of its own for them. If Slack refuses an update that held a container (for
+  content), that message counts its containers as a post does from then on: the update is tried
+  once more at once, what fits is written, and the rest goes on in a new message, or is cut with
+  the preview note in a message whose span is fixed. Measured on 2026-10-06 (slack-sdk 3.44.1, free plan, one
   run per row): `chat.update` accepted 50 containers of 10,000 characters (500,000), and 45 of
   11,000 in the shape a call with no card gets (a rich title and a subtitle), which is the most
   the counting lets a message hold, and never refused one, while `chat.appendStream` and `chat.postMessage` count a container's text toward

@@ -590,6 +590,9 @@ class _Message:
     # The footer a stop of unknown outcome carried (a footerless stop records nothing): if the
     # next stop finds the stream over, that stop is the one that landed.
     stop_unknown: list[dict[str, Any]] | None = None
+    # Slack refused an update of this message whose containers were not counted: from then on
+    # they count toward MESSAGE_LIMIT, as in a post.
+    containers_counted: bool = False
 
 
 class ReplySink:
@@ -1187,7 +1190,7 @@ class ReplySink:
                         return blocks, (index, 0)
                     blocks += self._card_blocks(part.update)
                 for piece in pieces:
-                    length = self._weight(part, piece, posting)
+                    length = self._weight(message, part, piece, posting)
                     if held is not None and (index, piece) not in held.pieces:
                         # Late: left out, with the note when its card was shown, once.
                         if note_room and not noted and part.update.id in held.cards:
@@ -1237,10 +1240,11 @@ class ReplySink:
         return held
 
     @staticmethod
-    def _weight(tool: _Tool, piece: int, posting: bool) -> int:
+    def _weight(message: _Message, tool: _Tool, piece: int, posting: bool) -> int:
         """The characters a preview piece counts toward MESSAGE_LIMIT in a message: its text,
-        unless it is drawn as collapsed containers and the message is written by `chat.update`."""
-        if not posting and piece_collapsed(tool):
+        unless it is drawn as collapsed containers, the message is written by `chat.update` and
+        Slack has not refused an update of it for them."""
+        if not posting and not message.containers_counted and piece_collapsed(tool):
             return 0
         return len(tool.pieces()[piece - 1])
 
@@ -1256,7 +1260,7 @@ class ReplySink:
                 if not isinstance(part, _Tool):
                     continue
                 for piece in self._tool_elements(part, floor, ceil)[1]:
-                    length = self._weight(part, piece, False)
+                    length = self._weight(message, part, piece, False)
                     if (
                         base_blocks + used_blocks + 1 + reserved > BLOCKS_LIMIT
                         or base_size + used_size + length > MESSAGE_LIMIT
@@ -1282,13 +1286,13 @@ class ReplySink:
         return blocks, size
 
     async def _update_step(
-        self, message: _Message, end: Cursor | None, left_out: Cursor | None = None
+        self, message: _Message, end: Cursor | None
     ) -> tuple[bool, Cursor | None]:
         """Bring a stopped message to what the model says, with a `chat.update` when it shows
         something else: (written, where the reply goes on past the message). An update never
         notifies (measured 2026-09-29). Nothing is written for a message whose stream already
-        shows the model. `left_out` is where the reply goes on if Slack refuses the content
-        (`_post_step`: the message holds what its post took, and no more)."""
+        shows the model. An update refused for content that held a container, which counted for
+        nothing, is tried once more with the containers counted, as a post counts them."""
         assert message.ts is not None
         blocks, overflow = self._blocks(message, end)
         footer = self._footer_of(message)
@@ -1324,12 +1328,15 @@ class ReplySink:
                 # The daemon's stop never reached Slack: stopped now, the next write passes.
                 await self._stop(message, None, end)
             elif code in REFUSED_CONTENT:
+                if not message.containers_counted and any(b["type"] == "container" for b in blocks):
+                    message.containers_counted = True
+                    return await self._update_step(message, end)
                 # The message already shows what it showed: never replaced by a plainer one.
                 # The change is dropped; the next one is tried. After a refused append nothing
                 # else would say the message is short of the model, so that is kept.
                 message.shown, message.exact, message.footer = blocks, False, footer
                 message.short = message.refused
-                return True, overflow if left_out is None else left_out
+                return True, overflow
             return False, None
         message.shown, message.exact, message.footer = blocks, False, footer
         message.short = False
@@ -1372,8 +1379,7 @@ class ReplySink:
         """Post the message that continues a stopped one, with the blocks of its span as a post
         takes them, then bring it to what an update takes: a container's text counts toward a
         post's limit and not toward an update's, so what the post left out of its span reaches
-        the same message and no further one is opened for it. If that update is refused, the
-        reply goes on from where the post stopped."""
+        the same message and no further one is opened for it."""
         blocks, overflow = self._blocks(message, None, posting=True)
         footer = self._footer_of(message)
         blocks += footer
@@ -1417,7 +1423,7 @@ class ReplySink:
         message.ts = str(posted["ts"])
         message.shown, message.footer = blocks, footer
         self._retrack()
-        return await self._update_step(message, None, overflow)
+        return await self._update_step(message, None)
 
     @staticmethod
     def _first_words(plan: _Plan) -> str:
