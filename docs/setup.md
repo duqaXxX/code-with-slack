@@ -671,8 +671,9 @@ setting is:
   new message, and the notification reads the start of it.
 - An approval request and a question ring.
 - A reply that fails outright rings once, as any reply ending does.
-- `!stop` and a restart end the reply the same way, so each rings once. A reply longer than one
-  message rings for every extra message.
+- A restart ends the reply as any reply ending does, so it rings once. A `!stop` typed in the
+  thread rings once, with its answer `Stopped.`; typed in the channel it does not ring. A reply
+  longer than one message rings for every extra message.
 - Nothing rings while Claude writes.
 
 The channel's own setting (Part 1) governs only the bot's top-level messages (the answer to `!bind`, `!status`, `!resume`'s
