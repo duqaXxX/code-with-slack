@@ -15,16 +15,19 @@ import struct
 import subprocess
 import tempfile
 import zlib
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 from claude_agent_sdk import (
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    Message,
     PermissionResult,
+    StreamEvent,
     ToolPermissionContext,
+    UserMessage,
 )
 
 from code_with_slack import texts
@@ -109,10 +112,29 @@ class Mark(NamedTuple):
     asked: int  # permission requests received
 
 
+class Tapped:
+    """The real client, with every message it hands the session kept in `frames`: the session
+    swallows the replay of a prompt, so the probe reads it here."""
+
+    def __init__(self, client: ClaudeSDKClient, frames: list[Message]) -> None:
+        self._client = client
+        self._frames = frames
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+    async def receive_messages(self) -> AsyncIterator[Message]:
+        async for message in self._client.receive_messages():
+            self._frames.append(message)
+            yield message
+
+
 class Stage:
     def __init__(self, workdir: Path, log: Log) -> None:
         self.workdir = workdir
         self.log = log
+        # Every message of every client, in the order it reached the session (`Tapped`).
+        self.frames: list[Message] = []
         self.slack = FakeSlack()
         # The tool of every permission request the CLI sent, as `can_use_tool` received it.
         self.asked: list[str] = []
@@ -129,7 +151,7 @@ class Stage:
         async def trusted(directory: Path) -> bool:
             return directory == workdir
 
-        async def repository(directory: Path) -> Repository | None:
+        async def repository(directory: Path, session_folder: Path) -> Repository | None:
             # The probe's own folders stand for trusted ones: the "working folder" scene makes
             # its repo there, and the owner's record of trusted folders knows none of them.
             try:
@@ -182,7 +204,8 @@ class Stage:
         can_use_tool = noted if decide is not None else None
         model_free = options.resume is not None and options.resume in self._model_free_resumes
         model = None if model_free else PROBE_MODEL
-        return ClaudeSDKClient(dataclasses.replace(options, model=model, can_use_tool=can_use_tool))
+        real = ClaudeSDKClient(dataclasses.replace(options, model=model, can_use_tool=can_use_tool))
+        return cast(ClaudeClient, Tapped(real, self.frames))
 
     @property
     def session(self) -> ThreadSession:
@@ -302,6 +325,22 @@ async def first_turn(s: Stage, word: str) -> dict[str, Observation]:
     }
 
 
+async def replay(s: Stage) -> dict[str, Observation]:
+    start = len(s.frames)
+    turn = await s.turn("Reply with the single word: ready")
+    frames = s.frames[start:]
+    echoed = next(
+        (i for i, f in enumerate(frames) if isinstance(f, UserMessage) and f.uuid == turn.uuid),
+        None,
+    )
+    streamed = next((i for i, f in enumerate(frames) if isinstance(f, StreamEvent)), None)
+    if echoed is None:
+        return {"P19": Observation(True, False, "no user frame carried the uuid sent")}
+    early = streamed is None or echoed < streamed
+    detail = "" if early else "the replay came after the turn's first stream event"
+    return {"P19": Observation(True, early, detail)}
+
+
 def models_listed(models: list[dict[str, Any]]) -> Observation:
     """P17: the setup message is built from these fields, so each entry must carry the first two
     and every entry that supports effort must list its levels."""
@@ -314,7 +353,8 @@ def models_listed(models: list[dict[str, Any]]) -> Observation:
 async def image_turn(s: Stage) -> dict[str, Observation]:
     mark = s.mark()
     image = [("image/png", one_pixel_png())]
-    await s.turn(prompt_for("Reply with one word: what colour is this image?", image, []))
+    # In English: the owner's settings load here, and may ask for answers in another language.
+    await s.turn(prompt_for("Reply with one English word: what colour is this image?", image, []))
     reply = s.replies_since(mark)
     # The pixel is red: naming its colour shows Claude received the image. A reply alone does not,
     # since an error such as `API Error: 400` is a reply too.
@@ -605,6 +645,7 @@ SCENES: dict[str, tuple[str, ...]] = {
     "setup model resume": ("P18",),
     "bypass": ("P9",),
     "working folder": ("P14",),
+    "replay": ("P19",),
 }
 
 
@@ -627,6 +668,7 @@ async def run_scenes(log: Log) -> dict[str, Observation]:
             seen |= await attempt("setup model resume", s, setup_model_resume(s))
             seen |= await attempt("bypass", s, bypass(s))
             seen |= await attempt("working folder", s, working_folder(s))
+            seen |= await attempt("replay", s, replay(s))
         finally:
             await s.manager.close_all()
             forget_sessions(workdir, log)

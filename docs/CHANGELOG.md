@@ -461,8 +461,29 @@ All notable changes to this project are documented here. The format follows
   waited on it for `DRAIN_LIMIT_SECONDS`, and `!stop` interrupted an idle client. A subagent's
   frame that no reply holds, with no turn running, now starts no turn. Replayed in
   `test_sessions_report_turn` from `report-turn-agent-resume` (SDK 0.2.163, CLI 2.1.286). A
-  prompt that reaches Claude Code during a report turn by another way is still not released;
-  issue #150 stays open for it.
+  prompt that reaches Claude Code during a report turn by another way is released by the next
+  entry.
+- A prompt Claude Code takes into a turn it runs to report a background task is released when
+  that turn ends, and the reply says so (issue #150). Every session now passes
+  `--replay-user-messages` and sends each prompt as one user message under a uuid of its own
+  (`Turn.uuid`; `prompt.user_message` takes the text of a string prompt too). Claude Code
+  re-emits the prompt under that uuid: inside the running turn when it took the prompt in, and
+  after the `init` of the turn it starts for the prompt otherwise. A replay inside a running turn
+  is recorded (`ThreadSession._acknowledge`, `ActiveTurn.taken`) and, when that turn ends with an
+  injected origin, the prompt leaves `_sent` instead of waiting for a result that never comes:
+  the session stops reading busy, a restart no longer waits on it and `!stop` has nothing to
+  stop. The reply ends with `Claude Code took your message into this reply: send it again if it
+  is not answered here.` A prompt that was not taken in keeps its own turn, and a stream with no
+  replay behaves as before. A taken prompt is also released, with the note, when `!stop` ends
+  the turn with an injected result; when the session is abandoned (`_abandon`) it is listed among
+  the messages not sent. Measured on 2026-10-06 with claude-agent-sdk 0.2.163 (CLI 2.1.286,
+  Haiku, one run per scene); replayed in `test_sessions_prompt_replay` from
+  `prompt-replay-during-tool`, `-at-init`, `-after-tools` and `-stop-queued`. Probe claim P19
+  (the replay, with the uuid sent, comes before the first stream event of its turn) holds on
+  0.2.163, certified again on 2026-10-06 with all 19 claims. The probe's stand-in for
+  `trusted_repository` takes the session folder the daemon has passed since #48, without which
+  every footer of the probe failed, and its image scene asks for an English word, since the
+  owner's settings load there.
 - The footer and `!status` run git only on a repository the owner trusted in Claude Code, and
   leave the branch and the changes out anywhere else (`footer.git_state`, new;
   `footer.git_branch` and `footer.git_changes` are gone). The diff ran in whatever folder the

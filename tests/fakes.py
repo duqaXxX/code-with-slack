@@ -146,6 +146,8 @@ class FakeClaudeClient:
         self.connected = False
         # A prompt as sent: text, or the user messages of an image prompt (streaming input).
         self.queries: list[Any] = []
+        # Every user message as sent, uuid included: `queries` keeps the text of a string prompt.
+        self.sent: list[dict[str, Any]] = []
         self.modes: list[str] = []
         self.models_set: list[str | None] = []
         self.interrupts = 0
@@ -170,7 +172,21 @@ class FakeClaudeClient:
         self.models_set.append(model)
 
     async def query(self, prompt: str | AsyncIterable[dict[str, Any]]) -> None:
-        self.queries.append(prompt if isinstance(prompt, str) else [m async for m in prompt])
+        messages = (
+            [
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": prompt},
+                    "parent_tool_use_id": None,
+                }
+            ]
+            if isinstance(prompt, str)
+            else [m async for m in prompt]
+        )
+        self.sent.extend(messages)
+        # A prompt of plain text reads as its text, as before the daemon sent a uuid with it.
+        only = messages[0]["message"]["content"] if len(messages) == 1 else None
+        self.queries.append(only if isinstance(only, str) else messages)
         if self._turns:
             self._feed.put_nowait(self._turns.pop(0))
 

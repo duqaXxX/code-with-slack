@@ -331,6 +331,28 @@ starts on its own to report a background task renders into the reply that starte
 (`ThreadSession._opening_target`); when that reply has already ended, the report gets a reply of
 its own.
 
+A prompt taken into a report turn: every prompt a session sends is one user message under a uuid
+of the daemon's own (`Turn.uuid`, `prompt.user_message`), and the session passes
+`--replay-user-messages`, so Claude Code re-emits it as a `user` frame with that uuid
+(`ThreadSession._acknowledge`; measured on 2026-10-06 with claude-agent-sdk 0.2.163 and its
+bundled CLI 2.1.286, Haiku, one run per scene). A prompt that gets a turn of its own is replayed
+after that turn's `init` and before its first stream event, so no turn runs when its replay
+arrives; one the CLI takes into a running turn is replayed inside that turn, and that turn ends
+with one result, with the origin `task-notification`, for both. The session never waits for a
+replay: a frame that names no prompt in `_sent` (or the active turn's own) is an ordinary frame,
+and a stream recorded without the flag behaves as before. A replay that arrives while a turn
+runs lands on `ActiveTurn.taken`; when that turn's result has an injected origin,
+`ThreadSession._finish` releases those prompts (`_settle`: out of `_sent`, `Turn.done` set) and
+adds the note `texts.TAKEN_INTO_REPLY_ONE` to the reply, through the same end notes as a
+restart's `N messages were not sent`. A prompt whose replay did not come during the turn waits
+for its own turn. The worker sends one prompt at a time, so a turn takes in at most one today.
+An `interrupt()` with such a prompt queued ends the report turn with `error_during_execution`,
+and the prompt then runs as a turn of its own. A prompt already taken in when `!stop` ends the turn with an injected result is
+released with the note like any other (not measured: what Claude Code does with it on an
+interrupt). If the session is abandoned first (`ThreadSession._abandon`: a client error, a close,
+a restart), the prompt is listed among the messages not sent, whether or not Claude Code had
+taken it in; its replay is not kept.
+
 `!stop`, a restart, an error that cuts a turn, an idle close and `SessionGone` end the reply
 through the same path, at once: the stream stops with the footer and, for `!stop`, the stopped
 command's card, and that stop is the notification (`ThreadSession._stop_task_replies` for the
@@ -638,8 +660,9 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   working directory, `resume` set to the thread's stored session id and effort level
   (`sessions.client_options`), the owner's own settings
   (`setting_sources` user, project and local), streaming of partial messages, the approval
-  callback, and `--allow-dangerously-skip-permissions`, which makes `!bypass on` possible
-  without turning it on.
+  callback, `--allow-dangerously-skip-permissions`, which makes `!bypass on` possible
+  without turning it on, and `--replay-user-messages` (below, "A prompt taken into a report
+  turn").
 - After connecting, `get_server_info()` gives the commands the session offers (for `!help` and
   `!`) and the permission mode Claude Code started in (`native_mode`, kept as reported):
   `!bypass off` returns to it, or to `default` when the folder's own settings start it in
