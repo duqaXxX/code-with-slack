@@ -199,6 +199,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The case of issue #149 is also replayed from a recording in the order the CLI sent it:
+  `tests/fixtures/sdk/subagent-nested-background-mid-turn.jsonl` (CLI 2.1.286, recorded
+  2026-10-06). A subagent leaves `sleep 15` running and the owner's turn runs a 40-second
+  foreground command of its own. The command's `task_updated` and `task_notification` both
+  arrive before the turn's result, the agent then starts and ends a second time, and a report
+  turn follows. `test_a_recorded_turn_that_outlives_its_subagent_s_command_ends_once_with_its_footer`
+  fails with the #164 change taken out.
 - `ThreadSession._react_done_if_idle` logs one line at INFO when a reply's end does not bring
   ✅ (issue #160): `no done reaction in <channel>/<thread>, held by: …`, with the conditions
   that held it as flag names and counts (`running=1 shell`, `sent=1`, `unsettled`), never
