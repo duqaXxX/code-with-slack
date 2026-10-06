@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol, cast, get_args
+from uuid import uuid4
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -199,7 +200,7 @@ class DirectoryUnreadable(DirectoryUnavailable):
 class ClaudeClient(Protocol):
     async def connect(self) -> None: ...
     async def disconnect(self) -> None: ...
-    # The SDK's own signature; a turn sends text or prompt.user_message(), exactly one message.
+    # The SDK's own signature; a turn sends prompt.user_message(), exactly one message.
     async def query(self, prompt: str | AsyncIterable[dict[str, Any]]) -> None: ...
     def receive_messages(self) -> AsyncIterator[Message]: ...
     async def set_permission_mode(self, mode: PermissionMode) -> None: ...
@@ -261,7 +262,10 @@ def client_options(
             "PostToolUse": [HookMatcher(hooks=[on_tool_done])],
         },
         # Makes bypass possible, not active: `!bypass on` switches it on the live client.
-        extra_args={"allow-dangerously-skip-permissions": None},
+        # `replay-user-messages` (CLI reference): Claude Code re-emits each prompt with the uuid
+        # the daemon sent it under, which tells a prompt it took into a running turn from one
+        # that waits for a turn of its own (`ThreadSession._acknowledge`).
+        extra_args={"allow-dangerously-skip-permissions": None, "replay-user-messages": None},
         # CLI stderr may quote the conversation: keep it out of the log unless debugging.
         stderr=lambda line: logger.debug("claude stderr: %d chars", len(line)),
     )
@@ -316,6 +320,8 @@ class Turn:
     prompt: Prompt
     sink: ReplySink
     done: asyncio.Event = field(default_factory=asyncio.Event)
+    # The daemon's own id for the prompt, which Claude Code replays it under.
+    uuid: str = field(default_factory=lambda: str(uuid4()))
 
 
 def terminal_line(directory: Path, session_id: str) -> str:
@@ -339,6 +345,13 @@ def not_sent(turns: list[Turn], because: str) -> str:
     return "\n".join([header, *starts])
 
 
+def taken_note(count: int) -> str:
+    """The note for the reply a turn that took `count` prompts into itself ends with."""
+    return (texts.TAKEN_INTO_REPLY_ONE if count == 1 else texts.TAKEN_INTO_REPLY_MANY).format(
+        count=count
+    )
+
+
 async def check_directory(directory: Path, trusted: Callable[[Path], Awaitable[bool]]) -> None:
     """Raise the `DirectoryUnavailable` that keeps a session from starting in `directory`, the
     first found in the order the owner can act on: missing, unreadable, untrusted."""
@@ -358,6 +371,8 @@ async def check_directory(directory: Path, trusted: Callable[[Path], Awaitable[b
 class ActiveTurn:
     turn: Turn | None
     renderer: TurnRenderer
+    # Prompts whose replay arrived while this turn ran: Claude Code took them into it.
+    taken: list[Turn] = field(default_factory=list)
 
 
 class ThreadSession:
@@ -1359,8 +1374,7 @@ class ThreadSession:
                     continue
                 self._sent.append(turn)
                 self._taken = None
-                prompt = turn.prompt
-                await client.query(prompt if isinstance(prompt, str) else user_message(prompt))
+                await client.query(user_message(turn.prompt, turn.uuid))
                 await turn.done.wait()
             except (DirectoryUnavailable, SessionGone, SessionClosed) as exc:
                 self._taken = None
@@ -1413,9 +1427,29 @@ class ThreadSession:
         # from outside this loop's own per-message check above, so it needs its own call (D9).
         self._idle_timer_check()
 
+    def _acknowledge(self, message: UserMessage) -> bool:
+        """Whether `message` is the replay of a prompt this session sent (`replay-user-messages`),
+        which renders nothing and starts no turn: a replay with no turn running comes right
+        before the stream of the turn that prompt gets of its own. One that arrives inside a
+        running turn means Claude Code took the prompt into that turn, which then ends with one
+        result for both (measured 2026-10-06, CLI 2.1.286): `_finish` releases it. A uuid that
+        names no prompt of ours (a resumed session's) is no acknowledgement."""
+        if message.uuid is None:
+            return False
+        active = self._active
+        sent = [*self._sent, *([active.turn] if active and active.turn else [])]
+        turn = next((t for t in sent if t.uuid == message.uuid), None)
+        if turn is None:
+            return False
+        if active is not None and turn not in active.taken:
+            active.taken.append(turn)
+        return True
+
     async def _dispatch(self, message: Message) -> None:
         if isinstance(message, RateLimitEvent):
             self._deps.usage.invalidate()
+            return
+        if isinstance(message, UserMessage) and self._acknowledge(message):
             return
         if isinstance(message, SystemMessage) and message.subtype == "init":
             self.cli_version = message.data.get("claude_code_version")
@@ -1983,6 +2017,8 @@ class ThreadSession:
         # Default until the try below settles them; read in the `finally` even if something
         # above raises first.
         stopped = False
+        # Claude Code ends a turn it took prompts into with one injected result for all of them.
+        released = active.taken if injected_turn(result) else []
         try:
             if result.session_id:
                 self._deps.state.set_session(self.channel_id, self.thread_ts, result.session_id)
@@ -2019,6 +2055,8 @@ class ThreadSession:
                 # `_settle` discards the owner turn's own reply, which is the latest now. The
                 # footer belongs under the answer.
                 await self._hand_latest_to(active.renderer.sink)
+            if released:
+                self._end_notes.append(taken_note(len(released)))
             # What a restart dropped meanwhile is said where the running turn ends.
             await self._feed_end_notes(active.renderer)
             # `!stop` cut this turn short, the owner's own or a report's: its reply ends like any
@@ -2026,18 +2064,23 @@ class ThreadSession:
             # (`force`: `!stop` never does).
             await self._close_reply(active.renderer, footer, force=stopped)
         finally:
-            await self._settle(active.turn, result)
+            await self._settle(active.turn, result, released)
             # D1: a report turn's own reply is `_close_reply`'s
             # concern above; this catches every other reply a joint one left stranded.
             await self._sweep_closed_out()
             self._stop_tail_ended()
         return stopped
 
-    async def _settle(self, turn: Turn | None, result: ResultMessage) -> None:
+    async def _settle(self, turn: Turn | None, result: ResultMessage, released: list[Turn]) -> None:
         """Release whoever waits on this turn. The result's origin says whose turn it really was:
         when an owner query and a task notification cross, the guess made at the turn's start can
-        be wrong; this puts the queue back in order (that one reply carries the other's text)."""
+        be wrong; this puts the queue back in order (that one reply carries the other's text).
+        `released`: prompts Claude Code took into this turn; no result of their own follows."""
         injected = injected_turn(result)
+        for taken in released:
+            if taken in self._sent:
+                self._sent.remove(taken)
+            taken.done.set()
         if turn is None and not injected and self._sent:
             logger.warning(
                 "an owner reply in %s/%s went to a background reply",
@@ -2048,7 +2091,7 @@ class ThreadSession:
             # was guessed to be the report: the owner turn's own reply is never written.
             self._sent.popleft().done.set()
             self._expect_injected_turn()
-        elif turn is not None and injected:
+        elif turn is not None and injected and turn not in released:
             logger.warning(
                 "a background reply in %s/%s went to an owner reply",
                 self.channel_id,
@@ -2058,7 +2101,7 @@ class ThreadSession:
             turn.sink = await self._sink()
             self._sent.appendleft(turn)
             self._settled.set()
-        elif turn is not None:
+        elif turn is not None and not injected:
             turn.done.set()
         else:
             self._settled.set()

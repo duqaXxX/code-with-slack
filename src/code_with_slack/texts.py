@@ -100,6 +100,15 @@ STOPPED_BEFORE_ANSWER = "code-with-slack stopped before this answer."
 # one note names them. `{because}` is one of the two phrases below.
 NOT_SENT_ONE = "1 message was not sent because {because}: send it again."
 NOT_SENT_MANY = "{count} messages were not sent because {because}: send them again."
+# Prompts Claude Code took into a running turn of its own (a report of a background task): no
+# result of their own follows, so the reply of that turn says so at its end.
+TAKEN_INTO_REPLY_ONE = (
+    "Claude Code took your message into this reply: send it again if it is not answered here."
+)
+TAKEN_INTO_REPLY_MANY = (
+    "Claude Code took {count} messages into this reply: "
+    "send them again if they are not answered here."
+)
 BECAUSE_RESTARTED = "code-with-slack restarted"
 BECAUSE_SHUTDOWN = "code-with-slack stopped"
 BECAUSE_STOPPED = "Claude Code stopped"

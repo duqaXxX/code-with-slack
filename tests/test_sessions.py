@@ -206,7 +206,10 @@ async def test_the_client_is_launched_as_the_design_says(
     assert options.resume is None
     assert options.setting_sources == ["user", "project", "local"]
     assert options.include_partial_messages is True
-    assert options.extra_args == {"allow-dangerously-skip-permissions": None}
+    assert options.extra_args == {
+        "allow-dangerously-skip-permissions": None,
+        "replay-user-messages": None,
+    }
     assert options.can_use_tool is not None
     assert options.cli_path is None
 
