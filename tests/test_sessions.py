@@ -4257,6 +4257,36 @@ async def test_the_reply_is_not_ended_while_its_turn_is_still_active(
     assert footer_writes(h) == ["chat.stopStream"]  # ended once, by its own turn, with the footer
 
 
+async def test_a_recorded_turn_that_outlives_its_subagent_s_command_ends_once_with_its_footer(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # subagent-nested-background-mid-turn.jsonl, in the order the CLI sent it (issue #149): the
+    # command a subagent left running ends, and is notified, while the owner's turn still runs
+    # a foreground command of its own; the agent then ends a second time and a report follows.
+    first, later = split_turns(sdk_messages("subagent-nested-background-mid-turn"))
+    result = next(i for i, m in enumerate(first) if isinstance(m, ResultMessage))
+    ended_mid_turn = [
+        m.task_id
+        for m in first[:result]
+        if isinstance(m, TaskNotificationMessage) and m.status == "completed"
+    ]
+    assert len(ended_mid_turn) == 3  # the agent, its command, the turn's own command
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    await until(lambda: h.reactions()[-1] == Status.DONE.value)
+    assert footer_writes(h)[:1] == ["chat.stopStream"]  # the footer rode on the stream's stop
+    assert len(h.slack.calls_to("chat.stopStream")) == 1  # at the turn's end, not before
+    assert h.slack.calls_to("chat.postMessage") == []  # no closing message of its own
+
+    h.clients[0].inject(later)  # the agent's second end, then Claude Code's report turn
+    await until(lambda: len(h.slack.calls_to("chat.stopStream")) == 2)
+    await until(lambda: h.reactions()[-1] == Status.DONE.value and session.idle)
+    stops = h.slack.calls_to("chat.stopStream")
+    assert all({"type": "divider"} in (stop.get("blocks") or []) for stop in stops)
+    assert h.slack.calls_to("chat.postMessage") == []
+
+
 async def test_a_subagent_s_command_and_the_agent_s_second_end_close_the_reply_as_before(
     harness_for: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
 ) -> None:
