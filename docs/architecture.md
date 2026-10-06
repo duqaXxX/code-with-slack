@@ -767,7 +767,9 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   `context: fork` typed as a command runs its agent before the turn's first message, and streams
   none of that agent's calls, so its line shows the command while it works. A task frame that
   names a call (`tool_use_id`) held by a reply whose background subagent still works goes to
-  that reply, as the subagent's calls do (`parent_tool_use_id`). On each result the session id is stored
+  that reply, as the subagent's calls do (`parent_tool_use_id`). A subagent's own frame that no
+  reply holds, while no turn runs (an agent continued with `SendMessage` in a daemon that never
+  saw the call that first started it: its frames name that call), starts no turn. On each result the session id is stored
   (so `/clear`, which starts a new session, is recorded), the footer is built and the reply
   closed. The turn stays active until the reply is closed.
 - A background task that finishes between turns sends its notification while the session is
