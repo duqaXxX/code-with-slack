@@ -1517,6 +1517,13 @@ class ThreadSession:
                     return
                 if not isinstance(message, TURN_MESSAGES):
                     return
+                if call:
+                    # A subagent's own frame, whose call no reply holds: an agent continued with
+                    # `SendMessage` in a daemon that never saw the call that first started it
+                    # (recorded: `report-turn-agent-resume.jsonl`, CLI 2.1.286, whose frames name
+                    # that first call, not the `SendMessage` one). It is no turn of the
+                    # conversation's, so it starts none and takes no owner prompt's.
+                    return
             self._active = await self._start_turn()
             # A report turn has no prompt behind it: only now does `_thread_line` read it.
             self._show_thread_status()

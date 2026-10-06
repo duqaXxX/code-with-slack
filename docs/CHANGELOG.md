@@ -436,6 +436,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- An agent continued with `SendMessage` in a daemon restarted since the agent's first run no
+  longer starts a turn of its own (issue #150). Its frames name the `Agent` call that first
+  started it, which the restarted daemon never saw, so `ThreadSession._dispatch` opened a turn
+  with no prompt behind it. While that turn was active the agent's notification did not hold the
+  owner's next prompt, which went to Claude Code during the turn that reports the agent, was
+  taken into it and got no result of its own: the session read busy from then on, a restart
+  waited on it for `DRAIN_LIMIT_SECONDS`, and `!stop` interrupted an idle client. A subagent's
+  frame that no reply holds, with no turn running, now starts no turn. Replayed in
+  `test_sessions_report_turn` from `report-turn-agent-resume` (SDK 0.2.163, CLI 2.1.286). A
+  prompt that reaches Claude Code during a report turn by another way is still not released;
+  issue #150 stays open for it.
 - The footer and `!status` run git only on a repository the owner trusted in Claude Code, and
   leave the branch and the changes out anywhere else (`footer.git_state`, new;
   `footer.git_branch` and `footer.git_changes` are gone). The diff ran in whatever folder the
