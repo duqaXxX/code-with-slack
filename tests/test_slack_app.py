@@ -2,6 +2,7 @@ import asyncio
 import copy
 import itertools
 import json
+import logging
 import os
 import time
 from collections.abc import AsyncIterator, Iterator
@@ -4529,3 +4530,94 @@ async def test_a_name_is_looked_up_in_a_folder_with_no_repository(world: World) 
     (done,) = opened(world)
     assert json.loads(done["files"])[0]["title"] == "docs/Guide.md"
     assert world.ephemerals() == []
+
+
+# Issue #142: which path answered `texts.HOLD_GONE` is read from the log, ids and flags only.
+def _app_log(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.name == "code_with_slack.slack_app"]
+
+
+async def test_an_accepted_setup_start_is_logged(
+    manual: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    await manual.dispatch(message("SECRET-PROMPT-CONTENT", ts=THREAD))
+    body = setup_click(manual)
+    with caplog.at_level(logging.INFO, logger="code_with_slack"):
+        await manual.dispatch(body)
+    assert f"accepted a setup start in {CHANNEL}/{THREAD} on message {body['message']['ts']}" in (
+        _app_log(caplog)
+    )
+    assert "SECRET-PROMPT-CONTENT" not in caplog.text
+
+
+async def test_a_second_start_is_logged_as_accepted_then_refused(
+    manual: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    await manual.dispatch(message("SECRET-PROMPT-CONTENT", ts=THREAD))
+    body = setup_click(manual)
+    with caplog.at_level(logging.INFO, logger="code_with_slack"):
+        await manual.dispatch(body)
+        await manual.dispatch(body)
+    lines = [m for m in _app_log(caplog) if "setup start" in m]
+    assert lines[0].startswith("accepted a setup start")
+    assert lines[1].startswith("refused a click (setup start, not ")
+    assert (
+        f"action {SETUP_START} in {CHANNEL}/{THREAD} on message {body['message']['ts']}"
+        in (lines[1])
+    )
+    assert "SECRET-PROMPT-CONTENT" not in caplog.text
+
+
+async def test_a_start_for_a_setup_no_longer_held_is_logged(
+    manual: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    await manual.dispatch(message("SECRET-PROMPT-CONTENT", ts=THREAD))
+    body = setup_click(manual)
+    body["actions"][0]["value"] = "no-such-setup"
+    with caplog.at_level(logging.INFO, logger="code_with_slack"):
+        await manual.dispatch(body)
+    (line,) = [m for m in _app_log(caplog) if "refused a click" in m]
+    assert "(setup start, not held)" in line and "held=False" in line
+    assert "no-such-setup" not in caplog.text and "SECRET-PROMPT-CONTENT" not in caplog.text
+
+
+async def test_a_start_that_resolve_refuses_is_logged_with_what_differs(
+    manual: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    await manual.dispatch(message("SECRET-PROMPT-CONTENT", ts=THREAD))
+    with caplog.at_level(logging.INFO, logger="code_with_slack"):
+        await manual.dispatch(setup_click(manual, thread_ts=OTHER_THREAD))
+    (line,) = [m for m in _app_log(caplog) if "refused a click" in m]
+    assert "(setup start, not resolved)" in line
+    assert "held=True, decided=False, same_thread=False" in line
+    assert "SECRET-PROMPT-CONTENT" not in caplog.text
+
+
+async def test_a_model_change_after_start_is_logged(
+    manual: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    await manual.dispatch(message("SECRET-PROMPT-CONTENT", ts=THREAD))
+    model = setup_click(manual, SETUP_MODEL, model="haiku")
+    await manual.dispatch(setup_click(manual))
+    await manual.settle(0.2)
+    with caplog.at_level(logging.INFO, logger="code_with_slack"):
+        await manual.dispatch(model)
+    (line,) = [m for m in _app_log(caplog) if "refused a click" in m]
+    assert "(setup model, no open setup)" in line
+    assert f"action {SETUP_MODEL} in {CHANNEL}/{THREAD}" in line
+    assert "open_at_message=False, held=False" in line
+    assert "SECRET-PROMPT-CONTENT" not in caplog.text
+
+
+async def test_a_second_hold_click_is_logged(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    await start_a_hold(world)
+    hold_id = button_value(posted_blocks(world), HOLD_CONTINUE)
+    body = click_in(HOLD_CONTINUE, hold_id, CHANNEL, THREAD)
+    await world.dispatch(body)
+    with caplog.at_level(logging.INFO, logger="code_with_slack"):
+        await world.dispatch(body)
+    (line,) = [m for m in _app_log(caplog) if "refused a click" in m]
+    assert "(hold decision)" in line and f"action {HOLD_CONTINUE} in {CHANNEL}/{THREAD}" in line
+    assert hold_id not in caplog.text and "hello" not in caplog.text

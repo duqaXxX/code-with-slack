@@ -760,6 +760,19 @@ def build_app(
             await tell_owner(channel, thread_ts, texts.NOT_SENT)
         return answer
 
+    def log_refused_click(path: str, body: dict[str, Any], **facts: object) -> None:
+        # Issue #142: three paths answer `texts.HOLD_GONE`, and only these facts tell them apart.
+        # Ids and flags only: the click's text and the setup's choice never reach the log.
+        logger.info(
+            "refused a click (%s): action %s in %s/%s on message %s; %s",
+            path,
+            body["actions"][0].get("action_id"),
+            (body.get("channel") or {}).get("id"),
+            click_thread(body),
+            body["message"]["ts"],
+            ", ".join(f"{name}={value}" for name, value in facts.items()),
+        )
+
     async def on_hold_decision(ack: AsyncAck, body: dict[str, Any]) -> None:
         await ack()
         user, team = interaction_actor(body)
@@ -771,7 +784,14 @@ def build_app(
         action = body["actions"][0]
         hold_id = str(action.get("value"))
         answer = True if action["action_id"] == HOLD_CONTINUE else None
+        held = holds.get(hold_id)
         if holds.resolve(hold_id, channel, thread_ts, answer) is None:
+            log_refused_click(
+                "hold decision",
+                body,
+                held=held is not None,
+                decided=held is not None and held.future.done(),
+            )
             await tell_owner(channel, thread_ts, texts.HOLD_GONE)
             return
         await remove_request(channel, thread_ts, body["message"]["ts"])
@@ -787,6 +807,7 @@ def build_app(
         setup_id = str(body["actions"][0].get("value"))
         pending = holds.get(setup_id)
         if pending is None:
+            log_refused_click("setup start, not held", body, held=False)
             await tell_owner(channel, thread_ts, texts.HOLD_GONE)
             return
         # The controls' own state rides on the click: nothing about the choice is stored here,
@@ -794,7 +815,21 @@ def build_app(
         values = (body.get("state") or {}).get("values") or {}
         choice = read_choice(values, pending.context or [])
         if holds.resolve(setup_id, channel, thread_ts, choice) is None:
+            log_refused_click(
+                "setup start, not resolved",
+                body,
+                held=True,
+                decided=pending.future.done(),
+                same_thread=(pending.channel_id, pending.thread_ts) == (channel, thread_ts),
+            )
             await tell_owner(channel, thread_ts, texts.HOLD_GONE)
+            return
+        logger.info(
+            "accepted a setup start in %s/%s on message %s",
+            channel,
+            thread_ts,
+            body["message"]["ts"],
+        )
 
     async def on_setup_model(ack: AsyncAck, body: dict[str, Any]) -> None:
         """A new model changes which efforts exist: the message is rewritten with the levels of
@@ -810,6 +845,12 @@ def build_app(
         setup_id = holds.at_message(channel, thread_ts, message_ts)
         pending = holds.get(setup_id) if setup_id is not None else None
         if setup_id is None or pending is None:
+            log_refused_click(
+                "setup model, no open setup",
+                body,
+                open_at_message=setup_id is not None,
+                held=pending is not None,
+            )
             await tell_owner(channel, thread_ts, texts.HOLD_GONE)
             return
         models = pending.context or []
