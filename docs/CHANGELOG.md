@@ -476,7 +476,9 @@ All notable changes to this project are documented here. The format follows
   is not answered here.` A prompt that was not taken in keeps its own turn, and a stream with no
   replay behaves as before. Measured on 2026-10-06 with claude-agent-sdk 0.2.163 (CLI 2.1.286,
   Haiku, one run per scene); replayed in `test_sessions_prompt_replay` from
-  `prompt-replay-during-tool`, `-at-init`, `-after-tools` and `-stop-queued`.
+  `prompt-replay-during-tool`, `-at-init`, `-after-tools` and `-stop-queued`. Probe claim P19
+  (the replay, with the uuid sent, comes before the first stream event of its turn) is not run
+  yet.
 - The footer and `!status` run git only on a repository the owner trusted in Claude Code, and
   leave the branch and the changes out anywhere else (`footer.git_state`, new;
   `footer.git_branch` and `footer.git_changes` are gone). The diff ran in whatever folder the

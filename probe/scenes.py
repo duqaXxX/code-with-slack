@@ -15,16 +15,19 @@ import struct
 import subprocess
 import tempfile
 import zlib
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 from claude_agent_sdk import (
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    Message,
     PermissionResult,
+    StreamEvent,
     ToolPermissionContext,
+    UserMessage,
 )
 
 from code_with_slack import texts
@@ -109,10 +112,29 @@ class Mark(NamedTuple):
     asked: int  # permission requests received
 
 
+class Tapped:
+    """The real client, with every message it hands the session kept in `frames`: the session
+    swallows the replay of a prompt, so the probe reads it here."""
+
+    def __init__(self, client: ClaudeSDKClient, frames: list[Message]) -> None:
+        self._client = client
+        self._frames = frames
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+    async def receive_messages(self) -> AsyncIterator[Message]:
+        async for message in self._client.receive_messages():
+            self._frames.append(message)
+            yield message
+
+
 class Stage:
     def __init__(self, workdir: Path, log: Log) -> None:
         self.workdir = workdir
         self.log = log
+        # Every message of every client, in the order it reached the session (`Tapped`).
+        self.frames: list[Message] = []
         self.slack = FakeSlack()
         # The tool of every permission request the CLI sent, as `can_use_tool` received it.
         self.asked: list[str] = []
@@ -182,7 +204,8 @@ class Stage:
         can_use_tool = noted if decide is not None else None
         model_free = options.resume is not None and options.resume in self._model_free_resumes
         model = None if model_free else PROBE_MODEL
-        return ClaudeSDKClient(dataclasses.replace(options, model=model, can_use_tool=can_use_tool))
+        real = ClaudeSDKClient(dataclasses.replace(options, model=model, can_use_tool=can_use_tool))
+        return cast(ClaudeClient, Tapped(real, self.frames))
 
     @property
     def session(self) -> ThreadSession:
@@ -300,6 +323,22 @@ async def first_turn(s: Stage, word: str) -> dict[str, Observation]:
         "P2": Observation(True, "Context:" in status),
         "P17": models_listed(s.session.models),
     }
+
+
+async def replay(s: Stage) -> dict[str, Observation]:
+    start = len(s.frames)
+    turn = await s.turn("Reply with the single word: ready")
+    frames = s.frames[start:]
+    echoed = next(
+        (i for i, f in enumerate(frames) if isinstance(f, UserMessage) and f.uuid == turn.uuid),
+        None,
+    )
+    streamed = next((i for i, f in enumerate(frames) if isinstance(f, StreamEvent)), None)
+    if echoed is None:
+        return {"P19": Observation(True, False, "no user frame carried the uuid sent")}
+    early = streamed is None or echoed < streamed
+    detail = "" if early else "the replay came after the turn's first stream event"
+    return {"P19": Observation(True, early, detail)}
 
 
 def models_listed(models: list[dict[str, Any]]) -> Observation:
@@ -605,6 +644,7 @@ SCENES: dict[str, tuple[str, ...]] = {
     "setup model resume": ("P18",),
     "bypass": ("P9",),
     "working folder": ("P14",),
+    "replay": ("P19",),
 }
 
 
@@ -627,6 +667,7 @@ async def run_scenes(log: Log) -> dict[str, Observation]:
             seen |= await attempt("setup model resume", s, setup_model_resume(s))
             seen |= await attempt("bypass", s, bypass(s))
             seen |= await attempt("working folder", s, working_folder(s))
+            seen |= await attempt("replay", s, replay(s))
         finally:
             await s.manager.close_all()
             forget_sessions(workdir, log)

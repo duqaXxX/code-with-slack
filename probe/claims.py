@@ -193,6 +193,15 @@ CLAIMS = [
         "at the top level, pick a model in the setup and press Start, restart the daemon, reply "
         "in the thread; `!status` shows the model",
     ),
+    Claim(
+        "P19",
+        "gesture",
+        "a prompt sent under a uuid is re-emitted with it (`--replay-user-messages`), before the "
+        "first stream event of its turn",
+        "code_with_slack.sessions.ThreadSession._acknowledge",
+        "send a message while Claude Code reports a background task, as `docs/features.md` "
+        "describes: the reply ends with the note, or the session answers it in a turn of its own",
+    ),
 ]
 
 
