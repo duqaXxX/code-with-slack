@@ -79,6 +79,7 @@ type, field, value, method and option of the SDK the source depends on, against 
 runs on. A row the package no longer defines is BROKEN and stops the run with exit status 3 before
 any token is spent. A row marked `reference` that the published
 [reference](https://code.claude.com/docs/en/agent-sdk/python) no longer names is UNPROVEN and is
-listed to be read by hand, as is every row the reference never named and no claim covers. A
+listed to be read by hand. The rows the reference never named and no claim covers are counted;
+`uv run python -m probe --surface` lists them and checks the table alone, with no token spent. A
 change that reads a new field, key or value of the SDK adds its row there in the same pull
 request; `tests/test_sdk_surface.py` fails on an imported SDK name with no row.

@@ -3,6 +3,7 @@
     uv run python -m probe            run if the pinned claude-agent-sdk is not certified yet
     uv run python -m probe --force    run anyway
     uv run python -m probe --latest   run on the newest release on PyPI, in a temporary worktree
+    uv run python -m probe --surface  check docs/sdk-surface.md alone and list its rows: no tokens
 
 It uses the owner's Claude Code login and real tokens (Haiku), which is why it is not part of
 pytest. Exit status: 0 certified, 3 a claim is BROKEN, 2 not every gesture claim could be proven;
@@ -135,12 +136,23 @@ def run(path: Path, force: bool) -> int:
     return 0
 
 
+def show_surface() -> int:
+    """The SDK surface map against the installed release and the published reference, with the
+    rows a run only counts. It starts no session, so it spends nothing."""
+    mapped = check_surface(surface(), read_reference(), set_aside())
+    print(surface_report(mapped, full=True))
+    return 3 if mapped.broken else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="python -m probe", description=__doc__.split("\n")[0])
     parser.add_argument("--force", action="store_true", help="run even if already certified")
     parser.add_argument("--latest", action="store_true", help="probe the newest release on PyPI")
+    parser.add_argument("--surface", action="store_true", help="check the SDK surface map only")
     parser.add_argument("--certificate", type=Path, default=CERTIFIED, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.surface:
+        return show_surface()
     return on_latest(args.force) if args.latest else run(args.certificate, args.force)
 
 

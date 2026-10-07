@@ -186,7 +186,10 @@ def test_rows_in_no_reference_and_under_no_claim_are_listed_by_hand() -> None:
     )
     result = check([measured, claimed], PAGE, [])
     assert result.by_hand == (measured,)
-    assert "StreamEvent.event.type (measured)" in report(result)
+    # A run counts them, since they are the same on every release; the list is on request.
+    assert "1 rows are in no reference" in report(result)
+    assert "StreamEvent.event.type" not in report(result)
+    assert "StreamEvent.event.type (measured)" in report(result, full=True)
 
 
 def test_a_changed_header_or_a_bad_cell_is_an_error_not_a_shorter_map(tmp_path: Path) -> None:

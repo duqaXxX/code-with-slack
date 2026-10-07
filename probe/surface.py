@@ -237,8 +237,10 @@ def check(rows: list[Row], page: str | None, known: list[str]) -> Check:
     )
 
 
-def report(result: Check) -> str:
-    """What the probe prints about the map, before its scenes."""
+def report(result: Check, *, full: bool = False) -> str:
+    """What the probe prints about the map, before its scenes. The rows no reference names and
+    no claim covers are the same from one release to the next, so a run counts them and only
+    `full` lists them: they are where to look when a release misbehaves, not a list to tick."""
     lines = [f"SDK surface ({SURFACE.name}):"]
     if result.missing:
         lines.append("  BROKEN, no longer in the package:")
@@ -256,9 +258,12 @@ def report(result: Check) -> str:
         lines.append("  every `reference` row is still named by the reference")
     if result.unlisted:
         lines.append("  in the package and not in the map: " + ", ".join(result.unlisted))
-    if result.by_hand:
+    if result.by_hand and full:
+        lines.append("  in no reference and under no claim:")
+        lines += [f"    {r.name} ({r.source})" for r in result.by_hand]
+    elif result.by_hand:
         lines.append(
-            "  in no reference and under no claim, check on a real stream when it matters:"
+            f"  {len(result.by_hand)} rows are in no reference and under no claim"
+            " (`python -m probe --surface` lists them)"
         )
-        lines += [f"    [ ] {r.name} ({r.source})" for r in result.by_hand]
     return "\n".join(lines)

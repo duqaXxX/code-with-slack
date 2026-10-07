@@ -36,15 +36,18 @@ in a release with no notice, so it is the first place to look when a release mis
   counts as naming a member when the member's name appears in the section of its type, in the
   definition or in the prose, so a row is read by hand when the section is rewritten. The check
   runs when the probe runs its scenes, so not on a release that is already certified. It also lists the
-  message, block and event types the package exports that the table does not know, and every
-  row that is in no reference and under no claim.
+  message, block and event types the package exports that the table does not know, and counts
+  the rows that are in no reference and under no claim. Those rows do not change from one
+  release to the next, so a run does not list them: `uv run python -m probe --surface` does, and
+  checks the table alone, with no session and no token.
 - Nothing checks that the table lists every field the source reads: the import check is complete
   for types and functions only. A change that reads a new field, key or value of the SDK adds
   its row in the same pull request.
 
 ## On a new SDK release
 
-1. Run the probe on it and read the surface section of its output first.
+1. Run the probe on it and read the surface section of its output first: three lines when
+   nothing changed.
 2. For each BROKEN row, the symbol in its Used in column is what to fix or to stop using.
 3. For each UNPROVEN row, read the reference: move the row to `package` or `measured` if the
    reference dropped it, or correct the row if the reference renamed it.
