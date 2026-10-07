@@ -4202,27 +4202,62 @@ async def test_a_subagent_s_command_that_outlives_its_call_is_a_running_shell(
     assert h.clients[0].stopped_tasks == [command]
 
 
-async def test_a_failed_subagent_shows_its_reason_on_its_own_line_and_nowhere_else(
-    harness_for: Callable[..., Harness],
+def task_cards(h: Harness) -> list[dict[str, Any]]:
+    """Every task card Slack was sent, in call order."""
+    return [
+        chunk
+        for _, args in h.slack.calls
+        for chunk in args.get("chunks") or []
+        if chunk.get("type") == "task_update"
+    ]
+
+
+async def test_a_background_subagent_s_api_error_shows_on_its_card_and_not_in_the_text(
+    harness_for: Callable[..., Harness], caplog: pytest.LogCaptureFixture
 ) -> None:
     # subagent-api-error.jsonl (issue #161): a background subagent whose requests all fail,
     # after the main turn's result; then Claude Code's report turn.
     first, later = split_turns(sdk_messages("subagent-api-error"))
     (failed,) = [m for m in later if isinstance(m, TaskNotificationMessage)]
     assert failed.status == "failed"
-    assert failed.summary.startswith("Agent terminated early due to an API error: API Error: 529")
+    reason = "Agent terminated early due to an API error: API Error: 529"
+    assert failed.summary.startswith(reason)
     h = harness_for({"turns": [first]})
     session = h.session()
-    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
-    h.clients[0].inject(later)
-    await until(lambda: h.reactions()[-1] == Status.DONE.value and session.idle)
+    with caplog.at_level(logging.INFO, logger="code_with_slack"):
+        await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+        h.clients[0].inject(later)
+        await until(lambda: h.reactions()[-1] == Status.DONE.value and session.idle)
     (text,) = h.slack.stream_texts()
-    lines = [line for line in text.splitlines() if "API Error: 529" in line]
-    # Once, on the line of the task that failed, in Claude Code's own words from the notification.
-    assert len(lines) == 1 and lines[0].startswith(
-        '✗ Agent "Synthetic subtask" failed: Agent terminated'
-    )
+    assert "API Error" not in text  # not at the top level, as no other text of a subagent is
+    assert '✗ Agent "Synthetic subtask" failed' in text.splitlines()
+    card = task_cards(h)[-1]
+    assert card["status"] == "error" and card["output"].startswith(reason)
     assert Status.ERROR.value not in h.reactions()  # the main turn and its report both succeeded
+    warned = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert warned == [
+        f"Claude Code reported a subagent's error in {session.channel_id}/{session.thread_ts}:"
+        " server_error"
+    ]
+
+
+async def test_a_foreground_subagent_s_api_error_shows_on_its_card(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # subagent-api-error-foreground.jsonl (CLI 2.1.286): the Agent call is asked to run in the
+    # foreground. No message with `error` is forwarded then: the task is notified as failed and
+    # the call's result, an error, says why.
+    messages = sdk_messages("subagent-api-error-foreground")
+    assert not [m for m in messages if isinstance(m, AssistantMessage) and m.error]
+    h = harness_for({"turns": [messages]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    await until(lambda: h.reactions()[-1] == Status.DONE.value)
+    card = task_cards(h)[-1]
+    # One card for the whole run: the fold puts a failed call's output after its title.
+    assert card["status"] == "error"
+    assert "Agent terminated early due to an API error: API Error: 529" in card["title"]
+    assert "API Error" not in "".join(h.slack.stream_texts())
 
 
 def nested_background_ending_mid_turn() -> tuple[list[Any], list[Any], list[Any]]:

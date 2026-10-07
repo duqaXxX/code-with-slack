@@ -1529,6 +1529,14 @@ class ThreadSession:
         )
         origin = self._origin_of(call) if call else None
         if origin is not None:
+            if isinstance(message, AssistantMessage) and message.error is not None:
+                # A subagent's failed request: the category only, as for the turn's own below.
+                logger.warning(
+                    "Claude Code reported a subagent's error in %s/%s: %s",
+                    self.channel_id,
+                    self.thread_ts,
+                    message.error,
+                )
             await origin.feed(message)
             await self._adopt_promoted(origin)
             if isinstance(message, TaskStartedMessage):
@@ -1608,9 +1616,7 @@ class ThreadSession:
 
     def _ended_line(self, message: TaskNotificationMessage) -> str:
         """The terminal's line for a task's end: a command's own summary, or `Agent "..."
-        finished` from the task's description, plus the duration when the task reports one. A
-        task that failed also says why, in the notification's own words (`Agent terminated early
-        due to an API error: ...`): nothing else in the reply does."""
+        finished` from the task's description, plus the duration when the task reports one."""
         task_type, description = self._tasks.get(message.task_id, ("", ""))
         if task_type in SUMMARY_IS_END_LINE and message.summary:
             text = one_line(message.summary, 200)
@@ -1620,8 +1626,6 @@ class ThreadSession:
             name = TASK_KINDS.get(task_type, UNKNOWN_KIND)[1]
             outcome = {"completed": "finished"}.get(message.status, message.status)
             text = f'{name} "{one_line(label or message.task_id, 120)}" {outcome}'
-            if message.status == "failed" and message.summary:
-                text += f": {one_line(message.summary, 200)}"
         duration = message.usage["duration_ms"] if message.usage else None
         return ended_line(text, message.status, duration)
 

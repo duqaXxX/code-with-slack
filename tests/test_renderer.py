@@ -210,9 +210,25 @@ async def test_a_subagent_s_api_error_is_left_out_of_the_reply_s_text() -> None:
     (block,) = reply.content
     assert isinstance(block, TextBlock) and block.text.startswith("API Error: 529")
     sink, renderer = await render(messages)
-    # Like every other text of a subagent: the failure belongs to its own line, not to the reply.
+    # Like every other text of a subagent: the failure belongs to its own card, not to the reply.
     assert block.text not in "".join(sink.texts)
     assert renderer.error is None and not renderer.auth_failed
+
+
+async def test_a_subagent_s_api_error_shows_under_its_card_when_no_task_frame_says_so() -> None:
+    # The recorded stream with the task's own end taken out, as for a subagent whose task frames
+    # never reach this reply (one started by another subagent): the words are still on the card.
+    messages = [
+        m
+        for m in sdk_messages("subagent-api-error")
+        if not isinstance(m, TaskNotificationMessage | TaskUpdatedMessage)
+    ]
+    reply = error_reply(messages)
+    sink, _ = await render(messages)
+    card = [u for u in sink.tasks if u.id == reply.parent_tool_use_id][-1]
+    assert card.details is not None and card.details.splitlines()[-1].startswith("API Error: 529")
+    assert card.calls == 0  # a note under the card, not one more call of the subagent
+    assert "API Error" not in "".join(sink.texts)
 
 
 async def test_an_api_error_with_no_words_of_its_own_lets_the_result_speak() -> None:

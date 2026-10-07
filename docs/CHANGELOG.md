@@ -213,13 +213,18 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 
 - A subagent's failed API request no longer shows at the top level of the reply (issue #161).
-  Claude Code forwards the subagent's error message with `error` and `parent_tool_use_id` both
-  set (recorded: `subagent-api-error.jsonl`, CLI 2.1.286, every request of the subagent answered
-  529 by a local endpoint while the main conversation's succeeded), and `TurnRenderer._assistant`
-  wrote its sentence into the reply, although the main turn went on and succeeded. It now leaves
-  the message out, as it does every other text of a subagent. The line of a task that failed
-  gives the reason instead, from the notification's summary:
-  `✗ Agent "..." failed: Agent terminated early due to an API error: ...`, cut at 200 characters.
+  For a background subagent Claude Code forwards the subagent's own error message, with `error`
+  and `parent_tool_use_id` both set (recorded: `subagent-api-error.jsonl`, CLI 2.1.286, every
+  request of the subagent answered 529 by a local endpoint while the main conversation's
+  succeeded), and `TurnRenderer._assistant` wrote its sentence into the reply, although the main
+  turn went on and succeeded. The sentence was already on the subagent's card, as the output of
+  the failed task, so it showed twice. The message is now left out of the text, as every other
+  text of a subagent is, and its words are noted under the card of the call that started the
+  subagent, so they show even when no task frame of that subagent reaches the reply. The session
+  logs `Claude Code reported a subagent's error in <channel>/<thread>: <category>`; such a
+  message logged nothing before. For a foreground subagent no such message is forwarded and
+  nothing changes (recorded: `subagent-api-error-foreground.jsonl`): the card shows the error
+  with the reason from the task's notification.
 - The text Claude Code writes for nine API statuses is recorded and replayed (issue #162):
   `api-error-400.jsonl` to `api-error-504.jsonl`, CLI 2.1.286, one status and its documented
   error type per recording. Nothing changes in what the reply shows: `authentication_failed`
