@@ -3,6 +3,7 @@
     uv run python -m probe            run if the pinned claude-agent-sdk is not certified yet
     uv run python -m probe --force    run anyway
     uv run python -m probe --latest   run on the newest release on PyPI, in a temporary worktree
+    uv run python -m probe --surface  check docs/sdk-surface.md alone and list its rows: no tokens
 
 It uses the owner's Claude Code login and real tokens (Haiku), which is why it is not part of
 pytest. Exit status: 0 certified, 3 a claim is BROKEN, 2 not every gesture claim could be proven;
@@ -26,6 +27,9 @@ from claude_agent_sdk._cli_version import __cli_version__
 from probe.claims import CLAIMS, broken, can_certify, certificate, checklist, evaluate, report
 from probe.features import by_hand
 from probe.scenes import run_scenes
+from probe.surface import check as check_surface
+from probe.surface import read_reference, set_aside, surface
+from probe.surface import report as surface_report
 
 REPO = Path(__file__).resolve().parents[1]
 CERTIFIED = Path(__file__).resolve().parent / "certified-versions.json"
@@ -105,6 +109,13 @@ def run(path: Path, force: bool) -> int:
     # Read before the scenes: a broken map stops the run before it spends tokens, and cannot
     # come between a finished run and its verdict.
     left = by_hand()
+    # The SDK surface map, on the release this run is on: a symbol the package no longer defines
+    # needs no scene to be known, so it stops the run here.
+    mapped = check_surface(surface(), read_reference(), set_aside())
+    print(surface_report(mapped) + "\n")
+    if mapped.broken:
+        print("Not certified: the package no longer defines a symbol the daemon uses.")
+        return 3
     seen = asyncio.run(run_scenes(log))
     results = [evaluate(claim, seen.get(claim.id)) for claim in CLAIMS]
     print(report(results, __cli_version__, sdk))
@@ -125,12 +136,23 @@ def run(path: Path, force: bool) -> int:
     return 0
 
 
+def show_surface() -> int:
+    """The SDK surface map against the installed release and the published reference, with the
+    rows a run only counts. It starts no session, so it spends nothing."""
+    mapped = check_surface(surface(), read_reference(), set_aside())
+    print(surface_report(mapped, full=True))
+    return 3 if mapped.broken else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="python -m probe", description=__doc__.split("\n")[0])
     parser.add_argument("--force", action="store_true", help="run even if already certified")
     parser.add_argument("--latest", action="store_true", help="probe the newest release on PyPI")
+    parser.add_argument("--surface", action="store_true", help="check the SDK surface map only")
     parser.add_argument("--certificate", type=Path, default=CERTIFIED, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.surface:
+        return show_surface()
     return on_latest(args.force) if args.latest else run(args.certificate, args.force)
 
 

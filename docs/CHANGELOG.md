@@ -7,6 +7,19 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `docs/sdk-surface.md`, the map of what the daemon depends on in `claude-agent-sdk`: 195 rows,
+  one for each type, function, method, option, field, key and value the source reads, calls or
+  decides on, with where it is used and where it is known from. Read on 2026-10-07 against SDK
+  0.2.163 and the Agent SDK reference for Python: 115 rows are named by the reference, 20 are
+  defined by the package only (`TaskUpdatedMessage`, `ModelUsage`, the two private functions of
+  `claude_agent_sdk._internal.sessions` among them) and 60 are in neither (the keys of the
+  server info, of `tool_use_result`, of the stream events, the `effort` of the Stop hook input).
+  `tests/test_sdk_surface.py` keeps the table in step with the source's imports and with the
+  installed package, so the daily SDK release watch runs it on the newest release. The probe
+  (`probe/surface.py`) checks it before its scenes: a row the package no longer defines is
+  BROKEN and ends the run with status 3 before any token is spent; a `reference` row the
+  published reference no longer names, or a reference that cannot be read, is UNPROVEN; the
+  types the package exports that the table neither lists nor sets aside are printed as new.
 - `!open`, sent inside a session's thread: a message with one `Choose a file` button, and
   `!open <path>` or `!open <words>` for a file directly. The button opens a modal with a search
   field and one radio row for each file (its name as plain text, its folder below, at most 10, with a
