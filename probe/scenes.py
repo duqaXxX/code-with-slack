@@ -632,6 +632,19 @@ def forget_sessions(workdir: Path, log: Log) -> None:
 
 # Each scene and the claims it observes: the one place a claim id meets its scene.
 # `tests/test_probe.py` checks that together they cover `probe.claims.CLAIMS` exactly.
+async def goal(s: Stage) -> dict[str, Observation]:
+    """A goal met by its first turn, so the scene is one turn and leaves no goal behind."""
+    mark, condition = s.mark(), "Reply with the single word tick."
+    await s.turn(f"/goal {condition}")
+    reply = s.replies_since(mark)
+    opens = reply.startswith(f"Goal set: {condition}")
+    once = reply.count("Goal set:") == 1 and len(reply) > len(f"Goal set: {condition}")
+    detail = (
+        "" if opens and once else f"opens with the line: {opens}, once and with a reply: {once}"
+    )
+    return {"P20": Observation(True, opens and once, detail)}
+
+
 SCENES: dict[str, tuple[str, ...]] = {
     "first turn": ("P1", "P2", "P3", "P17"),
     "image": ("P4",),
@@ -646,6 +659,7 @@ SCENES: dict[str, tuple[str, ...]] = {
     "bypass": ("P9",),
     "working folder": ("P14",),
     "replay": ("P19",),
+    "goal": ("P20",),
 }
 
 
@@ -669,6 +683,7 @@ async def run_scenes(log: Log) -> dict[str, Observation]:
             seen |= await attempt("bypass", s, bypass(s))
             seen |= await attempt("working folder", s, working_folder(s))
             seen |= await attempt("replay", s, replay(s))
+            seen |= await attempt("goal", s, goal(s))
         finally:
             await s.manager.close_all()
             forget_sessions(workdir, log)
