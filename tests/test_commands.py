@@ -128,6 +128,14 @@ def test_help_lists_the_daemon_words_and_every_session_command() -> None:
     assert all(f"`!{c['name']}" in text for c in commands if c["name"] != "clear")
 
 
+def test_help_says_how_a_command_is_told_from_a_text() -> None:
+    commands = sdk_json("server-info")["commands"]
+    for listed in (None, commands):  # in the channel and inside a session's thread
+        assert help_text(listed).split("\n")[1] == texts.HELP_RULE
+        assert texts.HELP_RULE not in help_text(listed, "status")  # a search lists matches only
+    assert "`\\!goal`" in texts.HELP_RULE
+
+
 def test_help_leaves_out_clear_which_a_thread_refuses() -> None:
     # Issue #76: a session's commands are listed inside its thread only, where `!clear` is
     # refused. The recorded list (SDK 0.2.163) does carry it.
