@@ -1529,6 +1529,14 @@ class ThreadSession:
         )
         origin = self._origin_of(call) if call else None
         if origin is not None:
+            if isinstance(message, AssistantMessage) and message.error is not None:
+                # A subagent's failed request: the category only, as for the turn's own below.
+                logger.warning(
+                    "Claude Code reported a subagent's error in %s/%s: %s",
+                    self.channel_id,
+                    self.thread_ts,
+                    message.error,
+                )
             await origin.feed(message)
             await self._adopt_promoted(origin)
             if isinstance(message, TaskStartedMessage):

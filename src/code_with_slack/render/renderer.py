@@ -321,6 +321,14 @@ class TurnRenderer:
         await self._text(("\n\n" if self._wrote_text else "") + line + "\n\n", notice=True)
 
     async def _assistant(self, message: AssistantMessage) -> None:
+        if message.error is not None and message.parent_tool_use_id is not None:
+            # A subagent's own failed request (recorded: `subagent-api-error.jsonl`): like every
+            # other text of a subagent it stays out of the reply, whose turn may well go on and
+            # succeed. Its words go under the card of the call that started the subagent, the
+            # outermost one when subagents nest, so the failure shows whether or not a task
+            # frame of that subagent ever reaches this reply.
+            await self._child_note(message.parent_tool_use_id, message)
+            return
         if message.error == "authentication_failed":
             self.auth_failed = True
             await self._text(texts.AUTH_FAILED, notice=True)
@@ -474,6 +482,18 @@ class TurnRenderer:
         await self._set(
             replace(self._lines[root], details="\n".join(lines), task=True, calls=calls)
         )
+
+    async def _child_note(self, parent: str, message: AssistantMessage) -> None:
+        """What a subagent's error message says, as a nested line of its card: not one more
+        call, so the count stays."""
+        root = self._root_of.get(parent, parent)
+        words = "".join(b.text for b in message.content if isinstance(b, TextBlock)).strip()
+        if root not in self._lines or not words:
+            return
+        lines = self._children.setdefault(root, [])
+        lines.append(one_line(words, 200))
+        del lines[:-CHILD_LINES]
+        await self._set(replace(self._lines[root], details="\n".join(lines), task=True))
 
     async def _set(self, update: TaskUpdate) -> None:
         if update.id not in self._lines:

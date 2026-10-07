@@ -158,6 +158,79 @@ async def test_an_api_error_shows_the_text_claude_code_wrote() -> None:
     assert renderer.error == "server_error" and not renderer.auth_failed
 
 
+# One recording for each status a local endpoint answered with, and the error type the API
+# reference gives it (issue #162, SDK 0.2.163, CLI 2.1.286). 401, 402 and 403 were recorded with
+# a made-up API key, so their sentence is the one of API-key auth.
+RECORDED_API_ERRORS = {
+    400: "unknown",
+    402: "unknown",
+    404: "model_not_found",
+    413: "invalid_request",
+    429: "rate_limit",
+    500: "server_error",
+    504: "server_error",
+}
+
+
+@pytest.mark.parametrize("status", RECORDED_API_ERRORS)
+async def test_every_recorded_api_error_shows_claude_code_s_sentence_once(status: int) -> None:
+    messages = sdk_messages(f"api-error-{status}")
+    reply = error_reply(messages)
+    # The category is read from the recording, whatever the SDK's `AssistantMessageError` lists:
+    # `model_not_found` is not in it, and the text is shown the same way.
+    assert reply.error == RECORDED_API_ERRORS[status]
+    (block,) = reply.content
+    assert isinstance(block, TextBlock) and block.text
+    sink, renderer = await render(messages)
+    assert "".join(sink.texts) == block.text  # once, and never read: the words are Claude Code's
+    assert sink.notices == sink.texts
+    assert renderer.error == reply.error and not renderer.auth_failed
+    assert renderer.result is not None and renderer.result.api_error_status == status
+
+
+@pytest.mark.parametrize("status", [401, 403])
+async def test_a_401_and_a_403_both_arrive_as_a_failed_login(status: int) -> None:
+    # A 403 is a missing permission in the API reference, and Claude Code still sends it as
+    # `authentication_failed` with `Failed to authenticate.`: the category is the documented
+    # field, so it gets the note a 401 gets. The status is on the result, which comes after.
+    messages = sdk_messages(f"api-error-{status}")
+    assert error_reply(messages).error == "authentication_failed"
+    sink, renderer = await render(messages)
+    assert renderer.auth_failed and "".join(sink.texts) == texts.AUTH_FAILED
+    assert renderer.result is not None and renderer.result.api_error_status == status
+
+
+async def test_a_subagent_s_api_error_is_left_out_of_the_reply_s_text() -> None:
+    # subagent-api-error.jsonl (issue #161, CLI 2.1.286): the subagent's requests all got a 529
+    # while the main conversation's succeeded. Claude Code forwards the subagent's own error
+    # message, with `error` and `parent_tool_use_id` both set, after the main turn's result.
+    messages = sdk_messages("subagent-api-error")
+    reply = error_reply(messages)
+    assert reply.error == "server_error" and reply.parent_tool_use_id is not None
+    (block,) = reply.content
+    assert isinstance(block, TextBlock) and block.text.startswith("API Error: 529")
+    sink, renderer = await render(messages)
+    # Like every other text of a subagent: the failure belongs to its own card, not to the reply.
+    assert block.text not in "".join(sink.texts)
+    assert renderer.error is None and not renderer.auth_failed
+
+
+async def test_a_subagent_s_api_error_shows_under_its_card_when_no_task_frame_says_so() -> None:
+    # The recorded stream with the task's own end taken out, as for a subagent whose task frames
+    # never reach this reply (one started by another subagent): the words are still on the card.
+    messages = [
+        m
+        for m in sdk_messages("subagent-api-error")
+        if not isinstance(m, TaskNotificationMessage | TaskUpdatedMessage)
+    ]
+    reply = error_reply(messages)
+    sink, _ = await render(messages)
+    card = [u for u in sink.tasks if u.id == reply.parent_tool_use_id][-1]
+    assert card.details is not None and card.details.splitlines()[-1].startswith("API Error: 529")
+    assert card.calls == 0  # a note under the card, not one more call of the subagent
+    assert "API Error" not in "".join(sink.texts)
+
+
 async def test_an_api_error_with_no_words_of_its_own_lets_the_result_speak() -> None:
     # No such message was recorded: the recorded one, with its blocks taken out. The result is
     # the recorded one, and carries the sentence.

@@ -212,6 +212,26 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- A subagent's failed API request no longer shows at the top level of the reply (issue #161).
+  For a background subagent Claude Code forwards the subagent's own error message, with `error`
+  and `parent_tool_use_id` both set (recorded: `subagent-api-error.jsonl`, CLI 2.1.286, every
+  request of the subagent answered 529 by a local endpoint while the main conversation's
+  succeeded), and `TurnRenderer._assistant` wrote its sentence into the reply, although the main
+  turn went on and succeeded. The sentence was already on the subagent's card, as the output of
+  the failed task, so it showed twice. The message is now left out of the text, as every other
+  text of a subagent is, and its words are noted under the card of the call that started the
+  subagent, so they show even when no task frame of that subagent reaches the reply. The session
+  logs `Claude Code reported a subagent's error in <channel>/<thread>: <category>`; such a
+  message logged nothing before. For a foreground subagent no such message is forwarded and
+  nothing changes (recorded: `subagent-api-error-foreground.jsonl`): the card shows the error
+  with the reason from the task's notification.
+- The text Claude Code writes for nine API statuses is recorded and replayed (issue #162):
+  `api-error-400.jsonl` to `api-error-504.jsonl`, CLI 2.1.286, one status and its documented
+  error type per recording. Nothing changes in what the reply shows: `authentication_failed`
+  keeps the project's note, and every other category shows Claude Code's sentence, whether the
+  SDK's `AssistantMessageError` names it or not (`model_not_found` for a 404 is not in it). A 403
+  arrives as `authentication_failed`, as a 401 does. The recordings for 401, 402 and 403 were
+  made with a made-up API key, so their sentence is that of API-key auth.
 - `claude-agent-sdk` 0.2.164, which bundles Claude Code 2.1.292 (was 0.2.163 with 2.1.286). The
   probe certified it on 2026-10-07: all 19 claims hold, every row of `docs/sdk-surface.md` is
   still in the package and every `reference` row is still named by the reference. The two
