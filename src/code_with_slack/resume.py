@@ -20,7 +20,7 @@ from typing import Any
 from claude_agent_sdk import SDKSessionInfo
 
 # The SDK's own rules for where a directory's transcripts live (CLAUDE_CONFIG_DIR, path
-# sanitising): private helpers of claude-agent-sdk 0.2.163 (unchanged since 0.2.158), pinned, and
+# sanitising): private helpers of claude-agent-sdk 0.2.164 (unchanged since 0.2.158), pinned, and
 # covered by tests.
 from claude_agent_sdk._internal.sessions import _canonicalize_path, _find_project_dir
 

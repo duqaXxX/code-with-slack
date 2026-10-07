@@ -212,6 +212,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `claude-agent-sdk` 0.2.164, which bundles Claude Code 2.1.292 (was 0.2.163 with 2.1.286). The
+  probe certified it on 2026-10-07: all 19 claims hold, every row of `docs/sdk-surface.md` is
+  still in the package and every `reference` row is still named by the reference. The two
+  private helpers `resume.py` imports from `claude_agent_sdk._internal.sessions` are unchanged.
+  The recorded fixtures stay those of CLI 2.1.286.
 - `docs/features.md` and `docs/setup.md` say what a `!stop` rings as measured (issue #67): typed
   in the thread, one push that shows `Stopped.`; typed in the channel, none. Both said that a
   `!stop` rings once wherever it is typed, through the stop of the reply's stream.
