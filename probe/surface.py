@@ -95,27 +95,33 @@ def _literals(annotation: Any) -> set[object]:
 
 
 def _members(owner: Any) -> dict[str, Any]:
-    """The fields of a dataclass or a TypedDict of the SDK, with their annotations."""
+    """The fields of a dataclass or a TypedDict of the SDK, or the parameters of one of its
+    functions, with their annotations: unresolved ones when a hint does not resolve, since a
+    name that cannot be resolved is still a member."""
     try:
         return typing.get_type_hints(owner)
     except Exception:
         if dataclasses.is_dataclass(owner):
             return {f.name: f.type for f in dataclasses.fields(owner)}
-        return {}
+        found: dict[str, Any] = {}
+        for base in reversed(getattr(owner, "__mro__", (owner,))):
+            found.update(getattr(base, "__annotations__", None) or {})
+        return found
 
 
 def in_package(row: Row) -> bool | None:
-    """Whether the installed `claude-agent-sdk` still defines what `row` names. None when the
-    package cannot say: a key inside a `dict[str, Any]`, a value of a plain `str` field, an owner
-    that is no type of the SDK."""
+    """Whether the installed `claude-agent-sdk` still defines what `row` names. False also when
+    the type it hangs from is not in the package: gone in this release, or never a type of the
+    SDK (a tool's input). None when the type is there and cannot say: a key inside a
+    `dict[str, Any]`, a value of a plain `str` field."""
     if row.kind in ("type", "function"):
         try:
             return hasattr(importlib.import_module(row.owner), row.member)
-        except ImportError:
+        except Exception:  # a module of a new release that fails to import is not there either
             return False
     owner = _sdk_type(row.root)
     if owner is None:
-        return None
+        return False
     if row.kind == "method":
         return row.owner == row.root and callable(getattr(owner, row.member, None))
     if row.kind in ("field", "option", "key"):

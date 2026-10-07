@@ -26,13 +26,16 @@ in a release with no notice, so it is the first place to look when a release mis
 - `tests/test_sdk_surface.py` runs with the test suite, so also in the daily SDK release watch on
   the newest release. It fails when the source imports an SDK name the table does not list or the
   table lists one the source no longer imports, when a `reference` or `package` row names
-  something the installed package does not define, when a `measured` row names something the
-  package does define, when a member no longer appears in the source, and when a claim in the
-  last column does not exist.
+  something the installed package does not define (the member, or the type it hangs from), when
+  a `measured` row names something the package does define, when a member no longer appears
+  inside any of the symbols its row names, and when a claim in the last column does not exist.
 - The probe (`uv run python -m probe`, see [CONTRIBUTING.md](../CONTRIBUTING.md)) checks the
   table before its scenes, on the release it runs on. A row the package no longer defines is
   BROKEN and the release is not certified. A `reference` row the reference no longer names, or a
-  reference that cannot be read, is UNPROVEN and is listed to be read by hand. It also lists the
+  reference that cannot be read, is UNPROVEN and is listed to be read by hand. The reference
+  counts as naming a member when the member's name appears in the section of its type, in the
+  definition or in the prose, so a row is read by hand when the section is rewritten. The check
+  runs when the probe runs its scenes, so not on a release that is already certified. It also lists the
   message, block and event types the package exports that the table does not know, and every
   row that is in no reference and under no claim.
 - Nothing checks that the table lists every field the source reads: the import check is complete
@@ -56,7 +59,7 @@ in a release with no notice, so it is the first place to look when a release mis
 | `claude_agent_sdk` | `AssistantMessage` | type | sessions.py: TURN_MESSAGES, ThreadSession._dispatch; render/renderer.py: TurnRenderer.feed, TurnRenderer._assistant | reference | none |
 | `claude_agent_sdk` | `ClaudeAgentOptions` | type | sessions.py: ClientFactory, client_options; footer.py: UsageProbe.__init__ | reference | none |
 | `claude_agent_sdk` | `ClaudeSDKClient` | type | sessions.py: default_client_factory | reference | none |
-| `claude_agent_sdk` | `Message` | type | sessions.py: ClaudeClient.receive_messages, ThreadSession._dispatch, ThreadSession._standalone, ThreadSession._held; render/renderer.py: TurnRenderer.feed | reference | none |
+| `claude_agent_sdk` | `Message` | type | sessions.py: ClaudeClient.receive_messages, ThreadSession._dispatch, ThreadSession._standalone, ThreadSession.__init__; render/renderer.py: TurnRenderer.feed | reference | none |
 | `claude_agent_sdk` | `ResultError` | type | sessions.py: ThreadSession.ensure_connected | reference | none |
 | `claude_agent_sdk` | `ResultMessage` | type | sessions.py: TURN_MESSAGES, injected_turn, ThreadSession._dispatch, ThreadSession._finish, ThreadSession._settle; footer.py: UsageProbe.__call__, session_tokens; render/renderer.py: TurnRenderer.feed, TurnRenderer.result | reference | none |
 | `claude_agent_sdk` | `SDKSessionInfo` | type | sessions.py: directory_sessions, SessionDeps.sessions_of, SessionManager.sessions_in, SessionManager.dated; resume.py: matching, by_last_activity, _row; home.py: Home.__init__; slack_app.py: resume_into_thread, show_resumed | reference | none |
@@ -149,10 +152,12 @@ in a release with no notice, so it is the first place to look when a release mis
 | `SystemMessage` | `subtype` | field | sessions.py: ThreadSession._dispatch; render/renderer.py: TurnRenderer.feed | reference | none |
 | `TaskNotificationMessage` | `status` | field | sessions.py: ThreadSession._ended_line; render/renderer.py: TurnRenderer.feed | reference | none |
 | `TaskNotificationMessage` | `summary` | field | sessions.py: ThreadSession._ended_line; render/renderer.py: TurnRenderer.feed | reference | none |
+| `TaskNotificationMessage` | `tool_use_id` | field | sessions.py: ThreadSession._dispatch | reference | none |
 | `TaskNotificationMessage` | `task_id` | field | sessions.py: ThreadSession._dispatch, ThreadSession._ended_line; render/renderer.py: TurnRenderer.feed | reference | none |
 | `TaskNotificationMessage` | `usage` | field | sessions.py: ThreadSession._ended_line | reference | none |
 | `TaskProgressMessage` | `description` | field | render/renderer.py: TurnRenderer.feed | reference | none |
 | `TaskProgressMessage` | `task_id` | field | sessions.py: ThreadSession._dispatch; render/renderer.py: TurnRenderer.feed | reference | none |
+| `TaskProgressMessage` | `tool_use_id` | field | sessions.py: ThreadSession._dispatch | reference | none |
 | `TaskStartedMessage` | `description` | field | sessions.py: ThreadSession._record_task; render/renderer.py: TurnRenderer._task_started, TurnRenderer._open_line | reference | none |
 | `TaskStartedMessage` | `task_id` | field | sessions.py: ThreadSession._dispatch, ThreadSession._record_task; render/renderer.py: TurnRenderer._task_started, TurnRenderer._open_line | reference | none |
 | `TaskStartedMessage` | `task_type` | field | sessions.py: ThreadSession._record_task; render/renderer.py: TurnRenderer._open_line | reference | none |
@@ -241,10 +246,6 @@ in a release with no notice, so it is the first place to look when a release mis
 | `TaskNotificationMessage.status` | `"stopped"` | value | render/renderer.py: terminal_status | reference | none |
 | `TaskStartedMessage.task_type` | `"local_agent"` | value | sessions.py: TASK_KINDS, ThreadSession._ended_line, ThreadSession._running_kinds | reference | none |
 | `TaskStartedMessage.task_type` | `"local_bash"` | value | sessions.py: TASK_KINDS, SUMMARY_IS_END_LINE, ThreadSession._ended_line, ThreadSession._running_kinds | reference | none |
-| `TaskUpdatedMessage.status` | `"completed"` | value | sessions.py: ThreadSession._dispatch; render/renderer.py: TurnRenderer.feed | package | none |
-| `TaskUpdatedMessage.status` | `"failed"` | value | sessions.py: ThreadSession._dispatch; render/renderer.py: TurnRenderer.feed | package | none |
-| `TaskUpdatedMessage.status` | `"killed"` | value | sessions.py: ThreadSession._dispatch; render/renderer.py: TurnRenderer.feed | package | none |
-| `TaskUpdatedMessage.status` | `"stopped"` | value | sessions.py: ThreadSession._dispatch; render/renderer.py: TurnRenderer.feed | measured | none |
 | `ToolUseBlock.name` | `"Bash"` | value | render/previews.py: WORDS, folded | measured | none |
 | `ToolUseBlock.name` | `"Edit"` | value | render/previews.py: PREVIEWED, preview; render/renderer.py: TurnRenderer._block | measured | none |
 | `ToolUseBlock.name` | `"Read"` | value | render/previews.py: WORDS, folded | measured | none |
@@ -254,7 +255,7 @@ in a release with no notice, so it is the first place to look when a release mis
 ## Types the daemon does not read
 
 The package exports these message, block and event types and the source imports none of them.
-A message of a type the renderer does not know is rendered generically or left out. The probe
+A message of a type `TurnRenderer.feed` does not match is left out of the reply. The probe
 reports any other such type as new.
 
 - `ConversationResetMessage`

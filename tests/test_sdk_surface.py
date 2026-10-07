@@ -23,7 +23,6 @@ from probe.surface import (
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "code_with_slack"
 ROWS = surface()
-SOURCE_TEXT = "\n".join(path.read_text() for path in sorted(SRC.rglob("*.py")))
 
 
 def imported() -> set[tuple[str, str]]:
@@ -56,16 +55,41 @@ def test_a_row_s_source_agrees_with_the_installed_package(row: Row) -> None:
         assert defined is not True, "the package defines it: the row is `package`, or `reference`"
 
 
+def body(file: str, symbol: str) -> str:
+    """The source of `symbol` in `file`: a function, a class, a method (`Class.method`) or a
+    module-level name, found at any depth since handlers are defined inside `build_app`."""
+    text = (SRC / file).read_text()  # a missing file is an error here
+    scope: ast.AST = ast.parse(text)
+    for part in symbol.split("."):
+        found = None
+        for node in ast.walk(scope):
+            if node is scope:
+                continue
+            named = isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+            if named and node.name == part:
+                found = node
+            elif isinstance(node, ast.Assign | ast.AnnAssign):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                if any(isinstance(t, ast.Name) and t.id == part for t in targets):
+                    found = node
+            if found is not None:
+                break
+        assert found is not None, f"{file} has no {symbol}"
+        scope = found
+    return ast.get_source_segment(text, scope) or ""
+
+
 @pytest.mark.parametrize("row", ROWS, ids=lambda r: f"{r.kind}:{r.name}"[:70])
-def test_a_row_names_something_the_source_still_uses(row: Row) -> None:
-    member = row.member.strip('"')
-    assert re.search(rf"(?<![\w-]){re.escape(member)}(?![\w-])", SOURCE_TEXT), member
+def test_a_row_is_used_inside_a_symbol_it_names(row: Row) -> None:
+    # Not "somewhere in the source": `type`, `name` and `text` are everywhere. The member has to
+    # appear in the body of a symbol the row itself points at, and every such symbol has to exist.
+    member = re.escape(row.member.strip('"'))
     assert row.used_in, "a row says where it is used"
+    sources = []
     for place in row.used_in:
         file, _, symbols = place.partition(":")
-        text = (SRC / file.strip()).read_text()  # a missing file is an error here
-        for symbol in symbols.split(","):
-            assert symbol.strip().rsplit(".", 1)[-1] in text, f"{symbol.strip()} in {file}"
+        sources += [body(file.strip(), symbol.strip()) for symbol in symbols.split(",")]
+    assert any(re.search(rf"(?<![\w-]){member}(?![\w-])", source) for source in sources)
 
 
 def test_every_claim_a_row_names_exists() -> None:
@@ -136,6 +160,16 @@ def test_a_symbol_gone_from_the_package_breaks_and_one_gone_from_the_reference_d
     text = report(result)
     assert "BROKEN" in text and "ClaudeSDKClient.no_such_method" in text
     assert "UNPROVEN" in text and "TaskNotificationMessage.task_id" in text
+
+
+def test_a_member_whose_type_left_the_package_is_missing_too() -> None:
+    # `ModelUsage` has no `type` row of its own (the source never imports it): were it renamed,
+    # only its fields' rows could say so.
+    orphan = row("NoSuchUsage", "inputTokens", "field")
+    assert in_package(orphan) is False
+    assert check([orphan], None, []).missing == (orphan,)
+    below = row("NoSuchMessage.data", "key", "key", source="measured")
+    assert check([below], None, []).missing == ()  # a measured row never claimed the package had it
 
 
 def test_a_reference_that_cannot_be_read_is_said_and_proves_nothing() -> None:
