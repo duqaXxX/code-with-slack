@@ -123,6 +123,11 @@ def terminal_status(status: str) -> tuple[TaskStatus, str | None]:
     return "complete", None
 
 
+def _words(message: AssistantMessage) -> str:
+    """The text of a message's text blocks, joined and trimmed."""
+    return "".join(b.text for b in message.content if isinstance(b, TextBlock)).strip()
+
+
 class TurnRenderer:
     def __init__(self, sink: Sink, cwd: str | None = None) -> None:
         self._sink = sink
@@ -149,6 +154,10 @@ class TurnRenderer:
         self._wrote_text = False
         self._after_text = False  # Claude's text is the last thing in the reply, no card since
         self._break_due = False  # the text block that just started follows text directly
+        # Ids of the messages a `message_start` announced: their text is written from its deltas.
+        self._streamed: set[str] = set()
+        self._stream_open = False  # a `message_start` came and its `message_stop` has not
+        self._stream_unnamed = False  # a `message_start` carried no id: the ids tell nothing
         self.result: ResultMessage | None = None
         self.auth_failed = False
         # The category of the last reply Claude Code wrote itself about a failure, if any.
@@ -163,7 +172,16 @@ class TurnRenderer:
             case StreamEvent(parent_tool_use_id=None, event=event):
                 delta = event.get("delta") or {}
                 block = event.get("content_block") or {}
-                if event.get("type") == "content_block_start" and block.get("type") == "text":
+                if event.get("type") == "message_start":
+                    started = (event.get("message") or {}).get("id")
+                    self._stream_open = True
+                    if isinstance(started, str):
+                        self._streamed.add(started)
+                    else:
+                        self._stream_unnamed = True
+                elif event.get("type") == "message_stop":
+                    self._stream_open = False
+                elif event.get("type") == "content_block_start" and block.get("type") == "text":
                     # Two text blocks with no card between them (a goal's inner turns, a Stop hook
                     # that continues the turn) would run together: the break waits for the first
                     # text, so a block that stays empty adds none.
@@ -339,12 +357,30 @@ class TurnRenderer:
             # with no stream event of their own, so they are read from its blocks. With no words
             # here the result speaks: it repeats them, and `feed` falls back to the category.
             self.error = message.error
-            words = "".join(b.text for b in message.content if isinstance(b, TextBlock)).strip()
+            words = _words(message)
             if words:
                 await self._text(("\n\n" if self._wrote_text else "") + words, notice=True)
             return
+        if self._unannounced(message) and (words := _words(message)):
+            # Text no stream event announced is a command's own output (`Goal set: …` before a
+            # goal's first inner turn, recorded: `goal.jsonl`): nothing else writes it once the
+            # reply has other text, so it is read from the message's blocks. Like a text block
+            # that follows another, it needs a break only when text is the last thing written.
+            await self._text(("\n\n" if self._after_text else "") + words)
         for block in message.content:
             await self._block(block, message.parent_tool_use_id)
+
+    def _unannounced(self, message: AssistantMessage) -> bool:
+        """Whether a top-level message's text reached the reply through no stream event. Never
+        while a streamed message is unfinished (its text may be this one's, sent again whole
+        after a failed stream, which no recording shows) or once a stream named no id."""
+        return (
+            message.parent_tool_use_id is None
+            and message.message_id is not None
+            and message.message_id not in self._streamed
+            and not self._stream_open
+            and not self._stream_unnamed
+        )
 
     async def _block(self, block: object, parent: str | None, result: object = None) -> None:
         if isinstance(block, ToolUseBlock | ServerToolUseBlock):
@@ -487,7 +523,7 @@ class TurnRenderer:
         """What a subagent's error message says, as a nested line of its card: not one more
         call, so the count stays."""
         root = self._root_of.get(parent, parent)
-        words = "".join(b.text for b in message.content if isinstance(b, TextBlock)).strip()
+        words = _words(message)
         if root not in self._lines or not words:
             return
         lines = self._children.setdefault(root, [])

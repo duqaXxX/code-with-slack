@@ -202,6 +202,15 @@ CLAIMS = [
         "send a message while Claude Code reports a background task, as `docs/features.md` "
         "describes: the reply ends with the note, or the session answers it in a turn of its own",
     ),
+    Claim(
+        "P20",
+        "gesture",
+        "the reply to `/goal` opens with the command's `Goal set:` line: an assistant message "
+        "whose `message_id` no `message_start` event announced",
+        "code_with_slack.render.renderer.TurnRenderer._unannounced",
+        "send `!goal reply with the single word tick`; the reply opens with `Goal set:` and the "
+        "condition, then Claude's text, written once",
+    ),
 ]
 
 

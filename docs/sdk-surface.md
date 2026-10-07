@@ -89,7 +89,7 @@ in a release with no notice, so it is the first place to look when a release mis
 | `claude_agent_sdk.types` | `TaskProgressMessage` | type | sessions.py: TASK_MESSAGES; render/renderer.py: TaskFrame, TurnRenderer.feed | reference | none |
 | `claude_agent_sdk.types` | `TaskStartedMessage` | type | sessions.py: TASK_MESSAGES, ThreadSession._dispatch, ThreadSession._record_task; render/renderer.py: TaskFrame, TurnRenderer._task_started, TurnRenderer._open_line | reference | none |
 | `claude_agent_sdk.types` | `TaskUpdatedMessage` | type | sessions.py: TASK_MESSAGES, ThreadSession._dispatch; render/renderer.py: TaskFrame, TurnRenderer.feed | package | none |
-| `claude_agent_sdk.types` | `TextBlock` | type | render/renderer.py: TurnRenderer._assistant | reference | none |
+| `claude_agent_sdk.types` | `TextBlock` | type | render/renderer.py: _words | reference | none |
 | `claude_agent_sdk.types` | `ToolPermissionContext` | type | sessions.py: ThreadSession._can_use_tool; approvals.py: approval_blocks | reference | none |
 | `claude_agent_sdk.types` | `ToolResultBlock` | type | render/renderer.py: TurnRenderer.feed, TurnRenderer._block | reference | none |
 | `claude_agent_sdk.types` | `ToolUseBlock` | type | render/renderer.py: TurnRenderer._block | reference | none |
@@ -123,6 +123,7 @@ in a release with no notice, so it is the first place to look when a release mis
 | `list_sessions` | `include_worktrees` | option | sessions.py: directory_sessions | reference | none |
 | `AssistantMessage` | `content` | field | render/renderer.py: TurnRenderer._assistant | reference | none |
 | `AssistantMessage` | `error` | field | render/renderer.py: TurnRenderer._assistant; sessions.py: ThreadSession._dispatch | reference | none |
+| `AssistantMessage` | `message_id` | field | render/renderer.py: TurnRenderer._unannounced | reference | P20 |
 | `AssistantMessage` | `parent_tool_use_id` | field | render/renderer.py: TurnRenderer._assistant; sessions.py: ThreadSession._dispatch | reference | none |
 | `BaseHookInput` | `cwd` | field | sessions.py: ThreadSession._note_cwd | reference | P14 |
 | `ContextUsageResponse` | `model` | field | sessions.py: ThreadSession._footer_data | reference | none |
@@ -168,7 +169,7 @@ in a release with no notice, so it is the first place to look when a release mis
 | `TaskUpdatedMessage` | `status` | field | sessions.py: ThreadSession._dispatch; render/renderer.py: TurnRenderer.feed | package | none |
 | `TaskUpdatedMessage` | `task_id` | field | sessions.py: ThreadSession._dispatch; render/renderer.py: TurnRenderer.feed | package | none |
 | `TaskUsage` | `duration_ms` | field | sessions.py: ThreadSession._ended_line | reference | none |
-| `TextBlock` | `text` | field | render/renderer.py: TurnRenderer._assistant | reference | none |
+| `TextBlock` | `text` | field | render/renderer.py: _words | reference | none |
 | `ToolPermissionContext` | `description` | field | approvals.py: approval_blocks | reference | none |
 | `ToolPermissionContext` | `title` | field | sessions.py: ThreadSession._can_use_tool; approvals.py: approval_blocks | reference | none |
 | `ToolPermissionContext` | `tool_use_id` | field | sessions.py: ThreadSession._can_use_tool | reference | none |
@@ -210,10 +211,12 @@ in a release with no notice, so it is the first place to look when a release mis
 | `StopHookInput.effort` | `level` | key | sessions.py: ThreadSession._on_stop | measured | none |
 | `StreamEvent.event` | `content_block` | key | render/renderer.py: TurnRenderer.feed | measured | none |
 | `StreamEvent.event` | `delta` | key | render/renderer.py: TurnRenderer.feed | measured | none |
+| `StreamEvent.event` | `message` | key | render/renderer.py: TurnRenderer.feed | measured | none |
 | `StreamEvent.event` | `type` | key | render/renderer.py: TurnRenderer.feed | measured | none |
 | `StreamEvent.event.content_block` | `type` | key | render/renderer.py: TurnRenderer.feed | measured | none |
 | `StreamEvent.event.delta` | `text` | key | render/renderer.py: TurnRenderer.feed | measured | none |
 | `StreamEvent.event.delta` | `type` | key | render/renderer.py: TurnRenderer.feed | measured | none |
+| `StreamEvent.event.message` | `id` | key | render/renderer.py: TurnRenderer.feed | measured | none |
 | `SystemMessage.data` | `claude_code_version` | key | sessions.py: ThreadSession._dispatch | measured | P1 |
 | `SystemMessage.data` | `compact_metadata` | key | render/renderer.py: TurnRenderer.feed | measured | none |
 | `SystemMessage.data` | `session_id` | key | sessions.py: ThreadSession._dispatch | measured | none |
@@ -241,6 +244,8 @@ in a release with no notice, so it is the first place to look when a release mis
 | `StreamEvent.event.delta.type` | `"text_delta"` | value | render/renderer.py: TurnRenderer.feed | measured | none |
 | `StreamEvent.event.type` | `"content_block_delta"` | value | render/renderer.py: TurnRenderer.feed | measured | none |
 | `StreamEvent.event.type` | `"content_block_start"` | value | render/renderer.py: TurnRenderer.feed | measured | none |
+| `StreamEvent.event.type` | `"message_start"` | value | render/renderer.py: TurnRenderer.feed | measured | P20 |
+| `StreamEvent.event.type` | `"message_stop"` | value | render/renderer.py: TurnRenderer.feed | measured | none |
 | `SystemMessage.subtype` | `"compact_boundary"` | value | render/renderer.py: TurnRenderer.feed | measured | none |
 | `SystemMessage.subtype` | `"init"` | value | sessions.py: ThreadSession._dispatch | measured | P1 |
 | `TaskNotificationMessage.status` | `"completed"` | value | sessions.py: ThreadSession._ended_line | reference | none |

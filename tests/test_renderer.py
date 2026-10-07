@@ -469,6 +469,10 @@ def block_events(*pieces: str, parent: str | None = None, thinking: bool = False
         for piece in pieces
     ]
     wire.append({"type": "content_block_stop", "index": 1})
+    return stream_events(wire, parent)
+
+
+def stream_events(wire: list[dict[str, Any]], parent: str | None = None) -> list[Message]:
     out = [
         parse_message(
             {
@@ -484,11 +488,101 @@ def block_events(*pieces: str, parent: str | None = None, thinking: bool = False
     return [m for m in out if m is not None]
 
 
+def message_start(message_id: str | None) -> list[Message]:
+    """The event that opens a streamed message, with the keys the renderer reads of the recorded
+    one (`goal.jsonl`); `None` leaves the id out, which no recording shows."""
+    message: dict[str, Any] = {"type": "message", "role": "assistant", "content": []}
+    if message_id is not None:
+        message["id"] = message_id
+    return stream_events([{"type": "message_start", "message": message}])
+
+
+def message_stop() -> list[Message]:
+    return stream_events([{"type": "message_stop"}])
+
+
+def unannounced(
+    text: str,
+    *,
+    message_id: str | None = "00000000-0000-0000-0000-00000000000a",
+    parent: str | None = None,
+) -> list[Message]:
+    """A command's own output, in the shape of the `Goal set:` message of `goal.jsonl`: a whole
+    assistant message with a synthetic model and no stream event before it."""
+    message: dict[str, Any] = {
+        "model": "<synthetic>",
+        "role": "assistant",
+        "type": "message",
+        "stop_reason": "end_turn",
+        "content": [{"type": "text", "text": text}],
+    }
+    if message_id is not None:
+        message["id"] = message_id
+    parsed = parse_message(
+        {
+            "type": "assistant",
+            "message": message,
+            "parent_tool_use_id": parent,
+            "session_id": "00000000-0000-0000-0000-000000000001",
+            "uuid": "00000000-0000-0000-0000-000000000003",
+        }
+    )
+    assert parsed is not None
+    return [parsed]
+
+
 async def test_the_inner_turns_of_a_goal_do_not_run_together() -> None:
     sink, _ = await render(sdk_messages("goal"))
     written = "".join(sink.texts)
     assert written.endswith("tick\n\ntick\n\ntick")
     assert "ticktick" not in written
+
+
+async def test_a_goal_s_reply_opens_with_the_command_s_own_line() -> None:
+    """`Goal set: …` is `/goal`'s own output: an assistant message no stream event announced
+    (recorded: `goal.jsonl`), followed by the first inner turn's text."""
+    sink, _ = await render(sdk_messages("goal"))
+    written = "".join(sink.texts)
+    assert written.startswith("Goal set: Reply with the single word tick")
+    assert "Never use a tool.\n\nAcknowledged." in written
+    assert written.count("Goal set:") == 1
+
+
+async def test_text_the_stream_already_wrote_is_not_written_again() -> None:
+    """Every streamed message also arrives whole: only its deltas are written."""
+    sink, _ = await render(sdk_messages("goal"))
+    assert "".join(sink.texts).count("Acknowledged.") == 1
+
+
+async def test_unannounced_text_after_streamed_text_is_a_paragraph_apart() -> None:
+    streamed = message_start("msg_1") + block_events("one") + message_stop()
+    sink, _ = await render(streamed + unannounced("Goal cleared: x"))
+    assert sink.texts == ["one", "\n\nGoal cleared: x"]
+
+
+async def test_a_subagent_s_unannounced_text_stays_out_of_the_reply() -> None:
+    sink, _ = await render(unannounced("inner words", parent="toolu_1"))
+    assert "inner words" not in "".join(sink.texts)
+
+
+async def test_a_message_with_no_id_is_not_taken_for_unannounced() -> None:
+    sink, _ = await render(unannounced("words", message_id=None))
+    assert "words" not in "".join(sink.texts)
+
+
+async def test_nothing_unannounced_is_written_while_a_streamed_message_is_unfinished() -> None:
+    """A stream that stops halfway may be followed by the same text sent whole under another
+    id: writing it would repeat what the deltas already wrote."""
+    halfway = message_start("msg_1") + block_events("Here is the pla")
+    sink, _ = await render(halfway + unannounced("Here is the plan."))
+    assert sink.texts == ["Here is the pla"]
+
+
+async def test_a_stream_that_names_no_message_turns_the_rule_off() -> None:
+    """Without ids every streamed message would look unannounced and be written twice."""
+    streamed = message_start(None) + block_events("one") + message_stop()
+    sink, _ = await render(streamed + unannounced("one", message_id="msg_1"))
+    assert sink.texts == ["one"]
 
 
 async def test_two_text_blocks_with_nothing_between_are_a_paragraph_apart() -> None:

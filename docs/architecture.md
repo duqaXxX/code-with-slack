@@ -191,7 +191,8 @@ for a run of calls and one for a line with a view of its own (see below).
 | SDK input | What the owner sees |
 |---|---|
 | `StreamEvent` with no parent, a `text_delta` | the text, as it is written |
-| a top-level `TextBlock` in an `AssistantMessage` | nothing more: the same text already arrived as deltas |
+| a top-level `TextBlock` in an `AssistantMessage` whose `message_id` a `message_start` event announced | nothing more: the same text already arrived as deltas |
+| the same in an `AssistantMessage` whose `message_id` no `message_start` event announced | the text, where it arrives, a paragraph apart from text before it. Claude Code writes its own output for a command this way: `Goal set: <condition>` before the first inner turn of a `/goal`, the output of `/usage` and of a skill run in a forked context (recorded: `goal.jsonl`, `usage.jsonl`, `skill-fork-command.jsonl`). A message with no `message_id` is left to the row above, and so is every such message while a streamed one has had no `message_stop`, or once a `message_start` named no id |
 | `ToolUseBlock` or `ServerToolUseBlock` with no parent | a new tool line, in progress, titled `Name: first string argument` |
 | the same inside a subagent or a skill run in a forked context (`parent_tool_use_id` set) | the parent's line counts the subagent's calls (`Agent: review · 12 calls`) and, while it runs, holds its latest ones (`renderer.CHILD_LINES`) as the card's `details`, and becomes a task's line: it keeps a card of its own once it ends, in the foreground or in the background |
 | `ToolResultBlock` or `ServerToolResultBlock` for a line | the line completes, or shows an error with the output's first line when `is_error`; a line whose task already ended as stopped keeps `Stopped` |
@@ -202,7 +203,7 @@ for a run of calls and one for a line with a view of its own (see below).
 | `AssistantMessage.error` `authentication_failed` | a note asking to run `claude` and `/login` on the host. Claude Code sends this category for a 401 and for a 403 alike |
 | any other `AssistantMessage.error` | the text of the message, which Claude Code wrote itself (for a 529, `API Error: 529 Overloaded.` and what to do next), as a notice. With no text block the turn's result speaks, and `Claude Code reported an error` with the error code shows only when the result has no text either. The category is never matched against a list: one the SDK's `AssistantMessageError` does not name, such as `model_not_found`, shows its text the same way. The session logs a warning with the channel, the thread and the code |
 | `SystemMessage` `compact_boundary` | `Compacted the conversation: 15.0k → 2.0k tokens.`, from its `compact_metadata`, whether the owner asked (`!compact`) or Claude Code compacted on its own |
-| `ResultMessage` | its text, when nothing else was written (local commands such as `/usage` send no deltas) |
+| `ResultMessage` | its text, when nothing else was written. In the recordings a local command's text (`/usage`) arrives first in an `AssistantMessage` no stream event announced, so this is the fallback for a turn whose only text is its result |
 
 A turn that ends with no text and no tool line says `Done. Claude Code returned no text.`, or
 `Stopped the current turn.` when it was interrupted, so no reply is left empty. When the turn
