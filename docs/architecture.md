@@ -687,7 +687,8 @@ where the *next* thread starts, and refuses while any of the channel's threads i
 - D8: before a message would wake an idle session (`slack_app.submit_to_session`), a live session
   of any other thread, of any channel, whose resolved folder is the same and is not idle
   (`SessionManager.working_in`) makes the daemon ask first: `Another session is working in this
-  folder: <link>. Send anyway?`, with Continue and Cancel (`slack_app.hold_before_sending`, kept
+  folder: <link>. Send anyway?`, with the buttons `Send anyway` and `Don't send`
+  (`slack_app.hold_before_sending`, kept
   in `hold.Holds`, memory only). The wait runs inside `submit_to_session`'s own `arrival_lock`, so
   a later message of the same thread queues behind it rather than opening a second hold. `!stop`
   inside the held thread or a top-level `!stop` of its channel cancels the wait the same way

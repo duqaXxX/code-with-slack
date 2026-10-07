@@ -227,8 +227,10 @@ STOPPED_THREAD = "Stopped."
 NOTHING_TO_STOP_THREAD = "Nothing is running in this session."
 # D8: two sessions in one folder at once.
 HOLD_QUESTION = "Another session is working in this folder: {link}. Send anyway?"
-HOLD_CONTINUE_BUTTON = "Continue"
-HOLD_CANCEL_BUTTON = "Cancel"
+# The words of the question itself, and close in length: Slack sizes a button by its text, so
+# `Continue` beside `Cancel` made the second look the lesser choice (issue #76).
+HOLD_CONTINUE_BUTTON = "Send anyway"
+HOLD_CANCEL_BUTTON = "Don't send"
 HOLD_UNPOSTED = (
     "code-with-slack could not show this question in Slack, so the message was not sent. "
     "Send it again."

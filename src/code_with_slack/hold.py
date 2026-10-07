@@ -1,7 +1,8 @@
 """Questions that hold a message before it is sent. D8: before a message wakes an idle session
 while a live session of another thread (any channel) is busy in the same resolved folder, the
-daemon asks `Another session is working in this folder: <link>. Send anyway?`, with Continue and
-Cancel. The session setup (`setup.py`) is the other one: model, effort and bypass, then Start.
+daemon asks `Another session is working in this folder: <link>. Send anyway?`, with two buttons,
+`Send anyway` and `Don't send`, which the code calls Continue and Cancel.
+The session setup (`setup.py`) is the other one: model, effort and bypass, then Start.
 
 Kept in memory only, like `approvals.Approvals`: a hold never outlives the process (`!stop`, a
 top-level `!stop` of its channel, and a drain all cancel one exactly as Cancel does), so nothing
@@ -113,7 +114,9 @@ class Holds:
 
 def hold_blocks(hold_id: str, link: str) -> list[dict[str, Any]]:
     """The question in the thread: a `mrkdwn` section (`link` in mrkdwn's own `<url|label>` form,
-    same as approvals and the resume picker use for their own buttons) plus Continue and Cancel."""
+    same as approvals and the resume picker use for their own buttons) plus Continue and Cancel.
+    Only Continue is `primary`: one button of a set, and never `danger` for an answer that
+    destroys nothing (button element reference, docs.slack.dev, read 2026-10-07)."""
     return [
         {
             "type": "section",

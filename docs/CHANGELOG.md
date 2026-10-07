@@ -212,6 +212,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The two buttons under `Another session is working in this folder: ... Send anyway?` read
+  `Send anyway` and `Don't send` (issue #76); they read `Continue` and `Cancel`. Slack sizes a
+  button by its text and offers no width, so the shorter `Cancel` looked the lesser of the two.
+  The new labels differ by one character and answer the question in its own words. Their styles
+  are unchanged: `Send anyway` is `primary`, `Don't send` has none.
 - A channel's `!status` names each session by its title (issue #76). The link to a thread read
   `Session` on every row, so several idle threads showed as identical `Session: idle` lines.
   The link's label is now the title Claude Code gave the session, as the Home tab and a

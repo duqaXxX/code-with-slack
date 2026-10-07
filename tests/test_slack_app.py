@@ -22,7 +22,7 @@ from code_with_slack.attachments import DownloadFailed
 from code_with_slack.config import Config
 from code_with_slack.footer import UsageCache
 from code_with_slack.guards import ChannelGuard, Identity
-from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds
+from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, hold_blocks
 from code_with_slack.home import (
     CHANNEL_ACTION,
     CLEAN_ACTION,
@@ -706,6 +706,16 @@ async def test_bang_status_falls_back_to_session_when_the_titles_cannot_be_read(
 )
 def test_how_long_ago_reads_in_one_unit(seconds: int, shown: str) -> None:
     assert slack_app_module.ago(seconds) == shown
+
+
+def test_the_hold_question_s_buttons_answer_it_in_its_own_words() -> None:
+    # Issue #76: `Continue` beside the shorter `Cancel` made the second look the lesser choice,
+    # and a button's width is its text. One `primary` in the set, as the button reference asks.
+    _, actions = hold_blocks("hold-1", "<https://example.slack.com/x|Session>")
+    send, keep = actions["elements"]
+    assert (send["text"]["text"], send.get("style")) == ("Send anyway", "primary")
+    assert (keep["text"]["text"], keep.get("style")) == ("Don't send", None)
+    assert abs(len(send["text"]["text"]) - len(keep["text"]["text"])) <= 1
 
 
 async def test_bang_status_fetches_permalinks_concurrently(world: World) -> None:
