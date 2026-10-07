@@ -212,6 +212,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `!help` with no text opens with one line on what makes a message a command: its first
+  character is `!`, in code or bold too, and anything before the `!` sends it as text (`\!goal`).
+  The rule of #178 was in `docs/setup.md` only. A search (`!help <text>`) lists its matches
+  alone, as before.
 - The two buttons under `Another session is working in this folder: ... Send anyway?` read
   `Send anyway` and `Don't send` (issue #76); they read `Continue` and `Cancel`. Slack sizes a
   button by its text and offers no width, so the shorter `Cancel` looked the lesser of the two.

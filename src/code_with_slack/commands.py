@@ -157,7 +157,8 @@ def unformatted(text: str, blocks: object) -> str:
 def help_text(commands: list[dict[str, Any]] | None, query: str = "") -> str:
     """The daemon's words, then every command the session offers now (None: not bound yet)
     except those its thread refuses (`refused_in_thread`), keeping only the lines whose name or
-    description contains `query`, ignoring case."""
+    description contains `query`, ignoring case. With no query, the rule that tells a command
+    from a text comes first."""
 
     def keep(line: str) -> bool:
         return query.lower() in line.lower()
@@ -170,7 +171,8 @@ def help_text(commands: list[dict[str, Any]] | None, query: str = "") -> str:
         for usage, description in map(command_parts, sorted(offered, key=command_name))
         if keep(f"{usage} {description}")
     ]
-    lines = [texts.HELP_OWN, *own]
+    # The rule heads the whole list; a search shows its matches alone.
+    lines = [texts.HELP_OWN, *([] if query else [texts.HELP_RULE]), *own]
     if commands is None:
         lines.append(texts.HELP_UNBOUND)
     else:

@@ -292,6 +292,10 @@ STATUS_CHANNEL_BYPASS = " · ⚡ bypass"
 STATUS_CHANNEL_FOLDER = " · folder `{directory}`"
 STATUS_CHANNEL_LINK_FALLBACK = "thread `{thread_ts}`"
 HELP_OWN = "**code-with-slack**"
+HELP_RULE = (
+    "A message that starts with `!` is a command, in code or bold too. To send it as text, put "
+    "anything before the `!`, as in `\\!goal`."
+)
 HELP_WORDS = (
     "`!guide` how code-with-slack works, in a few lines; in the channel or inside a thread",
     "`!help [text]` this list, or only the lines that contain the text; in the channel or "
