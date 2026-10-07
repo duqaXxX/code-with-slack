@@ -59,6 +59,7 @@ from code_with_slack.commands import (
     host_only,
     parse_bang,
     refused_in_thread,
+    unformatted,
 )
 from code_with_slack.config import Config
 from code_with_slack.folders import BIND_ACTION, bind_blocks
@@ -426,8 +427,12 @@ def build_app(
         top_level = thread_ts == ts
         text = slack_unescape(event.get("text") or "")
         files: list[dict[str, Any]] = event.get("files") or []
-        # A message with files is a prompt: no daemon word or command takes a file.
-        command = None if files else parse_bang(text)
+        # A message with files is a prompt: no daemon word or command takes a file. A word is
+        # a word however it is formatted: the event's text carries the marks (a backtick before
+        # the `!` of a message in inline code), the composer's blocks carry the text without.
+        command = (
+            None if files else parse_bang(text) or parse_bang(unformatted(event.get("blocks")))
+        )
         # A known session's thread routes a word to it; anywhere else (truly top-level, or a
         # thread that is not a session) a word acts exactly as a top-level one would.
         session = None if top_level else sessions.get(channel, thread_ts)

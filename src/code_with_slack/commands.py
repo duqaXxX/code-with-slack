@@ -117,6 +117,30 @@ def parse_bang(text: str) -> Command | None:
     return Passthrough(body)
 
 
+# The parts of a composer message whose text is read through its formatting. A quote or a list is
+# left out: what opens it is not what the owner typed first.
+_READ_THROUGH = ("rich_text_section", "rich_text_preformatted")
+
+
+def unformatted(blocks: object) -> str:
+    """The text of a message as Slack's composer stored it, without its formatting (inline code,
+    a code block, bold, italic, strikethrough): a line for each part. Empty when the message
+    holds anything but plain `text` elements in those parts, which leaves it to the event's own
+    text."""
+    lines: list[str] = []
+    for block in blocks if isinstance(blocks, list) else []:
+        if block.get("type") != "rich_text":
+            return ""
+        for part in block.get("elements") or []:
+            leaves = part.get("elements") or []
+            if part.get("type") not in _READ_THROUGH:
+                return ""
+            if any(leaf.get("type") != "text" for leaf in leaves):
+                return ""
+            lines.append("".join(str(leaf.get("text", "")) for leaf in leaves))
+    return "\n".join(lines)
+
+
 def help_text(commands: list[dict[str, Any]] | None, query: str = "") -> str:
     """The daemon's words, then every command the session offers now (None: not bound yet)
     except those its thread refuses (`refused_in_thread`), keeping only the lines whose name or

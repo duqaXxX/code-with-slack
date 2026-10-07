@@ -280,11 +280,19 @@ async def world(slack: FakeSlack, tmp_path: Path) -> AsyncIterator[World]:
     await made.home.close()
 
 
+def composed(text: str, **style: bool) -> list[dict[str, Any]]:
+    """The blocks Slack's composer sends with a message of one run of text, as the recorded
+    events hold them; a style as read back from Slack on 2026-10-07 (`code` for inline code)."""
+    leaf: dict[str, Any] = {"type": "text", "text": text, **({"style": style} if style else {})}
+    section = {"type": "rich_text_section", "elements": [leaf]}
+    return [{"type": "rich_text", "block_id": "pHDTI", "elements": [section]}]
+
+
 def message(text: str = "hello", **event: Any) -> dict[str, Any]:
     """A top-level message: its `thread_ts` defaults to its own `ts` (a fresh fixture ts unless
     `ts=` is given), so each call with a distinct `ts` opens an independent thread."""
     body = recorded("event_callback-message")
-    body["event"].update({"text": text, **event})
+    body["event"].update({"text": text, "blocks": composed(text), **event})
     return body
 
 
@@ -295,7 +303,9 @@ def reply(text: str, thread_ts: str, **event: Any) -> dict[str, Any]:
     """A reply inside `thread_ts`'s thread: its own `ts` always differs from it."""
     body = recorded("event_callback-message")
     own_ts = f"179019{next(_REPLY_SEQ):04d}.900000"
-    body["event"].update({"text": text, "thread_ts": thread_ts, "ts": own_ts, **event})
+    body["event"].update(
+        {"text": text, "blocks": composed(text), "thread_ts": thread_ts, "ts": own_ts, **event}
+    )
     return body
 
 
@@ -631,6 +641,25 @@ async def test_a_gone_session_answers_bypass_with_no_new_session(world: World) -
     assert world.ephemerals() == [texts.SESSION_GONE]
     assert reactions_on(world, word["event"]["ts"]) == []  # nothing took effect: no ✅
     assert world.state.thread(CHANNEL, THREAD) is None
+
+
+async def test_a_word_in_code_formatting_is_still_a_word(world: World) -> None:
+    """Pasted from where it was shown as code, a word keeps the formatting: the event's text
+    starts with a backtick, the composer's blocks hold the word (issue #178)."""
+    await world.dispatch(message("`!stop`", blocks=composed("!stop", code=True)))
+    assert said(world) == [texts.NOTHING_TO_STOP]
+    assert world.queries() == []
+
+
+async def test_a_command_in_code_formatting_runs_as_the_command(world: World) -> None:
+    await world.dispatch(message("`!compact`", blocks=composed("!compact", code=True)))
+    assert world.queries() == ["/compact"]
+
+
+async def test_anything_before_the_bang_keeps_a_message_a_prompt(world: World) -> None:
+    await world.dispatch(message("\\!stop"))
+    assert world.queries() == ["\\!stop"]
+    assert said(world) == []
 
 
 async def test_bang_status_and_stop_top_level_summarize_the_channel(world: World) -> None:

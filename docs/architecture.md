@@ -1038,7 +1038,13 @@ A `message` event is routed by whether it is a reply in an existing thread: `sla
 reads `sessions.get(channel, thread_ts)` for a reply (`None` for a thread that holds no session),
 and always `None` for a top-level one (`thread_ts == ts`), even in a channel that is bound.
 `code_with_slack.commands.parse_bang` reads a message starting with `!` (none for one
-carrying files, which is always a prompt): `help`, `guide`, `bind`, `bypass`, `status`, `stop`
+carrying files, which is always a prompt). `handle_message` gives it the event's `text` first,
+then what `commands.unformatted` reads in the event's `blocks`: Slack puts the formatting marks in
+`text` (a backtick before the `!` of a message in inline code) and keeps the text without them in
+the `rich_text` block its composer sends, as `text` elements whose `style` says how they look.
+`unformatted` joins those elements for a message made of `rich_text_section` and
+`rich_text_preformatted` parts only, and returns nothing for a quote, a list, or a part that holds
+any other element (a link, an emoji, a mention), which leaves such a message a prompt. The words: `help`, `guide`, `bind`, `bypass`, `status`, `stop`
 and `resume` and `open` are the daemon's own words (`commands.Word`), dispatched in `handle_word` by
 whether the lookup above found a session: `!bind` and `!resume` work only at the top level,
 refused inside a thread (`texts.WORD_IN_THREAD`); `!bypass` only inside a thread, refused at the

@@ -543,6 +543,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A `!word` sent in Slack's formatting is read as the word (#178). A command pasted from a place
+  that showed it as code kept the formatting, the event's `text` then started with a backtick,
+  and `parse_bang` took the message for a prompt with no word about it: a `!goal` set no goal, a
+  `!stop` would have started a turn. `handle_message` now also reads the message in the
+  `rich_text` block Slack's composer sends, where the text comes without its marks
+  (`commands.unformatted`; a message in inline code read back on 2026-10-07 holds one `text`
+  element with `"style": {"code": true}`). The rule is the first character: inline code, a code
+  block, bold, italic and strikethrough are read through, and anything before the `!` keeps a
+  message a prompt (`\!goal`). A quote, a list, and a formatted message that also holds a link,
+  an emoji or a mention stay prompts. A message that starts with a command meant as a quotation
+  now runs it.
 - The reply to `!goal` opens with Claude Code's own `Goal set: <condition>` line (#113). The line
   is an assistant message that no stream event announces, and the renderer wrote a command's
   output only when the reply held no other text, so a goal's first inner turn hid it.

@@ -1,4 +1,5 @@
 import re
+from typing import Any
 
 import pytest
 
@@ -15,6 +16,7 @@ from code_with_slack.commands import (
     help_text,
     parse_bang,
     refused_in_thread,
+    unformatted,
 )
 from tests.fakes import sdk_json
 
@@ -47,6 +49,39 @@ from tests.fakes import sdk_json
 )
 def test_parse_bang(text: str, expected: object) -> None:
     assert parse_bang(text) == expected
+
+
+def rich_text(*parts: dict[str, Any]) -> list[dict[str, Any]]:
+    """A composer message's blocks, in the shape Slack stores them (read back on 2026-10-07 for a
+    message in inline code; `rich_text_preformatted` as the Block Kit reference gives it)."""
+    return [{"type": "rich_text", "block_id": "Rd58H", "elements": list(parts)}]
+
+
+def section(*leaves: dict[str, Any], kind: str = "rich_text_section") -> dict[str, Any]:
+    return {"type": kind, "elements": list(leaves)}
+
+
+def leaf(text: str, **style: bool) -> dict[str, Any]:
+    return {"type": "text", "text": text, **({"style": style} if style else {})}
+
+
+@pytest.mark.parametrize(
+    ("blocks", "expected"),
+    [
+        (rich_text(section(leaf("!goal tick", code=True))), "!goal tick"),
+        (rich_text(section(leaf("!goal", bold=True), leaf(" tick"))), "!goal tick"),
+        (rich_text(section(leaf("!goal tick"), kind="rich_text_preformatted")), "!goal tick"),
+        (rich_text(section(leaf("!goal")), section(leaf("tick"))), "!goal\ntick"),
+        (rich_text(section(leaf("!stop"), kind="rich_text_quote")), ""),
+        (rich_text(section(section(leaf("!stop")), kind="rich_text_list")), ""),
+        (rich_text(section(leaf("!goal "), {"type": "emoji", "name": "wave"})), ""),
+        ([{"type": "section", "text": {"type": "mrkdwn", "text": "!stop"}}], ""),
+        ([], ""),
+        (None, ""),
+    ],
+)
+def test_unformatted(blocks: object, expected: str) -> None:
+    assert unformatted(blocks) == expected
 
 
 def test_help_lists_the_daemon_words_and_every_session_command() -> None:

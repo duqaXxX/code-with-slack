@@ -513,6 +513,13 @@ top-level, not as a reply:
 
 ### Commands
 
+A message is a command when its first character is `!`, however it is formatted: inline code, a
+code block, bold, italic and strikethrough are read through, so a word pasted from a place that
+showed it as code still acts. To send Claude a text that starts with `!`, put any character
+before it: `\!goal`, `"!goal"`. A message that starts with a command you only meant to quote
+runs that command. Inside a quote or a list a `!` is never a command, and neither is a formatted
+message that also holds a link, an emoji or a mention.
+
 | Word | At the top level (answered by a post in the channel) | Inside a session's thread (answered for you alone) |
 |---|---|---|
 | `!guide` | Explains in a few lines how code-with-slack works | Same, as an ephemeral message you alone see |
