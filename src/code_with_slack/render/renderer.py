@@ -149,6 +149,8 @@ class TurnRenderer:
         self._wrote_text = False
         self._after_text = False  # Claude's text is the last thing in the reply, no card since
         self._break_due = False  # the text block that just started follows text directly
+        # Ids of the messages a `message_start` announced: their text is written from its deltas.
+        self._streamed: set[str] = set()
         self.result: ResultMessage | None = None
         self.auth_failed = False
         # The category of the last reply Claude Code wrote itself about a failure, if any.
@@ -163,7 +165,11 @@ class TurnRenderer:
             case StreamEvent(parent_tool_use_id=None, event=event):
                 delta = event.get("delta") or {}
                 block = event.get("content_block") or {}
-                if event.get("type") == "content_block_start" and block.get("type") == "text":
+                if event.get("type") == "message_start":
+                    started = (event.get("message") or {}).get("id")
+                    if isinstance(started, str):
+                        self._streamed.add(started)
+                elif event.get("type") == "content_block_start" and block.get("type") == "text":
                     # Two text blocks with no card between them (a goal's inner turns, a Stop hook
                     # that continues the turn) would run together: the break waits for the first
                     # text, so a block that stays empty adds none.
@@ -343,6 +349,17 @@ class TurnRenderer:
             if words:
                 await self._text(("\n\n" if self._wrote_text else "") + words, notice=True)
             return
+        if (
+            message.parent_tool_use_id is None
+            and message.message_id is not None
+            and message.message_id not in self._streamed
+        ):
+            # Text no stream event announced is a command's own output (`Goal set: …` before a
+            # goal's first inner turn, recorded: `goal.jsonl`): nothing else writes it once the
+            # reply has other text, so it is read from the message's blocks.
+            words = "".join(b.text for b in message.content if isinstance(b, TextBlock)).strip()
+            if words:
+                await self._text(("\n\n" if self._after_text else "") + words)
         for block in message.content:
             await self._block(block, message.parent_tool_use_id)
 

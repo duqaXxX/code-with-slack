@@ -123,6 +123,7 @@ in a release with no notice, so it is the first place to look when a release mis
 | `list_sessions` | `include_worktrees` | option | sessions.py: directory_sessions | reference | none |
 | `AssistantMessage` | `content` | field | render/renderer.py: TurnRenderer._assistant | reference | none |
 | `AssistantMessage` | `error` | field | render/renderer.py: TurnRenderer._assistant; sessions.py: ThreadSession._dispatch | reference | none |
+| `AssistantMessage` | `message_id` | field | render/renderer.py: TurnRenderer._assistant | reference | none |
 | `AssistantMessage` | `parent_tool_use_id` | field | render/renderer.py: TurnRenderer._assistant; sessions.py: ThreadSession._dispatch | reference | none |
 | `BaseHookInput` | `cwd` | field | sessions.py: ThreadSession._note_cwd | reference | P14 |
 | `ContextUsageResponse` | `model` | field | sessions.py: ThreadSession._footer_data | reference | none |
@@ -210,10 +211,12 @@ in a release with no notice, so it is the first place to look when a release mis
 | `StopHookInput.effort` | `level` | key | sessions.py: ThreadSession._on_stop | measured | none |
 | `StreamEvent.event` | `content_block` | key | render/renderer.py: TurnRenderer.feed | measured | none |
 | `StreamEvent.event` | `delta` | key | render/renderer.py: TurnRenderer.feed | measured | none |
+| `StreamEvent.event` | `message` | key | render/renderer.py: TurnRenderer.feed | measured | none |
 | `StreamEvent.event` | `type` | key | render/renderer.py: TurnRenderer.feed | measured | none |
 | `StreamEvent.event.content_block` | `type` | key | render/renderer.py: TurnRenderer.feed | measured | none |
 | `StreamEvent.event.delta` | `text` | key | render/renderer.py: TurnRenderer.feed | measured | none |
 | `StreamEvent.event.delta` | `type` | key | render/renderer.py: TurnRenderer.feed | measured | none |
+| `StreamEvent.event.message` | `id` | key | render/renderer.py: TurnRenderer.feed | measured | none |
 | `SystemMessage.data` | `claude_code_version` | key | sessions.py: ThreadSession._dispatch | measured | P1 |
 | `SystemMessage.data` | `compact_metadata` | key | render/renderer.py: TurnRenderer.feed | measured | none |
 | `SystemMessage.data` | `session_id` | key | sessions.py: ThreadSession._dispatch | measured | none |
@@ -241,6 +244,7 @@ in a release with no notice, so it is the first place to look when a release mis
 | `StreamEvent.event.delta.type` | `"text_delta"` | value | render/renderer.py: TurnRenderer.feed | measured | none |
 | `StreamEvent.event.type` | `"content_block_delta"` | value | render/renderer.py: TurnRenderer.feed | measured | none |
 | `StreamEvent.event.type` | `"content_block_start"` | value | render/renderer.py: TurnRenderer.feed | measured | none |
+| `StreamEvent.event.type` | `"message_start"` | value | render/renderer.py: TurnRenderer.feed | measured | none |
 | `SystemMessage.subtype` | `"compact_boundary"` | value | render/renderer.py: TurnRenderer.feed | measured | none |
 | `SystemMessage.subtype` | `"init"` | value | sessions.py: ThreadSession._dispatch | measured | P1 |
 | `TaskNotificationMessage.status` | `"completed"` | value | sessions.py: ThreadSession._ended_line | reference | none |

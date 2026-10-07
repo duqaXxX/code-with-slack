@@ -491,6 +491,22 @@ async def test_the_inner_turns_of_a_goal_do_not_run_together() -> None:
     assert "ticktick" not in written
 
 
+async def test_a_goal_s_reply_opens_with_the_command_s_own_line() -> None:
+    """`Goal set: …` is `/goal`'s own output: an assistant message no stream event announced
+    (recorded: `goal.jsonl`), followed by the first inner turn's text."""
+    sink, _ = await render(sdk_messages("goal"))
+    written = "".join(sink.texts)
+    assert written.startswith("Goal set: Reply with the single word tick")
+    assert "Never use a tool.\n\nAcknowledged." in written
+    assert written.count("Goal set:") == 1
+
+
+async def test_text_the_stream_already_wrote_is_not_written_again() -> None:
+    """Every streamed message also arrives whole: only its deltas are written."""
+    sink, _ = await render(sdk_messages("goal"))
+    assert "".join(sink.texts).count("Acknowledged.") == 1
+
+
 async def test_two_text_blocks_with_nothing_between_are_a_paragraph_apart() -> None:
     sink, _ = await render(block_events("one") + block_events("two"))
     assert sink.texts == ["one", "\n\ntwo"]
