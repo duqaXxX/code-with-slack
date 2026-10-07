@@ -217,6 +217,18 @@ All notable changes to this project are documented here. The format follows
   still in the package and every `reference` row is still named by the reference. The two
   private helpers `resume.py` imports from `claude_agent_sdk._internal.sessions` are unchanged.
   The recorded fixtures stay those of CLI 2.1.286.
+- A refused click on a session setup or a held message is logged at INFO (issue #142), as
+  `refused a click (<path>): action <action id> in <channel>/<thread> on message <ts>; <flags>`,
+  where `<path>` is `setup start, not held`, `setup start, not resolved`,
+  `setup model, no open setup` or `hold decision`, and the flags (`held`, `decided`,
+  `same_thread`, `open_at_message`) tell which check failed. An accepted Start logs
+  `accepted a setup start in <channel>/<thread> on message <ts>`. Nothing the owner sees changes,
+  and the log holds ids and flags only.
+- A posted approval or question request, and its removal, are logged at INFO (issue #71):
+  `posted an approval request in <channel>/<thread>: message <ts>` (or `a question request`) and
+  `removed a request in <channel>: message <ts>, <n>s after it was posted`, the age taken from the
+  message's own `ts`. The log shows the timing of a push that did not arrive; it holds ids and a
+  duration only.
 - `docs/features.md` and `docs/setup.md` say what a `!stop` rings as measured (issue #67): typed
   in the thread, one push that shows `Stopped.`; typed in the channel, none. Both said that a
   `!stop` rings once wherever it is typed, through the stop of the reply's stream.

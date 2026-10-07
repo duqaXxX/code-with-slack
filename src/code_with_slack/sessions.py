@@ -2281,6 +2281,13 @@ class ThreadSession:
                 )
                 return PermissionResultDeny(message=texts.APPROVAL_UNPOSTED)
             message_ts = str(posted["ts"])
+            logger.info(
+                "posted %s request in %s/%s: message %s",
+                "a question" if questions else "an approval",
+                self.channel_id,
+                self.thread_ts,
+                message_ts,
+            )
             if self._deps.approvals.posted(approval_id, message_ts):
                 # Crash repair (issue #19): still carrying buttons, until it is answered.
                 # Best-effort (fix round item 7): the message is already live either way, so a

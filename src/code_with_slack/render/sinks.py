@@ -151,6 +151,14 @@ async def delete_request(slack: AsyncWebClient, *, channel: str, ts: str) -> Non
     except Exception as exc:
         if describe(exc) != "message_not_found":
             logger.warning("could not remove a request in %s: %s", channel, describe(exc))
+            return
+    # Issue #71: a message ts is its post time in epoch seconds, so the age of a request when it
+    # goes is read from the log with no timer kept for it. Ids and a duration only.
+    try:
+        age = f"{time.time() - float(ts):.1f}s after it was posted"
+    except ValueError:
+        age = "age unknown"
+    logger.info("removed a request in %s: message %s, %s", channel, ts, age)
 
 
 def context_block(text: str) -> dict[str, Any]:

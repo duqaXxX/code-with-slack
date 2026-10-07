@@ -1,6 +1,7 @@
 import asyncio
 import itertools
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -2870,3 +2871,18 @@ async def test_a_refused_update_with_no_container_is_dropped_as_before(
     await sink.text(" again")
     await settled()
     assert len(slack.calls_to("chat.update")) == 2  # the next change is tried
+
+
+async def test_a_request_slack_refuses_to_delete_is_not_logged_as_removed(
+    slack: FakeSlack, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Issue #71 reads the removal's timing from the log: a delete that failed must not be in it.
+    slack.responses["chat.delete"] = {"ok": False, "error": "cant_delete_message"}
+    with caplog.at_level(logging.INFO, logger="code_with_slack"):
+        await sinks.delete_request(slack, channel=CHANNEL, ts="1790000000.000100")
+    assert "could not remove a request" in caplog.text
+    assert "removed a request" not in caplog.text
+    slack.responses["chat.delete"] = {"ok": False, "error": "message_not_found"}
+    with caplog.at_level(logging.INFO, logger="code_with_slack"):
+        await sinks.delete_request(slack, channel=CHANNEL, ts="1790000000.000100")
+    assert "removed a request" in caplog.text  # already gone counts as done
