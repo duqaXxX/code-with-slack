@@ -93,10 +93,12 @@ def parse_bang(text: str) -> Command | None:
     if not stripped.startswith("!"):
         return None
     body = stripped[1:]
-    word, _, rest = body.partition(" ")
-    if not word:
+    if not body or body[0].isspace():
         return None
-    rest = rest.strip()
+    # The word ends at any whitespace: a line break after it (a code block that follows the
+    # word, a second line) separates it from its arguments as a space does.
+    word, *more = body.split(None, 1)
+    rest = more[0].strip() if more else ""
     match word.lower():
         case "help":
             return Help(rest.lower())
@@ -114,31 +116,42 @@ def parse_bang(text: str) -> Command | None:
             return Resume(rest)
         case "open":
             return Open(rest)
-    return Passthrough(body)
+    return Passthrough(f"{word} {rest}".strip())
 
 
-# The parts of a composer message whose text is read through its formatting. A quote or a list is
-# left out: what opens it is not what the owner typed first.
+# The parts of a composer message a word is read through. A quote or a list is left out: what
+# opens it is not what the owner typed first.
 _READ_THROUGH = ("rich_text_section", "rich_text_preformatted")
+_MARKS = "`*_~"  # what Slack writes in a message's text around code, bold, italic, strikethrough
 
 
-def unformatted(blocks: object) -> str:
-    """The text of a message as Slack's composer stored it, without its formatting (inline code,
-    a code block, bold, italic, strikethrough): a line for each part. Empty when the message
-    holds anything but plain `text` elements in those parts, which leaves it to the event's own
-    text."""
-    lines: list[str] = []
-    for block in blocks if isinstance(blocks, list) else []:
-        if block.get("type") != "rich_text":
-            return ""
-        for part in block.get("elements") or []:
-            leaves = part.get("elements") or []
-            if part.get("type") not in _READ_THROUGH:
-                return ""
-            if any(leaf.get("type") != "text" for leaf in leaves):
-                return ""
-            lines.append("".join(str(leaf.get("text", "")) for leaf in leaves))
-    return "\n".join(lines)
+def _first_run(blocks: object) -> str | None:
+    """The text a composer message opens with, without its formatting; None for a message that
+    opens with anything else (a quote, a list, an emoji, a mention) or has no composer block."""
+    block = blocks[0] if isinstance(blocks, list) and blocks else {}
+    part = (block.get("elements") or [{}])[0] if block.get("type") == "rich_text" else {}
+    leaf = (part.get("elements") or [{}])[0] if part.get("type") in _READ_THROUGH else {}
+    return str(leaf.get("text", "")) if leaf.get("type") == "text" else None
+
+
+def unformatted(text: str, blocks: object) -> str:
+    """`text` without the marks around the run it opens with, when that run starts with `!`: the
+    composer's block says what the run is (`_first_run`), the text holds the rest as the owner
+    sent it. Empty when the message does not open with a formatted `!`, or when the text does
+    not read as its marks, that run, then the same marks closing it or the message."""
+    run = _first_run(blocks)
+    opening, bang, rest = text.strip().partition("!")
+    body = bang + rest
+    if not run or not run.startswith("!") or not opening or set(opening) - set(_MARKS):
+        return ""
+    if not body.startswith(run):
+        return ""
+    after, closing = body[len(run) :], opening[::-1]
+    if after.startswith(closing):
+        return run + after[len(closing) :]
+    if after.endswith(closing):
+        return run + after[: -len(closing)]
+    return ""
 
 
 def help_text(commands: list[dict[str, Any]] | None, query: str = "") -> str:

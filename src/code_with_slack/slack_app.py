@@ -429,10 +429,10 @@ def build_app(
         files: list[dict[str, Any]] = event.get("files") or []
         # A message with files is a prompt: no daemon word or command takes a file. A word is
         # a word however it is formatted: the event's text carries the marks (a backtick before
-        # the `!` of a message in inline code), the composer's blocks carry the text without.
-        command = (
-            None if files else parse_bang(text) or parse_bang(unformatted(event.get("blocks")))
-        )
+        # the `!` of a message in inline code), which the composer's blocks tell from the text.
+        command = None
+        if not files:
+            command = parse_bang(text) or parse_bang(unformatted(text, event.get("blocks")))
         # A known session's thread routes a word to it; anywhere else (truly top-level, or a
         # thread that is not a session) a word acts exactly as a top-level one would.
         session = None if top_level else sessions.get(channel, thread_ts)

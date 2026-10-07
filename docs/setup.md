@@ -515,10 +515,11 @@ top-level, not as a reply:
 
 A message is a command when its first character is `!`, however it is formatted: inline code, a
 code block, bold, italic and strikethrough are read through, so a word pasted from a place that
-showed it as code still acts. To send Claude a text that starts with `!`, put any character
-before it: `\!goal`, `"!goal"`. A message that starts with a command you only meant to quote
-runs that command. Inside a quote or a list a `!` is never a command, and neither is a formatted
-message that also holds a link, an emoji or a mention.
+showed it as code still acts. The word ends at the first space or line break, and what follows
+is sent as you wrote it. To send Claude a text that starts with `!`, put any character before it:
+`\!goal`, `"!goal"`. A message that starts with a command you only meant to quote runs that
+command: `!stop` or `!bypass on` alone in inline code acts as the word. Inside a quote or a list
+a `!` is never a command.
 
 | Word | At the top level (answered by a post in the channel) | Inside a session's thread (answered for you alone) |
 |---|---|---|

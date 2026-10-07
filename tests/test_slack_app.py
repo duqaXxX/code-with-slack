@@ -656,10 +656,22 @@ async def test_a_command_in_code_formatting_runs_as_the_command(world: World) ->
     assert world.queries() == ["/compact"]
 
 
-async def test_anything_before_the_bang_keeps_a_message_a_prompt(world: World) -> None:
-    await world.dispatch(message("\\!stop"))
-    assert world.queries() == ["\\!stop"]
+async def test_anything_before_the_bang_keeps_a_formatted_message_a_prompt(world: World) -> None:
+    """The escape the setup doc gives, where the two readings differ: the text opens with a
+    mark, the composer's run with the backslash."""
+    await world.dispatch(message("`\\!stop`", blocks=composed("\\!stop", code=True)))
+    assert world.queries() == ["`\\!stop`"]
     assert said(world) == []
+
+
+async def test_a_formatted_command_keeps_its_arguments_as_sent(world: World) -> None:
+    blocks = composed("!compact", code=True)
+    blocks[0]["elements"][0]["elements"] += [
+        {"type": "text", "text": " keep "},
+        {"type": "text", "text": "the plan", "style": {"code": True}},
+    ]
+    await world.dispatch(message("`!compact` keep `the plan`", blocks=blocks))
+    assert world.queries() == ["/compact keep `the plan`"]
 
 
 async def test_bang_status_and_stop_top_level_summarize_the_channel(world: World) -> None:
