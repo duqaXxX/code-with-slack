@@ -1,4 +1,5 @@
 import re
+from typing import Any
 
 import pytest
 
@@ -15,6 +16,7 @@ from code_with_slack.commands import (
     help_text,
     parse_bang,
     refused_in_thread,
+    unformatted,
 )
 from tests.fakes import sdk_json
 
@@ -43,10 +45,79 @@ from tests.fakes import sdk_json
         ("hello", None),
         ("!", None),
         ("! compact", None),
+        ("!compact\nnotes", Passthrough("compact notes")),  # the word ends at a line break too
+        ("!stop\n", Stop()),
+        ("!model  opus ", Passthrough("model opus")),
     ],
 )
 def test_parse_bang(text: str, expected: object) -> None:
     assert parse_bang(text) == expected
+
+
+def rich_text(*parts: dict[str, Any]) -> list[dict[str, Any]]:
+    """A composer message's blocks, as Slack stores them. Read back on 2026-10-07: a section
+    with a `text` element in inline code, and a `rich_text_preformatted` part. The `bold` style
+    and the `rich_text_quote` and `rich_text_list` part types are named by the Block Kit
+    reference and were not read from a real message."""
+    return [{"type": "rich_text", "block_id": "Rd58H", "elements": list(parts)}]
+
+
+def part(*leaves: dict[str, Any], kind: str = "rich_text_section") -> dict[str, Any]:
+    return {"type": kind, "elements": list(leaves)}
+
+
+def leaf(text: str, **style: bool) -> dict[str, Any]:
+    return {"type": "text", "text": text, **({"style": style} if style else {})}
+
+
+CODE_BLOCK = {**part(leaf("!goal tick"), kind="rich_text_preformatted"), "border": 0}
+
+
+@pytest.mark.parametrize(
+    ("text", "blocks", "expected"),
+    [
+        # The two shapes read back from Slack: inline code, and a code block.
+        ("`!goal tick`", rich_text(part(leaf("!goal tick", code=True))), "!goal tick"),
+        ("```!goal tick```\n", rich_text(CODE_BLOCK), "!goal tick"),
+        # Only the first run is read in the blocks: what follows it comes from the text, with
+        # its own formatting and its links as the owner sent them.
+        (
+            "`!goal` what is it?",
+            rich_text(part(leaf("!goal", code=True), leaf(" what is it?"))),
+            "!goal what is it?",
+        ),
+        (
+            "*!goal* run `make test` see https://example.com/1",
+            rich_text(part(leaf("!goal", bold=True), leaf(" run "), leaf("make test", code=True))),
+            "!goal run `make test` see https://example.com/1",
+        ),
+        (
+            "`!compact`\n```notes```",
+            rich_text(
+                part(leaf("!compact", code=True)),
+                part(leaf("notes"), kind="rich_text_preformatted"),
+            ),
+            "!compact\n```notes```",
+        ),
+        # Anything before the `!` keeps the message a prompt, formatted or not.
+        ("`\\!stop`", rich_text(part(leaf("\\!stop", code=True))), ""),
+        ("say `!stop`", rich_text(part(leaf("say "), leaf("!stop", code=True))), ""),
+        ("!stop", rich_text(part(leaf("!stop"))), ""),  # no marks: `parse_bang` reads the text
+        # A quote and a list are not read through.
+        ("> !stop", rich_text(part(leaf("!stop"), kind="rich_text_quote")), ""),
+        ("• !stop", rich_text(part(part(leaf("!stop")), kind="rich_text_list")), ""),
+        # A text that does not read as marks, the run, the marks again: left alone.
+        ("`!stop`", rich_text(part(leaf("!status", code=True))), ""),
+        ("`!stop", rich_text(part(leaf("!stop", code=True))), ""),
+        ("x`!stop`", rich_text(part(leaf("!stop", code=True))), ""),
+        # No composer block: nothing tells a mark from a character the owner typed.
+        ("`!stop`", [{"type": "section", "text": {"type": "mrkdwn", "text": "`!stop`"}}], ""),
+        ("`!stop`", [], ""),
+        ("`!stop`", None, ""),
+    ],
+)
+def test_unformatted(text: str, blocks: object, expected: str) -> None:
+    assert unformatted(text, blocks) == expected
 
 
 def test_help_lists_the_daemon_words_and_every_session_command() -> None:
