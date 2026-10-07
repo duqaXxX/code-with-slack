@@ -657,6 +657,57 @@ async def test_bang_status_lists_every_live_session_with_a_link(world: World) ->
     assert lines[1] == f"[Session]({link}): busy"
 
 
+async def test_bang_status_names_an_idle_session_by_its_title_and_last_activity(
+    world: World,
+) -> None:
+    # Issue #76: five rows reading `Session: idle` told the owner nothing about which was which.
+    two_hours_ago = int((time.time() - 7_200) * 1000)
+    world.stored_sessions = [SDKSessionInfo(SESSION_A, "Fix the footer", two_hours_ago, 1)]
+    await world.dispatch(message(f"!resume {SESSION_A}"))  # a live, idle session with that id
+    await world.dispatch(message("!status", ts=OTHER_THREAD))
+    assert said(world)[-1].splitlines()[1] == f"[Fix the footer]({PERMALINK}): idle · 2h ago"
+
+
+async def test_bang_status_keeps_a_title_s_own_brackets_out_of_the_link(world: World) -> None:
+    world.stored_sessions = [SDKSessionInfo(SESSION_A, "fix [urgent](x) *now*", 0, 1)]
+    await world.dispatch(message(f"!resume {SESSION_A}"))
+    await world.dispatch(message("!status", ts=OTHER_THREAD))
+    row = said(world)[-1].splitlines()[1]
+    assert row.startswith(rf"[fix \[urgent\]\(x\) \*now\*]({PERMALINK}): idle")
+
+
+async def test_bang_status_falls_back_to_session_when_the_titles_cannot_be_read(
+    world: World,
+) -> None:
+    world.stored_sessions = [SDKSessionInfo(SESSION_A, "Fix the footer", 0, 1)]
+    await world.dispatch(message(f"!resume {SESSION_A}"))
+
+    def broken(directory: Path) -> list[SDKSessionInfo]:
+        raise OSError("unreadable")
+
+    world.sessions._deps.sessions_of = broken
+    await world.dispatch(message("!status", ts=OTHER_THREAD))
+    assert said(world)[-1].splitlines()[1] == f"[Session]({PERMALINK}): idle"  # no title, no time
+
+
+@pytest.mark.parametrize(
+    ("seconds", "shown"),
+    [
+        (5, "just now"),
+        (59, "just now"),
+        (60, "1m ago"),
+        (3_599, "59m ago"),
+        (3_600, "1h ago"),
+        (86_399, "23h ago"),
+        (86_400, "1d ago"),
+        (30 * 86_400, "30d ago"),
+        (-30, "just now"),
+    ],
+)
+def test_how_long_ago_reads_in_one_unit(seconds: int, shown: str) -> None:
+    assert slack_app_module.ago(seconds) == shown
+
+
 async def test_bang_status_fetches_permalinks_concurrently(world: World) -> None:
     await world.dispatch(message("hello", ts=THREAD))
     await world.dispatch(message("hello", ts=OTHER_THREAD))

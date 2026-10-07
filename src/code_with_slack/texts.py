@@ -283,6 +283,9 @@ STATUS_CHANNEL_ROW = "{link}: {activity}"
 STATUS_CHANNEL_WAITING = "waiting for you"
 STATUS_CHANNEL_BUSY = "busy"
 STATUS_CHANNEL_IDLE = "idle"
+# After `idle`, how long ago Claude Code last wrote to the session, when that is known.
+STATUS_CHANNEL_SINCE = " · {ago}"
+STATUS_CHANNEL_SESSION = "Session"  # the link's label for a session with no title yet
 STATUS_CHANNEL_BYPASS = " · ⚡ bypass"
 STATUS_CHANNEL_FOLDER = " · folder `{directory}`"
 STATUS_CHANNEL_LINK_FALLBACK = "thread `{thread_ts}`"

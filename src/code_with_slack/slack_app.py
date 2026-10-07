@@ -170,6 +170,18 @@ def _link(match: re.Match[str]) -> str:
     return label if SCHEME.sub("", url) == label else f"{label} ({url})"
 
 
+def ago(seconds: float) -> str:
+    """How long ago, in one unit, as a channel's `!status` says it of an idle session."""
+    whole = int(seconds)
+    if whole < 60:
+        return "just now"
+    if whole < 3600:
+        return f"{whole // 60}m ago"
+    if whole < 86400:
+        return f"{whole // 3600}h ago"
+    return f"{whole // 86400}d ago"
+
+
 def slack_unescape(text: str) -> str:
     """The text as the owner typed it, with the address of any link the owner named."""
     text = LINK.sub(_link, text)
@@ -1314,10 +1326,20 @@ def build_app(
         if not live:
             lines.append(texts.STATUS_CHANNEL_EMPTY)
         else:
+            # What tells one thread from another (issue #76): the title Claude Code gave its
+            # session, as the Home tab and a restart's notice name it, and when it last wrote.
+            known: dict[str, SDKSessionInfo] = {}
+            for directory in {live_session.directory for live_session in live}:
+                try:
+                    listed = await sessions.sessions_in(directory)
+                except Exception as exc:
+                    logger.warning("could not list a folder's sessions: %s", describe(exc))
+                    continue
+                known.update({s.session_id: s for s in listed})
             lines.extend(
                 await asyncio.gather(
                     *(
-                        channel_status_row(channel, record.directory, live_session)
+                        channel_status_row(channel, record.directory, live_session, known)
                         for live_session in live
                     )
                 )
@@ -1328,9 +1350,15 @@ def build_app(
             await in_channel(channel, "\n".join([texts.RESTART_WAITS_HEADER, waits]))
 
     async def channel_status_row(
-        channel: str, channel_directory: Path, session: ThreadSession
+        channel: str,
+        channel_directory: Path,
+        session: ThreadSession,
+        known: dict[str, SDKSessionInfo],
     ) -> str:
-        link = await thread_link(channel, session.thread_ts)
+        stored = state.thread(channel, session.thread_ts)
+        info = known.get(str(stored.session_id)) if stored is not None else None
+        title = one_line(info.summary or "", TITLE_LIMIT) if info is not None else ""
+        link = await thread_link(channel, session.thread_ts, title)
         if session.waiting_for_owner:
             activity = texts.STATUS_CHANNEL_WAITING
         elif session.busy or session.running_kinds:
@@ -1338,6 +1366,10 @@ def build_app(
             activity = texts.STATUS_CHANNEL_BUSY
         else:
             activity = texts.STATUS_CHANNEL_IDLE
+            if info is not None and info.last_modified:
+                # `last_modified` is in milliseconds (SDKSessionInfo, SDK reference).
+                since = ago(time.time() - info.last_modified / 1000)
+                activity += texts.STATUS_CHANNEL_SINCE.format(ago=since)
         row = texts.STATUS_CHANNEL_ROW.format(link=link, activity=activity)
         if session.running_kinds:
             row += f" · {texts.RUNNING.format(counts=session.running_kinds)}"
@@ -1358,13 +1390,14 @@ def build_app(
             )
             return None
 
-    async def thread_link(channel: str, thread_ts: str) -> str:
+    async def thread_link(channel: str, thread_ts: str, title: str = "") -> str:
         # `say` posts a markdown block: standard Markdown links (docs.slack.dev, markdown
-        # block), not mrkdwn's `<url|label>`.
+        # block), not mrkdwn's `<url|label>`. The title is shown as written, so its own
+        # brackets cannot end the label.
         permalink = await _permalink(channel, thread_ts)
         if permalink is None:
             return texts.STATUS_CHANNEL_LINK_FALLBACK.format(thread_ts=thread_ts)
-        return f"[Session]({permalink})"
+        return f"[{markdown_escape(title) or texts.STATUS_CHANNEL_SESSION}]({permalink})"
 
     async def thread_mrkdwn_link(channel: str, thread_ts: str, label: str) -> str:
         # A resume row and a notice are mrkdwn (`context_block`), which takes `<url|label>`.
