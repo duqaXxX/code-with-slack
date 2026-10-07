@@ -227,8 +227,10 @@ STOPPED_THREAD = "Stopped."
 NOTHING_TO_STOP_THREAD = "Nothing is running in this session."
 # D8: two sessions in one folder at once.
 HOLD_QUESTION = "Another session is working in this folder: {link}. Send anyway?"
-HOLD_CONTINUE_BUTTON = "Continue"
-HOLD_CANCEL_BUTTON = "Cancel"
+# The words of the question itself, and close in length: Slack sizes a button by its text, so
+# `Continue` beside `Cancel` made the second look the lesser choice (issue #76).
+HOLD_CONTINUE_BUTTON = "Send anyway"
+HOLD_CANCEL_BUTTON = "Don't send"
 HOLD_UNPOSTED = (
     "code-with-slack could not show this question in Slack, so the message was not sent. "
     "Send it again."
@@ -283,6 +285,9 @@ STATUS_CHANNEL_ROW = "{link}: {activity}"
 STATUS_CHANNEL_WAITING = "waiting for you"
 STATUS_CHANNEL_BUSY = "busy"
 STATUS_CHANNEL_IDLE = "idle"
+# After `idle`, how long ago Claude Code last wrote to the session, when that is known.
+STATUS_CHANNEL_SINCE = " · {ago}"
+STATUS_CHANNEL_SESSION = "Session"  # the link's label for a session with no title yet
 STATUS_CHANNEL_BYPASS = " · ⚡ bypass"
 STATUS_CHANNEL_FOLDER = " · folder `{directory}`"
 STATUS_CHANNEL_LINK_FALLBACK = "thread `{thread_ts}`"

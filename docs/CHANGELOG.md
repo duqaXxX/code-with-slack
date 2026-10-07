@@ -212,6 +212,19 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The two buttons under `Another session is working in this folder: ... Send anyway?` read
+  `Send anyway` and `Don't send` (issue #76); they read `Continue` and `Cancel`. Slack sizes a
+  button by its text and offers no width, so the shorter `Cancel` looked the lesser of the two.
+  The new labels differ by one character and answer the question in its own words. Their styles
+  are unchanged: `Send anyway` is `primary`, `Don't send` has none.
+- A channel's `!status` names each session by its title (issue #76). The link to a thread read
+  `Session` on every row, so several idle threads showed as identical `Session: idle` lines.
+  The link's label is now the title Claude Code gave the session, as the Home tab and a
+  restart's notice already name it, cut at 80 characters and shown as written, and an idle row
+  says how long ago the session was last written to, in one unit: a row reads
+  `Fix the footer: idle · 2h ago`, its title being the link. A session with no title yet, or whose folder's sessions cannot be listed, keeps
+  `Session` and shows no time. The time is `SDKSessionInfo.last_modified`, read when the answer
+  is posted. The answer is a post every member of the channel reads, as it was.
 - A subagent's failed API request no longer shows at the top level of the reply (issue #161).
   For a background subagent Claude Code forwards the subagent's own error message, with `error`
   and `parent_tool_use_id` both set (recorded: `subagent-api-error.jsonl`, CLI 2.1.286, every

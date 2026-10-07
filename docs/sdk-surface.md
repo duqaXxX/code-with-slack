@@ -140,9 +140,9 @@ in a release with no notice, so it is the first place to look when a release mis
 | `SDKSessionInfo` | `custom_title` | field | resume.py: matching | reference | none |
 | `SDKSessionInfo` | `file_size` | field | resume.py: _row | reference | none |
 | `SDKSessionInfo` | `git_branch` | field | resume.py: _row | reference | none |
-| `SDKSessionInfo` | `last_modified` | field | resume.py: by_last_activity, _row | reference | none |
-| `SDKSessionInfo` | `session_id` | field | resume.py: matching, by_last_activity, _row; __main__.py: _alive_sessions; home.py: Home._titles; slack_app.py: restart_waits, handle_resume, resume_into_thread, resume_clicked, show_resumed | reference | none |
-| `SDKSessionInfo` | `summary` | field | resume.py: _row; home.py: Home._titles; slack_app.py: restart_waits, resume_into_thread, show_resumed | reference | none |
+| `SDKSessionInfo` | `last_modified` | field | resume.py: by_last_activity, _row; slack_app.py: channel_status_row | reference | none |
+| `SDKSessionInfo` | `session_id` | field | resume.py: matching, by_last_activity, _row; __main__.py: _alive_sessions; home.py: Home._titles; slack_app.py: restart_waits, handle_resume, resume_into_thread, resume_clicked, show_resumed, channel_status | reference | none |
+| `SDKSessionInfo` | `summary` | field | resume.py: _row; home.py: Home._titles; slack_app.py: restart_waits, resume_into_thread, show_resumed, channel_status_row | reference | none |
 | `ServerToolResultBlock` | `content` | field | render/renderer.py: TurnRenderer._block, result_summary | package | none |
 | `ServerToolResultBlock` | `tool_use_id` | field | render/renderer.py: TurnRenderer._block | package | none |
 | `ServerToolUseBlock` | `id` | field | render/renderer.py: TurnRenderer._block | package | none |

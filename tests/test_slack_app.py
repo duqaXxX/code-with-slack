@@ -22,7 +22,7 @@ from code_with_slack.attachments import DownloadFailed
 from code_with_slack.config import Config
 from code_with_slack.footer import UsageCache
 from code_with_slack.guards import ChannelGuard, Identity
-from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds
+from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, hold_blocks
 from code_with_slack.home import (
     CHANNEL_ACTION,
     CLEAN_ACTION,
@@ -655,6 +655,67 @@ async def test_bang_status_lists_every_live_session_with_a_link(world: World) ->
     # `say` posts a markdown block: a standard Markdown link, not mrkdwn's `<url|label>`.
     link = f"https://example.slack.com/archives/{CHANNEL}/p1780000000000001"
     assert lines[1] == f"[Session]({link}): busy"
+
+
+async def test_bang_status_names_an_idle_session_by_its_title_and_last_activity(
+    world: World,
+) -> None:
+    # Issue #76: five rows reading `Session: idle` told the owner nothing about which was which.
+    two_hours_ago = int((time.time() - 7_200) * 1000)
+    world.stored_sessions = [SDKSessionInfo(SESSION_A, "Fix the footer", two_hours_ago, 1)]
+    await world.dispatch(message(f"!resume {SESSION_A}"))  # a live, idle session with that id
+    await world.dispatch(message("!status", ts=OTHER_THREAD))
+    assert said(world)[-1].splitlines()[1] == f"[Fix the footer]({PERMALINK}): idle · 2h ago"
+
+
+async def test_bang_status_keeps_a_title_s_own_brackets_out_of_the_link(world: World) -> None:
+    world.stored_sessions = [SDKSessionInfo(SESSION_A, "fix [urgent](x) *now*", 0, 1)]
+    await world.dispatch(message(f"!resume {SESSION_A}"))
+    await world.dispatch(message("!status", ts=OTHER_THREAD))
+    row = said(world)[-1].splitlines()[1]
+    assert row.startswith(rf"[fix \[urgent\]\(x\) \*now\*]({PERMALINK}): idle")
+
+
+async def test_bang_status_falls_back_to_session_when_the_titles_cannot_be_read(
+    world: World,
+) -> None:
+    world.stored_sessions = [SDKSessionInfo(SESSION_A, "Fix the footer", 0, 1)]
+    await world.dispatch(message(f"!resume {SESSION_A}"))
+
+    def broken(directory: Path) -> list[SDKSessionInfo]:
+        raise OSError("unreadable")
+
+    world.sessions._deps.sessions_of = broken
+    await world.dispatch(message("!status", ts=OTHER_THREAD))
+    assert said(world)[-1].splitlines()[1] == f"[Session]({PERMALINK}): idle"  # no title, no time
+
+
+@pytest.mark.parametrize(
+    ("seconds", "shown"),
+    [
+        (5, "just now"),
+        (59, "just now"),
+        (60, "1m ago"),
+        (3_599, "59m ago"),
+        (3_600, "1h ago"),
+        (86_399, "23h ago"),
+        (86_400, "1d ago"),
+        (30 * 86_400, "30d ago"),
+        (-30, "just now"),
+    ],
+)
+def test_how_long_ago_reads_in_one_unit(seconds: int, shown: str) -> None:
+    assert slack_app_module.ago(seconds) == shown
+
+
+def test_the_hold_question_s_buttons_answer_it_in_its_own_words() -> None:
+    # Issue #76: `Continue` beside the shorter `Cancel` made the second look the lesser choice,
+    # and a button's width is its text. One `primary` in the set, as the button reference asks.
+    _, actions = hold_blocks("hold-1", "<https://example.slack.com/x|Session>")
+    send, keep = actions["elements"]
+    assert (send["text"]["text"], send.get("style")) == ("Send anyway", "primary")
+    assert (keep["text"]["text"], keep.get("style")) == ("Don't send", None)
+    assert abs(len(send["text"]["text"]) - len(keep["text"]["text"])) <= 1
 
 
 async def test_bang_status_fetches_permalinks_concurrently(world: World) -> None:
