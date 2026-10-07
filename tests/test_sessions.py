@@ -4304,3 +4304,33 @@ async def test_a_subagent_s_command_and_the_agent_s_second_end_close_the_reply_a
     assert not any(m.streaming for m in h.slack.messages.values())
     assert [c["status"] for c in h.cards()] == ["complete", "complete"]
     assert len(h.slack.stream_ts) == 1  # every report rendered into the reply that began it
+
+
+async def test_a_posted_and_a_removed_request_are_logged_by_id_and_age_only(
+    harness_for: Callable[..., Harness], caplog: pytest.LogCaptureFixture
+) -> None:
+    # Issue #71: the push of a request is matched to its timing from the log.
+    recorded = sdk_json("ask-can-use-tool")
+    ask = CanUseToolCall("Bash", {"command": "SECRET-COMMAND-TEXT"})
+    question = CanUseToolCall(recorded["tool_name"], recorded["input"])
+    h = harness_for({"turns": [[ask, question, *sdk_messages("tools")]]})
+    with caplog.at_level(logging.INFO, logger="code_with_slack"):
+        session = h.session()
+        turn = await session.submit("SECRET-PROMPT-CONTENT")
+        await until(lambda: bool(h.approvals._pending))
+        approval_ts = h.slack.posted_ts[-1]
+        approval_id = next(iter(h.approvals._pending))
+        assert h.approvals.resolve(approval_id, CHANNEL, THREAD, Approve()) is not None
+        await until(lambda: bool(h.approvals._pending))
+        question_ts = h.slack.posted_ts[-1]
+        assert await session.stop() is True
+        await asyncio.wait_for(session.stop_landed(), 2)
+        await asyncio.wait_for(turn.done.wait(), 2)
+    lines = [r.getMessage() for r in caplog.records]
+    assert f"posted an approval request in {CHANNEL}/{THREAD}: message {approval_ts}" in lines
+    assert f"posted a question request in {CHANNEL}/{THREAD}: message {question_ts}" in lines
+    (removed,) = [m for m in lines if m.startswith("removed a request")]
+    assert removed.startswith(f"removed a request in {CHANNEL}: message {question_ts}, ")
+    assert removed.endswith("s after it was posted")
+    assert "SECRET-PROMPT-CONTENT" not in caplog.text
+    assert "SECRET-COMMAND-TEXT" not in caplog.text
