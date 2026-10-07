@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import dataclasses
 import itertools
 import json
 import logging
@@ -666,6 +667,32 @@ async def test_bang_status_names_an_idle_session_by_its_title_and_last_activity(
     await world.dispatch(message(f"!resume {SESSION_A}"))  # a live, idle session with that id
     await world.dispatch(message("!status", ts=OTHER_THREAD))
     assert said(world)[-1].splitlines()[1] == f"[Fix the footer]({PERMALINK}): idle · 2h ago"
+
+
+async def test_bang_status_dates_an_idle_session_by_its_last_message_not_its_file(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Seen live on 2026-10-07: a session idle for 16 minutes read `idle · just now`. Its file had
+    # just been written to, by the entries with no timestamp Claude Code appends when a session
+    # is connected again, so the file's time says nothing of when the owner last heard from it.
+    now_ms = int(time.time() * 1000)
+    other = "68da9311-0000-4000-8000-00000000000b"
+    world.stored_sessions = [
+        SDKSessionInfo(SESSION_A, "Fix the footer", now_ms, 1),  # its file: touched just now
+        SDKSessionInfo(other, "Another session of the folder", now_ms, 1),  # no live thread
+    ]
+    asked: list[list[str]] = []
+
+    def last_messages(directory: Path, found: list[SDKSessionInfo]) -> list[SDKSessionInfo]:
+        asked.append([s.session_id for s in found])
+        return [dataclasses.replace(s, last_modified=now_ms - 16 * 60_000) for s in found]
+
+    monkeypatch.setattr(sessions_module, "by_last_activity", last_messages)
+    await world.dispatch(message(f"!resume {SESSION_A}"))
+    asked.clear()
+    await world.dispatch(message("!status", ts=OTHER_THREAD))
+    assert said(world)[-1].splitlines()[1] == f"[Fix the footer]({PERMALINK}): idle · 16m ago"
+    assert asked == [[SESSION_A]]  # only the sessions the answer shows are read
 
 
 async def test_bang_status_keeps_a_title_s_own_brackets_out_of_the_link(world: World) -> None:

@@ -1327,15 +1327,28 @@ def build_app(
             lines.append(texts.STATUS_CHANNEL_EMPTY)
         else:
             # What tells one thread from another (issue #76): the title Claude Code gave its
-            # session, as the Home tab and a restart's notice name it, and when it last wrote.
+            # session, as the Home tab and a restart's notice name it, and the time of its last
+            # message. Not the time of its file, which `list_sessions` gives: Claude Code writes
+            # entries with no timestamp to a transcript when it connects the session again, so
+            # a session idle for 16 minutes read `just now` (seen 2026-10-07). Only the sessions
+            # the answer shows are dated, since dating reads their files.
+            shown = {
+                str(stored.session_id)
+                for live_session in live
+                if (stored := state.thread(channel, live_session.thread_ts)) is not None
+                and stored.session_id
+            }
             known: dict[str, SDKSessionInfo] = {}
             for directory in {live_session.directory for live_session in live}:
                 try:
                     listed = await sessions.sessions_in(directory)
+                    dated = await sessions.dated(
+                        directory, [s for s in listed if s.session_id in shown]
+                    )
                 except Exception as exc:
                     logger.warning("could not list a folder's sessions: %s", describe(exc))
                     continue
-                known.update({s.session_id: s for s in listed})
+                known.update({s.session_id: s for s in dated})
             lines.extend(
                 await asyncio.gather(
                     *(
@@ -1367,7 +1380,8 @@ def build_app(
         else:
             activity = texts.STATUS_CHANNEL_IDLE
             if info is not None and info.last_modified:
-                # `last_modified` is in milliseconds (SDKSessionInfo, SDK reference).
+                # In milliseconds (SDKSessionInfo, SDK reference), and by now the time of the
+                # session's last message (`channel_status` dated it).
                 since = ago(time.time() - info.last_modified / 1000)
                 activity += texts.STATUS_CHANNEL_SINCE.format(ago=since)
         row = texts.STATUS_CHANNEL_ROW.format(link=link, activity=activity)
