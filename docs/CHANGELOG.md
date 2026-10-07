@@ -223,8 +223,8 @@ All notable changes to this project are documented here. The format follows
   restart's notice already name it, cut at 80 characters and shown as written, and an idle row
   says how long ago the session was last written to, in one unit: a row reads
   `Fix the footer: idle · 2h ago`, its title being the link. A session with no title yet, or whose folder's sessions cannot be listed, keeps
-  `Session` and shows no time. The time is `SDKSessionInfo.last_modified`, read when the answer
-  is posted. The answer is a post every member of the channel reads, as it was.
+  `Session` and shows no time. The answer is a post every member of the channel reads, as it
+  was.
 - A subagent's failed API request no longer shows at the top level of the reply (issue #161).
   For a background subagent Claude Code forwards the subagent's own error message, with `error`
   and `parent_tool_use_id` both set (recorded: `subagent-api-error.jsonl`, CLI 2.1.286, every
@@ -543,6 +543,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- An idle row of a channel's `!status` dates its session by the session's last message. It
+  read the time of the session's file (`SDKSessionInfo.last_modified`), and Claude Code appends
+  entries with no timestamp to a transcript when it connects the session again: on 2026-10-07 a
+  session idle for 16 minutes read `idle · just now` after a restart. `channel_status` now dates
+  the sessions it shows with `SessionManager.dated`, the reading of the transcript's end that
+  already orders the list of `!resume`, and reads no other session's file. A row cannot read
+  more than an hour: a live session is closed after `IDLE_CLOSE_SECONDS` idle, and only live
+  sessions are listed.
 - A reply is no longer ended while the turn that writes it still runs (issue #149). A command a
   subagent starts and that outlives the subagent's Bash call becomes a task of the reply, and
   when it ended the task branch of `ThreadSession._dispatch` ended that reply without checking
