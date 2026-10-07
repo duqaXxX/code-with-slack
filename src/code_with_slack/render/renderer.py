@@ -321,6 +321,11 @@ class TurnRenderer:
         await self._text(("\n\n" if self._wrote_text else "") + line + "\n\n", notice=True)
 
     async def _assistant(self, message: AssistantMessage) -> None:
+        if message.error is not None and message.parent_tool_use_id is not None:
+            # A subagent's own failed request (recorded: `subagent-api-error.jsonl`): like every
+            # other text of a subagent it stays out of the reply, whose turn may well go on and
+            # succeed. The task's notification names the failure on the subagent's own line.
+            return
         if message.error == "authentication_failed":
             self.auth_failed = True
             await self._text(texts.AUTH_FAILED, notice=True)

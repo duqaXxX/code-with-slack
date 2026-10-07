@@ -1608,7 +1608,9 @@ class ThreadSession:
 
     def _ended_line(self, message: TaskNotificationMessage) -> str:
         """The terminal's line for a task's end: a command's own summary, or `Agent "..."
-        finished` from the task's description, plus the duration when the task reports one."""
+        finished` from the task's description, plus the duration when the task reports one. A
+        task that failed also says why, in the notification's own words (`Agent terminated early
+        due to an API error: ...`): nothing else in the reply does."""
         task_type, description = self._tasks.get(message.task_id, ("", ""))
         if task_type in SUMMARY_IS_END_LINE and message.summary:
             text = one_line(message.summary, 200)
@@ -1618,6 +1620,8 @@ class ThreadSession:
             name = TASK_KINDS.get(task_type, UNKNOWN_KIND)[1]
             outcome = {"completed": "finished"}.get(message.status, message.status)
             text = f'{name} "{one_line(label or message.task_id, 120)}" {outcome}'
+            if message.status == "failed" and message.summary:
+                text += f": {one_line(message.summary, 200)}"
         duration = message.usage["duration_ms"] if message.usage else None
         return ended_line(text, message.status, duration)
 
