@@ -36,7 +36,7 @@ class RecordingSink:
         self.notices: list[str] = []
         self.closed_out: bool | str | None = False
 
-    async def text(self, markdown: str, *, notice: bool = False) -> None:
+    async def text(self, markdown: str, *, notice: bool = False, ending: bool = False) -> None:
         self.texts.append(markdown)
         if notice:
             self.notices.append(markdown)

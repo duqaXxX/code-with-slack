@@ -614,11 +614,16 @@ All notable changes to this project are documented here. The format follows
   text alone, there was no ending to move: the new message held one zero-width space, its
   notification named a tool call or the answer's first words, and the error reached the
   reply by an edit, which never rings. Seen live on 2026-10-08 with a process killed 320
-  seconds into a turn. `ReplySink._ending_cursor` now takes the daemon's last line as the
-  ending when there is no footer to post. The running list is no footer: a turn cut while a
-  subagent works closes with `⏳ 1 agent` still showing, and ends with the error line too. A
-  reply that ends with its footer is unchanged: a line of the daemon's stays where it was
-  written. Not covered: a process lost while no turn is active writes no line at all.
+  seconds into a turn. The line `ThreadSession._abandon` writes on how a reply ended is now a
+  part of its own in the sink (`ReplySink.text` with `ending`), and `ReplySink._ending_cursor`
+  takes it as the ending when there is no footer to post. It is the notification's text ahead
+  of a tool's title. The same holds for `This reply ended before an answer: …`, after a
+  restart of the daemon or a closed session. A notice written just before the line stays in
+  the reply, a card that closes after it moves under it, and no other line of the daemon's
+  moves. The running list is no footer: a turn cut while a subagent works closes with
+  `⏳ 1 agent` still showing, and ends with the line too. A reply that ends with its footer is
+  unchanged: a line of the daemon's stays where it was written. Not covered: a process lost
+  while no turn is active writes no line at all.
 - A message counts its text as the blocks Slack makes of it, so a reply with many headings or
   tables continues in a new message where an edit of it was refused (#92). Slack translates a
   `markdown` block, and a stream's text, into several stored blocks: a `header` per heading, a

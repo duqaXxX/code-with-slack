@@ -142,10 +142,11 @@ So, inside a thread:
   300 seconds), which rings, and goes on in the same message by `chat.update`, silently. Its end
   posts the text Claude wrote after its last call and the footer as a new message, which rings
   a second time with the start of that text, and takes the text out of the first message. An
-  answer that is text alone keeps it, and the new message is the footer alone. A turn that an
-  error cut short has no footer: the new message is then the error line
-  (`Claude Code reported an error: …`), taken out of the first message, so the second ring says
-  the turn failed.
+  answer that is text alone keeps it, and the new message is the footer alone. A turn cut
+  short has no footer: the new message is then the line that says how it ended
+  (`Claude Code reported an error: …`, or `This reply ended before an answer: …` after a
+  restart of the daemon), taken out of the first message, so the second ring says the turn
+  did not end well. No other line of the daemon's moves.
 - A reply whose stream Slack refuses to grow (`msg_too_long`: Slack does not document its cap, and
   the daemon counts text and cards toward it by measured figures) stops its stream at that moment, which rings, and
   goes on the same way: by `chat.update`, with its ending in a new message. An edit Slack refuses for

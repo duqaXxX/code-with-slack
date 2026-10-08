@@ -516,6 +516,7 @@ Cursor = tuple[int, int]  # (part, offset): characters into a text part, element
 class _Text:
     text: str
     notice: bool = False  # a line of the daemon's own: never the banner while Claude has words
+    ending: bool = False  # a notice that says how a reply was cut short (`_ending_cursor`)
     rev: int = 0  # bumped when it changes: a message whose parts kept theirs is not rendered again
 
 
@@ -928,16 +929,19 @@ class ReplySink:
         self._ended = True
         self._retrack()
 
-    async def text(self, markdown: str, *, notice: bool = False) -> None:
-        """Claude's words, or with `notice` a line of the daemon's own (never a banner)."""
+    async def text(self, markdown: str, *, notice: bool = False, ending: bool = False) -> None:
+        """Claude's words, or with `notice` a line of the daemon's own (never a banner while
+        Claude has words). With `ending` that line says how the reply was cut short: a part of
+        its own, never joined to an earlier notice, so it can move whole (`_ending_cursor`)."""
+        notice = notice or ending
         if markdown.strip():
             self._fold.text()
         last = self._parts[-1] if self._parts else None
-        if isinstance(last, _Text) and last.notice == notice:
+        if isinstance(last, _Text) and (last.notice, last.ending) == (notice, ending):
             last.text += markdown
             last.rev = self._next_rev()
         else:
-            self._parts.append(_Text(markdown, notice, self._next_rev()))
+            self._parts.append(_Text(markdown, notice, ending, self._next_rev()))
         await self._changed()
 
     async def task(self, update: TaskUpdate) -> None:
@@ -1153,8 +1157,8 @@ class ReplySink:
         its body is no ending), with whatever follows it. None when the message holds no such
         text from its start, or would keep nothing of the answer before it (an answer that is
         text alone): the ending is then the footer alone. With no footer to post either (a turn
-        cut short), the daemon's last line is the ending when it is the reply's last part: it
-        says how the reply ended, where the message that notifies would show empty. The running
+        cut short), the ending is the daemon's line on how the reply ended (`_Text.ending`),
+        with whatever follows it, where the message that notifies would show empty. The running
         list is no footer: the session empties it once the lost process's tasks are stopped."""
         index = next(
             (
@@ -1167,10 +1171,18 @@ class ReplySink:
             None,
         )
         cursor = self._cut_before(message, index)
-        if cursor is None and not self._footer and self._parts:
-            last = self._parts[-1]
-            if isinstance(last, _Text) and last.notice and last.text.strip():
-                cursor = self._cut_before(message, len(self._parts) - 1)
+        if cursor is None and not self._footer:
+            said = next(
+                (
+                    i
+                    for i in range(len(self._parts) - 1, message.start[0] - 1, -1)
+                    if isinstance(part := self._parts[i], _Text)
+                    and part.ending
+                    and part.text.strip()
+                ),
+                None,
+            )
+            cursor = self._cut_before(message, said)
         return cursor
 
     def _cut_before(self, message: _Message, index: int | None) -> Cursor | None:
@@ -1193,16 +1205,20 @@ class ReplySink:
 
     def _banner(self, span: list[tuple[int, _Text | _Tool, int, int | None]] | None = None) -> str:
         """The notification's text, plain: the first paragraph of Claude's own words in the
-        span; else the first tool's title; else a line of the daemon's. Never a daemon line
-        while there is something of Claude's to show. Cut to BANNER_LIMIT."""
+        span; else the daemon's line on how the reply was cut short; else the first tool's
+        title; else any line of the daemon's. Never a daemon line while there are words of
+        Claude's to show. Cut to BANNER_LIMIT."""
         span = self._span((0, 0), None) if span is None else span
-        notice = ""
+        notice = said = ""
         for _, part, floor, ceil in span:
             if isinstance(part, _Text):
                 words = part.text[floor:ceil].strip()
                 if words and not part.notice:
                     return banner_text(words.split("\n\n", 1)[0], limit=BANNER_LIMIT) or "…"
                 notice = notice or words
+                said = said or (words if part.ending else "")
+        if said:
+            return banner_text(said.split("\n\n", 1)[0], limit=BANNER_LIMIT) or "…"
         for _, part, _, _ in span:
             if isinstance(part, _Tool):
                 return banner_text(card_fields(part.update)["title"], limit=BANNER_LIMIT) or "…"
@@ -2028,8 +2044,8 @@ class ReplySink:
         to move into a message of its own (`_end`), or bring it to the footer as it stands: it
         stays once posted, since it is what notified. Its text is Claude's own words, as a
         banner: never a line of the daemon's. With no footer either it holds one zero-width
-        space: a reply that ends on a line of the daemon's, under something of the answer, never
-        comes here (`_ending_cursor`)."""
+        space: a reply that holds the daemon's line on how it ended, under something of the
+        answer, never comes here (`_ending_cursor`)."""
         blocks = self._closing_blocks() or [context_block(ZERO_WIDTH_SPACE)]
         attempted = self._clock.time()
         try:

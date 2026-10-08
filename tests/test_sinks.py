@@ -550,7 +550,7 @@ async def test_a_reply_cut_short_after_its_stream_stopped_ends_with_the_daemon_s
     await sink.task(tool("t1", "Bash"))
     await settled()
     await clock.advance(sinks.STREAM_SECONDS + 1)
-    await sink.text("\n\n" + ERROR_LINE, notice=True)
+    await sink.text("\n\n" + ERROR_LINE, ending=True)
     await sink.finish([])
     await sink.close_out(None)
     [closing] = slack.calls_to("chat.postMessage")
@@ -568,7 +568,7 @@ async def test_an_answer_of_text_alone_cut_short_ends_with_the_daemon_s_line(
     await sink.text("Half an answer")
     await settled()
     await clock.advance(sinks.STREAM_SECONDS + 1)
-    await sink.text("\n\n" + ERROR_LINE, notice=True)
+    await sink.text("\n\n" + ERROR_LINE, ending=True)
     await sink.finish([])
     await sink.close_out(None)
     [closing] = slack.calls_to("chat.postMessage")
@@ -589,7 +589,7 @@ async def test_a_reply_cut_short_while_a_task_still_counts_ends_with_the_daemon_
     await sink.task(tool("t1", "Bash"))
     await settled()
     await clock.advance(sinks.STREAM_SECONDS + 1)
-    await sink.text("\n\n" + ERROR_LINE, notice=True)
+    await sink.text("\n\n" + ERROR_LINE, ending=True)
     await sink.set_running("⏳ 1 agent")
     await sink.finish([])
     await sink.close_out(None)
@@ -616,7 +616,7 @@ async def test_an_answer_of_text_alone_under_a_daemon_line_cut_short_ends_with_t
     await sink.text("Half an answer")
     await settled()
     await clock.advance(sinks.STREAM_SECONDS + 1)
-    await sink.text("\n\n" + ERROR_LINE, notice=True)
+    await sink.text("\n\n" + ERROR_LINE, ending=True)
     await sink.finish([])
     await sink.close_out(None)
     [closing] = slack.calls_to("chat.postMessage")
@@ -625,6 +625,63 @@ async def test_an_answer_of_text_alone_under_a_daemon_line_cut_short_ends_with_t
         {"type": "markdown", "text": texts.COMPACTED_PLAIN},
         {"type": "markdown", "text": "Half an answer"},
     ]
+
+
+async def test_only_the_line_on_how_the_reply_ended_moves_not_a_notice_written_before_it(
+    slack: FakeSlack,
+) -> None:
+    # Two notices in a row were one part: the compaction line moved with the error and was the
+    # notification's text.
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.task(tool("t1", "Bash"))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("\n\n" + texts.COMPACTED_PLAIN + "\n\n", notice=True)
+    await sink.text("\n\n" + ERROR_LINE, ending=True)
+    await sink.finish([])
+    await sink.close_out(None)
+    [closing] = slack.calls_to("chat.postMessage")
+    assert closing["blocks"] == [{"type": "markdown", "text": ERROR_LINE}]
+    assert closing["text"] == sinks.banner_text(ERROR_LINE, limit=sinks.BANNER_LIMIT)
+    assert texts.COMPACTED_PLAIN in str(slack.calls_to("chat.update")[-1]["blocks"])
+
+
+async def test_a_card_that_closes_after_the_line_on_how_the_reply_ended_moves_under_it(
+    slack: FakeSlack,
+) -> None:
+    # Two calls open when the turn is cut: closing them draws a card after the error line, which
+    # was then no longer the reply's last part, and the closing message showed empty.
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.task(tool("t1", "Bash"))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("\n\n" + ERROR_LINE, ending=True)
+    await sink.task(tool("t2", "Read"))
+    await sink.finish([])
+    await sink.close_out(None)
+    [closing] = slack.calls_to("chat.postMessage")
+    assert closing["blocks"][0] == {"type": "markdown", "text": ERROR_LINE}
+    assert "Read 1 file" in str(closing["blocks"][1:])  # folded, as a run that ended
+    # the error, not the card's title, is what the notification says
+    assert closing["text"] == sinks.banner_text(ERROR_LINE, limit=sinks.BANNER_LIMIT)
+
+
+async def test_a_daemon_line_that_does_not_say_how_the_reply_ended_never_moves(
+    slack: FakeSlack,
+) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.task(tool("t1", "Bash"))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("\n\n" + texts.COMPACTED_PLAIN, notice=True)
+    await sink.finish([])
+    await sink.close_out(None)
+    [closing] = slack.calls_to("chat.postMessage")
+    assert closing["blocks"] == [sinks.context_block(sinks.ZERO_WIDTH_SPACE)]
+    assert texts.COMPACTED_PLAIN in str(slack.calls_to("chat.update")[-1]["blocks"])
 
 
 async def test_a_daemon_line_stays_in_the_reply_when_the_footer_is_the_ending(
