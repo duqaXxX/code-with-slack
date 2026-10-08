@@ -16,8 +16,8 @@ from code_with_slack.commands import Invalid, Word
 ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
 # The README is the landing page: a feature's detail goes in docs/setup.md. The limit sits a
-# quarter above the page's length when it was set (677 words, as `str.split` counts them). Raise
-# it only when the page gains a section, never to make room for the description of one feature.
+# quarter above the page's length when it was set (677 words, as `str.split` counts them). It is
+# a prompt to ask where new text belongs: raise it when the page needs the words.
 README_WORD_LIMIT = 846
 DOCS = sorted(
     p
