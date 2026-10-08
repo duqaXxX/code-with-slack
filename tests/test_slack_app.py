@@ -3224,7 +3224,7 @@ def auto_mode_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(FakeClaudeClient, "__init__", init)
 
 
-async def test_bang_bypass_off_in_an_auto_mode_thread_names_auto_mode(
+async def test_bang_bypass_off_in_an_auto_mode_thread_returns_to_auto_mode(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     auto_mode_settings(monkeypatch)
@@ -3232,7 +3232,7 @@ async def test_bang_bypass_off_in_an_auto_mode_thread_names_auto_mode(
     await world.dispatch(reply("!bypass on", THREAD))
     await world.dispatch(reply("!bypass off", THREAD))
     assert world.clients[0].modes == ["bypassPermissions", "auto"]
-    assert world.ephemerals() == [texts.BYPASS_ON_THREAD, texts.BYPASS_OFF_AUTO_THREAD]
+    assert world.ephemerals() == [texts.BYPASS_ON_THREAD, texts.BYPASS_OFF_THREAD]
 
 
 def bypass_box(world: World) -> dict[str, Any]:

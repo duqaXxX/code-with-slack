@@ -203,12 +203,9 @@ BYPASS_ON_THREAD = (
     "Bypass is on in this session: every tool runs without asking, until `!bypass off`. "
     "It survives a restart."
 )
+# Says nothing about what is asked: that is the mode the owner's own settings give.
 BYPASS_OFF_THREAD = (
-    "Bypass is off in this session: Claude Code asks again before tools that need approval."
-)
-BYPASS_OFF_AUTO_THREAD = (
-    "Bypass is off in this session: it runs in Claude Code's auto mode, where a classifier "
-    "decides which tools run without asking."
+    "Bypass is off in this session: Claude Code follows your permission settings again."
 )
 STOPPED = "Stopped the current turn."
 # An answered question, as the terminal keeps it in the transcript.

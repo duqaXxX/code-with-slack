@@ -941,17 +941,11 @@ def build_app(
                 else:
                     # Both: the line says what changed and is gone on reload, the ✅ stays.
                     await acknowledge(channel, ts)
-                    if on:
-                        said = texts.BYPASS_ON_THREAD
-                    else:
-                        # Off returns to the mode the owner's settings give, which asks about
-                        # fewer tools when it is auto mode: the line names where it landed.
-                        said = (
-                            texts.BYPASS_OFF_AUTO_THREAD
-                            if session.auto
-                            else texts.BYPASS_OFF_THREAD
-                        )
-                    await tell_owner(channel, thread_ts, said)
+                    await tell_owner(
+                        channel,
+                        thread_ts,
+                        texts.BYPASS_ON_THREAD if on else texts.BYPASS_OFF_THREAD,
+                    )
             case Status():
                 if session is None:
                     await channel_status(channel)
