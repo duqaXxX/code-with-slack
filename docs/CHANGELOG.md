@@ -564,11 +564,12 @@ All notable changes to this project are documented here. The format follows
   The boundary now starts the turn, so the reply reads
   `Compacted the conversation: 20.7k → 5.0k tokens.`; a compaction among a turn's tool calls
   already showed. Recorded on 2026-10-08 with claude-agent-sdk 0.2.164 (bundled CLI 2.1.292) and
-  the daemon's CLI arguments: `tests/fixtures/sdk/compact.jsonl` (a `/compact` session),
-  `compact-interrupt.jsonl` (one interrupted a second after it began, which Claude Code answers
-  `Compaction canceled.`) and `auto-compact.jsonl` (the one turn of a longer session in which
-  Claude Code compacted at 67.9k tokens, with `CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000`).
-  Replayed in `tests/test_sessions_compaction.py`.
+  the daemon's CLI arguments: `tests/fixtures/sdk/compact.jsonl` (a `/compact` session) and
+  `auto-compact.jsonl` (the one turn of a longer session in which Claude Code compacted at 67.9k
+  tokens, with `CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000`), replayed in
+  `tests/test_sessions_compaction.py`. A boundary with no prompt sent and no report awaited
+  starts no turn. Probe claim P21 sends `/compact` on every new release and reads the line in
+  the reply.
 
 - A `!word` sent in Slack's formatting is read as the word (#178). A command pasted from a place
   that showed it as code kept the formatting, the event's `text` then started with a backtick,

@@ -645,6 +645,15 @@ async def goal(s: Stage) -> dict[str, Observation]:
     return {"P20": Observation(True, opens and once, detail)}
 
 
+async def compact(s: Stage) -> dict[str, Observation]:
+    """Runs last: the session it leaves holds a summary in place of the scenes before it."""
+    mark = s.mark()
+    await s.turn("/compact")
+    reply = s.replies_since(mark)
+    shown = reply.startswith("Compacted the conversation")
+    return {"P21": Observation(True, shown, "" if shown else f"the reply reads {reply[:80]!r}")}
+
+
 SCENES: dict[str, tuple[str, ...]] = {
     "first turn": ("P1", "P2", "P3", "P17"),
     "image": ("P4",),
@@ -660,6 +669,7 @@ SCENES: dict[str, tuple[str, ...]] = {
     "working folder": ("P14",),
     "replay": ("P19",),
     "goal": ("P20",),
+    "compact": ("P21",),
 }
 
 
@@ -684,6 +694,7 @@ async def run_scenes(log: Log) -> dict[str, Observation]:
             seen |= await attempt("working folder", s, working_folder(s))
             seen |= await attempt("replay", s, replay(s))
             seen |= await attempt("goal", s, goal(s))
+            seen |= await attempt("compact", s, compact(s))
         finally:
             await s.manager.close_all()
             forget_sessions(workdir, log)

@@ -1594,9 +1594,13 @@ class ThreadSession:
                 # A compaction's boundary comes before every frame of its turn that shows
                 # something, on `/compact` and on an automatic compaction at a turn's start
                 # (recorded: `compact.jsonl`, `auto-compact.jsonl`, CLI 2.1.292). The turn starts
-                # with it, as it would one frame later with the summary Claude Code sends next.
+                # with it, as it would one frame later with the summary Claude Code sends next,
+                # and only a turn that is due: a boundary with no prompt sent and no report
+                # awaited would open a reply that no result is known to end.
                 compacted = (
-                    isinstance(message, SystemMessage) and message.subtype == "compact_boundary"
+                    isinstance(message, SystemMessage)
+                    and message.subtype == "compact_boundary"
+                    and (bool(self._sent) or self._injected_expected)
                 )
                 if not isinstance(message, TURN_MESSAGES) and not compacted:
                     return
