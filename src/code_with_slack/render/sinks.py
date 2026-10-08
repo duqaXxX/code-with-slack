@@ -850,8 +850,9 @@ class ReplySink:
         self._latest = True
         self._closed_out = False  # whether close_out has run; a second call is a no-op
         # Where the footer went once the reply ended: "inline", on the stream's own stop (and
-        # on the message's updates after it); "moved", under the reply's ending, posted as its
-        # last message; or "post", in a closing message that holds nothing else.
+        # on the message's updates after it); "moved", under the reply's ending in its last
+        # message (posted for it, or the continuation that opened on the line on how the reply
+        # ended); or "post", in a closing message that holds nothing else.
         self._end_mode: str | None = None
         # Set once the end has landed on Slack (`_end_landed`): the reply's messages are then a
         # fixed set, and a late update only edits them, keeping what its last message showed
@@ -1146,7 +1147,7 @@ class ReplySink:
 
     def _footer_of(self, message: _Message) -> list[dict[str, Any]]:
         """The footer a message shows: only the reply's last, when the footer rode on its
-        stream's stop or when it is the ending posted as a message of its own (`_end`)."""
+        stream's stop or when it is the reply's ending, in a message of its own (`_end`)."""
         if message is self._messages[-1] and self._end_mode in ("inline", "moved"):
             return self._closing_blocks()
         return []
@@ -1205,8 +1206,16 @@ class ReplySink:
 
     def _opens_on_ending(self, message: _Message) -> bool:
         """Whether `message`, posted as a continuation, starts at the daemon's line on how the
-        reply ended: it rang with that line, and is the reply's ending as it stands."""
-        said = self._last_text(message, ending=True)
+        reply ended, inside it or in what follows it: it rang when it was posted, and is the
+        reply's ending as it stands."""
+        said = next(
+            (
+                i
+                for i in range(len(self._parts) - 1, -1, -1)
+                if isinstance(part := self._parts[i], _Text) and part.ending and part.text.strip()
+            ),
+            None,
+        )
         return message.mode == "post" and said is not None and (said, 0) <= message.start
 
     def _banner(self, span: list[tuple[int, _Text | _Tool, int, int | None]] | None = None) -> str:
@@ -1991,7 +2000,9 @@ class ReplySink:
     async def _end(self) -> bool:
         """The reply's end, on Slack: the footer on the last stream's stop; once the stream is
         over, under the reply's ending, posted as a new message, or in a closing message of its
-        own when there is no ending to move (`_ending_cursor`)."""
+        own when there is no ending to move (`_ending_cursor`). A continuation that opened on
+        the line on how the reply ended is the ending as it stands (`_opens_on_ending`): nothing
+        is posted, and the footer goes under it by edit."""
         if not self._messages:
             return True  # nothing was ever shown: nothing to end
         if self._end_mode in ("inline", "moved"):
@@ -2047,8 +2058,10 @@ class ReplySink:
     def _end_landed(self) -> bool:
         """Whether the reply's end is on Slack: the footer rode on the last stream's stop
         ("inline", set after a stop that landed) or sits in the ending posted as the last
-        message ("moved", reset when that post fails), or the closing message was posted. Not
-        `_end_mode == "post"`, which `_end` sets before the closing message is written."""
+        message ("moved", reset when that post fails), or the closing message was posted. A
+        continuation that is the ending as it stands is "moved" too, from before its footer is
+        written: it rang when it was posted, and an edit that fails is written by the next pass.
+        Not `_end_mode == "post"`, which `_end` sets before the closing message is written."""
         return self._end_mode in ("inline", "moved") or self._closing is not None
 
     async def _write_closing(self) -> bool:
@@ -2056,8 +2069,8 @@ class ReplySink:
         to move into a message of its own (`_end`), or bring it to the footer as it stands: it
         stays once posted, since it is what notified. Its text is Claude's own words, as a
         banner: never a line of the daemon's. With no footer either it holds one zero-width
-        space: only a reply with no line on how it ended comes here that way (a turn that
-        ended well, text alone, whose footer could not be built)."""
+        space: the known case is a turn that ended well, text alone, whose footer could not
+        be built."""
         blocks = self._closing_blocks() or [context_block(ZERO_WIDTH_SPACE)]
         attempted = self._clock.time()
         try:

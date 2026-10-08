@@ -538,7 +538,6 @@ async def test_the_closing_message_text_skips_the_daemon_s_own_lines(slack: Fake
 
 
 ERROR_LINE = "Claude Code reported an error: `the Claude Code process exited`"
-FULL_LINES = 733  # lines of 15 characters: a message that has no room left for one more line
 
 
 async def test_a_reply_cut_short_after_its_stream_stopped_ends_with_the_daemon_s_line(
@@ -730,22 +729,44 @@ async def test_the_line_on_how_the_reply_ended_moves_with_a_footer_an_earlier_tu
 async def test_a_last_message_that_opens_with_the_line_on_how_the_reply_ended_is_the_ending(
     slack: FakeSlack,
 ) -> None:
-    # The first message is full, so the error line goes on in a continuation, which rings
-    # with it: a closing message after it showed empty and rang a third time.
+    # The first message is full to the character, so the whole error line goes on in a
+    # continuation, which rings with it: a closing message after it showed empty and rang a
+    # third time. With any room left the line is cut where the room ends, as any text is.
     clock = FakeClock()
     sink = reply(slack, clock=clock)
-    await sink.text("a line of text\n" * FULL_LINES)
+    await sink.text("w" * sinks.MESSAGE_LIMIT)
     await settled()
     await clock.advance(sinks.STREAM_SECONDS + 1)
-    assert len(slack.posted_ts) == 0  # the first message holds it all, and no more
+    # The first message holds it all, in one stream, and no more.
+    assert len(slack.stream_ts) == 1 and len(slack.posted_ts) == 0
     await sink.text("\n\n" + ERROR_LINE, ending=True)
     await sink.finish([])
     await sink.close_out(None)
     await settled()
     [continuation] = slack.calls_to("chat.postMessage")  # and no closing message after it
-    [block] = continuation["blocks"]
-    assert block["type"] == "markdown" and block["text"].endswith("process exited`")
+    assert continuation["blocks"] == [{"type": "markdown", "text": ERROR_LINE}]
+    assert continuation["text"] == sinks.banner_text(ERROR_LINE, limit=sinks.BANNER_LIMIT)
     assert slack.message_blocks()[-1] == continuation["blocks"]
+
+
+async def test_a_last_message_that_opens_after_the_line_on_how_the_reply_ended_is_the_ending(
+    slack: FakeSlack,
+) -> None:
+    # The line fits the first message and the note under it does not: the continuation starts
+    # in the note, past the line, and a closing message after it showed empty all the same.
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("w" * (sinks.MESSAGE_LIMIT - len("\n\n" + ERROR_LINE)))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("\n\n" + ERROR_LINE, ending=True)
+    await sink.text("\n\n_3 messages were not sent: Claude Code stopped._", notice=True)
+    await sink.finish([])
+    await sink.close_out(None)
+    await settled()
+    [continuation] = slack.calls_to("chat.postMessage")  # and no closing message after it
+    assert "were not sent" in str(continuation["blocks"])
+    assert sinks.ZERO_WIDTH_SPACE not in str(slack.message_blocks())
 
 
 async def test_a_daemon_line_stays_in_the_reply_when_the_footer_is_the_ending(

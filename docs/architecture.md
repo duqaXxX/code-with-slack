@@ -462,10 +462,12 @@ little earlier itself.
   under it. No other line of the daemon's moves. A footer goes under the line: a report turn
   cut short renders into a reply that already has the footer of its first turn, and the
   running list (`⏳ 1 agent`) shows there until the session empties it. When a full message
-  pushed the line into a continuation, that message rang with it and is the ending as it
-  stands (`ReplySink._opens_on_ending`): no closing message follows. The new message shows
-  empty in one case: a turn that ended well with an answer of text alone, whose footer could
-  not be built.
+  pushed the line, or the note under it, into a continuation, that message rang when it was
+  posted and is the ending as it stands (`ReplySink._opens_on_ending`): no closing message
+  follows. A line that does not fit the room left in a message is cut there, as any text is,
+  and the continuation then rings with the rest of it. The new message shows empty in one
+  known case: a turn that ended well with an answer of text alone, whose footer could not be
+  built.
 
 A message holds 12,000 characters and 50 blocks or task cards (measured: "Message limits"). Slack
 translates Claude's text into a `header` per heading, a `table` per table, a `divider` per rule and

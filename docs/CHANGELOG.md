@@ -612,9 +612,11 @@ All notable changes to this project are documented here. The format follows
   turn ended with that footer alone, the line left in a silent edit: the line now moves with
   the footer under it. A reply that held only a line of the daemon's above the line ended
   with a message that showed empty: the line now moves and the other stays. A reply whose
-  full message had pushed the line into a continuation got an empty-looking closing message
-  after it, a third ring: the continuation is now the ending (`ReplySink._opens_on_ending`).
-  The empty-looking message remains in one case, a turn that ended well with an answer of
+  full message had pushed the line, or the note under it, into a continuation got an
+  empty-looking closing message after it, a third ring: the continuation is now the ending
+  (`ReplySink._opens_on_ending`). Not covered: a line that does not fit the room left in a
+  message is cut there, as any text is, and the continuation rings with the rest of it. The
+  empty-looking message remains in one known case, a turn that ended well with an answer of
   text alone whose footer could not be built, where it is the only notification of the end.
 - A turn cut short after its reply's stream stopped ends with the error line as a new message,
   where it ended with a message that showed empty (#165). Past 280 seconds, or after an append
