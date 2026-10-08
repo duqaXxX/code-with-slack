@@ -236,6 +236,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The docs are rearranged for a first reader, with nothing removed from what they state.
+  `docs/setup.md` is one numbered path from the clone to the first reply, with a checkpoint after
+  the install, after `.env` and after the LaunchAgent starts; Full Disk Access comes before the
+  LaunchAgent, and what a first install does not need (`state.json`, restarts, scopes, trust and
+  git) is under `Reference`. `docs/architecture.md` opens with an overview and a diagram, names
+  each behaviour in words and gathers its measurements in one table. The Feature column of
+  `docs/features.md` is one line per feature, with the rest under `Details`. `tests/test_docs.py`
+  now fails on a dotted name a doc cites that the source does not define, on a variable, a scope
+  or a word `docs/setup.md` does not name, and on a Feature cell past `FEATURE_NAME_LIMIT`
+  characters.
+
 - The README is a landing page: what the daemon is for, what it needs before an install, the
   steps of the setup, what a session shows and one row per command. The detail of each command
   lives in `docs/setup.md` alone. `tests/test_docs.py` fails when the README's command table
