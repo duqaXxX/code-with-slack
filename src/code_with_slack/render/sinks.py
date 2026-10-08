@@ -1325,15 +1325,16 @@ class ReplySink:
         message.size, message.count, message.card_cost = plan.size, plan.count, plan.card_cost
         message.text_blocks.update(plan.text_blocks)
 
-    def _stream_shows(self, message: _Message, end: Cursor | None) -> bool:
+    def _stream_shows(self, message: _Message, end: Cursor | None, *, folding: bool = True) -> bool:
         """Whether the message's stream, as sent, shows what the model says for its span: every
         card as it is now, and ended (a card left in progress in a stopped stream is stored as
         an error until it is updated: measured 2026-09-28), every preview piece, all the text.
         Never once the body has ended, for a message with cards of a run of calls: the model
-        then says the folded line, which a stream cannot show."""
+        then says the folded line, which a stream cannot show; without `folding` that is let
+        pass, and the answer is whether the stream holds everything the span says."""
         for tool_id, sent in message.cards.items():
             update = self._tools[tool_id].update
-            if self._finished and update.folded is not None:
+            if folding and self._finished and update.folded is not None:
                 return False
             if update.status not in TERMINAL or card_chunk(update) != sent:
                 return False
@@ -1576,10 +1577,13 @@ class ReplySink:
                     blocks, overflow = self._blocks(message, end)
                     blocks += footer
                 # The message already shows what it showed: never replaced by a plainer one.
-                # The change is dropped; the next one is tried. After a refused append nothing
-                # else would say the message is short of the model, so that is kept.
+                # The change is dropped; the next one is tried. Nothing else would say the
+                # message is short of the model, so that is kept until an update passes. A
+                # stream never rewritten (`shown` is None) that was sent all of its span lacks
+                # only how the update would have drawn it, its cards folded: it is not short.
+                whole = message.shown is None and self._stream_shows(message, end, folding=False)
                 message.shown, message.exact, message.footer = blocks, False, footer
-                message.short = message.refused
+                message.short = message.short or not whole
                 return True, overflow
             return False, None
         message.shown, message.exact, message.footer = blocks, False, footer
