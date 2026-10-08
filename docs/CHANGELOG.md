@@ -7,6 +7,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- A session started from Slack has Claude Code's Chrome integration when the owner chose
+  "Enabled by default" in `/chrome`. Claude Code applies that choice to interactive sessions
+  only, and in the non-interactive mode the Agent SDK uses it connects the `claude-in-chrome`
+  server only when started with `--chrome` (measured 2026-10-09, Claude Code 2.1.292): the
+  daemon now passes the flag when `claudeInChromeDefaultEnabled` is true in `~/.claude.json`,
+  read at every connect (`chrome.py`). The permissions stay Claude Code's own: a browser action
+  it asks about reaches Slack as Approve and Deny buttons, and the daemon adds no rule for a
+  thread in bypass. Not checked: the same under the LaunchAgent, whether a browser action still
+  asks in a thread in bypass, and how a screenshot in a tool result shows in Slack.
 - The thread's status line reads `Compacting conversation…`, the terminal's words, while Claude
   Code compacts the conversation, on `!compact` and on a compaction of its own (#169). Claude
   Code opens a compaction with a `status` system message that says `compacting`, repeats it

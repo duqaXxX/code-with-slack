@@ -191,6 +191,7 @@ in a release with no notice, so it is the first place to look when a release mis
 | `AskUserQuestion.input.questions[].options[]` | `description` | key | approvals.py: _says_more, _option, _option_whole | measured | none |
 | `AskUserQuestion.input.questions[].options[]` | `label` | key | approvals.py: _answer, _says_more, _option, _option_whole | measured | none |
 | `ClaudeAgentOptions.extra_args` | `allow-dangerously-skip-permissions` | key | sessions.py: client_options | measured | none |
+| `ClaudeAgentOptions.extra_args` | `chrome` | key | sessions.py: client_options | measured | none |
 | `ClaudeAgentOptions.extra_args` | `replay-user-messages` | key | sessions.py: client_options | measured | P19 |
 | `ClaudeSDKClient.get_server_info()` | `commands` | key | sessions.py: ThreadSession.ensure_connected | measured | none |
 | `ClaudeSDKClient.get_server_info()` | `current_permission_mode` | key | sessions.py: ThreadSession.ensure_connected | measured | none |
@@ -290,4 +291,4 @@ These are not names of the SDK, so no row can express them and no check covers t
   hands to `can_use_tool` as a plain dict.
 - The rows under `StreamEvent.event` are the Claude API's streaming events, which the SDK passes
   through unparsed. Their names are in the Claude API streaming reference.
-- The two keys under `ClaudeAgentOptions.extra_args` are flags of the CLI that the SDK forwards.
+- The three keys under `ClaudeAgentOptions.extra_args` are flags of the CLI that the SDK forwards.

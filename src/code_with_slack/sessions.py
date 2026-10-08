@@ -57,6 +57,7 @@ from code_with_slack.approvals import (
     question_blocks,
     to_permission,
 )
+from code_with_slack.chrome import chrome_enabled
 from code_with_slack.folders import bindable_folders
 from code_with_slack.footer import (
     FooterData,
@@ -241,7 +242,20 @@ def client_options(
     can_use_tool: CanUseTool,
     on_stop: HookCallback,
     on_tool_done: HookCallback,
+    chrome: bool = False,
 ) -> ClaudeAgentOptions:
+    # Makes bypass possible, not active: `!bypass on` switches it on the live client.
+    # `replay-user-messages` (CLI reference): Claude Code re-emits each prompt with the uuid
+    # the daemon sent it under, which tells a prompt it took into a running turn from one
+    # that waits for a turn of its own (`ThreadSession._acknowledge`).
+    extra_args: dict[str, str | None] = {
+        "allow-dangerously-skip-permissions": None,
+        "replay-user-messages": None,
+    }
+    if chrome:
+        # The owner's "Enabled by default" reaches an interactive session only: here the flag
+        # is what connects Claude Code's Chrome integration (`code_with_slack.chrome`).
+        extra_args["chrome"] = None
     return ClaudeAgentOptions(
         cwd=str(directory),
         resume=session_id,
@@ -261,11 +275,7 @@ def client_options(
             "Stop": [HookMatcher(hooks=[on_stop])],
             "PostToolUse": [HookMatcher(hooks=[on_tool_done])],
         },
-        # Makes bypass possible, not active: `!bypass on` switches it on the live client.
-        # `replay-user-messages` (CLI reference): Claude Code re-emits each prompt with the uuid
-        # the daemon sent it under, which tells a prompt it took into a running turn from one
-        # that waits for a turn of its own (`ThreadSession._acknowledge`).
-        extra_args={"allow-dangerously-skip-permissions": None, "replay-user-messages": None},
+        extra_args=extra_args,
         # CLI stderr may quote the conversation: keep it out of the log unless debugging.
         stderr=lambda line: logger.debug("claude stderr: %d chars", len(line)),
     )
@@ -299,6 +309,8 @@ class SessionDeps:
     holds: Holds = field(default_factory=Holds)
     client_factory: ClientFactory = default_client_factory
     workspace_trusted: Callable[[Path], Awaitable[bool]] = workspace_trusted
+    # Whether the owner turned Chrome on by default in Claude Code, asked at every connect.
+    chrome_enabled: Callable[[], Awaitable[bool]] = chrome_enabled
     # The daemon's own git runs only on what this returns, for a directory and the folder the
     # session started in: a repository the owner trusted, or one inside that folder.
     trusted_repository: Callable[[Path, Path], Awaitable[Repository | None]] = trusted_repository
@@ -1378,6 +1390,7 @@ class ThreadSession:
             self._can_use_tool,
             self._on_stop,
             self._on_tool_done,
+            chrome=await self._deps.chrome_enabled(),
         )
         client = self._deps.client_factory(options)
         await client.connect()
