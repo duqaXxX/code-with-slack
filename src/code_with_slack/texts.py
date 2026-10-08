@@ -206,6 +206,10 @@ BYPASS_ON_THREAD = (
 BYPASS_OFF_THREAD = (
     "Bypass is off in this session: Claude Code asks again before tools that need approval."
 )
+BYPASS_OFF_AUTO_THREAD = (
+    "Bypass is off in this session: it runs in Claude Code's auto mode, where a classifier "
+    "decides which tools run without asking."
+)
 STOPPED = "Stopped the current turn."
 # An answered question, as the terminal keeps it in the transcript.
 ANSWERED = "User answered Claude's questions:"
