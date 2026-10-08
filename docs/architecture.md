@@ -455,17 +455,19 @@ little earlier itself.
   `ThreadSession._abandon` writes a line on how the reply ended
   (`Claude Code reported an error: …`, `This reply ended before an answer: …`). When Claude
   wrote text after its last call, that line follows the text into the new message, whose
-  banner is still the start of the text. When there is no such text to move and no footer,
-  the line itself is the ending that moves, with whatever follows it, and is the banner. The
-  sink keeps it as a part of its own (`ReplySink.text` with `ending`, fed by
-  `TurnRenderer.feed_ending`), so a notice written just before it stays in the reply, and a
-  card that closes after it moves under it. No other line of the daemon's moves. The running
-  list (`⏳ 1 agent`) is no footer: a reply cut short while a task still counts ends the same
-  way, with the list under the line until the session empties it. A report turn cut short in
-  a reply that already has the footer of its first turn keeps that footer as its ending, and
-  the line stays in the reply. The new message shows empty when a reply with no footer has no
-  such line, when nothing of the answer would stay above the line, or when the line opens
-  the reply's last message.
+  banner is still the start of the text. When there is no such text to move, the line itself
+  is the ending that moves, with whatever follows it, and is the banner. The sink keeps it as
+  a part of its own (`ReplySink.text` with `ending`, fed by `TurnRenderer.feed_ending`), so a
+  notice written just before it stays in the reply, and a card that closes after it moves
+  under it. No other line of the daemon's moves. A footer goes under the line: a report turn
+  cut short renders into a reply that already has the footer of its first turn, and the
+  running list (`⏳ 1 agent`) shows there until the session empties it. When a full message
+  pushed the line, or the note under it, into a continuation, that message rang when it was
+  posted and is the ending as it stands (`ReplySink._opens_on_ending`): no closing message
+  follows. A line that does not fit the room left in a message is cut there, as any text is,
+  and the continuation then rings with the rest of it. The new message shows empty in one
+  known case: a turn that ended well with an answer of text alone, whose footer could not be
+  built.
 
 A message holds 12,000 characters and 50 blocks or task cards (measured: "Message limits"). Slack
 translates Claude's text into a `header` per heading, a `table` per table, a `divider` per rule and
