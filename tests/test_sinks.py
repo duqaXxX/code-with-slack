@@ -3235,7 +3235,7 @@ async def test_a_fold_refused_for_too_many_blocks_keeps_the_text_the_stream_show
     await sink.text(text)
     await settled()
     await sink.finish([])
-    await sink.close_out(None)
+    assert await sink.close_out(None) is True  # nothing is missing: the reply ended well
     await settled()
     assert lines_of(*slack.message_texts()) == lines_of(text)  # the fold is dropped, not the text
 
@@ -3292,3 +3292,62 @@ async def test_a_streamed_heading_goes_to_the_next_message_with_its_text(slack: 
     first, second = slack.message_texts()
     assert first.endswith("paragraph 22") and second.startswith("## Heading 23")
     assert lines_of(first, second) == lines_of(text)
+
+
+# A dropped update leaves the message short of what Claude wrote: the reply's end does not land,
+# which the session shows as a failed turn, until an update of that message passes.
+
+
+async def test_a_dropped_update_of_a_message_written_by_edit_is_an_end_that_did_not_land(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.01)
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("partial")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)  # from here the message grows by update
+    slack.responses["chat.update"] = rejected("invalid_blocks")
+    await sink.text(" and more")
+    await sink.finish([])
+    assert await sink.close_out("footer") is False
+    assert await sink.wait_landed() is False
+    assert slack.stream_texts() == ["partial"]
+
+
+async def test_a_dropped_update_followed_by_one_that_passes_lands_the_reply(
+    slack: FakeSlack,
+) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("partial")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    slack.responses["chat.update"] = [rejected("invalid_blocks"), {"ok": True}]
+    await sink.text(" and more")
+    await settled()
+    assert slack.stream_texts() == ["partial"]  # the change was dropped
+    await sink.text(", then the end")
+    await sink.finish([])
+    assert await sink.close_out("footer") is True
+    assert slack.stream_texts()[0].startswith("partial and more, then the end")
+
+
+async def test_a_dropped_update_of_a_continuation_is_an_end_that_did_not_land(
+    slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sinks, "FINAL_RETRY_SECONDS", 0.01)
+    clock = FakeClock()
+    sink = reply(slack, clock=clock, limiter=UpdateLimiter(burst=50))
+    await sink.text("start\n")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("a line of text\n" * 1_000)  # past one message: the rest is a post
+    await settled()
+    posted = slack.posted_ts[0]
+    slack.responses["chat.update"] = lambda args: (
+        rejected("invalid_blocks") if args["ts"] == posted else {"ok": True}
+    )
+    await sink.text("the last line")
+    await sink.finish([])
+    assert await sink.close_out("footer") is False

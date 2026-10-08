@@ -236,6 +236,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- A reply ends with ❌ whenever an edit Slack refused left one of its messages short of what
+  Claude wrote, whatever kind of message it is (#92, the owner's decision of 2026-10-08). An
+  edit refused for its content is dropped, and the message keeps what it showed. That was
+  remembered only for a message whose stream had been refused as too long; a reply past 280
+  seconds and a continuation message ended with ✅ on a text that was missing its last change.
+  `ReplySink._update_step` now marks any such message as short until an update of it passes,
+  and the reply's end counts as not landed while one is: the one retry runs, then the root
+  shows ❌. One case is not short: the update that only folds the cards of a stream that was
+  sent all of its span, where every word and every card is already on Slack. Nothing is added
+  to the thread; the log line of the refused write says which write and why.
 - The confirmation of `!resume` says what a session open in two places does (#41): `If it is
   open in a terminal, close it there first: while it is open in both, neither sees the other's
   messages, and a later resume keeps only one side's.` It said the messages of both would mix in
