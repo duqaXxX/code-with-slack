@@ -100,9 +100,9 @@ So, inside a thread:
   answer that is text alone keeps it, and the new message is the footer alone.
 - A reply whose stream Slack refuses to grow (`msg_too_long`: Slack does not document its cap, and
   the daemon counts text and cards toward it by measured figures) stops its stream at that moment, which rings, and
-  goes on the same way: by `chat.update`, with its ending in a new message. If Slack refuses
-  that edit too and no later one passes, the reply is short of what Claude wrote and the root
-  shows ❌.
+  goes on the same way: by `chat.update`, with its ending in a new message. An edit Slack refuses for
+  its content is dropped, on any message of a reply: if no later edit of that message passes, the
+  reply is short of what Claude wrote and the root shows ❌.
 - A reply longer than one message (12,000 characters or 50 blocks, counting each heading, table
   and rule of Claude's text as a block) continues in a new message, and
   each extra message rings. The text of a collapsed diff counts toward the 12,000 in a stream and

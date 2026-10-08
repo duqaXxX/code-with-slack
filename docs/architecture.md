@@ -378,9 +378,11 @@ card lacks (`sinks.card_addition`), and `ReplySink._plan_card` counts each card 
 `MESSAGE_LIMIT`: its title, the text it was sent, and a fixed cost per card, per text and per
 line, set from that measurement. A new card that does not fit opens the next message; a card
 already in a full message gains no more lines of `details`, and still gets its `output`. The count is an estimate of what Slack stores, so
-a refusal remains possible; it is logged with the sizes the plan knew and no content. If Slack then refuses
-the update of that message too, the change is dropped and the message shows less than the model:
-unless a later update passes, the reply's end counts as not landed and the root shows ❌. Every
+a refusal remains possible; it is logged with the sizes the plan knew and no content. When Slack
+refuses an update of any message for its content, the change is dropped and the message shows less
+than the model: unless a later update of it passes, the reply's end counts as not landed and the
+root shows ❌. The update that only folds the cards of a stream sent all of its span is the
+exception, since nothing of the reply is missing. Every
 reply that has ended keeps its footer, the record of how its last turn ended; only the thread's
 latest reply adds the counts of what still runs to it (`ReplySink.set_latest`). A card left `in_progress` in a stopped message is stored
 as an error until it is updated (measured 2026-09-28), so every end closes its cards first.
