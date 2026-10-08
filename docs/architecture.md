@@ -194,7 +194,7 @@ for a run of calls and one for a line with a view of its own (see below).
 | a top-level `TextBlock` in an `AssistantMessage` whose `message_id` a `message_start` event announced | nothing more: the same text already arrived as deltas |
 | the same in an `AssistantMessage` whose `message_id` no `message_start` event announced | the text, where it arrives, a paragraph apart from text before it. Claude Code writes its own output for a command this way: `Goal set: <condition>` before the first inner turn of a `/goal`, the output of `/usage` and of a skill run in a forked context (recorded: `goal.jsonl`, `usage.jsonl`, `skill-fork-command.jsonl`). A message with no `message_id` is left to the row above, and so is every such message while a streamed one has had no `message_stop`, or once a `message_start` named no id |
 | `ToolUseBlock` or `ServerToolUseBlock` with no parent | a new tool line, in progress, titled `Name: first string argument` |
-| the same inside a subagent or a skill run in a forked context (`parent_tool_use_id` set) | the parent's line counts the subagent's calls (`Agent: review · 12 calls`) and, while it runs, holds its latest ones (`renderer.CHILD_LINES`) as the card's `details`, and becomes a task's line: it keeps a card of its own once it ends, in the foreground or in the background |
+| the same inside a subagent or a skill run in a forked context (`parent_tool_use_id` set) | the parent's line counts the subagent's calls (`Agent: review · 12 calls`) and, while it runs, holds its latest ones (`renderer.CHILD_LINES`) as the card's `details` (a streamed card is sent each of them once and keeps them all, since a stream only adds to a card's text), and becomes a task's line: it keeps a card of its own once it ends, in the foreground or in the background |
 | `ToolResultBlock` or `ServerToolResultBlock` for a line | the line completes, or shows an error with the output's first line when `is_error`; a line whose task already ended as stopped keeps `Stopped` |
 | `TaskStartedMessage` | for a tool call, nothing yet: Claude Code starts a task for a long command in the foreground too, which ends before the call's result. When the call's result arrives with its task still running, the line becomes a task's line, notes "Running in background" on its nested line and stays in progress. A task started by a call inside another call (a long command a subagent runs) is held aside while that call is open: it gets no line and the session does not track it. If it ends before the call's result, it was the subagent's foreground work and stays off the reply; if it is still running at the call's result, it outlives the call and becomes a task with its own line, like a top-level one (`TurnRenderer.nests`, `take_promoted`). A task with no call in the reply gets a new line; one started by a call the reply never saw, while such a task (a command's) runs, is an agent inside that command and shows on the command's line, counted as a call with its description, as a subagent's calls show on its line |
 | `TaskProgressMessage` | the line shows the task's description |
@@ -364,8 +364,13 @@ Slack refuses as too long (`msg_too_long`) would be refused again, so `ReplySink
 stops the stream at once, without the footer, and writes the message by `chat.update`; the end
 then posts the reply's ending, as for a reply past `STREAM_SECONDS`. The text of a message's cards
 counts toward the cap of a streamed message, by a formula Slack does not document (measured
-2026-10-01 in a private test channel, slack-sdk 3.44.1, issue #92), and the plan does not count
-it; the refusal is logged with the sizes the plan knew and no content. If Slack then refuses
+2026-10-01 in a private test channel, slack-sdk 3.44.1, issue #92). Slack adds the `details` and
+the `output` of every `task_update` to what the card holds, so a stream is sent only the lines a
+card lacks (`sinks.card_addition`), and `ReplySink._plan_card` counts each card toward
+`MESSAGE_LIMIT`: its title, the text it was sent, and a fixed cost per card, per text and per
+line, set from that measurement. A new card that does not fit opens the next message; a card
+already in a full message gains no more lines of `details`, and still gets its `output`. The count is an estimate of what Slack stores, so
+a refusal remains possible; it is logged with the sizes the plan knew and no content. If Slack then refuses
 the update of that message too, the change is dropped and the message shows less than the model:
 unless a later update passes, the reply's end counts as not landed and the root shows ❌. Every
 reply that has ended keeps its footer, the record of how its last turn ended; only the thread's

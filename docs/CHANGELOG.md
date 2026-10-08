@@ -580,6 +580,26 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A streamed card is sent each line of its text once, and its text counts toward the message's
+  size (#92). Slack adds the `details` and the `output` of every `task_update` to what the card
+  already holds, and an update that carries neither leaves them (measured 2026-10-01 with
+  slack-sdk 3.44.1 and 2026-10-08 with slack-sdk 3.45.0, in a private test channel). The daemon
+  sent a subagent's last ten lines with every nested call, so the stored card held each line up
+  to ten times, joined with no line break between two updates. The owner's log holds 16
+  `chat.appendStream` refusals from 2026-10-02 to 2026-10-06, 8 of them in messages of at most
+  4 cards. `sinks.card_addition` now
+  sends a stream only the lines the card lacks (`sinks.lacking`), a line break first, and
+  no text when the card says nothing new. `ReplySink._plan_card` counts each card
+  toward `MESSAGE_LIMIT`: its title, the text it was sent, and a fixed cost for the card, for
+  each of its two texts and for each line (`CARD_COST`, `CARD_FIELD_COST`, `CARD_LINE_COST`).
+  Replayed over the 15 streams measured on 2026-10-01, that count is 13,514 at most in an
+  accepted append and 13,801 at least in a refused one, and `MESSAGE_LIMIT` is 11,000. A new
+  card or new text that does not fit continues in a new message; a card already in a full
+  message keeps its title and status up to date, gains no more lines of details, and still
+  gets its output when it ends. Slack's cap stays
+  undocumented and follows what Slack stores, so text heavy with formatting can still be
+  refused below the count; that case goes on by `chat.update` as before. Not checked in a
+  Slack client: how a card that holds every line of a long subagent run reads.
 - A compaction that comes before its turn's first message shows its line (#169). On `!compact`,
   and when Claude Code compacts on its own as a turn begins, the `compact_boundary` frame arrives
   before any frame that starts a turn, and `ThreadSession._dispatch` dropped it: a `!compact` was

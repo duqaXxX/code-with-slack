@@ -2886,3 +2886,157 @@ async def test_a_request_slack_refuses_to_delete_is_not_logged_as_removed(
     with caplog.at_level(logging.INFO, logger="code_with_slack"):
         await sinks.delete_request(slack, channel=CHANNEL, ts="1790000000.000100")
     assert "removed a request" in caplog.text  # already gone counts as done
+
+
+# A stream's card: Slack adds the details and the output of every chunk to what the card holds
+# (measured 2026-10-01 and 2026-10-08), so a stream is sent only what the card lacks.
+
+
+def card_chunks(slack: FakeSlack, card_id: str) -> list[dict[str, Any]]:
+    """Every chunk a reply's streams were sent for one card, in order."""
+    return [
+        chunk
+        for method in ("chat.startStream", "chat.appendStream")
+        for call in slack.calls_to(method)
+        for chunk in call["chunks"]
+        if chunk.get("id") == card_id
+    ]
+
+
+@pytest.mark.parametrize(
+    ("held", "wanted", "more"),
+    [
+        ("", "a\nb", "a\nb"),
+        ("a\nb", "a\nb", ""),
+        ("a\nb", "a\nb\nc", "\nc"),
+        ("a\nb\nc", "b\nc\nd\ne", "\nd\ne"),
+        ("a\nb", "c", "\nc"),
+        ("a\na", "a\na\na", "\na"),
+        ("x\na", "a\na", "\na"),
+    ],
+)
+def test_a_card_is_sent_the_lines_it_lacks(held: str, wanted: str, more: str) -> None:
+    assert sinks.lacking(held, wanted) == more
+
+
+async def test_a_subagent_card_is_sent_each_of_its_lines_once(slack: FakeSlack) -> None:
+    sink = reply(slack, limiter=UpdateLimiter(burst=20))  # room for a write per line
+    lines = [f"Bash: step {n}" for n in range(1, 13)]
+    for n in range(1, 13):
+        window = "\n".join(lines[max(0, n - 10) : n])  # the last ten, as the renderer keeps them
+        await sink.task(tool("a1", "Agent", "in_progress", details=window, task=True, calls=n))
+        await settled()
+    # However the writes were batched, the chunks carry each line once, in order.
+    sent = "".join(chunk.get("details", "") for chunk in card_chunks(slack, "a1"))
+    assert sent == "\n".join(lines)
+    [[card]] = slack.message_cards()
+    assert card["details"] == "\n".join(lines) and card["title"].endswith(" · 12 calls")
+
+
+async def test_a_card_whose_title_alone_changes_is_sent_no_text_again(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.task(tool("a1", "Agent", "in_progress", details="Read: notes.md", task=True))
+    await settled()
+    await sink.task(
+        tool("a1", "Agent", "in_progress", details="Read: notes.md", task=True, calls=1)
+    )
+    await settled()
+    await sink.task(tool("b1", "Agent", "error", output="exit 2", task=True))
+    await settled()
+    await sink.task(
+        TaskUpdate("b1", "Agent: again", "error", name="Agent", output="exit 2", task=True)
+    )
+    await settled()
+    first, second = card_chunks(slack, "a1")
+    assert first["details"] == "Read: notes.md" and "details" not in second
+    first, second = card_chunks(slack, "b1")
+    assert first["output"] == "exit 2" and "output" not in second
+    assert [c.get("details", c.get("output")) for c in slack.message_cards()[0]] == [
+        "Read: notes.md",
+        "exit 2",
+    ]
+
+
+async def test_a_card_whose_one_line_changes_gains_a_line(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    for words in ("Reading the tests", "Running the tests"):
+        await sink.task(tool("k1", "task", "in_progress", details=words, task=True))
+        await settled()
+    [[card]] = slack.message_cards()
+    assert card["details"] == "Reading the tests\nRunning the tests"
+
+
+async def test_cards_whose_text_fills_the_message_continue_in_a_new_stream(
+    slack: FakeSlack,
+) -> None:
+    # Measured 2026-10-01: a stream took 4 error cards with 2,900 characters of output and
+    # refused the fifth. Three of them are counted as a full message.
+    sink = reply(slack)
+    for i in range(6):
+        await sink.task(
+            tool(f"t{i}", "Agent", "error", output=f"{i}" * sinks.CARD_TEXT_LIMIT, task=True)
+        )
+        await settled()
+    await sink.finish([])
+    await sink.close_out(None)
+    assert len(slack.stream_ts) == 2
+    assert [len(cards) for cards in slack.message_cards()] == [3, 3]
+
+
+async def test_text_after_cards_that_fill_the_message_continues_in_a_new_stream(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    for i in range(3):
+        await sink.task(
+            tool(f"t{i}", "Agent", "error", output=f"{i}" * sinks.CARD_TEXT_LIMIT, task=True)
+        )
+    await settled()
+    await sink.text("a line of text\n" * 200)  # 3,000 characters: the cards left room for less
+    await settled()
+    first, second = slack.message_texts()
+    assert first and second and len(first) + len(second) >= 2_990
+    assert len(first) < 1_500
+
+
+async def test_a_running_card_in_a_full_message_keeps_its_title_and_gains_no_line(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.task(tool("a1", "Agent", "in_progress", details="Read: notes.md", task=True))
+    await sink.text("a line of text\n" * 700)  # 10,500 characters
+    await settled()
+    await sink.task(
+        tool(
+            "a1", "Agent", "in_progress", details="Read: notes.md\n" + "x" * 400, task=True, calls=2
+        )
+    )
+    await settled()
+    last = card_chunks(slack, "a1")[-1]
+    assert last["title"].endswith(" · 2 calls") and "details" not in last
+    assert slack.message_cards()[0][0]["details"] == "Read: notes.md"
+    assert len(slack.stream_ts) == 1
+
+
+async def test_a_card_that_ends_is_sent_no_text_for_the_details_it_no_longer_says(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.task(tool("a1", "Agent", "in_progress", details="Read: notes.md", task=True))
+    await settled()
+    await sink.task(tool("a1", "Agent", "complete", task=True))
+    await settled()
+    _, second = card_chunks(slack, "a1")
+    assert second == {"type": "task_update", "id": "a1", "title": "Agent: a1", "status": "complete"}
+    assert slack.message_cards()[0][0]["details"] == "Read: notes.md"  # Slack keeps them
+
+
+async def test_a_card_that_fails_in_a_full_message_still_says_why(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.task(tool("a1", "Agent", "in_progress", task=True))
+    await sink.text("a line of text\n" * 720)  # 10,800 characters
+    await settled()
+    await sink.task(tool("a1", "Agent", "error", output="x" * 400, task=True))
+    await settled()
+    assert card_chunks(slack, "a1")[-1]["output"] == "x" * 400
+    assert len(slack.stream_ts) == 1
