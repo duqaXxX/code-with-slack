@@ -211,6 +211,15 @@ CLAIMS = [
         "send `!goal reply with the single word tick`; the reply opens with `Goal set:` and the "
         "condition, then Claude's text, written once",
     ),
+    Claim(
+        "P21",
+        "gesture",
+        "the reply to `/compact` is the compaction's line: its `compact_boundary` comes before "
+        "every frame of its turn that starts one, and a result follows it",
+        "code_with_slack.sessions.ThreadSession._dispatch",
+        "send `!compact` in a thread with a few turns; the reply is `Compacted the "
+        "conversation:` and the tokens before and after",
+    ),
 ]
 
 

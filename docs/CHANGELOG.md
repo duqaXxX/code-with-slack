@@ -557,6 +557,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A compaction that comes before its turn's first message shows its line (#169). On `!compact`,
+  and when Claude Code compacts on its own as a turn begins, the `compact_boundary` frame arrives
+  before any frame that starts a turn, and `ThreadSession._dispatch` dropped it: a `!compact` was
+  answered `_Done. Claude Code returned no text._` and an automatic compaction showed nothing.
+  The boundary now starts the turn, so the reply reads
+  `Compacted the conversation: 20.7k → 5.0k tokens.`; a compaction among a turn's tool calls
+  already showed. Recorded on 2026-10-08 with claude-agent-sdk 0.2.164 (bundled CLI 2.1.292) and
+  the daemon's CLI arguments: `tests/fixtures/sdk/compact.jsonl` (a `/compact` session) and
+  `auto-compact.jsonl` (the one turn of a longer session in which Claude Code compacted at 67.9k
+  tokens, with `CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000`), replayed in
+  `tests/test_sessions_compaction.py`. A boundary with no prompt sent and no report awaited
+  starts no turn. Probe claim P21 sends `/compact` on every new release and reads the line in
+  the reply.
+
 - A `!word` sent in Slack's formatting is read as the word (#178). A command pasted from a place
   that showed it as code kept the formatting, the event's `text` then started with a backtick,
   and `parse_bang` took the message for a prompt with no word about it: a `!goal` set no goal, a

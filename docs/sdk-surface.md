@@ -248,7 +248,7 @@ in a release with no notice, so it is the first place to look when a release mis
 | `StreamEvent.event.type` | `"content_block_start"` | value | render/renderer.py: TurnRenderer.feed | measured | none |
 | `StreamEvent.event.type` | `"message_start"` | value | render/renderer.py: TurnRenderer.feed | measured | P20 |
 | `StreamEvent.event.type` | `"message_stop"` | value | render/renderer.py: TurnRenderer.feed | measured | none |
-| `SystemMessage.subtype` | `"compact_boundary"` | value | render/renderer.py: TurnRenderer.feed | measured | none |
+| `SystemMessage.subtype` | `"compact_boundary"` | value | sessions.py: ThreadSession._dispatch; render/renderer.py: TurnRenderer.feed | measured | P21 |
 | `SystemMessage.subtype` | `"init"` | value | sessions.py: ThreadSession._dispatch | measured | P1 |
 | `SystemMessage.subtype` | `"status"` | value | sessions.py: ThreadSession._dispatch | measured | none |
 | `TaskNotificationMessage.status` | `"completed"` | value | sessions.py: ThreadSession._ended_line | reference | none |
