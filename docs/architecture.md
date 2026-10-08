@@ -308,7 +308,14 @@ little earlier itself.
   message is the footer alone (`ReplySink._write_closing`), its banner the start of Claude's
   answer, never a line of the daemon's.
 
-A message holds 12,000 characters and 50 blocks or task cards (measured 2026-09-28); a reply past
+A message holds 12,000 characters and 50 blocks or task cards (measured 2026-09-28). Slack
+translates Claude's text into a `header` per heading, a `table` per table, a `divider` per rule and
+`rich_text` for each run between them, and holds a post and an update to 50 of those; a stream is
+not held to it, the update after its stop is (measured 2026-10-08). `sinks.markdown_starts` counts
+a text that way for a stream's plan, a post and an update alike. While the reply is being
+written, a write of its last message that Slack still refuses with `no more than 50 items allowed`
+halves the message's room and is tried again (`ReplySink._tighten`), so the rest goes on in a new
+message; the writes of the reply's end are not split. A reply past
 `sinks.MESSAGE_LIMIT` or `sinks.BLOCKS_LIMIT` continues in a new message, a new stream while the
 first one still streams, else a post. Every message a reply adds notifies once. A stream and a
 post count the text of a collapsed container toward those 12,000 characters; `chat.update` does

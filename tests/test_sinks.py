@@ -3040,3 +3040,229 @@ async def test_a_card_that_fails_in_a_full_message_still_says_why(slack: FakeSla
     await settled()
     assert card_chunks(slack, "a1")[-1]["output"] == "x" * 400
     assert len(slack.stream_ts) == 1
+
+
+# The blocks Slack makes of markdown: a header per heading, a table per table, a divider per
+# rule, rich text for each run between them. A post or an update whose message passes 50 of them
+# is refused; a stream is not, and the update after its stop is (measured 2026-10-08).
+
+
+def sections(count: int, start: int = 1) -> str:
+    """`count` headings with a paragraph each: two blocks a section, as Slack stored them."""
+    return "\n\n".join(f"## Heading {n}\n\nparagraph {n}" for n in range(start, start + count))
+
+
+def lines_of(*texts: str) -> list[str]:
+    """The lines with words of some texts, in order: what a reply says, however it was cut."""
+    return [line for text in texts for line in text.split("\n") if line.strip()]
+
+
+def too_many(error: str = "invalid_blocks") -> SlackApiError:
+    """Slack's refusal of a message with more than 50 blocks, as recorded on 2026-10-08."""
+    notes = ["[ERROR] no more than 50 items allowed [json-pointer:/blocks]"]
+    return SlackApiError(
+        error, {"ok": False, "error": error, "response_metadata": {"messages": notes}}
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "stored"),
+    [
+        # each shape was posted alone on 2026-10-08 and its stored blocks counted
+        ("one\n\ntwo", 1),
+        ("## Title\n\ntext", 2),
+        ("before\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nafter", 3),
+        ("| a | b |\n|---|---|\n| 1 | 2 |\n\nmid\n\n| c | d |\n|---|---|\n| 3 | 4 |", 3),
+        ("- one\n- two\n\ntext", 1),
+        ("text\n\n```\ncode\n```\n\nmore", 1),
+        ("## A\n\na\n\n## B\n\nb\n\n## C\n\nc", 6),
+        ("before\n\n> quoted\n\nafter", 1),
+        ("before\n\n---\n\nafter", 3),
+        ("before\n\n![alt](https://example.com/a.png)\n\nafter", 1),
+        ("- [ ] one\n- [x] two\n\nafter", 1),
+        ("```\n# not a heading\n```\n\nafter", 1),
+        ("# one\n\n## two\n\n### three\n\ntext", 4),
+        ("## one\n## two\n\ntext", 3),
+        ("**Title**\n\ntext\n\n**Title 2**\n\ntext", 1),
+        (sections(25), 50),
+    ],
+)
+def test_markdown_counts_the_blocks_slack_stored_for_it(text: str, stored: int) -> None:
+    assert sinks.markdown_blocks(text) == stored
+
+
+def test_markdown_is_cut_at_the_line_that_starts_one_block_too_many() -> None:
+    text = sections(3)
+    assert sinks.markdown_cut(text, 6) is None
+    cut = sinks.markdown_cut(text, 4)
+    assert cut is not None and text[cut:] == "## Heading 3\n\nparagraph 3"
+
+
+async def test_a_streamed_text_with_many_headings_continues_in_a_new_stream(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    text = sections(60)  # 120 blocks, 1,600 characters: far below the size limit
+    for i in range(0, len(text), 400):
+        await sink.text(text[i : i + 400])
+        await settled()
+    await sink.finish([])
+    await sink.close_out(None)
+    shown = slack.message_texts()
+    assert len(slack.stream_ts) == 3
+    assert all(sinks.markdown_blocks(words) <= sinks.BLOCKS_LIMIT for words in shown)
+    assert lines_of(*shown) == lines_of(text)  # nothing left out
+
+
+async def test_an_updated_message_with_many_headings_continues_in_a_post(
+    slack: FakeSlack,
+) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock, limiter=UpdateLimiter(burst=50))
+    await sink.text("start\n\n")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    text = sections(60)
+    for i in range(0, len(text), 400):
+        await sink.text(text[i : i + 400])
+        await settled()
+    await sink.finish([])
+    await sink.close_out(None)
+    writes = slack.calls_to("chat.update") + slack.calls_to("chat.postMessage")
+    assert max(sinks.blocks_count(w["blocks"]) for w in writes if w.get("blocks")) <= 50
+    assert lines_of(*slack.message_texts()) == lines_of("start", text)
+
+
+async def test_cards_and_headings_share_the_room_of_a_message(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    for i in range(30):
+        await sink.task(tool(f"t{i}", "Agent", task=True))
+    await settled()
+    await sink.text(sections(20))  # 40 blocks: 15 fit beside the 30 cards
+    await settled()
+    await sink.finish([])
+    await sink.close_out(None)
+    first, second = slack.message_texts()
+    assert sinks.markdown_blocks(first) == 15
+    assert lines_of(first, second) == lines_of(sections(20))
+
+
+async def test_an_update_refused_for_too_many_blocks_goes_on_in_a_new_message(
+    slack: FakeSlack, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Slack counts more than the daemon does: here every list item is a block of its own.
+    def answer(args: dict[str, Any]) -> Any:
+        items = sum(b["text"].count("\n- ") for b in args["blocks"] if b["type"] == "markdown")
+        return too_many() if items > 20 else {"ok": True}
+
+    slack.responses["chat.update"] = answer
+    clock = FakeClock()
+    sink = reply(slack, clock=clock, limiter=UpdateLimiter(burst=50))
+    await sink.text("start\n")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    items = "".join(f"\n- item {n}\n\n## Heading {n}\n" for n in range(1, 41))
+    with caplog.at_level(logging.WARNING, logger="code_with_slack.render.sinks"):
+        await sink.text(items)
+        await settled()
+        await sink.finish([])
+        assert await sink.close_out(None)
+    assert lines_of(*slack.message_texts()) == lines_of("start", items)  # nothing was dropped
+    assert len(slack.posted_ts) >= 2
+    assert "chat.update failed (invalid_blocks at /blocks, over 50 blocks once translated)" in (
+        caplog.text
+    )
+    assert "item" not in caplog.text
+
+
+async def test_an_update_refused_for_another_reason_is_not_split(slack: FakeSlack) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("start\n")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    slack.responses["chat.update"] = lambda args: rejected("invalid_blocks")
+    await sink.text(sections(5))
+    await settled()
+    assert slack.posted_ts == []  # the change is dropped, as before
+
+
+async def test_a_post_refused_for_too_many_blocks_is_posted_with_less(slack: FakeSlack) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("start\n")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    slack.responses["chat.postMessage"] = [too_many(), slack.responses["chat.postMessage"]]
+    text = "a line of text\n" * 1_000  # past one message: the rest is posted
+    await sink.text(text)
+    await settled()
+    assert len(slack.calls_to("chat.postMessage")) == 2  # refused, then posted
+    assert lines_of(*slack.message_texts()) == lines_of("start", text)
+
+
+@pytest.mark.parametrize(
+    ("text", "blocks"),
+    [
+        # Not measured on Slack: read as CommonMark and GFM define them.
+        ("Title\n=====\n\ntext", 3),
+        ("````md\n```\n# inside\n```\n````\n\n## after\n\ntext", 3),
+        ("```x``` then words\n\n## after\n\ntext", 3),
+        ("~~~\n# inside\n~~~\n\n## after", 2),
+        ("before\r\n\r\n---\r\n\r\nafter", 3),
+        ("before\n\n- - -\n\nafter", 3),
+        ("```\n# the fence is still open while the text streams", 1),
+    ],
+)
+def test_markdown_shapes_that_were_not_measured_are_read_as_commonmark(
+    text: str, blocks: int
+) -> None:
+    assert sinks.markdown_blocks(text) == blocks
+
+
+async def test_a_fold_refused_for_too_many_blocks_keeps_the_text_the_stream_showed(
+    slack: FakeSlack,
+) -> None:
+    # Slack counts more than the daemon does: here every list item is a block of its own.
+    def answer(args: dict[str, Any]) -> Any:
+        items = sum(b["text"].count("- item") for b in args["blocks"] if b["type"] == "markdown")
+        return too_many() if items > 10 else {"ok": True}
+
+    slack.responses["chat.update"] = answer
+    sink = reply(slack)
+    await sink.task(tool("t1", "Bash"))
+    text = "".join(f"- item {n}\n\n## Heading {n}\n\n" for n in range(1, 21))
+    await sink.text(text)
+    await settled()
+    await sink.finish([])
+    await sink.close_out(None)
+    await settled()
+    assert lines_of(*slack.message_texts()) == lines_of(text)  # the fold is dropped, not the text
+
+
+async def test_an_update_refused_down_to_one_block_repeats_nothing(slack: FakeSlack) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock, limiter=UpdateLimiter(burst=50))
+    await sink.text("start\n")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    slack.responses["chat.update"] = lambda args: too_many()
+    await sink.text(sections(5))
+    await settled()
+    assert slack.posted_ts == []  # no rest posted while the message still shows what it showed
+    slack.responses["chat.update"] = {"ok": True}
+    await sink.text("\n\nthe end")
+    await settled()
+    assert lines_of(*slack.message_texts()) == lines_of("start", sections(5), "the end")
+
+
+async def test_a_sent_line_that_turns_into_a_table_is_not_cut_in_two(slack: FakeSlack) -> None:
+    sink = reply(slack, limiter=UpdateLimiter(burst=50))
+    await sink.text(sections(22) + "\n\nintro\n\na | b")  # 45 blocks, the last one a run of text
+    await settled()
+    await sink.text("\n---|---\n1 | 2\n\n## Next\n\nlast")
+    await settled()
+    await sink.finish([])
+    await sink.close_out(None)
+    first, second = slack.message_texts()
+    assert first.endswith("a | b\n---|---\n1 | 2") and second.startswith("## Next")

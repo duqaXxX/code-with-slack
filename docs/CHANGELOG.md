@@ -580,6 +580,30 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A message counts its text as the blocks Slack makes of it, so a reply with many headings or
+  tables continues in a new message where an edit of it was refused (#92). Slack translates a
+  `markdown` block, and a stream's text, into several stored blocks: a `header` per heading, a
+  `table` per table, a `divider` per rule, and `rich_text` for each run of anything else between
+  them. `chat.update` and `chat.postMessage` answer `invalid_blocks` with
+  `no more than 50 items allowed` when a message passes 50 of them; a stream stored 90 with no
+  refusal, and the update that follows its stop is held to the 50 (measured 2026-10-08 in a
+  private test channel, slack-sdk 3.45.0; the markdown block reference says only that one block
+  "may result in multiple blocks after translation"). The daemon counted a text as one block.
+  The owner's log holds six such refusals on 2026-10-07: one message of 17 blocks by the
+  daemon's count was 51 by Slack's, and each refused edit was dropped. `sinks.markdown_starts`
+  now finds the blocks of a text, and a stream's plan, a post and an update all count them
+  toward `BLOCKS_LIMIT` and cut a text at the line that would start one block too many. For
+  the five texts of that message the count gives what Slack stored (7, 7, 9, 10 and 6), and the
+  turn replayed through the sink stays at 45 or under in every write, 67 of which were sent to
+  Slack and accepted. When Slack still refuses a write of the reply's last message with that sentence
+  while the reply is being written, the message's room is halved and the write is tried again,
+  so the rest of the reply goes on in a new message where the change was dropped
+  (`ReplySink._tighten`). A message that already has a successor, and the writes of the reply's
+  end (the fold of the cards, the ending's post), are not split and drop the change as before:
+  the text the message showed stays. A refused write's log line now names where
+  in the payload Slack pointed and whether it counted too many blocks, never Slack's sentence.
+  Not measured: markdown shapes beyond the sixteen in `test_sinks` (seven more are counted as
+  CommonMark reads them), and how a reply cut between two sections reads in a Slack client.
 - A streamed card is sent each line of its text once, and its text counts toward the message's
   size (#92). Slack adds the `details` and the `output` of every `task_update` to what the card
   already holds, and an update that carries neither leaves them (measured 2026-10-01 with
