@@ -13,7 +13,10 @@ sessions. A vulnerability goes to the **Security** tab, never to an issue (see
 1. Fork, branch, and keep one subject per pull request.
 2. Run the checks below; CI runs the same ones.
 3. Update the doc a change makes false in the same commit, and add a line under `## Unreleased`
-   in [docs/CHANGELOG.md](docs/CHANGELOG.md) for a change in behaviour.
+   in [docs/CHANGELOG.md](docs/CHANGELOG.md) for a change in behaviour. `tests/test_docs.py`
+   fails on a name a doc cites that the source no longer defines (`sinks.ReplySink`,
+   `ThreadSession.mode`), and on a variable, a Slack scope or a word that
+   [docs/setup.md](docs/setup.md) does not name.
 4. A new `!word` of the daemon is a class in the `Word` union of `code_with_slack.commands` with
    its `WORD`, and needs a line in `texts.GUIDE` (the `!guide` text) and in `texts.HELP_WORDS`:
    `tests/test_commands.py` fails until both explain it. Change the guide whenever a behaviour
