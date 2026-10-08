@@ -1,13 +1,14 @@
 # code-with-slack
 
-Drive Claude Code on your own Mac from Slack: one channel per project, one thread per session.
+Code from anywhere with Claude Code: your Mac does the work, Slack is the remote.
 
 <!-- Demo recording goes here: a reply growing in a thread, an Approve click, the footer. -->
 
 Claude Code runs in a terminal on your Mac. code-with-slack is a small daemon on that Mac that
-lets you keep working with it from Slack, on your phone or on another computer. You write in a
-channel; Claude Code runs in the project's folder with your own login, settings and permissions;
-the reply shows up in the thread while Claude works. Nobody else can talk to it.
+lets you keep working with it from Slack, on your phone or on another computer. Each private
+channel is one project and each thread in it is one session: you write a message, Claude Code
+runs in the project's folder with your own login, settings and permissions, and the reply shows
+up in the thread while Claude works. Nobody else can talk to it.
 
 Powered by Claude, through the
 [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview).
