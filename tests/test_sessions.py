@@ -2153,7 +2153,7 @@ async def test_bypass_from_the_folder_s_own_settings_shows_and_turns_off(
 AUTO_INFO = {"commands": [], "current_permission_mode": "auto"}
 
 
-async def test_a_thread_claude_code_started_in_auto_mode_says_so(
+async def test_a_thread_claude_code_started_in_auto_mode_says_so_in_status_only(
     harness_for: Callable[..., Harness],
 ) -> None:
     # Bypass never chosen: the mode is the one the owner's own settings start Claude Code in.
@@ -2161,7 +2161,8 @@ async def test_a_thread_claude_code_started_in_auto_mode_says_so(
     session = h.session()
     await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
     assert h.clients[0].modes == []  # the daemon set no mode of its own
-    assert statuses(h)[-1].startswith("auto · ")
+    # The footer marks bypass alone: with it off, the mode is on `!status`.
+    assert "auto" not in statuses(h)[-1] and "⚡" not in statuses(h)[-1]
     assert "Mode: `auto`" in await session.status()
 
 
@@ -2175,8 +2176,9 @@ async def test_bypass_off_returns_an_auto_thread_to_auto(
     assert statuses(h)[-1].startswith("⚡ bypass")
     await session.set_bypass(False)
     assert h.clients[0].modes == ["bypassPermissions", "auto"]
+    assert "Mode: `auto`" in await session.status()
     await asyncio.wait_for((await session.submit("again")).done.wait(), 2)
-    assert statuses(h)[-1].startswith("auto · ")
+    assert not statuses(h)[-1].startswith("⚡ bypass")
 
 
 async def test_bypass_off_lands_on_default_when_claude_code_refuses_auto(
@@ -2202,7 +2204,7 @@ async def test_bypass_off_lands_on_default_when_claude_code_refuses_auto(
     assert stored is not None and stored.bypass is False
     assert "Mode: `default`" in await session.status()
     await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
-    assert not statuses(h)[-1].startswith(("auto", "⚡"))
+    assert not statuses(h)[-1].startswith("⚡")
 
 
 async def test_bypass_off_that_no_mode_accepts_is_not_recorded(
@@ -2234,10 +2236,8 @@ async def test_the_mode_claude_code_reports_is_the_one_shown(
     h = harness_for({"turns": turns})
     session = h.session()
     await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
-    assert statuses(h)[-1].startswith("auto · ")
     assert "Mode: `auto`" in await session.status()
     await asyncio.wait_for((await session.submit("again")).done.wait(), 2)
-    assert not statuses(h)[-1].startswith("auto")
     assert "Mode: `bypassPermissions`" in await session.status()
 
 

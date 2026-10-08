@@ -235,7 +235,7 @@ in a release with no notice, so it is the first place to look when a release mis
 | `HookEvent` | `"PostToolUse"` | value | sessions.py: client_options | reference | none |
 | `HookEvent` | `"Stop"` | value | sessions.py: client_options | reference | none |
 | `MessageOriginKind` | `"human"` | value | sessions.py: injected_turn | package | none |
-| `PermissionMode` | `"auto"` | value | sessions.py: ThreadSession.auto | reference | none |
+| `PermissionMode` | `"auto"` | value | sessions.py: ThreadSession.set_bypass | reference | none |
 | `PermissionMode` | `"bypassPermissions"` | value | sessions.py: ThreadSession.ensure_connected, ThreadSession._bypass_runs, ThreadSession._mode_for, ThreadSession.status; sessions.py: ThreadSession.ensure_connected, ThreadSession._mode_for | reference | none |
 | `PermissionMode` | `"default"` | value | sessions.py: ThreadSession.ensure_connected, ThreadSession._mode_for, ThreadSession.set_bypass | reference | none |
 | `ResultMessage.terminal_reason` | `"aborted_streaming"` | value | render/renderer.py: INTERRUPTED, TurnRenderer.close; sessions.py: ThreadSession._finish | reference | none |

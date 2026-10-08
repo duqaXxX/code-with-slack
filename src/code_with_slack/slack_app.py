@@ -1394,8 +1394,6 @@ def build_app(
             row += f" · {texts.RUNNING.format(counts=session.running_kinds)}"
         if session.bypass:
             row += texts.STATUS_CHANNEL_BYPASS
-        elif session.auto:
-            row += texts.STATUS_CHANNEL_AUTO
         if session.directory != channel_directory:
             row += texts.STATUS_CHANNEL_FOLDER.format(directory=session.directory)
         return row

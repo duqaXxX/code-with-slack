@@ -297,8 +297,6 @@ class FooterData:
     # Lines inserted and deleted since the last commit in the folder the session works in, as
     # the branch is; None outside a repo.
     changes: tuple[int, int] | None = None
-    # Claude Code's auto mode, which only shows while bypass is off.
-    auto: bool = False
 
 
 def format_tokens(count: int) -> str:
@@ -373,10 +371,10 @@ def format_status_fields(data: FooterData, now: datetime) -> list[str]:
 
 
 def format_footer(data: FooterData, now: datetime) -> str:
-    """One line: bypass or auto mode, model and effort, the channel's folder, then branch,
-    changes, tokens, context and limits (the owner's order)."""
+    """One line: bypass, model and effort, the channel's folder, then branch, changes, tokens,
+    context and limits (the owner's order)."""
     fields = footer_fields(data, now)
-    parts = ["⚡ bypass"] if data.bypass else ["auto"] if data.auto else []
+    parts = ["⚡ bypass"] if data.bypass else []
     parts += [f.short for f in fields if f.label in SESSION]
     if data.directory is not None and data.directory.name:
         # Its name alone, the project's: the whole path is on `!status`'s Directory line.
