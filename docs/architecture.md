@@ -438,8 +438,7 @@ not be shown, and the tool's line records the denial.
 
 ## Footer
 
-Every reply ends with one context line (`footer.format_footer`): `⚡ bypass` when bypass is on
-or `auto` when the thread runs in Claude Code's auto mode,
+Every reply ends with one context line (`footer.format_footer`): `⚡ bypass` when bypass is on,
 the model from the SDK's `get_context_usage()`, the effort level, the name of the folder this
 thread was opened in, the git branch and the uncommitted changes of the folder the session works
 in, the session's tokens from the turn's `ResultMessage.model_usage`, the context percentage from
@@ -676,10 +675,10 @@ where the *next* thread starts, and refuses while any of the channel's threads i
   Claude Code settings give (`permissions.defaultMode`). `ThreadSession.mode` holds the mode the
   client runs in: what the connect left, then each `permissionMode` Claude Code reports in a
   `status` system message, which follows every `set_permission_mode` (measured 2026-10-08,
-  `claude-agent-sdk` 0.2.164). `ThreadSession.auto` reads it for
-  the footer's `auto` and the channel list. When Claude Code refuses the mode `!bypass off`
-  returns to (auto mode on a model that has none), `ThreadSession.set_bypass` sets `default`,
-  since the refusal leaves bypass running.
+  `claude-agent-sdk` 0.2.164). The `Mode:` line of `!status` shows it; the footer and the
+  channel list mark bypass alone. When Claude Code refuses the mode `!bypass off` returns to
+  (auto mode on a model that has none), `ThreadSession.set_bypass` sets `default`, since the
+  refusal leaves bypass running.
 - If the thread's stored session cannot be resumed (its transcript was deleted), its entry is
   dropped, the thread ends (`SessionGone`), and its reply, and every reply still waiting in it,
   says so (`texts.SESSION_GONE`); the next message in that thread finds no entry, starts

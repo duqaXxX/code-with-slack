@@ -91,14 +91,6 @@ def test_minimal_footer_hides_what_it_does_not_know() -> None:
     assert format_footer(data, NOW) == ""
 
 
-def test_auto_mode_takes_the_place_of_bypass_and_never_shows_beside_it() -> None:
-    known = {"branch": "main", "model": None, "context_percent": None, "session_tokens": None}
-    auto = FooterData(bypass=False, usage=None, auto=True, **known)
-    assert format_footer(auto, NOW) == "auto · main"
-    both = FooterData(bypass=True, usage=None, auto=True, **known)
-    assert format_footer(both, NOW) == "⚡ bypass · main"
-
-
 def test_status_fields_list_the_footer_s_values_one_per_line() -> None:
     usage = Usage(Limit(3, NOW + timedelta(hours=2, minutes=10)), Limit(25, None))
     data = FooterData(

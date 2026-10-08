@@ -7,11 +7,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- A thread in Claude Code's auto mode shows `auto` in the footer and in the channel list of
-  `!status`. The mode is the one the owner's settings start Claude Code in
-  (`permissions.defaultMode`); the daemon sets none. It is read from the `permissionMode` Claude
-  Code reports in its `status` system messages (`ThreadSession.mode`), so a session reported
-  out of auto mode stops showing it. `!bypass off` in such a thread returns to auto mode, and sets
+- With bypass off a thread runs in the mode the owner's settings start Claude Code in
+  (`permissions.defaultMode`), auto mode included; the daemon sets none. The `Mode:` line of
+  `!status` shows the mode Claude Code reports (`ThreadSession.mode`: the connect's
+  `current_permission_mode`, then the `permissionMode` of its `status` system messages). The
+  footer and the channel list mark bypass alone. `!bypass off` in a thread that started in auto
+  mode returns to it, and sets
   `default` when Claude Code refuses it, which it does for a model with no auto mode. The answer
   to `!bypass off` is `Bypass is off in this session: Claude Code follows your permission settings
   again.` whatever that mode is (`texts.BYPASS_OFF_THREAD`).

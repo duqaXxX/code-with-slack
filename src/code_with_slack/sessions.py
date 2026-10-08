@@ -499,8 +499,8 @@ class ThreadSession:
         self._client_effort: str | None = None
         self._client_bypass = False
         self.native_mode = "default"
-        # The permission mode the client runs in now: what the connect left it in, then
-        # whatever Claude Code reports (`_dispatch`).
+        # The permission mode the client runs in now, for `!status`: what the connect left it
+        # in, then whatever Claude Code reports (`_dispatch`).
         self.mode = "default"
         self.cli_version: str | None = None
         # The effort level Claude Code last reported: its Stop hook, or the output of `/effort`
@@ -547,12 +547,6 @@ class ThreadSession:
         """Whether this thread runs in bypass: the one answer the footer's ⚡, `!status`, the
         channel list and the setup's checkbox read."""
         return self._bypass_runs(self.bypass_choice)
-
-    @property
-    def auto(self) -> bool:
-        """Whether this thread runs in Claude Code's auto mode, by Claude Code's last report:
-        what the footer and the channel list show while bypass is off."""
-        return not self.bypass and self.mode == "auto"
 
     def _mode_for(self, on: bool) -> str:
         """The permission mode that means `on`; off is the native mode, or `default` when the
@@ -2257,7 +2251,6 @@ class ThreadSession:
         branch, changes = await git_state(here, self._repository)
         return FooterData(
             bypass=self.bypass,
-            auto=self.auto,
             branch=branch,
             model=context.get("model"),
             context_percent=context.get("percentage"),
