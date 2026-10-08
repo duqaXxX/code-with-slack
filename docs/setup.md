@@ -239,6 +239,28 @@ If you turn on Claude Code's Bash sandbox, do it in your own settings, where it 
 terminal and to Slack alike. Its auto-allow mode runs sandboxed Bash commands without asking,
 so they would not reach Slack for approval.
 
+The MCP servers you set up in Claude Code are available to a session started from Slack, with
+two limits. Both come from the Agent SDK, which runs Claude Code without its interactive
+terminal:
+
+- A server that needs you to sign in cannot be signed in from Slack. Run `claude mcp login
+  <name>` on the machine, or `/mcp` in the terminal.
+- Computer use is not available. It is Claude Code's built-in server that sees the screen and
+  controls the mouse and the keyboard, and Claude Code offers it in an interactive session only.
+  A session started from Slack cannot click through a native app, whatever `/mcp` shows in the
+  terminal for the same folder. Commands, scripts and command-line tools run from Slack as they
+  do in the terminal.
+
+Claude Code's [Chrome integration](https://code.claude.com/docs/en/chrome) follows your choice in
+Claude Code. When `/chrome` shows **Enabled by default: Yes** in the terminal, a session started
+from Slack has the browser tools too, and Claude opens its tabs in the Chrome running on the
+machine, with your sign-ins. Nothing about it is set in code-with-slack: turn it on or off with
+`/chrome` in the terminal, and a thread follows the change from its next start or resume. The
+permissions are Claude Code's own: when it asks before a browser action, the request reaches
+Slack as **Approve** and **Deny** buttons, and the sites Claude may act on are the ones the
+extension allows. Chrome has to be open, with the extension signed in to the account Claude Code
+uses.
+
 ## Part 4: starting code-with-slack on macOS
 
 code-with-slack runs as a user LaunchAgent: it starts when you log in and restarts if it exits.
@@ -387,6 +409,9 @@ The bot answers one person, and the rest of this list protects what that person 
   days, so a conversation resumed after a restart still finds them.
 - Trust a folder in Claude Code only after reading its `.claude/` settings and hooks: trusting it
   is what lets a session from Slack start there.
+- With Chrome enabled by default in Claude Code, a session from Slack acts in your browser with
+  your sign-ins, and a thread in bypass may do so without asking. Leave it off in `/chrome` if
+  you do not want that reachable from Slack.
 - The footer, `!status` and `!open` run git in a repository inside the folder a session started in
   without a trust of its own for it. A repository that ends up there (one Claude clones during the
   session, say) can name filters in its config that git then runs, outside the approval prompt.

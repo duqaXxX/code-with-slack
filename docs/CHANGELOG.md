@@ -7,6 +7,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- A session started from Slack has Claude Code's Chrome integration when the owner chose
+  "Enabled by default" in `/chrome`. Claude Code applies that choice to interactive sessions
+  only, and in the non-interactive mode the Agent SDK uses it connects the `claude-in-chrome`
+  server only when started with `--chrome` (measured 2026-10-09, Claude Code 2.1.292): the
+  daemon now passes the flag when `claudeInChromeDefaultEnabled` is true in `~/.claude.json`,
+  read at every connect (`chrome.py`). The permissions stay Claude Code's own: a browser action
+  it asks about reaches Slack as Approve and Deny buttons, and the daemon adds no rule for a
+  thread in bypass. Not checked: the same under the LaunchAgent, whether a browser action still
+  asks in a thread in bypass, and how a screenshot in a tool result shows in Slack.
 - The thread's status line reads `Compacting conversation…`, the terminal's words, while Claude
   Code compacts the conversation, on `!compact` and on a compaction of its own (#169). Claude
   Code opens a compaction with a `status` system message that says `compacting`, repeats it
@@ -236,6 +245,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The docs say that computer use is not available to a session started from Slack. Claude Code
+  offers its built-in `computer-use` server in an interactive session only, and the Agent SDK
+  runs Claude Code in its non-interactive mode: the server is absent there even when it is
+  switched on for the folder (measured 2026-10-09, Claude Code 2.1.292). `docs/setup.md` states
+  the limit beside what does load, the MCP servers the owner configured, and that a server
+  cannot be signed in from Slack; `docs/architecture.md` records the measurement, which also
+  covers the Chrome integration. No change in behaviour.
 - The docs are rearranged for a first reader, with nothing removed from what they state.
   `docs/setup.md` is one numbered path from the clone to the first reply, with a checkpoint after
   the install, after `.env` and after the LaunchAgent starts; Full Disk Access comes before the

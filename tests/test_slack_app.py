@@ -94,6 +94,10 @@ def recorded(kind: str) -> dict[str, Any]:
     return copy.deepcopy(slack_payload(name))
 
 
+async def chrome_off() -> bool:
+    return False
+
+
 async def always_trusted(directory: Path) -> bool:
     return True  # code_with_slack.trust has tests of its own
 
@@ -154,6 +158,7 @@ class World:
                 usage=UsageCache(no_usage),
                 client_factory=factory,
                 workspace_trusted=always_trusted,
+                chrome_enabled=chrome_off,
                 trusted_repository=any_repository,
                 sessions_of=lambda directory: self.stored_sessions,
                 update_limiter=update_limiter or UpdateLimiter(),

@@ -89,10 +89,14 @@ class Harness:
         self.clients: list[FakeClaudeClient] = []
         self.approvals = Approvals()
         self.usage_fetches = 0
+        self.chrome = False  # what Claude Code's "Enabled by default" says, read at each connect
         self._scripts = scripts
 
         async def trusted(directory: Path) -> bool:
             return True
+
+        async def chrome_enabled() -> bool:
+            return self.chrome
 
         async def fetch() -> str:
             self.usage_fetches += 1
@@ -106,6 +110,7 @@ class Harness:
             usage=UsageCache(fetch),
             client_factory=self.factory,
             workspace_trusted=trusted,
+            chrome_enabled=chrome_enabled,
             trusted_repository=any_repository,
             # A generous burst: these tests are about session orchestration, not the shared
             # limiter's own pacing (that lives in test_sinks.py), and several use a real 2s
@@ -212,6 +217,27 @@ async def test_the_client_is_launched_as_the_design_says(
     }
     assert options.can_use_tool is not None
     assert options.cli_path is None
+
+
+async def test_chrome_is_passed_when_the_owner_enabled_it_in_claude_code(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # `--chrome` is the CLI flag; with it a non-interactive run lists the `claude-in-chrome`
+    # server, and without it does not, whatever the key says (measured 2026-10-09, CLI 2.1.292).
+    h = harness_for({}, {})
+    h.chrome = True
+    session = h.session()
+    await session.ensure_connected()
+    assert h.clients[0].options.extra_args == {
+        "allow-dangerously-skip-permissions": None,
+        "replay-user-messages": None,
+        "chrome": None,
+    }
+    # The key is read again at the next connect: turned off, the rebuilt client has no Chrome.
+    h.chrome = False
+    await session.close(reason="test")
+    await h.session().ensure_connected()
+    assert "chrome" not in h.clients[1].options.extra_args
 
 
 async def test_a_restart_resumes_the_stored_session(harness_for: Callable[..., Harness]) -> None:

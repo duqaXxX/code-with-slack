@@ -834,7 +834,16 @@ refuses while any of the channel's threads is not idle (`SessionManager.bind`).
   (`setting_sources` user, project and local), streaming of partial messages, the approval
   callback, `--allow-dangerously-skip-permissions`, which makes `!bypass on` possible
   without turning it on, and `--replay-user-messages` (below, "A prompt taken into a report
-  turn").
+  turn"). The SDK runs Claude Code in its non-interactive mode, which treats the two servers
+  built into Claude Code differently from the terminal (measured: "Built-in servers"). Computer
+  use is offered in an interactive session only and is never there. The Chrome integration is
+  connected only when Claude Code is started with `--chrome`, so the client gets that flag when
+  the owner chose "Enabled by default" in `/chrome` (`chrome.chrome_enabled` reads
+  `claudeInChromeDefaultEnabled` in `~/.claude.json` at every connect). The daemon adds no rule
+  of its own to the browser tools: a call Claude Code asks about goes through the approval
+  callback like any other (measured: "Chrome in an SDK session"), and what a thread in bypass
+  does with them is Claude Code's decision. The MCP servers the owner configured load as in the
+  terminal.
 - After connecting, `get_server_info()` gives the commands the session offers (for `!help` and
   `!`) and the permission mode Claude Code started in (`native_mode`, kept as reported):
   `!bypass off` returns to it, or to `default` when the folder's own settings start it in
@@ -1346,5 +1355,7 @@ repeated by `tests/test_openfile.py`.
 | Report inside a queued turn | When a message was already sent and waits for its turn, that turn comes first and Claude Code reports the task inside it, with no turn of its own | not recorded | not recorded | Claude Code 2.1.280 |
 | Thread status on iOS | A thread status sent as `status` alone showed nothing on iOS; the loading message shows | Slack iOS and desktop, free plan, an app holding `assistant:write` | 2026-10-02 | slack-sdk 3.44.1 |
 | Permalink opens on the reply | Slack opens a thread on the reply that a permalink names | Mac app and iOS | 2026-10-05 | not recorded |
+| Built-in servers | In a non-interactive run the `init` message lists the user, plugin and claude.ai MCP servers. `computer-use` is absent though switched on for the folder through `/mcp`; `claude-in-chrome` is absent with `/chrome` set to "Enabled by default" and listed, connected, with `--chrome` | The SDK's bundled CLI run with `-p --output-format stream-json`, with and without `--chrome`, reading `mcp_servers` and `tools` | 2026-10-09 | Claude Code 2.1.292 |
+| Chrome in an SDK session | A client started with `extra_args` `chrome` opened a page in the owner's Chrome, read it, took a screenshot (an `image` block in the tool result) and closed the tab. The permission callback was asked for `tabs_context_mcp`, `navigate`, `read_page` and `computer`, and not for `tabs_close_mcp` | `ClaudeSDKClient` with the daemon's options in `default` mode, Haiku, one run | 2026-10-09 | SDK 0.2.164, Claude Code 2.1.292 |
 | Status removal after two minutes | Slack removes a thread status two minutes after it was set and clears it when the app replies | `assistant.threads.setStatus` reference, read | 2026-10-02 | not recorded |
 | Resume and bypass | Claude Code's own `--resume` never restores `bypassPermissions` | sessions reference, read | 2026-09-26 | not recorded |
