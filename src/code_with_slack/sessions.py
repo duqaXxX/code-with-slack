@@ -1591,7 +1591,14 @@ class ThreadSession:
                     if isinstance(message, TaskNotificationMessage) and not stopped:
                         self._notified()
                     return
-                if not isinstance(message, TURN_MESSAGES):
+                # A compaction's boundary comes before every frame of its turn that shows
+                # something, on `/compact` and on an automatic compaction at a turn's start
+                # (recorded: `compact.jsonl`, `auto-compact.jsonl`, CLI 2.1.292). The turn starts
+                # with it, as it would one frame later with the summary Claude Code sends next.
+                compacted = (
+                    isinstance(message, SystemMessage) and message.subtype == "compact_boundary"
+                )
+                if not isinstance(message, TURN_MESSAGES) and not compacted:
                     return
                 if call:
                     # A subagent's own frame, whose call no reply holds: an agent continued with
