@@ -3016,3 +3016,27 @@ async def test_a_running_card_in_a_full_message_keeps_its_title_and_gains_no_lin
     assert last["title"].endswith(" · 2 calls") and "details" not in last
     assert slack.message_cards()[0][0]["details"] == "Read: notes.md"
     assert len(slack.stream_ts) == 1
+
+
+async def test_a_card_that_ends_is_sent_no_text_for_the_details_it_no_longer_says(
+    slack: FakeSlack,
+) -> None:
+    sink = reply(slack)
+    await sink.task(tool("a1", "Agent", "in_progress", details="Read: notes.md", task=True))
+    await settled()
+    await sink.task(tool("a1", "Agent", "complete", task=True))
+    await settled()
+    _, second = card_chunks(slack, "a1")
+    assert second == {"type": "task_update", "id": "a1", "title": "Agent: a1", "status": "complete"}
+    assert slack.message_cards()[0][0]["details"] == "Read: notes.md"  # Slack keeps them
+
+
+async def test_a_card_that_fails_in_a_full_message_still_says_why(slack: FakeSlack) -> None:
+    sink = reply(slack)
+    await sink.task(tool("a1", "Agent", "in_progress", task=True))
+    await sink.text("a line of text\n" * 720)  # 10,800 characters
+    await settled()
+    await sink.task(tool("a1", "Agent", "error", output="x" * 400, task=True))
+    await settled()
+    assert card_chunks(slack, "a1")[-1]["output"] == "x" * 400
+    assert len(slack.stream_ts) == 1

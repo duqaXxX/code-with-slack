@@ -589,13 +589,14 @@ All notable changes to this project are documented here. The format follows
   `chat.appendStream` refusals from 2026-10-02 to 2026-10-06, 8 of them in messages of at most
   4 cards. `sinks.card_addition` now
   sends a stream only the lines the card lacks (`sinks.lacking`), a line break first, and
-  nothing when the title or the status alone changed. `ReplySink._plan_card` counts each card
+  no text when the card says nothing new. `ReplySink._plan_card` counts each card
   toward `MESSAGE_LIMIT`: its title, the text it was sent, and a fixed cost for the card, for
   each of its two texts and for each line (`CARD_COST`, `CARD_FIELD_COST`, `CARD_LINE_COST`).
   Replayed over the 15 streams measured on 2026-10-01, that count is 13,514 at most in an
   accepted append and 13,801 at least in a refused one, and `MESSAGE_LIMIT` is 11,000. A new
   card or new text that does not fit continues in a new message; a card already in a full
-  message keeps its title and status up to date and gains no more lines. Slack's cap stays
+  message keeps its title and status up to date, gains no more lines of details, and still
+  gets its output when it ends. Slack's cap stays
   undocumented and follows what Slack stores, so text heavy with formatting can still be
   refused below the count; that case goes on by `chat.update` as before. Not checked in a
   Slack client: how a card that holds every line of a long subagent run reads.

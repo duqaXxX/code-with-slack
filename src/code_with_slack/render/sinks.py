@@ -495,8 +495,9 @@ def card_addition(
 ) -> tuple[dict[str, Any], dict[str, str], int]:
     """The chunk that brings a stream's card to `chunk`, what the card holds after it, and what
     it costs the message. `sent` is the card's last chunk (None for a new card) and `held` the
-    details and the output Slack keeps for it. A card already in the message leaves out a text
-    that does not fit `room`, and keeps what it holds."""
+    details and the output Slack keeps for it. A card already in the message leaves out the
+    details that do not fit `room`, and keeps those it holds; its output, which says how the
+    call ended, is sent whatever the room."""
     told = {key: chunk[key] for key in ("type", "id", "title", "status")}
     after = dict(held)
     if sent is None:
@@ -504,13 +505,15 @@ def card_addition(
     else:
         cost = max(0, len(chunk["title"]) - len(sent["title"]))
     for key in CARD_APPENDED:
-        more = lacking(held.get(key, ""), chunk.get(key, ""))
+        if key not in chunk:
+            continue  # nothing to say: the card keeps what it holds
+        more = lacking(held.get(key, ""), chunk[key])
         if not more:
             continue
         price = len(more) + CARD_LINE_COST * (more.count("\n") + (key not in held))
         if key not in held:
             price += CARD_FIELD_COST
-        if sent is not None and room is not None and cost + price > room:
+        if key == "details" and sent is not None and room is not None and cost + price > room:
             continue
         told[key] = more
         after[key] = held.get(key, "") + more

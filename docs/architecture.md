@@ -369,7 +369,7 @@ the `output` of every `task_update` to what the card holds, so a stream is sent 
 card lacks (`sinks.card_addition`), and `ReplySink._plan_card` counts each card toward
 `MESSAGE_LIMIT`: its title, the text it was sent, and a fixed cost per card, per text and per
 line, set from that measurement. A new card that does not fit opens the next message; a card
-already in a full message gains no more lines. The count is an estimate of what Slack stores, so
+already in a full message gains no more lines of `details`, and still gets its `output`. The count is an estimate of what Slack stores, so
 a refusal remains possible; it is logged with the sizes the plan knew and no content. If Slack then refuses
 the update of that message too, the change is dropped and the message shows less than the model:
 unless a later update passes, the reply's end counts as not landed and the root shows ❌. Every
