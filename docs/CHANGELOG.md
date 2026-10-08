@@ -607,6 +607,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- The setup guide and the docstring of `code_with_slack.trust` say what a trusted parent folder
+  leaves out (#9). Outside a repository a parent's trust lets a session start, and Claude Code
+  still holds the `permissions.allow` rules and `additionalDirectories` of the folder's own
+  `.claude/settings.json` until the dialog is accepted in that folder, which is why the terminal
+  shows the dialog again in a folder used from Slack. The docstring said those rules applied at
+  once in an SDK session. No change in behaviour.
 - The line on how a cut-short reply ended reaches the message that notifies in three more
   cases (#165). A report turn cut short in a reply that already had the footer of its first
   turn ended with that footer alone, the line left in a silent edit: the line now moves with

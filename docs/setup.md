@@ -218,7 +218,11 @@ approval for reaches Slack as **Approve** and **Deny** buttons, with the tool's 
    from Slack would otherwise run a repository's own hooks and apply its settings without asking.
    Before you bind a channel to a repository, open `claude` at its root in the terminal once and
    accept the dialog. A trusted parent folder does not cover a git repository inside it, such as
-   a clone. How trust reaches worktrees and nested repositories is under
+   a clone. Outside a repository a trusted parent folder is enough for a session to start, and
+   Claude Code then leaves out the `permissions.allow` rules and `additionalDirectories` of the
+   folder's own `.claude/settings.json` until you accept the dialog in that folder: Slack asks
+   for approvals those rules would cover, and the terminal shows the dialog again there, listing
+   them. How trust reaches worktrees and nested repositories is under
    [How trust applies to git](#how-trust-applies-to-git).
 
 The models a new thread offers are the ones Claude Code lists, older versions included. To offer
@@ -727,6 +731,7 @@ in [features.md](features.md#notifications), not restated here.
 | ``This thread already holds a session: send `!resume` again in the channel to pick another.`` | A Resume click or `!resume <id or name>` was sent to a thread that already has a session; a new `!resume` in the channel gives a thread of its own |
 | `This session is already open in another thread: <link>.` | A Resume click or `!resume <id or name>` named a session already open in some other thread; follow the link and send the message there instead |
 | `Claude Code has not been trusted in ...`, after a message or a `!bind` | Open `claude` in that folder (the repository root) in the terminal, accept the trust dialog, and send the message again. For a worktree whose folder was moved by hand, run `git worktree repair` in it |
+| The terminal shows the trust dialog in a folder you already use from Slack, or Slack asks for approvals the folder's allow rules cover | The folder is outside a repository and only a parent folder is trusted, which Claude Code does not count for the `permissions.allow` rules and `additionalDirectories` of the folder's `.claude/settings.json`. Accept the dialog in that folder: it lists them |
 | `The directory ... no longer exists` | The thread's directory was moved or deleted: restore it to keep using this thread, or, in the channel, bind another folder with `!bind <path>` and send a new message to start a session there |
 | `macOS does not let code-with-slack read ...` | The directory is in a folder macOS protects: see Part 4, "Folders macOS protects" |
 | `another code-with-slack is running` in the log | A second instance tried to start; only one may run |
