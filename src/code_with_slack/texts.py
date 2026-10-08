@@ -289,6 +289,7 @@ STATUS_CHANNEL_IDLE = "idle"
 STATUS_CHANNEL_SINCE = " · {ago}"
 STATUS_CHANNEL_SESSION = "Session"  # the link's label for a session with no title yet
 STATUS_CHANNEL_BYPASS = " · ⚡ bypass"
+STATUS_CHANNEL_AUTO = " · auto"
 STATUS_CHANNEL_FOLDER = " · folder `{directory}`"
 STATUS_CHANNEL_LINK_FALLBACK = "thread `{thread_ts}`"
 HELP_OWN = "**code-with-slack**"

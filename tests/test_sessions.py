@@ -2150,6 +2150,120 @@ async def test_bypass_from_the_folder_s_own_settings_shows_and_turns_off(
     assert not statuses(h)[-1].startswith("⚡ bypass")
 
 
+AUTO_INFO = {"commands": [], "current_permission_mode": "auto"}
+
+
+async def test_a_thread_claude_code_started_in_auto_mode_says_so(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # Bypass never chosen: the mode is the one the owner's own settings start Claude Code in.
+    h = harness_for({"turns": [sdk_messages("tools")], "server_info": AUTO_INFO})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
+    assert h.clients[0].modes == []  # the daemon set no mode of its own
+    assert statuses(h)[-1].startswith("auto · ")
+    assert "Mode: `auto`" in await session.status()
+
+
+async def test_bypass_off_returns_an_auto_thread_to_auto(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"turns": [sdk_messages("tools")] * 2, "server_info": AUTO_INFO})
+    session = h.session()
+    await session.set_bypass(True)
+    await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
+    assert statuses(h)[-1].startswith("⚡ bypass")
+    await session.set_bypass(False)
+    assert h.clients[0].modes == ["bypassPermissions", "auto"]
+    await asyncio.wait_for((await session.submit("again")).done.wait(), 2)
+    assert statuses(h)[-1].startswith("auto · ")
+
+
+async def test_bypass_off_lands_on_default_when_claude_code_refuses_auto(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # The refusal as the CLI words it for a model with no auto mode (measured 2026-10-08, SDK
+    # 0.2.164): it left the session in bypass, so off has to land somewhere that is not bypass.
+    h = harness_for({"turns": [sdk_messages("tools")], "server_info": AUTO_INFO})
+    session = h.session()
+    client = await session.ensure_connected()
+    await session.set_bypass(True)
+    accepted = client.set_permission_mode
+
+    async def refusing_auto(mode: str) -> None:
+        if mode == "auto":
+            raise Exception("Cannot set permission mode to auto: auto mode unavailable")
+        await accepted(mode)
+
+    client.set_permission_mode = refusing_auto
+    await session.set_bypass(False)
+    assert h.clients[0].modes == ["bypassPermissions", "default"]
+    stored = h.state.thread(CHANNEL, THREAD)
+    assert stored is not None and stored.bypass is False
+    assert "Mode: `default`" in await session.status()
+    await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
+    assert not statuses(h)[-1].startswith(("auto", "⚡"))
+
+
+async def test_bypass_off_that_no_mode_accepts_is_not_recorded(
+    harness_for: Callable[..., Harness],
+) -> None:
+    h = harness_for({"server_info": AUTO_INFO})
+    session = h.session()
+    client = await session.ensure_connected()
+    await session.set_bypass(True)
+
+    async def refusing(mode: str) -> None:
+        raise ConnectionError("the CLI went away")
+
+    client.set_permission_mode = refusing
+    with pytest.raises(ConnectionError):
+        await session.set_bypass(False)
+    stored = h.state.thread(CHANNEL, THREAD)
+    assert stored is not None and stored.bypass is True
+    assert session.bypass
+
+
+async def test_the_mode_claude_code_reports_is_the_one_shown(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # Both reports as recorded after `set_permission_mode` (2026-10-08, SDK 0.2.164): the mode
+    # shown follows them, whatever the session started in.
+    bypass_reported, auto_reported = sdk_messages("permission-mode-status")
+    turns = [[auto_reported, *sdk_messages("tools")], [bypass_reported, *sdk_messages("tools")]]
+    h = harness_for({"turns": turns})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("list the files")).done.wait(), 2)
+    assert statuses(h)[-1].startswith("auto · ")
+    assert "Mode: `auto`" in await session.status()
+    await asyncio.wait_for((await session.submit("again")).done.wait(), 2)
+    assert not statuses(h)[-1].startswith("auto")
+    assert "Mode: `bypassPermissions`" in await session.status()
+
+
+async def test_bypass_off_does_not_trade_another_refused_mode_for_default(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # Only auto mode's refusal was measured: any other mode that fails stays an error.
+    info = {"commands": [], "current_permission_mode": "acceptEdits"}
+    h = harness_for({"server_info": info})
+    session = h.session()
+    client = await session.ensure_connected()
+    await session.set_bypass(True)
+    accepted = client.set_permission_mode
+
+    async def refusing_accept_edits(mode: str) -> None:
+        if mode == "acceptEdits":
+            raise Exception("Cannot set permission mode to acceptEdits")
+        await accepted(mode)
+
+    client.set_permission_mode = refusing_accept_edits
+    with pytest.raises(Exception, match="acceptEdits"):
+        await session.set_bypass(False)
+    assert h.clients[0].modes == ["bypassPermissions"]
+    assert session.bypass
+
+
 async def test_a_listed_model_without_a_value_is_left_out(
     harness_for: Callable[..., Harness],
 ) -> None:

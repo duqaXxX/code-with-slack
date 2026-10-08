@@ -647,7 +647,8 @@ keeps it:
 ⚡ bypass · claude-opus-5-5 · effort medium · my-project · main · (+42,-10) · 10.2M tok · ctx 15% · 5h 16% ↻ 43m · 7d 46% ↻ 3d 4h
 ```
 
-It holds `⚡ bypass` when bypass is on, the model, the effort level, the name of the folder this
+It holds `⚡ bypass` when bypass is on, or `auto` when bypass is off and the session runs in
+Claude Code's auto mode (your own `permissions.defaultMode`), then the model, the effort level, the name of the folder this
 thread was opened in (its whole path is on `!status`), the git branch, the lines changed since
 the last commit (untracked files not counted), the session's tokens, the context used, and the
 5-hour and weekly limits with the time to each reset, which exist only with a claude.ai

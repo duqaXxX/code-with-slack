@@ -3393,6 +3393,28 @@ async def test_the_channel_status_row_reads_the_effective_bypass(
     assert texts.STATUS_CHANNEL_BYPASS in said(manual)[-1]
 
 
+async def test_the_channel_status_row_says_auto_for_a_thread_in_auto_mode(
+    manual: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = FakeClaudeClient.__init__
+
+    def init(self: FakeClaudeClient, options: Any, **kw: Any) -> None:
+        original(self, options, **kw)
+        self._server_info = dict(self._server_info, current_permission_mode="auto")
+
+    monkeypatch.setattr(FakeClaudeClient, "__init__", init)
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(setup_click(manual, bypass=False))
+    await manual.settle(0.3)
+    manual.state.set_session(CHANNEL, THREAD, "sess-ran")  # a thread that ran
+    await manual.dispatch(message("!status"))
+    assert texts.STATUS_CHANNEL_AUTO in said(manual)[-1]
+    manual.state.set_bypass(CHANNEL, THREAD, True)
+    await manual.dispatch(message("!status"))
+    assert texts.STATUS_CHANNEL_AUTO not in said(manual)[-1]
+    assert texts.STATUS_CHANNEL_BYPASS in said(manual)[-1]
+
+
 async def test_a_model_change_keeps_a_supported_effort_and_the_tick(manual: World) -> None:
     await manual.dispatch(message("hello", ts=THREAD))
     await manual.dispatch(setup_click(manual, SETUP_MODEL, model="opus", effort="low", bypass=True))
