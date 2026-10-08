@@ -595,13 +595,15 @@ All notable changes to this project are documented here. The format follows
   toward `BLOCKS_LIMIT` and cut a text at the line that would start one block too many. For
   the five texts of that message the count gives what Slack stored (7, 7, 9, 10 and 6), and the
   turn replayed through the sink stays at 45 or under in every write, 67 of which were sent to
-  Slack and accepted. When Slack still refuses a write with that sentence, the message's room
-  is halved and the write is tried again, so the rest of the reply goes on in a new message
-  where the change was dropped (`ReplySink._tighten`); a message that already has a successor
-  cannot be split and drops the change as before. A refused write's log line now names where
+  Slack and accepted. When Slack still refuses a write of the reply's last message with that sentence
+  while the reply is being written, the message's room is halved and the write is tried again,
+  so the rest of the reply goes on in a new message where the change was dropped
+  (`ReplySink._tighten`). A message that already has a successor, and the writes of the reply's
+  end (the fold of the cards, the ending's post), are not split and drop the change as before:
+  the text the message showed stays. A refused write's log line now names where
   in the payload Slack pointed and whether it counted too many blocks, never Slack's sentence.
-  Not measured: markdown shapes beyond the sixteen in `test_sinks`, and how a reply cut between
-  two sections reads in a Slack client.
+  Not measured: markdown shapes beyond the sixteen in `test_sinks` (seven more are counted as
+  CommonMark reads them), and how a reply cut between two sections reads in a Slack client.
 - A streamed card is sent each line of its text once, and its text counts toward the message's
   size (#92). Slack adds the `details` and the `output` of every `task_update` to what the card
   already holds, and an update that carries neither leaves them (measured 2026-10-01 with

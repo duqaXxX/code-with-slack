@@ -142,34 +142,44 @@ def describe_refusal(exc: Exception) -> str:
 # passes 50 of them; a stream is not, and the update that follows its stop is (measured
 # 2026-10-08, slack-sdk 3.45.0). Quotes, lists, images, bold lines and code blocks stay in the
 # rich text around them, and a `#` inside a code block is not a heading.
+# Read as CommonMark and GFM define them where Slack was not measured (a heading underlined
+# with `=`, a fence longer than three marks, a rule with spaces in it): a shape counted that
+# Slack keeps in its rich text only ends a message early.
 HEADING = re.compile(r" {0,3}#{1,6}(\s|$)")
-RULE = re.compile(r" {0,3}([-*_])( *\1){2,} *$")
+UNDERLINE = re.compile(r" {0,3}=+\s*$")
+RULE = re.compile(r" {0,3}([-*_])(\s*\1){2,}\s*$")
 TABLE_RULE = re.compile(r"\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
-FENCE = re.compile(r" {0,3}(```|~~~)")
+FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)$")
 
 
 def markdown_starts(text: str) -> list[int]:
     """Where each block starts that Slack makes of a markdown text, as offsets into it."""
     starts: list[int] = []
     lines = text.split("\n")
-    offset, fenced, running, table = 0, False, False, False
+    offset, fence, running, table = 0, "", False, False
     for number, line in enumerate(lines):
         here, offset = offset, offset + len(line) + 1
-        if FENCE.match(line):
-            fenced, table = not fenced, False
-        elif not fenced:
+        line = line.rstrip("\r")
+        mark = FENCE.match(line)
+        if fence:
+            # Closed by a run of the same mark, at least as long, with nothing after it.
+            if mark and mark[1].startswith(fence) and not mark[2].strip():
+                fence = ""
+        elif mark and "`" not in mark[2]:
+            fence, table = mark[1], False
+        else:
             if not line.strip():
                 table = False
                 continue
             if table and "|" in line:
                 continue
             table = False
-            following = lines[number + 1] if number + 1 < len(lines) else ""
+            following = lines[number + 1].rstrip("\r") if number + 1 < len(lines) else ""
             if "|" in line and "|" in following and TABLE_RULE.match(following):
                 starts.append(here)
                 table, running = True, False
                 continue
-            if HEADING.match(line) or RULE.match(line):
+            if HEADING.match(line) or RULE.match(line) or (running and UNDERLINE.match(line)):
                 starts.append(here)
                 running = False
                 continue
@@ -1247,9 +1257,12 @@ class ReplySink:
         whole = part.text[floor : sent + lead + len(piece)]
         opening = floor + len(whole) - len(whole.lstrip("\n"))
         words = whole.strip("\n")
-        over = markdown_cut(words, max(1, message.blocks_room - others))
+        # Text already sent can gain a block when its next line arrives (a line that turns
+        # out to head a table): the cut is then the next block's start, never inside a line.
+        starts = markdown_starts(words)[max(1, message.blocks_room - others) :]
+        over = next((at for at in starts if opening + at >= sent + lead), None)
         if over is not None:
-            stop = max(opening + over, sent + lead)
+            stop = opening + over
             piece = part.text[sent + lead : stop]
             plan.text[index] = stop
             plan.overflow = (index, stop)
@@ -1471,7 +1484,7 @@ class ReplySink:
                 for piece in self._tool_elements(part, floor, ceil)[1]:
                     length = self._weight(message, part, piece, False)
                     if (
-                        base_blocks + used_blocks + 1 + reserved > BLOCKS_LIMIT
+                        base_blocks + used_blocks + 1 + reserved > message.blocks_room
                         or base_size + used_size + length > MESSAGE_LIMIT
                     ):
                         cut.add((index, piece))
@@ -1495,13 +1508,16 @@ class ReplySink:
         return blocks, size
 
     async def _update_step(
-        self, message: _Message, end: Cursor | None
+        self, message: _Message, end: Cursor | None, *, split: bool = False, room: int = 0
     ) -> tuple[bool, Cursor | None]:
         """Bring a stopped message to what the model says, with a `chat.update` when it shows
         something else: (written, where the reply goes on past the message). An update never
         notifies (measured 2026-09-29). Nothing is written for a message whose stream already
         shows the model. An update refused for content that held a container, which counted for
-        nothing, is tried once more with the containers counted, as a post counts them."""
+        nothing, is tried once more with the containers counted, as a post counts them. With
+        `split`, for a caller that opens the next message at the cursor returned: an update
+        Slack refuses for too many blocks is tried again with less of the span (`_tighten`);
+        `room` is the room the message had before the first of those tries."""
         assert message.ts is not None
         blocks, overflow = self._blocks(message, end)
         footer = self._footer_of(message)
@@ -1539,9 +1555,15 @@ class ReplySink:
             elif code in REFUSED_CONTENT:
                 if not message.containers_counted and any(b["type"] == "container" for b in blocks):
                     message.containers_counted = True
-                    return await self._update_step(message, end)
-                if self._tighten(message, blocks, exc) and end is None and self._held is None:
-                    return await self._update_step(message, end)
+                    return await self._update_step(message, end, split=split, room=room)
+                if split and end is None and self._held is None and too_many_blocks(exc):
+                    before = room or message.blocks_room
+                    if self._tighten(message, blocks):
+                        return await self._update_step(message, end, split=True, room=before)
+                    # Refused down to one block: nothing was written, so nothing is cut.
+                    message.blocks_room = before
+                    blocks, overflow = self._blocks(message, end)
+                    blocks += footer
                 # The message already shows what it showed: never replaced by a plainer one.
                 # The change is dropped; the next one is tried. After a refused append nothing
                 # else would say the message is short of the model, so that is kept.
@@ -1554,11 +1576,11 @@ class ReplySink:
         return True, overflow
 
     @staticmethod
-    def _tighten(message: _Message, blocks: list[dict[str, Any]], exc: Exception) -> bool:
+    def _tighten(message: _Message, blocks: list[dict[str, Any]]) -> bool:
         """Slack counted more blocks in a write of the message than the daemon did: halve the
         room the message has, so that its next write holds less and the reply goes on in a new
-        message. False when Slack refused for another reason, or one block is too many."""
-        if not too_many_blocks(exc) or message.blocks_room <= 1:
+        message. False, with the room as it was, when one block was already too many."""
+        if message.blocks_room <= 1:
             return False
         message.blocks_room = max(1, min(message.blocks_room, blocks_count(blocks)) // 2)
         return True
@@ -1596,7 +1618,9 @@ class ReplySink:
         self._retrack()
         return True
 
-    async def _post_step(self, message: _Message) -> tuple[bool, Cursor | None]:
+    async def _post_step(
+        self, message: _Message, *, split: bool = False
+    ) -> tuple[bool, Cursor | None]:
         """Post the message that continues a stopped one, with the blocks of its span as a post
         takes them, then bring it to what an update takes: a container's text counts toward a
         post's limit and not toward an update's, so what the post left out of its span reaches
@@ -1626,8 +1650,8 @@ class ReplySink:
                 describe_refusal(exc),
                 *blocks_sizes(blocks),
             )
-            if self._tighten(message, blocks, exc):
-                return await self._post_step(message)
+            if split and too_many_blocks(exc) and self._tighten(message, blocks):
+                return await self._post_step(message, split=True)
             if unknown_outcome(exc):
                 ts = await self._adopt(
                     attempted, stream=False, probe=plain_words(banner)[:ADOPT_WORDS]
@@ -1646,7 +1670,7 @@ class ReplySink:
         message.ts = str(posted["ts"])
         message.shown, message.footer = blocks, footer
         self._retrack()
-        return await self._update_step(message, None)
+        return await self._update_step(message, None, split=split)
 
     @staticmethod
     def _first_words(plan: _Plan) -> str:
@@ -1761,12 +1785,12 @@ class ReplySink:
                 message.refused = True
                 if await self._stop(message, None, None) == "failed":
                     return False, None
-                return await self._update_step(message, None)
+                return await self._update_step(message, None, split=True)
             logger.warning("could not write a reply to Slack: %s", code)
             if code == NOT_STREAMING:
                 # Slack ended the stream first: the message goes on by update.
                 self._gone(message)
-                return await self._update_step(message, None)
+                return await self._update_step(message, None, split=True)
             if unknown_outcome(exc):
                 # An append is not idempotent: sent again it may show twice. The stream is told
                 # nothing more; the message is stopped and goes on by update, from the model.
@@ -1886,12 +1910,14 @@ class ReplySink:
                     self._end_mode = "inline"
                 message.exact = False
             if message.ts is None:
-                step = self._stream_step if message.mode == "stream" else self._post_step
-                ok, overflow = await step(message)
+                if message.mode == "stream":
+                    ok, overflow = await self._stream_step(message)
+                else:
+                    ok, overflow = await self._post_step(message, split=True)
             elif message.streaming:
                 ok, overflow = await self._stream_step(message)
             else:
-                ok, overflow = await self._update_step(message, None)
+                ok, overflow = await self._update_step(message, None, split=True)
             if not ok:
                 return False
             if overflow is None:

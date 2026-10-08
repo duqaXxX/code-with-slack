@@ -3199,3 +3199,70 @@ async def test_a_post_refused_for_too_many_blocks_is_posted_with_less(slack: Fak
     await settled()
     assert len(slack.calls_to("chat.postMessage")) == 2  # refused, then posted
     assert lines_of(*slack.message_texts()) == lines_of("start", text)
+
+
+@pytest.mark.parametrize(
+    ("text", "blocks"),
+    [
+        # Not measured on Slack: read as CommonMark and GFM define them.
+        ("Title\n=====\n\ntext", 3),
+        ("````md\n```\n# inside\n```\n````\n\n## after\n\ntext", 3),
+        ("```x``` then words\n\n## after\n\ntext", 3),
+        ("~~~\n# inside\n~~~\n\n## after", 2),
+        ("before\r\n\r\n---\r\n\r\nafter", 3),
+        ("before\n\n- - -\n\nafter", 3),
+        ("```\n# the fence is still open while the text streams", 1),
+    ],
+)
+def test_markdown_shapes_that_were_not_measured_are_read_as_commonmark(
+    text: str, blocks: int
+) -> None:
+    assert sinks.markdown_blocks(text) == blocks
+
+
+async def test_a_fold_refused_for_too_many_blocks_keeps_the_text_the_stream_showed(
+    slack: FakeSlack,
+) -> None:
+    # Slack counts more than the daemon does: here every list item is a block of its own.
+    def answer(args: dict[str, Any]) -> Any:
+        items = sum(b["text"].count("- item") for b in args["blocks"] if b["type"] == "markdown")
+        return too_many() if items > 10 else {"ok": True}
+
+    slack.responses["chat.update"] = answer
+    sink = reply(slack)
+    await sink.task(tool("t1", "Bash"))
+    text = "".join(f"- item {n}\n\n## Heading {n}\n\n" for n in range(1, 21))
+    await sink.text(text)
+    await settled()
+    await sink.finish([])
+    await sink.close_out(None)
+    await settled()
+    assert lines_of(*slack.message_texts()) == lines_of(text)  # the fold is dropped, not the text
+
+
+async def test_an_update_refused_down_to_one_block_repeats_nothing(slack: FakeSlack) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock, limiter=UpdateLimiter(burst=50))
+    await sink.text("start\n")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    slack.responses["chat.update"] = lambda args: too_many()
+    await sink.text(sections(5))
+    await settled()
+    assert slack.posted_ts == []  # no rest posted while the message still shows what it showed
+    slack.responses["chat.update"] = {"ok": True}
+    await sink.text("\n\nthe end")
+    await settled()
+    assert lines_of(*slack.message_texts()) == lines_of("start", sections(5), "the end")
+
+
+async def test_a_sent_line_that_turns_into_a_table_is_not_cut_in_two(slack: FakeSlack) -> None:
+    sink = reply(slack, limiter=UpdateLimiter(burst=50))
+    await sink.text(sections(22) + "\n\nintro\n\na | b")  # 45 blocks, the last one a run of text
+    await settled()
+    await sink.text("\n---|---\n1 | 2\n\n## Next\n\nlast")
+    await settled()
+    await sink.finish([])
+    await sink.close_out(None)
+    first, second = slack.message_texts()
+    assert first.endswith("a | b\n---|---\n1 | 2") and second.startswith("## Next")
