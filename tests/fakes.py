@@ -473,7 +473,9 @@ class FakeSlack(AsyncWebClient):
 
     def _shown(self, ts: str) -> tuple[str, list[dict[str, Any]]]:
         """What a message shows now: its body text and its cards. A stream shows what its chunks
-        say until a `chat.update` replaces it with the blocks that update carried."""
+        say until a `chat.update` replaces it with the blocks that update carried. A chunk
+        replaces its card's title and status, and adds its details and its output to those the
+        card holds (measured 2026-10-01 and 2026-10-08)."""
         message = self.messages[ts]
         if message.updated or not message.chunks:
             text = "\n\n".join(b["text"] for b in message.blocks if b.get("type") == "markdown")
@@ -483,7 +485,11 @@ class FakeSlack(AsyncWebClient):
         cards: dict[str, dict[str, Any]] = {}
         for chunk in message.chunks:
             if chunk["type"] == "task_update":
-                cards[chunk["id"]] = card_of(chunk)
+                card, held = card_of(chunk), cards.get(chunk["id"], {})
+                for key in ("details", "output"):
+                    if key in held or key in card:
+                        card[key] = held.get(key, "") + card.get(key, "")
+                cards[chunk["id"]] = card
         return text.strip(), list(cards.values())
 
     def message_texts(self) -> list[str]:

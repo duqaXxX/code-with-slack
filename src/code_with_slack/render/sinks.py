@@ -72,6 +72,18 @@ BANNER_LIMIT = 300
 CARD_TEXT_LIMIT = 2_900
 CARD_TITLE_LIMIT = 150
 CARD_TEXT_FIELDS = ("title", "details", "output")
+# A stream keeps the details and the output of every `task_update` of a card, each added to what
+# the card holds; an update that carries neither leaves them, and its title replaces the title
+# (measured 2026-10-01 and 2026-10-08).
+CARD_APPENDED = ("details", "output")
+# What a card costs a streamed message besides its characters: the card, each of the two texts
+# it holds, and each line of them. Slack stores a card's text as rich text, a line an element,
+# and its cap follows what it stores. Replayed over the 15 streams of 2026-10-01 (slack-sdk
+# 3.44.1), text and cards counted this way came to 13,514 at most in an accepted append and to
+# 13,801 at least in a refused one; MESSAGE_LIMIT sits under both.
+CARD_COST = 100
+CARD_FIELD_COST = 150
+CARD_LINE_COST = 50
 # chat.update errors that refuse the content itself (reference, read 2026-09-25): a plain retry
 # can pass where the blocks did not. A transient error such as `ratelimited` is not one.
 REFUSED_CONTENT = {"invalid_blocks", "invalid_blocks_format", "msg_too_long", "invalid_arguments"}
@@ -462,8 +474,48 @@ def card_fields(update: TaskUpdate) -> dict[str, str]:
 
 
 def card_chunk(update: TaskUpdate) -> dict[str, Any]:
-    """The `task_update` chunk of a tool: a stream updates a card in place by its id."""
+    """What a tool's card says, as a `task_update` chunk. A stream is sent `card_addition` of
+    it: the card is updated in place by its id, and its details and output only grow."""
     return {"type": "task_update", "id": update.id, **card_fields(update)}
+
+
+def lacking(held: str, wanted: str) -> str:
+    """What to add to the text a card holds so that it ends with `wanted`: the lines of `wanted`
+    past those the card already ends with, a line break first. Empty when it lacks nothing.
+    Ten equal lines followed by an eleventh read as nothing new."""
+    if not held:
+        return wanted
+    has, wants = held.split("\n"), wanted.split("\n")
+    shared = next((n for n in range(min(len(has), len(wants)), 0, -1) if has[-n:] == wants[:n]), 0)
+    return "".join(f"\n{line}" for line in wants[shared:])
+
+
+def card_addition(
+    chunk: dict[str, Any], sent: dict[str, Any] | None, held: dict[str, str], room: int | None
+) -> tuple[dict[str, Any], dict[str, str], int]:
+    """The chunk that brings a stream's card to `chunk`, what the card holds after it, and what
+    it costs the message. `sent` is the card's last chunk (None for a new card) and `held` the
+    details and the output Slack keeps for it. A card already in the message leaves out a text
+    that does not fit `room`, and keeps what it holds."""
+    told = {key: chunk[key] for key in ("type", "id", "title", "status")}
+    after = dict(held)
+    if sent is None:
+        cost = CARD_COST + len(chunk["title"])
+    else:
+        cost = max(0, len(chunk["title"]) - len(sent["title"]))
+    for key in CARD_APPENDED:
+        more = lacking(held.get(key, ""), chunk.get(key, ""))
+        if not more:
+            continue
+        price = len(more) + CARD_LINE_COST * (more.count("\n") + (key not in held))
+        if key not in held:
+            price += CARD_FIELD_COST
+        if sent is not None and room is not None and cost + price > room:
+            continue
+        told[key] = more
+        after[key] = held.get(key, "") + more
+        cost += price
+    return told, after, cost
 
 
 def rich_text(text: str) -> dict[str, Any]:
@@ -530,11 +582,13 @@ class _Plan:
 
     size: int  # characters the message holds once these chunks are in
     count: int  # elements it holds
+    card_cost: int = 0  # what its cards count toward MESSAGE_LIMIT beside `size`
     chunks: list[dict[str, Any]] = field(default_factory=list)
     overflow: Cursor | None = None  # where the next message starts, if the rest does not fit
     text: dict[int, int] = field(default_factory=dict)  # part -> characters sent up to
     pieces: set[tuple[int, int]] = field(default_factory=set)
     cards: dict[str, dict[str, Any]] = field(default_factory=dict)
+    card_held: dict[str, dict[str, str]] = field(default_factory=dict)
     counted: set[int] = field(default_factory=set)
 
 
@@ -554,7 +608,12 @@ class _Held:
 
 def plan_card_text(plan: _Plan) -> int:
     """The characters of card text a plan's chunks carry."""
-    return sum(len(chunk.get(key, "")) for chunk in plan.cards.values() for key in CARD_TEXT_FIELDS)
+    return sum(
+        len(chunk.get(key, ""))
+        for chunk in plan.chunks
+        if chunk["type"] == "task_update"
+        for key in CARD_TEXT_FIELDS
+    )
 
 
 @dataclass
@@ -570,10 +629,13 @@ class _Message:
     streaming: bool = False
     text_sent: dict[int, int] = field(default_factory=dict)
     pieces_sent: set[tuple[int, int]] = field(default_factory=set)
-    cards: dict[str, dict[str, Any]] = field(default_factory=dict)  # last chunk sent per tool
-    # Characters of card text (title, details, output) in every chunk sent: Slack keeps the
-    # details and the output of each one (measured 2026-10-01), and `size` counts none of it.
+    cards: dict[str, dict[str, Any]] = field(default_factory=dict)  # what each card was told
+    # The details and the output Slack holds per card: those of every chunk sent, joined.
+    card_held: dict[str, dict[str, str]] = field(default_factory=dict)
+    # Characters of card text (title, details, output) in every chunk sent, for the log, and
+    # what the cards count toward MESSAGE_LIMIT (`card_addition`); `size` counts none of it.
     card_text: int = 0
+    card_cost: int = 0
     size: int = 0
     count: int = 0
     counted: set[int] = field(default_factory=set)
@@ -1022,12 +1084,11 @@ class ReplySink:
     def _plan(self, message: _Message) -> _Plan:
         """What the message's stream lacks: the cards that changed since they were sent, then
         what the model has past what it was sent, in order, as far as the message holds."""
-        plan = _Plan(size=message.size, count=message.count)
+        plan = _Plan(size=message.size, count=message.count, card_cost=message.card_cost)
         for tool_id, sent in message.cards.items():
             chunk = card_chunk(self._tools[tool_id].update)
             if chunk != sent:
-                plan.chunks.append(chunk)
-                plan.cards[tool_id] = chunk
+                self._plan_card(message, plan, chunk)
         for index, part, floor, _ in self._span(message.start, None):
             if isinstance(part, _Text):
                 more = self._plan_text(message, plan, index, part, floor)
@@ -1036,6 +1097,23 @@ class ReplySink:
             if not more:
                 break
         return plan
+
+    @staticmethod
+    def _plan_card(message: _Message, plan: _Plan, chunk: dict[str, Any]) -> bool:
+        """Add a card's chunk to the plan as a stream takes it; False when the card is new and
+        the message has no room for it. A message that holds nothing yet takes any card."""
+        tool_id = chunk["id"]
+        room = MESSAGE_LIMIT - plan.size - plan.card_cost
+        told, held, cost = card_addition(
+            chunk, message.cards.get(tool_id), message.card_held.get(tool_id, {}), room
+        )
+        if tool_id not in message.cards and cost > room and plan.size + plan.card_cost > 0:
+            return False
+        plan.chunks.append(told)
+        plan.cards[tool_id] = chunk
+        plan.card_held[tool_id] = held
+        plan.card_cost += cost
+        return True
 
     def _plan_text(
         self, message: _Message, plan: _Plan, index: int, part: _Text, floor: int
@@ -1056,7 +1134,7 @@ class ReplySink:
         if new and plan.count >= BLOCKS_LIMIT:
             plan.overflow = (index, sent)
             return False
-        room = MESSAGE_LIMIT - plan.size
+        room = max(0, MESSAGE_LIMIT - plan.size - plan.card_cost)
         if len(tail) <= room or not tail[room:].strip():
             # All of it, or all but blanks, which go with what follows if anything does.
             piece = tail[:room]
@@ -1083,17 +1161,15 @@ class ReplySink:
         update = tool.update
         has_card, pieces = self._tool_elements(tool, floor, None)
         if has_card and update.id not in message.cards and update.id not in plan.cards:
-            if plan.count >= BLOCKS_LIMIT:
+            if plan.count >= BLOCKS_LIMIT or not self._plan_card(message, plan, card_chunk(update)):
                 plan.overflow = (index, 0)
                 return False
-            plan.cards[update.id] = card_chunk(update)
-            plan.chunks.append(plan.cards[update.id])
             plan.count += 1
         for piece in pieces:
             if (index, piece) in message.pieces_sent:
                 continue
             size = len(tool.pieces()[piece - 1])
-            if plan.count >= BLOCKS_LIMIT or plan.size + size > MESSAGE_LIMIT:
+            if plan.count >= BLOCKS_LIMIT or plan.size + plan.card_cost + size > MESSAGE_LIMIT:
                 plan.overflow = (index, piece)
                 return False
             plan.chunks.append(piece_chunk(tool, piece))
@@ -1107,8 +1183,9 @@ class ReplySink:
         message.text_sent.update(plan.text)
         message.pieces_sent |= plan.pieces
         message.cards.update(plan.cards)
+        message.card_held.update(plan.card_held)
         message.card_text += plan_card_text(plan)
-        message.size, message.count = plan.size, plan.count
+        message.size, message.count, message.card_cost = plan.size, plan.count, plan.card_cost
         message.counted |= plan.counted
 
     def _stream_shows(self, message: _Message, end: Cursor | None) -> bool:
@@ -1527,8 +1604,8 @@ class ReplySink:
         except Exception as exc:
             code = describe(exc)
             if code == TOO_LONG:
-                # Slack counts what the plan cannot (the text of the cards, kept from every
-                # update: measured 2026-10-01) and would refuse the same append again. The
+                # Slack's cap follows what it stores, which the plan only estimates, and it
+                # would refuse the same append again. The
                 # stream is stopped bare, as at STREAM_SECONDS, and the message goes on by
                 # update, from the model; the end then posts the closing message. Only this
                 # code: any other refusal stays a failed write, which the session shows.
