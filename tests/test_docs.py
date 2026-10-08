@@ -5,11 +5,20 @@ exempt from the prose checks: it quotes history by design.
 """
 
 import re
+import tomllib
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
+from code_with_slack.commands import Invalid, Word
+
 ROOT = Path(__file__).resolve().parents[1]
+README = ROOT / "README.md"
+# The README is the landing page: a feature's detail goes in docs/setup.md. The limit sits a
+# quarter above the page's length when it was set (677 words, as `str.split` counts them). Raise
+# it only when the page gains a section, never to make room for the description of one feature.
+README_WORD_LIMIT = 846
 DOCS = sorted(
     p
     for p in ROOT.rglob("*.md")
@@ -87,3 +96,31 @@ def test_no_orphan_doc() -> None:
                 linked.add((doc.parent / file_part).resolve())
     orphans = [d.name for d in (ROOT / "docs").glob("*.md") if d.resolve() not in linked]
     assert not orphans, f"docs nobody links to: {orphans}"
+
+
+def readme_section(title: str) -> str:
+    """The README's text under one `##` heading, up to the next one."""
+    match = re.search(rf"^## {re.escape(title)}\n(.*?)(?=^## |\Z)", README.read_text(), re.M | re.S)
+    assert match, f"README.md has no '## {title}' section"
+    return match.group(1)
+
+
+def test_the_readme_lists_every_word_of_the_daemon_and_no_other() -> None:
+    # A word added, renamed or removed without its row in the README's table fails here.
+    words = sorted(cls.WORD for cls in get_args(Word) if cls is not Invalid)
+    rows = sorted(set(re.findall(r"^\| `!(\w+)", readme_section("Commands"), re.M)))
+    assert rows == words
+
+
+def test_the_readme_states_the_version_and_the_python_the_package_declares() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    text = README.read_text()
+    assert f"version {project['version']}" in text
+    assert f"Python {project['requires-python'].removeprefix('>=')}" in text
+
+
+def test_the_readme_stays_a_landing_page() -> None:
+    words = len(README.read_text().split())
+    assert words <= README_WORD_LIMIT, (
+        f"README.md has {words} words, over {README_WORD_LIMIT}: detail belongs in docs/setup.md"
+    )

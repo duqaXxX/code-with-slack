@@ -236,6 +236,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The README is a landing page: what the daemon is for, what it needs before an install, the
+  steps of the setup, what a session shows and one row per command. The detail of each command
+  lives in `docs/setup.md` alone. `tests/test_docs.py` fails when the README's command table
+  differs from the `Word` union of `code_with_slack.commands`, when the version or the Python it
+  states differ from `pyproject.toml`, and when it passes `README_WORD_LIMIT` words.
+
 - A reply ends with ❌ whenever an edit Slack refused left one of its messages short of what
   Claude wrote, whatever kind of message it is (#92, the owner's decision of 2026-10-08). An
   edit refused for its content is dropped, and the message keeps what it showed. That was

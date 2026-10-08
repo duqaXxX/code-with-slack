@@ -17,7 +17,11 @@ sessions. A vulnerability goes to the **Security** tab, never to an issue (see
 4. A new `!word` of the daemon is a class in the `Word` union of `code_with_slack.commands` with
    its `WORD`, and needs a line in `texts.GUIDE` (the `!guide` text) and in `texts.HELP_WORDS`:
    `tests/test_commands.py` fails until both explain it. Change the guide whenever a behaviour
-   it describes changes.
+   it describes changes. The word also needs a row in the Commands table of
+   [README.md](README.md), which `tests/test_docs.py` checks against the same union.
+5. The README is the landing page and has a word limit (`README_WORD_LIMIT` in
+   `tests/test_docs.py`): describe a feature in [docs/setup.md](docs/setup.md), and change the
+   README only when one of its lines stops being true.
 
 ## Checks
 
