@@ -538,6 +538,7 @@ async def test_the_closing_message_text_skips_the_daemon_s_own_lines(slack: Fake
 
 
 ERROR_LINE = "Claude Code reported an error: `the Claude Code process exited`"
+FULL_LINES = 733  # lines of 15 characters: a message that has no room left for one more line
 
 
 async def test_a_reply_cut_short_after_its_stream_stopped_ends_with_the_daemon_s_line(
@@ -682,6 +683,69 @@ async def test_a_daemon_line_that_does_not_say_how_the_reply_ended_never_moves(
     [closing] = slack.calls_to("chat.postMessage")
     assert closing["blocks"] == [sinks.context_block(sinks.ZERO_WIDTH_SPACE)]
     assert texts.COMPACTED_PLAIN in str(slack.calls_to("chat.update")[-1]["blocks"])
+
+
+async def test_the_line_on_how_the_reply_ended_moves_from_under_a_notice_alone(
+    slack: FakeSlack,
+) -> None:
+    # Nothing of the answer above it, only a line of the daemon's: that line stays, and the
+    # message that notifies holds the error where it showed empty.
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text(texts.COMPACTED_PLAIN + "\n\n", notice=True)
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("\n\n" + ERROR_LINE, ending=True)
+    await sink.finish([])
+    await sink.close_out(None)
+    [closing] = slack.calls_to("chat.postMessage")
+    assert closing["blocks"] == [{"type": "markdown", "text": ERROR_LINE}]
+    assert slack.calls_to("chat.update")[-1]["blocks"] == [
+        {"type": "markdown", "text": texts.COMPACTED_PLAIN}
+    ]
+
+
+async def test_the_line_on_how_the_reply_ended_moves_with_a_footer_an_earlier_turn_left(
+    slack: FakeSlack,
+) -> None:
+    # A report turn cut short renders into a reply that already has its first turn's footer:
+    # the footer alone was the ending, and the error stayed in a silent edit.
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.task(tool("t1", "Bash"))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("\n\n" + ERROR_LINE, ending=True)
+    await sink.finish([])
+    await sink.close_out("footer")
+    [closing] = slack.calls_to("chat.postMessage")
+    assert closing["blocks"] == [
+        {"type": "markdown", "text": ERROR_LINE},
+        {"type": "divider"},
+        sinks.context_block("footer"),
+    ]
+    assert closing["text"] == sinks.banner_text(ERROR_LINE, limit=sinks.BANNER_LIMIT)
+
+
+async def test_a_last_message_that_opens_with_the_line_on_how_the_reply_ended_is_the_ending(
+    slack: FakeSlack,
+) -> None:
+    # The first message is full, so the error line goes on in a continuation, which rings
+    # with it: a closing message after it showed empty and rang a third time.
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("a line of text\n" * FULL_LINES)
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    assert len(slack.posted_ts) == 0  # the first message holds it all, and no more
+    await sink.text("\n\n" + ERROR_LINE, ending=True)
+    await sink.finish([])
+    await sink.close_out(None)
+    await settled()
+    [continuation] = slack.calls_to("chat.postMessage")  # and no closing message after it
+    [block] = continuation["blocks"]
+    assert block["type"] == "markdown" and block["text"].endswith("process exited`")
+    assert slack.message_blocks()[-1] == continuation["blocks"]
 
 
 async def test_a_daemon_line_stays_in_the_reply_when_the_footer_is_the_ending(

@@ -146,9 +146,10 @@ So, inside a thread:
   short gets no footer. When its reply has no text after the last call to move, the new
   message is the line that says how it ended (`Claude Code reported an error: …`, or
   `This reply ended before an answer: …` after a restart of the daemon), taken out of the
-  first message, and the second ring reads that line. When Claude wrote text after its last
-  call, the new message is that text with the line under it, and the ring reads the start of
-  the text. No other line of the daemon's moves.
+  first message, with the footer of an earlier turn under it if the reply has one, and the
+  second ring reads that line. When Claude wrote text after its last call, the new message is
+  that text with the line under it, and the ring reads the start of the text. No other line
+  of the daemon's moves.
 - A reply whose stream Slack refuses to grow (`msg_too_long`: Slack does not document its cap, and
   the daemon counts text and cards toward it by measured figures) stops its stream at that moment, which rings, and
   goes on the same way: by `chat.update`, with its ending in a new message. An edit Slack refuses for

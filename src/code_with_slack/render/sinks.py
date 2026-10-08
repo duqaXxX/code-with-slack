@@ -1156,13 +1156,14 @@ class ReplySink:
         last call, whole (a part of the model is never cut: half a list or a heading without
         its body is no ending), with whatever follows it. None when the message holds no such
         text from its start, or would keep nothing of the answer before it (an answer that is
-        text alone): the ending is then the footer alone. With no footer to post either (a turn
-        cut short), the ending is the daemon's line on how the reply ended (`_Text.ending`),
-        with whatever follows it, where the message that notifies would show empty. The running
-        list is no footer: the session empties it once the lost process's tasks are stopped."""
+        text alone): the ending is then the footer alone, unless the turn was cut short. The
+        ending is then the daemon's line on how the reply ended (`_Text.ending`), with whatever
+        follows it: the message that notifies says so, where it would show empty or hold a
+        footer alone. That line moves from under a line of the daemon's too, which stays."""
         cursor = self._cut_before(message, self._last_text(message, ending=False))
-        if cursor is None and not self._footer:
-            cursor = self._cut_before(message, self._last_text(message, ending=True))
+        if cursor is None:
+            said = self._last_text(message, ending=True)
+            cursor = self._cut_before(message, said, notices=True)
         return cursor
 
     def _last_text(self, message: _Message, *, ending: bool) -> int | None:
@@ -1179,23 +1180,34 @@ class ReplySink:
             None,
         )
 
-    def _cut_before(self, message: _Message, index: int | None) -> Cursor | None:
+    def _cut_before(
+        self, message: _Message, index: int | None, *, notices: bool = False
+    ) -> Cursor | None:
         """The cursor at the start of part `index`, when cutting `message` there leaves it
-        something of the answer; None when the part opens the message or nothing would stay."""
+        something of the answer, or with `notices` any line at all; None when the part opens
+        the message or nothing would stay."""
         if index is None or (index, 0) <= message.start:
             return None
         cursor = (index, 0)
         # Something of the answer must stay before it, and show: a card that draws (a folded
         # run's second card draws nothing), a preview, or words of Claude's. A message left
-        # with a line of the daemon's alone, or with nothing, is no answer.
+        # with a line of the daemon's alone, or with nothing, is no answer: cutting Claude's
+        # text there would move the whole answer out. The line on how the reply ended is no
+        # part of the answer, so a line of the daemon's is enough to stay above it.
         for _, part, floor, ceil in self._span(message.start, cursor):
             if isinstance(part, _Tool):
                 has_card, pieces = self._tool_elements(part, floor, ceil)
                 if (has_card and self._card_blocks(part.update)) or pieces:
                     return cursor
-            elif not part.notice and part.text[floor:ceil].strip():
+            elif (notices or not part.notice) and part.text[floor:ceil].strip():
                 return cursor
         return None
+
+    def _opens_on_ending(self, message: _Message) -> bool:
+        """Whether `message`, posted as a continuation, starts at the daemon's line on how the
+        reply ended: it rang with that line, and is the reply's ending as it stands."""
+        said = self._last_text(message, ending=True)
+        return message.mode == "post" and said is not None and (said, 0) <= message.start
 
     def _banner(self, span: list[tuple[int, _Text | _Tool, int, int | None]] | None = None) -> str:
         """The notification's text, plain: the first paragraph of Claude's own words in the
@@ -2022,6 +2034,12 @@ class ReplySink:
                     return False
                 message.exact, message.checked = False, None  # its stream said more than its span
                 return (await self._update_step(message, cursor))[0]
+            if self._opens_on_ending(message):
+                # A full message pushed the line into this one, which notified with it: a
+                # closing message after it would ring again with nothing to show. The footer,
+                # if there is one, goes under it by a silent edit.
+                self._end_mode = "moved"
+                return (await self._update_step(message, None))[0]
         self._end_mode = "post"
         self._body_landed = True  # every message is written: only the closing message is owed
         return await self._write_closing()
@@ -2038,8 +2056,8 @@ class ReplySink:
         to move into a message of its own (`_end`), or bring it to the footer as it stands: it
         stays once posted, since it is what notified. Its text is Claude's own words, as a
         banner: never a line of the daemon's. With no footer either it holds one zero-width
-        space: a reply that holds the daemon's line on how it ended, with something of the
-        answer above it in its last message, never comes here (`_ending_cursor`)."""
+        space: only a reply with no line on how it ended comes here that way (a turn that
+        ended well, text alone, whose footer could not be built)."""
         blocks = self._closing_blocks() or [context_block(ZERO_WIDTH_SPACE)]
         attempted = self._clock.time()
         try:

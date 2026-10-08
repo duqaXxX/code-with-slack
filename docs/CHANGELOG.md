@@ -607,6 +607,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- The line on how a cut-short reply ended reaches the message that notifies in three more
+  cases (#165). A report turn cut short in a reply that already had the footer of its first
+  turn ended with that footer alone, the line left in a silent edit: the line now moves with
+  the footer under it. A reply that held only a line of the daemon's above the line ended
+  with a message that showed empty: the line now moves and the other stays. A reply whose
+  full message had pushed the line into a continuation got an empty-looking closing message
+  after it, a third ring: the continuation is now the ending (`ReplySink._opens_on_ending`).
+  The empty-looking message remains in one case, a turn that ended well with an answer of
+  text alone whose footer could not be built, where it is the only notification of the end.
 - A turn cut short after its reply's stream stopped ends with the error line as a new message,
   where it ended with a message that showed empty (#165). Past 280 seconds, or after an append
   Slack refused, a reply's end is a new message, the one that notifies. A turn that lost its
@@ -624,9 +633,7 @@ All notable changes to this project are documented here. The format follows
   `⏳ 1 agent` still showing, and ends with the line too. A reply that ends with its footer is
   unchanged: a line of the daemon's stays where it was written. Not covered: a process lost
   while no turn is active writes no line at all; a reply cut short after text Claude wrote
-  past its last call still rings with the start of that text; and the new message still
-  shows empty when nothing of the answer would stay above the line or the line opens the
-  reply's last message.
+  past its last call still rings with the start of that text.
 - A message counts its text as the blocks Slack makes of it, so a reply with many headings or
   tables continues in a new message where an edit of it was refused (#92). Slack translates a
   `markdown` block, and a stream's text, into several stored blocks: a `header` per heading, a
