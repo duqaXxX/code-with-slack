@@ -592,7 +592,10 @@ All notable changes to this project are documented here. The format follows
   The owner's log holds six such refusals on 2026-10-07: one message of 17 blocks by the
   daemon's count was 51 by Slack's, and each refused edit was dropped. `sinks.markdown_starts`
   now finds the blocks of a text, and a stream's plan, a post and an update all count them
-  toward `BLOCKS_LIMIT` and cut a text at the line that would start one block too many. For
+  toward `BLOCKS_LIMIT` and cut a text at the line that would start one block too many. A
+  heading is never the last block before the cut: it opens the next message with the text it
+  heads (`sinks.markdown_cut`; in the first run on the owner's daemon, 40 sections were cut
+  between the 23rd heading and its sentence). For
   the five texts of that message the count gives what Slack stored (7, 7, 9, 10 and 6), and the
   turn replayed through the sink stays at 45 or under in every write, 67 of which were sent to
   Slack and accepted. When Slack still refuses a write of the reply's last message with that sentence

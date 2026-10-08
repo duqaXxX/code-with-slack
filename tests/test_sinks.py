@@ -3143,7 +3143,7 @@ async def test_cards_and_headings_share_the_room_of_a_message(slack: FakeSlack) 
     await sink.finish([])
     await sink.close_out(None)
     first, second = slack.message_texts()
-    assert sinks.markdown_blocks(first) == 15
+    assert sinks.markdown_blocks(first) == 14  # the fifteenth is a heading: it goes with its text
     assert lines_of(first, second) == lines_of(sections(20))
 
 
@@ -3266,3 +3266,29 @@ async def test_a_sent_line_that_turns_into_a_table_is_not_cut_in_two(slack: Fake
     await sink.close_out(None)
     first, second = slack.message_texts()
     assert first.endswith("a | b\n---|---\n1 | 2") and second.startswith("## Next")
+
+
+def test_a_heading_is_not_left_as_the_last_block_before_a_cut() -> None:
+    text = sections(3)
+    third = text.index("## Heading 3")
+    assert sinks.markdown_cut(text, 5) == third  # the fifth block is the third heading
+    assert sinks.markdown_cut(text, 4) == third
+    # a text that ends on the heading that fills the room: whatever follows would be cut off it
+    assert sinks.markdown_cut(text[: third + len("## Heading 3")], 5) == third
+    assert sinks.markdown_cut("## Only\n\ntext", 1) == len("## Only\n\n")  # never an empty message
+    # a stream cannot take back a heading it was sent
+    assert sinks.markdown_cut(text, 5, floor=third + 3) == text.index("paragraph 3")
+
+
+async def test_a_streamed_heading_goes_to_the_next_message_with_its_text(slack: FakeSlack) -> None:
+    # Seen on 2026-10-08: 40 sections, the first message ended on the heading of the 23rd.
+    sink = reply(slack, limiter=UpdateLimiter(burst=200))
+    text = sections(40)
+    for i in range(0, len(text), 7):  # in small pieces, as a stream brings it
+        await sink.text(text[i : i + 7])
+        await settled()
+    await sink.finish([])
+    await sink.close_out(None)
+    first, second = slack.message_texts()
+    assert first.endswith("paragraph 22") and second.startswith("## Heading 23")
+    assert lines_of(first, second) == lines_of(text)

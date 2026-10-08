@@ -194,10 +194,20 @@ def markdown_blocks(text: str) -> int:
     return max(1, len(markdown_starts(text)))
 
 
-def markdown_cut(text: str, room: int) -> int | None:
-    """Where to cut a markdown text so that it makes at most `room` blocks; None when it does."""
+def markdown_cut(text: str, room: int, floor: int = 0) -> int | None:
+    """Where to cut a markdown text so that it makes at most `room` blocks, at a block's start
+    no earlier than `floor` (what a stream was already sent); None when nothing is to cut. A
+    heading is never the last block before the cut, nor the last of a text that fills the room:
+    it opens the next message, with the text it heads."""
     starts = markdown_starts(text)
-    return starts[room] if len(starts) > room else None
+    index: int | None = len(starts) if len(starts) == room else None
+    if len(starts) > room:
+        index = next((i for i in range(room, len(starts)) if starts[i] >= floor), None)
+    if index is None:
+        return None
+    while index > 1 and starts[index - 1] >= floor and HEADING.match(text, starts[index - 1]):
+        index -= 1
+    return starts[index] if index < len(starts) else None
 
 
 def blocks_count(blocks: list[dict[str, Any]]) -> int:
@@ -1259,8 +1269,9 @@ class ReplySink:
         words = whole.strip("\n")
         # Text already sent can gain a block when its next line arrives (a line that turns
         # out to head a table): the cut is then the next block's start, never inside a line.
-        starts = markdown_starts(words)[max(1, message.blocks_room - others) :]
-        over = next((at for at in starts if opening + at >= sent + lead), None)
+        over = markdown_cut(
+            words, max(1, message.blocks_room - others), max(0, sent + lead - opening)
+        )
         if over is not None:
             stop = opening + over
             piece = part.text[sent + lead : stop]
