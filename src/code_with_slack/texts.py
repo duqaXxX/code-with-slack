@@ -206,6 +206,10 @@ BYPASS_ON_THREAD = (
 BYPASS_OFF_THREAD = (
     "Bypass is off in this session: Claude Code asks again before tools that need approval."
 )
+BYPASS_OFF_AUTO_THREAD = (
+    "Bypass is off in this session: it runs in Claude Code's auto mode, where a classifier "
+    "decides which tools run without asking."
+)
 STOPPED = "Stopped the current turn."
 # An answered question, as the terminal keeps it in the transcript.
 ANSWERED = "User answered Claude's questions:"
@@ -289,6 +293,7 @@ STATUS_CHANNEL_IDLE = "idle"
 STATUS_CHANNEL_SINCE = " · {ago}"
 STATUS_CHANNEL_SESSION = "Session"  # the link's label for a session with no title yet
 STATUS_CHANNEL_BYPASS = " · ⚡ bypass"
+STATUS_CHANNEL_AUTO = " · auto"
 STATUS_CHANNEL_FOLDER = " · folder `{directory}`"
 STATUS_CHANNEL_LINK_FALLBACK = "thread `{thread_ts}`"
 HELP_OWN = "**code-with-slack**"

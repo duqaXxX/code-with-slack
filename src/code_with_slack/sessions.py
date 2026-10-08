@@ -499,6 +499,9 @@ class ThreadSession:
         self._client_effort: str | None = None
         self._client_bypass = False
         self.native_mode = "default"
+        # The permission mode the client runs in now: what the connect left it in, then
+        # whatever Claude Code reports (`_dispatch`).
+        self.mode = "default"
         self.cli_version: str | None = None
         # The effort level Claude Code last reported: its Stop hook, or the output of `/effort`
         # and `/model`, which run no hook. None for a model without effort.
@@ -544,6 +547,12 @@ class ThreadSession:
         """Whether this thread runs in bypass: the one answer the footer's ⚡, `!status`, the
         channel list and the setup's checkbox read."""
         return self._bypass_runs(self.bypass_choice)
+
+    @property
+    def auto(self) -> bool:
+        """Whether this thread runs in Claude Code's auto mode, by Claude Code's last report:
+        what the footer and the channel list show while bypass is off."""
+        return not self.bypass and self.mode == "auto"
 
     def _mode_for(self, on: bool) -> str:
         """The permission mode that means `on`; off is the native mode, or `default` when the
@@ -902,10 +911,13 @@ class ThreadSession:
                 # Read once: a Start writing the switch meanwhile must not make the client's
                 # mode and what is recorded for it disagree.
                 choice = self.bypass_choice
+                mode = self.native_mode
                 if choice is True:
+                    mode = "bypassPermissions"
                     await client.set_permission_mode("bypassPermissions")
                 elif choice is False and self.native_mode == "bypassPermissions":
                     # An explicit off outlives a rebuild: the folder's own bypass would return.
+                    mode = "default"
                     await client.set_permission_mode("default")
             except BaseException:
                 # A client nobody holds would leave its Claude Code process running.
@@ -914,6 +926,7 @@ class ThreadSession:
             self._client = client
             self._client_effort = effort
             self._client_bypass = self._bypass_runs(choice)
+            self.mode = mode
             # A resumed session runs at the settings' level (measured), unknown until reported,
             # unless the daemon itself just asked for a stored level: that request is shown at
             # once, until Claude Code's own report (every turn ends with one) corrects it.
@@ -930,12 +943,29 @@ class ThreadSession:
         client = await self.ensure_connected()
         mode = self._mode_for(on)
         try:
-            await client.set_permission_mode(mode)  # type: ignore[arg-type]
+            try:
+                await client.set_permission_mode(mode)  # type: ignore[arg-type]
+            except Exception as exc:
+                if mode != "auto" or self._closed:
+                    raise
+                # Claude Code refuses auto mode to a session that does not meet its
+                # requirements (a model without it, measured), and the refusal leaves bypass
+                # running: off then lands on the mode Claude Code itself starts in when auto
+                # mode is unavailable.
+                logger.warning(
+                    "could not return %s/%s to auto mode, setting default: %s",
+                    self.channel_id,
+                    self.thread_ts,
+                    describe(exc),
+                )
+                mode = "default"
+                await client.set_permission_mode("default")
         except Exception:
             if self._closed:  # the close disconnected the client under the call
                 raise SessionClosed from None
             raise
         self._client_bypass = on
+        self.mode = mode
         # The session closed while the mode was being set: the thread this would write to may
         # already be gone, so the switch is never recorded after the fact.
         if self._closed:
@@ -1161,7 +1191,7 @@ class ThreadSession:
         if session_id and usable:
             head.append(terminal_line(self.directory, session_id))
         state = texts.STATUS_STATE.format(
-            mode=self._mode_for(self.bypass),
+            mode="bypassPermissions" if self.bypass else self.mode,
             # Only a turn's `init` message carries the version, never the connect (measured).
             version=self.cli_version
             or (texts.VERSION_PENDING if self._client is not None else "not started"),
@@ -1459,6 +1489,12 @@ class ThreadSession:
             init_session_id = message.data.get("session_id")
             if isinstance(init_session_id, str):
                 self._deps.state.set_session(self.channel_id, self.thread_ts, init_session_id)
+        if isinstance(message, SystemMessage) and message.subtype == "status":
+            # Claude Code reports the permission mode after a change (measured after each
+            # `set_permission_mode`): the mode shown follows what it says.
+            reported = message.data.get("permissionMode")
+            if isinstance(reported, str):
+                self.mode = reported
         if isinstance(message, TASK_MESSAGES) and (inner := self._nesting_reply(message)):
             # A task of a call inside another call (a long command a subagent runs) is that
             # call's root's work: Claude Code reports it to the subagent, so no turn follows it.
@@ -2221,6 +2257,7 @@ class ThreadSession:
         branch, changes = await git_state(here, self._repository)
         return FooterData(
             bypass=self.bypass,
+            auto=self.auto,
             branch=branch,
             model=context.get("model"),
             context_percent=context.get("percentage"),

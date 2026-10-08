@@ -219,6 +219,7 @@ in a release with no notice, so it is the first place to look when a release mis
 | `StreamEvent.event.message` | `id` | key | render/renderer.py: TurnRenderer.feed | measured | none |
 | `SystemMessage.data` | `claude_code_version` | key | sessions.py: ThreadSession._dispatch | measured | P1 |
 | `SystemMessage.data` | `compact_metadata` | key | render/renderer.py: TurnRenderer.feed | measured | none |
+| `SystemMessage.data` | `permissionMode` | key | sessions.py: ThreadSession._dispatch | measured | none |
 | `SystemMessage.data` | `session_id` | key | sessions.py: ThreadSession._dispatch | measured | none |
 | `SystemMessage.data.compact_metadata` | `post_tokens` | key | render/renderer.py: TurnRenderer._compacted | measured | none |
 | `SystemMessage.data.compact_metadata` | `pre_tokens` | key | render/renderer.py: TurnRenderer._compacted | measured | none |
@@ -234,8 +235,9 @@ in a release with no notice, so it is the first place to look when a release mis
 | `HookEvent` | `"PostToolUse"` | value | sessions.py: client_options | reference | none |
 | `HookEvent` | `"Stop"` | value | sessions.py: client_options | reference | none |
 | `MessageOriginKind` | `"human"` | value | sessions.py: injected_turn | package | none |
-| `PermissionMode` | `"bypassPermissions"` | value | sessions.py: ThreadSession.ensure_connected, ThreadSession._bypass_runs, ThreadSession._mode_for; sessions.py: ThreadSession.ensure_connected, ThreadSession._mode_for | reference | none |
-| `PermissionMode` | `"default"` | value | sessions.py: ThreadSession.ensure_connected, ThreadSession._mode_for | reference | none |
+| `PermissionMode` | `"auto"` | value | sessions.py: ThreadSession.auto | reference | none |
+| `PermissionMode` | `"bypassPermissions"` | value | sessions.py: ThreadSession.ensure_connected, ThreadSession._bypass_runs, ThreadSession._mode_for, ThreadSession.status; sessions.py: ThreadSession.ensure_connected, ThreadSession._mode_for | reference | none |
+| `PermissionMode` | `"default"` | value | sessions.py: ThreadSession.ensure_connected, ThreadSession._mode_for, ThreadSession.set_bypass | reference | none |
 | `ResultMessage.terminal_reason` | `"aborted_streaming"` | value | render/renderer.py: INTERRUPTED, TurnRenderer.close; sessions.py: ThreadSession._finish | reference | none |
 | `ResultMessage.terminal_reason` | `"aborted_tools"` | value | render/renderer.py: INTERRUPTED, TurnRenderer.close; sessions.py: ThreadSession._finish | reference | none |
 | `ServerToolUseBlock.name` | `"Edit"` | value | render/previews.py: PREVIEWED; render/renderer.py: TurnRenderer._block | measured | none |
@@ -248,6 +250,7 @@ in a release with no notice, so it is the first place to look when a release mis
 | `StreamEvent.event.type` | `"message_stop"` | value | render/renderer.py: TurnRenderer.feed | measured | none |
 | `SystemMessage.subtype` | `"compact_boundary"` | value | render/renderer.py: TurnRenderer.feed | measured | none |
 | `SystemMessage.subtype` | `"init"` | value | sessions.py: ThreadSession._dispatch | measured | P1 |
+| `SystemMessage.subtype` | `"status"` | value | sessions.py: ThreadSession._dispatch | measured | none |
 | `TaskNotificationMessage.status` | `"completed"` | value | sessions.py: ThreadSession._ended_line | reference | none |
 | `TaskNotificationMessage.status` | `"failed"` | value | render/renderer.py: ended_line, terminal_status | reference | none |
 | `TaskNotificationMessage.status` | `"killed"` | value | render/renderer.py: terminal_status | measured | none |

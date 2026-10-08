@@ -7,6 +7,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- A thread in Claude Code's auto mode shows `auto` in the footer and in the channel list of
+  `!status`. The mode is the one the owner's settings start Claude Code in
+  (`permissions.defaultMode`); the daemon sets none. It is read from the `permissionMode` Claude
+  Code reports in its `status` system messages (`ThreadSession.mode`), so a session reported
+  out of auto mode stops showing it. `!bypass off` in such a thread returns to auto mode, and sets
+  `default` when Claude Code refuses it, which it does for a model with no auto mode. The answer
+  to `!bypass off` names auto mode when the thread is back in it (`texts.BYPASS_OFF_AUTO_THREAD`).
+
 - `docs/sdk-surface.md`, the map of what the daemon depends on in `claude-agent-sdk`: 200 rows,
   one for each type, function, method, option, field, key and value the source reads, calls or
   decides on, with where it is used and where it is known from. Read on 2026-10-07 against SDK

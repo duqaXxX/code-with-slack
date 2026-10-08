@@ -3213,6 +3213,28 @@ def native_bypass_folder(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(FakeClaudeClient, "__init__", init)
 
 
+def auto_mode_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An owner whose own Claude Code settings start the process in auto mode."""
+    original = FakeClaudeClient.__init__
+
+    def init(self: FakeClaudeClient, options: Any, **kw: Any) -> None:
+        original(self, options, **kw)
+        self._server_info = dict(self._server_info, current_permission_mode="auto")
+
+    monkeypatch.setattr(FakeClaudeClient, "__init__", init)
+
+
+async def test_bang_bypass_off_in_an_auto_mode_thread_names_auto_mode(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auto_mode_settings(monkeypatch)
+    await world.dispatch(message("hi", ts=THREAD))
+    await world.dispatch(reply("!bypass on", THREAD))
+    await world.dispatch(reply("!bypass off", THREAD))
+    assert world.clients[0].modes == ["bypassPermissions", "auto"]
+    assert world.ephemerals() == [texts.BYPASS_ON_THREAD, texts.BYPASS_OFF_AUTO_THREAD]
+
+
 def bypass_box(world: World) -> dict[str, Any]:
     ((_, _, _, ts),) = world.waiting_setups()
     return setup_controls(world.slack.messages[ts].blocks)[SETUP_BYPASS]
@@ -3390,6 +3412,22 @@ async def test_the_channel_status_row_reads_the_effective_bypass(
     assert texts.STATUS_CHANNEL_BYPASS not in said(manual)[-1]
     manual.state.set_bypass(CHANNEL, THREAD, None)  # never chosen: the folder's bypass runs
     await manual.dispatch(message("!status"))
+    assert texts.STATUS_CHANNEL_BYPASS in said(manual)[-1]
+
+
+async def test_the_channel_status_row_says_auto_for_a_thread_in_auto_mode(
+    manual: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auto_mode_settings(monkeypatch)
+    await manual.dispatch(message("hello", ts=THREAD))
+    await manual.dispatch(setup_click(manual, bypass=False))
+    await manual.settle(0.3)
+    manual.state.set_session(CHANNEL, THREAD, "sess-ran")  # a thread that ran
+    await manual.dispatch(message("!status"))
+    assert texts.STATUS_CHANNEL_AUTO in said(manual)[-1]
+    manual.state.set_bypass(CHANNEL, THREAD, True)
+    await manual.dispatch(message("!status"))
+    assert texts.STATUS_CHANNEL_AUTO not in said(manual)[-1]
     assert texts.STATUS_CHANNEL_BYPASS in said(manual)[-1]
 
 
