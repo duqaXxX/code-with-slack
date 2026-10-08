@@ -1,15 +1,25 @@
 """Claude Code's folder trust, read before a session starts in a bound directory.
 
-An SDK session never shows the trust dialog and counts as trusted, so a repository's own hooks,
-`env` block and allow rules apply at once (permissions reference, "What runs before you trust a
-folder", read 2026-09-25). The daemon therefore starts Claude Code only where the owner has
-already trusted the folder in the terminal, by the rules Claude Code documents:
+An SDK session never shows the trust dialog, and Claude Code uses a repository's own hooks, `env`
+block and helper commands there whether the folder was trusted or not (permissions reference,
+"What runs before you trust a folder", read 2026-10-08). The daemon therefore starts Claude Code
+only where the owner has already trusted the folder in the terminal, by the rules Claude Code
+documents:
 
 - in a git repository, the trust is keyed on the repository root (the main checkout's root for
   a worktree) and a trusted parent does not cover it;
 - outside a repository, a trusted folder covers its subdirectories.
 
 The record is `projects["<path>"].hasTrustDialogAccepted` in `~/.claude.json`.
+
+Claude Code holds one kind of content to a stricter rule than this gate: the `permissions.allow`
+rules and `additionalDirectories` of a folder's `.claude/settings.json` need that folder's own
+record, and a trusted parent does not stand for it (same table). In a folder that only a parent's
+trust covers, a session starts and those rules are left out, with `this workspace has not been
+trusted` on stderr (measured 2026-10-03, CLI 2.1.286). The terminal shows its dialog again there,
+listing them, whatever the session did. No SDK or `claude -p` run wrote or changed a record's
+`hasTrustDialogAccepted` in those measurements; an interactive start that is not trusted writes
+`false`.
 
 The daemon's own git (the footer, `!status`, `!open`) has a second way in, beside a trusted
 repository key: a repository inside the folder the session started in (`trusted_repository`).

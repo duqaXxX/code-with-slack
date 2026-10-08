@@ -788,12 +788,16 @@ was opened in for as long as it exists: `!bind` changes only where the *next* th
 refuses while any of the channel's threads is not idle (`SessionManager.bind`).
 
 - The Claude Agent SDK client is created on first use, and only in a folder the owner has
-  trusted in Claude Code. An SDK session never shows Claude Code's trust dialog and counts as
-  trusted, so a repository's own hooks, `env` block and allow rules would apply at once.
+  trusted in Claude Code. An SDK session never shows Claude Code's trust dialog, and Claude Code
+  uses a repository's own hooks, `env` block and helper commands there whether the folder was
+  trusted or not.
   `code_with_slack.trust.workspace_trusted` reads Claude Code's record
   (`projects["<path>"].hasTrustDialogAccepted` in `~/.claude.json`) by Claude Code's rules: in a
   git repository the repository root decides (the main checkout's root for a worktree) and a
   trusted parent does not cover it; outside git, a trusted folder covers its subdirectories.
+  Claude Code holds the `permissions.allow` rules and `additionalDirectories` of a folder's
+  `.claude/settings.json` to that folder's own record: where only a parent's trust covers the
+  folder, the session starts and those rules are left out.
   Which repository a folder belongs to is read from the filesystem (`trust.locate`) and never
   asked of git there, since git would answer from the folder's own `.git` file, `commondir` and
   `core.worktree`, which whoever supplied the folder wrote. The first folder up the path that
