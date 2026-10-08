@@ -834,7 +834,11 @@ refuses while any of the channel's threads is not idle (`SessionManager.bind`).
   (`setting_sources` user, project and local), streaming of partial messages, the approval
   callback, `--allow-dangerously-skip-permissions`, which makes `!bypass on` possible
   without turning it on, and `--replay-user-messages` (below, "A prompt taken into a report
-  turn").
+  turn"). The SDK runs Claude Code in its non-interactive mode, which leaves out the two
+  servers built into Claude Code: computer use, which Claude Code offers in an interactive
+  session only, and the Chrome integration, which that mode connects only when started with
+  `--chrome` (measured: "Built-in servers"). The MCP servers the owner configured load as in
+  the terminal.
 - After connecting, `get_server_info()` gives the commands the session offers (for `!help` and
   `!`) and the permission mode Claude Code started in (`native_mode`, kept as reported):
   `!bypass off` returns to it, or to `default` when the folder's own settings start it in
@@ -1346,5 +1350,6 @@ repeated by `tests/test_openfile.py`.
 | Report inside a queued turn | When a message was already sent and waits for its turn, that turn comes first and Claude Code reports the task inside it, with no turn of its own | not recorded | not recorded | Claude Code 2.1.280 |
 | Thread status on iOS | A thread status sent as `status` alone showed nothing on iOS; the loading message shows | Slack iOS and desktop, free plan, an app holding `assistant:write` | 2026-10-02 | slack-sdk 3.44.1 |
 | Permalink opens on the reply | Slack opens a thread on the reply that a permalink names | Mac app and iOS | 2026-10-05 | not recorded |
+| Built-in servers | In a non-interactive run the `init` message lists the user, plugin and claude.ai MCP servers. `computer-use` is absent though switched on for the folder through `/mcp`; `claude-in-chrome` is absent with `/chrome` set to "Enabled by default" and listed, connected, with `--chrome` | The SDK's bundled CLI run with `-p --output-format stream-json`, with and without `--chrome`, reading `mcp_servers` and `tools` | 2026-10-09 | Claude Code 2.1.292 |
 | Status removal after two minutes | Slack removes a thread status two minutes after it was set and clears it when the app replies | `assistant.threads.setStatus` reference, read | 2026-10-02 | not recorded |
 | Resume and bypass | Claude Code's own `--resume` never restores `bypassPermissions` | sessions reference, read | 2026-09-26 | not recorded |

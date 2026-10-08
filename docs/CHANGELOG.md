@@ -236,6 +236,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The docs say that computer use is not available to a session started from Slack. Claude Code
+  offers its built-in `computer-use` server in an interactive session only, and the Agent SDK
+  runs Claude Code in its non-interactive mode: the server is absent there even when it is
+  switched on for the folder (measured 2026-10-09, Claude Code 2.1.292). `docs/setup.md` states
+  the limit beside what does load, the MCP servers the owner configured, and that a server
+  cannot be signed in from Slack; `docs/architecture.md` records the measurement, which also
+  covers the Chrome integration. No change in behaviour.
 - The docs are rearranged for a first reader, with nothing removed from what they state.
   `docs/setup.md` is one numbered path from the clone to the first reply, with a checkpoint after
   the install, after `.env` and after the LaunchAgent starts; Full Disk Access comes before the

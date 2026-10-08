@@ -239,6 +239,18 @@ If you turn on Claude Code's Bash sandbox, do it in your own settings, where it 
 terminal and to Slack alike. Its auto-allow mode runs sandboxed Bash commands without asking,
 so they would not reach Slack for approval.
 
+The MCP servers you set up in Claude Code are available to a session started from Slack, with
+two limits. Both come from the Agent SDK, which runs Claude Code without its interactive
+terminal:
+
+- A server that needs you to sign in cannot be signed in from Slack. Run `claude mcp login
+  <name>` on the machine, or `/mcp` in the terminal.
+- Computer use is not available. It is Claude Code's built-in server that sees the screen and
+  controls the mouse and the keyboard, and Claude Code offers it in an interactive session only.
+  A session started from Slack cannot click through a native app, whatever `/mcp` shows in the
+  terminal for the same folder. Commands, scripts and command-line tools run from Slack as they
+  do in the terminal.
+
 ## Part 4: starting code-with-slack on macOS
 
 code-with-slack runs as a user LaunchAgent: it starts when you log in and restarts if it exits.
