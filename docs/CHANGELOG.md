@@ -615,9 +615,10 @@ All notable changes to this project are documented here. The format follows
   notification named a tool call or the answer's first words, and the error reached the
   reply by an edit, which never rings. Seen live on 2026-10-08 with a process killed 320
   seconds into a turn. `ReplySink._ending_cursor` now takes the daemon's last line as the
-  ending when there is no footer to post. A reply that ends with its footer is unchanged: a
-  line of the daemon's stays where it was written. Not covered: a process lost while no turn
-  is active writes no line at all.
+  ending when there is no footer to post. The running list is no footer: a turn cut while a
+  subagent works closes with `⏳ 1 agent` still showing, and ends with the error line too. A
+  reply that ends with its footer is unchanged: a line of the daemon's stays where it was
+  written. Not covered: a process lost while no turn is active writes no line at all.
 - A message counts its text as the blocks Slack makes of it, so a reply with many headings or
   tables continues in a new message where an edit of it was refused (#92). Slack translates a
   `markdown` block, and a stream's text, into several stored blocks: a `header` per heading, a

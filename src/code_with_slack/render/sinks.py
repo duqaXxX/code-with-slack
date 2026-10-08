@@ -1153,8 +1153,9 @@ class ReplySink:
         its body is no ending), with whatever follows it. None when the message holds no such
         text from its start, or would keep nothing of the answer before it (an answer that is
         text alone): the ending is then the footer alone. With no footer to post either (a turn
-        cut short), the daemon's last line is the ending: it says how the reply ended, and the
-        message that notifies never shows empty."""
+        cut short), the daemon's last line is the ending when it is the reply's last part: it
+        says how the reply ended, where the message that notifies would show empty. The running
+        list is no footer: the session empties it once the lost process's tasks are stopped."""
         index = next(
             (
                 i
@@ -1165,10 +1166,16 @@ class ReplySink:
             ),
             None,
         )
-        if (index is None or (index, 0) <= message.start) and not self._closing_blocks():
-            last = self._parts[-1] if self._parts else None
+        cursor = self._cut_before(message, index)
+        if cursor is None and not self._footer and self._parts:
+            last = self._parts[-1]
             if isinstance(last, _Text) and last.notice and last.text.strip():
-                index = len(self._parts) - 1
+                cursor = self._cut_before(message, len(self._parts) - 1)
+        return cursor
+
+    def _cut_before(self, message: _Message, index: int | None) -> Cursor | None:
+        """The cursor at the start of part `index`, when cutting `message` there leaves it
+        something of the answer; None when the part opens the message or nothing would stay."""
         if index is None or (index, 0) <= message.start:
             return None
         cursor = (index, 0)

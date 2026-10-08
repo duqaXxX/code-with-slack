@@ -291,6 +291,34 @@ async def test_an_error_that_cuts_a_turn_after_its_stream_stopped_says_so_in_the
     assert h.slack.pushes() == 2  # the 280 s stop, and the message that says how it ended
 
 
+async def test_an_error_that_cuts_a_turn_while_its_subagent_works_says_so_in_the_message_that_rings(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # Issue #165 with a task still counted: the reply closes while `⏳ 1 agent` still shows, and
+    # the list empties right after. The closing message was that list alone, then empty.
+    from tests.fakes import EndOfStream
+
+    messages = sdk_messages("subagent-foreground")
+    h = harness_for({"turns": [messages[:37]]})
+    clock = FakeClock()
+    h.deps.stream_clock = clock
+    turn = await h.session().submit("run it in a subagent")
+    await until(lambda: bool(h.slack.calls_to("chat.startStream")))
+    await asyncio.sleep(0.1)
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    h.clients[0].inject([*messages[37:44], EndOfStream()])  # cut while the subagent works
+    await asyncio.wait_for(turn.done.wait(), 2)
+    await until(lambda: bool(h.slack.calls_to("chat.postMessage")))
+    [closing] = h.slack.calls_to("chat.postMessage")
+    assert closing["text"].startswith("Claude Code reported an error")
+    assert closing["blocks"][0]["text"].startswith("Claude Code reported an error")
+    await until(lambda: len(h.slack.message_blocks()[-1]) == 1)  # the list went with the process
+    [block] = h.slack.message_blocks()[-1]
+    assert block["type"] == "markdown" and block["text"].startswith("Claude Code reported an error")
+    assert "reported an error" not in str(h.slack.message_blocks()[0])  # moved, not shown twice
+    assert h.slack.pushes() == 2
+
+
 async def test_a_turn_that_fails_before_claude_answers_is_a_reply_of_its_own(
     harness_for: Callable[..., Harness], tmp_path: Any
 ) -> None:

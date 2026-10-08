@@ -578,6 +578,55 @@ async def test_an_answer_of_text_alone_cut_short_ends_with_the_daemon_s_line(
     ]
 
 
+async def test_a_reply_cut_short_while_a_task_still_counts_ends_with_the_daemon_s_line(
+    slack: FakeSlack,
+) -> None:
+    # The session shows the running list before it closes a reply and empties it once the lost
+    # process's tasks are stopped: the list is no footer, and the closing message it made
+    # ended up empty when the list did.
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.task(tool("t1", "Bash"))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("\n\n" + ERROR_LINE, notice=True)
+    await sink.set_running("⏳ 1 agent")
+    await sink.finish([])
+    await sink.close_out(None)
+    [closing] = slack.calls_to("chat.postMessage")
+    assert closing["blocks"] == [
+        {"type": "markdown", "text": ERROR_LINE},
+        {"type": "divider"},
+        sinks.context_block("⏳ 1 agent"),
+    ]
+    assert closing["text"] == sinks.banner_text(ERROR_LINE, limit=sinks.BANNER_LIMIT)
+    await sink.set_running("")
+    await settled()
+    assert slack.message_blocks()[-1] == [{"type": "markdown", "text": ERROR_LINE}]
+
+
+async def test_an_answer_of_text_alone_under_a_daemon_line_cut_short_ends_with_the_error(
+    slack: FakeSlack,
+) -> None:
+    # A compaction at the turn's start writes its line before the answer: the text is then no
+    # ending (only a line of the daemon's would stay above it), and the error still is one.
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text(texts.COMPACTED_PLAIN + "\n\n", notice=True)
+    await sink.text("Half an answer")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("\n\n" + ERROR_LINE, notice=True)
+    await sink.finish([])
+    await sink.close_out(None)
+    [closing] = slack.calls_to("chat.postMessage")
+    assert closing["blocks"] == [{"type": "markdown", "text": ERROR_LINE}]
+    assert slack.calls_to("chat.update")[-1]["blocks"] == [
+        {"type": "markdown", "text": texts.COMPACTED_PLAIN},
+        {"type": "markdown", "text": "Half an answer"},
+    ]
+
+
 async def test_a_daemon_line_stays_in_the_reply_when_the_footer_is_the_ending(
     slack: FakeSlack,
 ) -> None:
