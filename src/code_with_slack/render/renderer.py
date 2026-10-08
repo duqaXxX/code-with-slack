@@ -326,8 +326,13 @@ class TurnRenderer:
         await self._sink.text(prefix + text + "\n\n", notice=True)
 
     async def feed_error(self, text: str) -> None:
-        """A failure outside the SDK stream (the client died): say so in the reply, as the
-        line on how it ended."""
+        """A note of the daemon's after what the reply holds: what was not sent, what a
+        restart dropped."""
+        await self._text("\n\n" + text, notice=True)
+
+    async def feed_ending(self, text: str) -> None:
+        """The turn was cut short outside the SDK stream (the client died, the session
+        closed): say so in the reply, as the line on how it ended (`ReplySink.text`)."""
         await self._text("\n\n" + text, notice=True, ending=True)
 
     async def _compacted(self, metadata: dict[str, Any]) -> None:

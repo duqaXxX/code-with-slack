@@ -1160,30 +1160,24 @@ class ReplySink:
         cut short), the ending is the daemon's line on how the reply ended (`_Text.ending`),
         with whatever follows it, where the message that notifies would show empty. The running
         list is no footer: the session empties it once the lost process's tasks are stopped."""
-        index = next(
+        cursor = self._cut_before(message, self._last_text(message, ending=False))
+        if cursor is None and not self._footer:
+            cursor = self._cut_before(message, self._last_text(message, ending=True))
+        return cursor
+
+    def _last_text(self, message: _Message, *, ending: bool) -> int | None:
+        """The last part, from where `message` starts, that holds words of Claude's, or with
+        `ending` the daemon's line on how the reply was cut short; None when there is none."""
+        return next(
             (
                 i
                 for i in range(len(self._parts) - 1, message.start[0] - 1, -1)
                 if isinstance(part := self._parts[i], _Text)
-                and not part.notice
+                and (part.ending if ending else not part.notice)
                 and part.text.strip()
             ),
             None,
         )
-        cursor = self._cut_before(message, index)
-        if cursor is None and not self._footer:
-            said = next(
-                (
-                    i
-                    for i in range(len(self._parts) - 1, message.start[0] - 1, -1)
-                    if isinstance(part := self._parts[i], _Text)
-                    and part.ending
-                    and part.text.strip()
-                ),
-                None,
-            )
-            cursor = self._cut_before(message, said)
-        return cursor
 
     def _cut_before(self, message: _Message, index: int | None) -> Cursor | None:
         """The cursor at the start of part `index`, when cutting `message` there leaves it
@@ -2044,8 +2038,8 @@ class ReplySink:
         to move into a message of its own (`_end`), or bring it to the footer as it stands: it
         stays once posted, since it is what notified. Its text is Claude's own words, as a
         banner: never a line of the daemon's. With no footer either it holds one zero-width
-        space: a reply that holds the daemon's line on how it ended, under something of the
-        answer, never comes here (`_ending_cursor`)."""
+        space: a reply that holds the daemon's line on how it ended, with something of the
+        answer above it in its last message, never comes here (`_ending_cursor`)."""
         blocks = self._closing_blocks() or [context_block(ZERO_WIDTH_SPACE)]
         attempted = self._clock.time()
         try:

@@ -2243,7 +2243,7 @@ class ThreadSession:
         try:
             if active is not None:
                 with contextlib.suppress(Exception):
-                    await active.renderer.feed_error(line)
+                    await active.renderer.feed_ending(line)
                     if dropped:
                         await self._hand_latest_to(active.renderer.sink)
                         await active.renderer.feed_error(not_sent(dropped, because))
