@@ -34,12 +34,15 @@ class RecordingSink:
         self.tasks: list[TaskUpdate] = []
         self.finished: list[TaskUpdate] | None = None
         self.notices: list[str] = []
+        self.endings: list[str] = []
         self.closed_out: bool | str | None = False
 
-    async def text(self, markdown: str, *, notice: bool = False) -> None:
+    async def text(self, markdown: str, *, notice: bool = False, ending: bool = False) -> None:
         self.texts.append(markdown)
         if notice:
             self.notices.append(markdown)
+        if ending:
+            self.endings.append(markdown)
 
     async def task(self, update: TaskUpdate) -> None:
         self.tasks.append(update)
@@ -346,6 +349,14 @@ async def test_feed_error_appends_to_the_reply() -> None:
     renderer = TurnRenderer(sink)
     await renderer.feed_error("Claude Code reported an error: `ProcessError`")
     assert sink.texts == ["\n\nClaude Code reported an error: `ProcessError`"]
+    assert sink.notices == sink.texts and sink.endings == []  # a note, not how the reply ended
+
+
+async def test_feed_ending_marks_the_line_on_how_the_reply_ended() -> None:
+    sink = RecordingSink()
+    renderer = TurnRenderer(sink)
+    await renderer.feed_ending("Claude Code reported an error: `ProcessError`")
+    assert sink.endings == sink.notices == ["\n\nClaude Code reported an error: `ProcessError`"]
 
 
 async def test_feed_notice_opens_the_reply() -> None:

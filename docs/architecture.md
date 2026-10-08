@@ -450,7 +450,22 @@ little earlier itself.
   has not landed and the one retry follows. When the message holds no such text, or nothing of
   the answer would stay before it (an answer that is text alone), nothing is moved and the new
   message is the footer alone (`ReplySink._write_closing`), its banner the start of Claude's
-  answer, never a line of the daemon's.
+  answer, never a line of the daemon's. A turn cut short gets no footer (the Claude Code process
+  was lost, another error ended it, or the daemon restarted or closed the session), and
+  `ThreadSession._abandon` writes a line on how the reply ended
+  (`Claude Code reported an error: …`, `This reply ended before an answer: …`). When Claude
+  wrote text after its last call, that line follows the text into the new message, whose
+  banner is still the start of the text. When there is no such text to move and no footer,
+  the line itself is the ending that moves, with whatever follows it, and is the banner. The
+  sink keeps it as a part of its own (`ReplySink.text` with `ending`, fed by
+  `TurnRenderer.feed_ending`), so a notice written just before it stays in the reply, and a
+  card that closes after it moves under it. No other line of the daemon's moves. The running
+  list (`⏳ 1 agent`) is no footer: a reply cut short while a task still counts ends the same
+  way, with the list under the line until the session empties it. A report turn cut short in
+  a reply that already has the footer of its first turn keeps that footer as its ending, and
+  the line stays in the reply. The new message shows empty when a reply with no footer has no
+  such line, when nothing of the answer would stay above the line, or when the line opens
+  the reply's last message.
 
 A message holds 12,000 characters and 50 blocks or task cards (measured: "Message limits"). Slack
 translates Claude's text into a `header` per heading, a `table` per table, a `divider` per rule and

@@ -537,6 +537,168 @@ async def test_the_closing_message_text_skips_the_daemon_s_own_lines(slack: Fake
     assert closing["blocks"] == [sinks.context_block(sinks.ZERO_WIDTH_SPACE)]  # no footer to show
 
 
+ERROR_LINE = "Claude Code reported an error: `the Claude Code process exited`"
+
+
+async def test_a_reply_cut_short_after_its_stream_stopped_ends_with_the_daemon_s_line(
+    slack: FakeSlack,
+) -> None:
+    # Issue #165, seen live on 2026-10-08: the reply's last part was a tool call, the turn had no
+    # footer, and the message that notified showed empty while the error sat in an edit.
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.task(tool("t1", "Bash"))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("\n\n" + ERROR_LINE, ending=True)
+    await sink.finish([])
+    await sink.close_out(None)
+    [closing] = slack.calls_to("chat.postMessage")
+    assert closing["blocks"] == [{"type": "markdown", "text": ERROR_LINE}]
+    assert closing["text"] == sinks.banner_text(ERROR_LINE, limit=sinks.BANNER_LIMIT)
+    kept = slack.calls_to("chat.update")[-1]["blocks"]
+    assert all(ERROR_LINE not in str(block) for block in kept)  # moved, not shown twice
+
+
+async def test_an_answer_of_text_alone_cut_short_ends_with_the_daemon_s_line(
+    slack: FakeSlack,
+) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("Half an answer")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("\n\n" + ERROR_LINE, ending=True)
+    await sink.finish([])
+    await sink.close_out(None)
+    [closing] = slack.calls_to("chat.postMessage")
+    assert closing["blocks"] == [{"type": "markdown", "text": ERROR_LINE}]
+    assert slack.calls_to("chat.update")[-1]["blocks"] == [
+        {"type": "markdown", "text": "Half an answer"}
+    ]
+
+
+async def test_a_reply_cut_short_while_a_task_still_counts_ends_with_the_daemon_s_line(
+    slack: FakeSlack,
+) -> None:
+    # The session shows the running list before it closes a reply and empties it once the lost
+    # process's tasks are stopped: the list is no footer, and the closing message it made
+    # ended up empty when the list did.
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.task(tool("t1", "Bash"))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("\n\n" + ERROR_LINE, ending=True)
+    await sink.set_running("⏳ 1 agent")
+    await sink.finish([])
+    await sink.close_out(None)
+    [closing] = slack.calls_to("chat.postMessage")
+    assert closing["blocks"] == [
+        {"type": "markdown", "text": ERROR_LINE},
+        {"type": "divider"},
+        sinks.context_block("⏳ 1 agent"),
+    ]
+    assert closing["text"] == sinks.banner_text(ERROR_LINE, limit=sinks.BANNER_LIMIT)
+    await sink.set_running("")
+    await settled()
+    assert slack.message_blocks()[-1] == [{"type": "markdown", "text": ERROR_LINE}]
+
+
+async def test_an_answer_of_text_alone_under_a_daemon_line_cut_short_ends_with_the_error(
+    slack: FakeSlack,
+) -> None:
+    # A compaction at the turn's start writes its line before the answer: the text is then no
+    # ending (only a line of the daemon's would stay above it), and the error still is one.
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text(texts.COMPACTED_PLAIN + "\n\n", notice=True)
+    await sink.text("Half an answer")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("\n\n" + ERROR_LINE, ending=True)
+    await sink.finish([])
+    await sink.close_out(None)
+    [closing] = slack.calls_to("chat.postMessage")
+    assert closing["blocks"] == [{"type": "markdown", "text": ERROR_LINE}]
+    assert slack.calls_to("chat.update")[-1]["blocks"] == [
+        {"type": "markdown", "text": texts.COMPACTED_PLAIN},
+        {"type": "markdown", "text": "Half an answer"},
+    ]
+
+
+async def test_only_the_line_on_how_the_reply_ended_moves_not_a_notice_written_before_it(
+    slack: FakeSlack,
+) -> None:
+    # Two notices in a row were one part: the compaction line moved with the error and was the
+    # notification's text.
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.task(tool("t1", "Bash"))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("\n\n" + texts.COMPACTED_PLAIN + "\n\n", notice=True)
+    await sink.text("\n\n" + ERROR_LINE, ending=True)
+    await sink.finish([])
+    await sink.close_out(None)
+    [closing] = slack.calls_to("chat.postMessage")
+    assert closing["blocks"] == [{"type": "markdown", "text": ERROR_LINE}]
+    assert closing["text"] == sinks.banner_text(ERROR_LINE, limit=sinks.BANNER_LIMIT)
+    assert texts.COMPACTED_PLAIN in str(slack.calls_to("chat.update")[-1]["blocks"])
+
+
+async def test_a_card_that_closes_after_the_line_on_how_the_reply_ended_moves_under_it(
+    slack: FakeSlack,
+) -> None:
+    # Two calls open when the turn is cut: closing them draws a card after the error line, which
+    # was then no longer the reply's last part, and the closing message showed empty.
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.task(tool("t1", "Bash"))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("\n\n" + ERROR_LINE, ending=True)
+    await sink.task(tool("t2", "Read"))
+    await sink.finish([])
+    await sink.close_out(None)
+    [closing] = slack.calls_to("chat.postMessage")
+    assert closing["blocks"][0] == {"type": "markdown", "text": ERROR_LINE}
+    assert "Read 1 file" in str(closing["blocks"][1:])  # folded, as a run that ended
+    # the error, not the card's title, is what the notification says
+    assert closing["text"] == sinks.banner_text(ERROR_LINE, limit=sinks.BANNER_LIMIT)
+
+
+async def test_a_daemon_line_that_does_not_say_how_the_reply_ended_never_moves(
+    slack: FakeSlack,
+) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.task(tool("t1", "Bash"))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("\n\n" + texts.COMPACTED_PLAIN, notice=True)
+    await sink.finish([])
+    await sink.close_out(None)
+    [closing] = slack.calls_to("chat.postMessage")
+    assert closing["blocks"] == [sinks.context_block(sinks.ZERO_WIDTH_SPACE)]
+    assert texts.COMPACTED_PLAIN in str(slack.calls_to("chat.update")[-1]["blocks"])
+
+
+async def test_a_daemon_line_stays_in_the_reply_when_the_footer_is_the_ending(
+    slack: FakeSlack,
+) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.task(tool("t1", "Bash"))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("\n\n_Stopped._", notice=True)
+    await sink.finish([])
+    await sink.close_out("footer")
+    [closing] = slack.calls_to("chat.postMessage")
+    assert closing["blocks"] == [{"type": "divider"}, sinks.context_block("footer")]
+
+
 async def test_a_stream_slack_closed_first_falls_back_to_updates(slack: FakeSlack) -> None:
     sink = reply(slack)
     await sink.text("one")

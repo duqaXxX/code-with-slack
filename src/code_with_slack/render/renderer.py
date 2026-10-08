@@ -65,7 +65,7 @@ class TaskUpdate:
 
 
 class Sink(Protocol):
-    async def text(self, markdown: str, *, notice: bool = False) -> None: ...
+    async def text(self, markdown: str, *, notice: bool = False, ending: bool = False) -> None: ...
     async def task(self, update: TaskUpdate) -> None: ...
     async def finish(self, closing: list[TaskUpdate]) -> None: ...
     async def close_out(self, footer: str | None) -> bool: ...
@@ -326,8 +326,14 @@ class TurnRenderer:
         await self._sink.text(prefix + text + "\n\n", notice=True)
 
     async def feed_error(self, text: str) -> None:
-        """A failure outside the SDK stream (the client died): say so in the reply."""
+        """A note of the daemon's after what the reply holds: what was not sent, what a
+        restart dropped."""
         await self._text("\n\n" + text, notice=True)
+
+    async def feed_ending(self, text: str) -> None:
+        """The turn was cut short outside the SDK stream (the client died, the session
+        closed): say so in the reply, as the line on how it ended (`ReplySink.text`)."""
+        await self._text("\n\n" + text, notice=True, ending=True)
 
     async def _compacted(self, metadata: dict[str, Any]) -> None:
         """Claude Code compacted the conversation, on request or on its own: say by how much."""
@@ -539,8 +545,8 @@ class TurnRenderer:
         self._lines[update.id] = update
         await self._sink.task(update)
 
-    async def _text(self, markdown: str, *, notice: bool = False) -> None:
+    async def _text(self, markdown: str, *, notice: bool = False, ending: bool = False) -> None:
         if markdown:
             self._wrote_text = True
             self._after_text = not notice  # a notice ends with its own break
-            await self._sink.text(markdown, notice=notice)
+            await self._sink.text(markdown, notice=notice, ending=ending)
