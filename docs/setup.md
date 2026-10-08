@@ -1,10 +1,16 @@
 # Setup
 
-This guide takes a Mac from nothing to a Slack channel that drives a local Claude Code session.
-It covers the Slack app, the configuration code-with-slack reads, how it starts on macOS, and the
-security settings the design relies on.
+This guide takes a Mac from `git clone` to the first reply in Slack. It covers the Slack app, the
+configuration code-with-slack reads, how it starts on macOS, and the security settings the design
+relies on.
 
-Status: first release. Every part below describes what the code does.
+Status: no tagged release yet. [features.md](features.md) lists what is tested and what is still
+checked by hand.
+
+The install is one numbered sequence that runs through Parts 0 to 4. Three checkpoints in it say
+what to run and what you should see, so a wrong turn shows up where it happened. Part 5 is the
+security checklist, "Using it" describes the daily use, and the reference at the end holds the
+detail the sequence leaves out.
 
 ## Requirements
 
@@ -12,16 +18,22 @@ Status: first release. Every part below describes what the code does.
 - Claude Code installed and logged in with a claude.ai subscription: run `claude`, then `/login`.
   The 5-hour and weekly usage figures in the status footer exist only with a subscription.
 - [uv](https://docs.astral.sh/uv/) and Python 3.12 or later.
-- A Slack workspace where you are the only member. On the free plan Slack allows one workspace;
-  use it only if nobody else is in it (see Part 5).
+- A Slack workspace where you are the only member: a workspace admin could read or export what
+  Claude prints, and whoever controls your Slack account controls the machine. On the free plan
+  Slack allows one workspace; use it only if nobody else is in it (see Part 5).
+- Full Disk Access for the Python interpreter that runs code-with-slack, only if your projects
+  live in a folder macOS protects, such as `~/Documents` or `~/Desktop`. Without it a session
+  there fails to start. The step is under [Folders macOS protects](#folders-macos-protects).
 
 ## Part 0: install
 
-```bash
-git clone https://github.com/duqaXxX/code-with-slack.git
-cd code-with-slack
-uv tool install .
-```
+1. Clone the repository and install the command:
+
+   ```bash
+   git clone https://github.com/duqaXxX/code-with-slack.git
+   cd code-with-slack
+   uv tool install .
+   ```
 
 This puts the `code-with-slack` command in `~/.local/bin`, where the LaunchAgent of Part 4 runs
 it. To update, pull and run `uv tool install --reinstall .`.
@@ -30,18 +42,29 @@ code-with-slack runs the Claude Code CLI that ships inside the Claude Agent SDK 
 not the `claude` on your `PATH`. Both read the same login, so logging in once with `claude` and
 `/login` covers both.
 
+### Checkpoint 1: the command is installed
+
+```bash
+command -v code-with-slack
+```
+
+It prints the command's path, which ends in `.local/bin/code-with-slack`. If it prints nothing,
+`~/.local/bin` is not on your `PATH`: run `uv tool update-shell` and open a new terminal.
+
 ## Part 1: the Slack app
 
 ### Create the app from the manifest
 
-1. Open <https://api.slack.com/apps> and choose **Create New App**, then **From a manifest**.
-2. Pick your workspace and choose **Next**.
-3. On the **JSON** tab, replace the example with the contents of
-   [`slack-app-manifest.json`](../slack-app-manifest.json). To give the bot a name of your own,
-   change `features.bot_user.display_name`: it is the name Slack shows on every reply and at the
-   top of the bot's profile. Leave `display_information.name`, the app's name, as
-   `code-with-slack`. Choose **Next**.
-4. Check the summary and choose **Create**.
+2. Create the app from the manifest:
+
+   - Open <https://api.slack.com/apps> and choose **Create New App**, then **From a manifest**.
+   - Pick your workspace and choose **Next**.
+   - On the **JSON** tab, replace the example with the contents of
+     [`slack-app-manifest.json`](../slack-app-manifest.json). To give the bot a name of your own,
+     change `features.bot_user.display_name`: it is the name Slack shows on every reply and at
+     the top of the bot's profile. Leave `display_information.name`, the app's name, as
+     `code-with-slack`. Choose **Next**.
+   - Check the summary and choose **Create**.
 
 The manifest asks for private channels only (`groups:history`, `groups:read`,
 `message.groups`), `chat:write`, `files:read` to download the files you attach to a message,
@@ -52,31 +75,15 @@ scope and no event.
 The app registers no slash command: commands are typed as `!word` messages. Socket Mode is on,
 so the app needs no public URL and your machine opens no inbound port.
 
-An app created before `files:read`, `files:write` or `reactions:write` was added needs the scope
-too: on the app's **OAuth & Permissions** page add the missing bot scope, then reinstall the app
-to the workspace. Without `files:read`, every attached file is refused with `HTTP 302`; without
-`files:write`, `!open` answers that it needs the scope; without `reactions:write`, the status
-reaction is silently skipped (logged, never surfaced). The modal of `!open` needs nothing
-more in the manifest: its clicks, typed characters and submit arrive as interactivity events over
-the same Socket Mode connection as the other buttons.
-
-The line under a thread (`Working…`, `1 shell still running`) is Slack's thread status
-(`assistant.threads.setStatus`), which Slack's reference lists under `chat:write`. When Slack
-refuses it, the refusal is logged and the line is skipped.
-
-An app created before the Home tab was added needs it switched on: on the app's **App Home**
-page, under **Show Tabs**, turn on **Home Tab**, then restart code-with-slack. Without it the
-session list is not published, and the log says so once per start.
-
 code-with-slack needs none of the app's agent features: leave **Agent experience** and the
 **Slack Model Context Protocol (MCP) Server** off in the app settings. The MCP server lets an app
 act on behalf of Slack users, which code-with-slack never needs.
 
 ### Install it and collect two tokens
 
-1. Open **Install App** and install the app to your workspace. Copy the **Bot User OAuth Token**
+3. Open **Install App** and install the app to your workspace. Copy the **Bot User OAuth Token**
    (`xoxb-…`).
-2. Open **Basic Information**, find **App-Level Tokens**, and choose **Generate Token and
+4. Open **Basic Information**, find **App-Level Tokens**, and choose **Generate Token and
    Scopes**. Name it, add the scope `connections:write`, and generate it. Copy the token
    (`xapp-…`).
 
@@ -91,9 +98,9 @@ it"). Slack lets a bot delete only its own messages
 (`chat.delete` reference), and the first message of a thread and your replies are yours, so
 deleting them takes a token that acts as you.
 
-1. Open **OAuth & Permissions**, and under **Scopes**, **User Token Scopes**, add `chat:write`.
-2. Reinstall the app to your workspace when Slack asks.
-3. Copy the **User OAuth Token** (`xoxp-…`) into `.env` as `SLACK_USER_TOKEN` (Part 2).
+- Open **OAuth & Permissions**, and under **Scopes**, **User Token Scopes**, add `chat:write`.
+- Reinstall the app to your workspace when Slack asks.
+- Copy the **User OAuth Token** (`xoxp-…`) into `.env` as `SLACK_USER_TOKEN` (Part 2).
 
 This token can post, edit and delete messages as you, anywhere you can. code-with-slack uses it
 for two calls: `auth.test` at startup, to check the token is yours, and `chat.delete`, on the
@@ -104,59 +111,58 @@ no such token.
 
 ### Find your member ID
 
-In Slack, open your profile, choose the **⋮** button, then **Copy member ID** (it starts with
-`U`). If the profile does not open in the desktop app, use <https://app.slack.com>.
+5. In Slack, open your profile, choose the **⋮** button, then **Copy member ID** (it starts with
+   `U`). If the profile does not open in the desktop app, use <https://app.slack.com>.
 
 ### Create a channel per project
 
-1. Create a channel and turn on **Make private**. Name it after the project, with a common prefix
-   so the channels sort together, for example `cc-myproject`. Custom sidebar sections would group
-   them better, but Slack offers those on paid plans only.
-2. In the channel, run `/invite @code-with-slack`.
-3. Open the channel's notification settings. A reply, an approval request and a question post
-   inside their own Slack thread, and Slack notifies you on a new message in a thread you started,
-   whatever this setting is. It governs only the bot's top-level messages (the answer to a word
-   typed in the channel, with `!resume`'s list, and the upgrade notice): with **Just mentions**
-   those stay silent, since the bot writes no `@channel` mention anywhere; with **All new posts**
-   they ring too. A word typed inside a thread is answered for you alone and never rings.
+6. Create a channel for the project and invite the bot:
+
+   - Create a channel and turn on **Make private**. Name it after the project, with a common
+     prefix so the channels sort together, for example `cc-myproject`. Custom sidebar sections
+     would group them better, but Slack offers those on paid plans only.
+   - In the channel, run `/invite @code-with-slack`.
+   - Open the channel's notification settings. A reply, an approval request and a question post
+     inside their own Slack thread, and Slack notifies you on a new message in a thread you
+     started, whatever this setting is. It governs only the bot's top-level messages (the answer
+     to a word typed in the channel, with `!resume`'s list, and the upgrade notice): with
+     **Just mentions** those stay silent, since the bot writes no `@channel` mention anywhere;
+     with **All new posts** they ring too. A word typed inside a thread is answered for you alone
+     and never rings.
 
 The bot sees private channels it was invited to, and nothing else.
 
 ## Part 2: configuration
 
-code-with-slack keeps its files in `~/.config/code-with-slack/`:
+code-with-slack keeps its files in `~/.config/code-with-slack/`. `.env` is the one you write;
+`state.json` is written by code-with-slack and never needs editing (what it holds is under
+[The config directory and `state.json`](#the-config-directory-and-statejson)).
 
-| File | Written by | Holds |
-|---|---|---|
-| `.env` | you | the tokens and the settings below |
-| `state.json` | code-with-slack | for each channel, its directory; for each of its threads, the folder it was opened in, its Claude Code session id, its bypass choice (on, off or never chosen), the effort level set with `/effort` and the status reaction on its root message |
+code-with-slack refuses to start when `.env` is readable by anyone else, is a symbolic link, or
+belongs to another user, and when a token is of the wrong kind (`xoxb-` for the bot token,
+`xapp-` for the app-level token).
 
-`state.json` looks like this; you never need to edit it:
+7. Create the directory and the file, readable by you only:
 
-```json
-{"version": 2, "channels": {"C0123456789": {"directory": "/home/dev/code/project", "notice_pending": false, "threads": {"1700000000.000100": {"directory": "/home/dev/code/project", "session_id": "...", "bypass": false, "effort": null}}}}}
-```
+   ```bash
+   mkdir -p ~/.config/code-with-slack
+   touch ~/.config/code-with-slack/.env
+   chmod 600 ~/.config/code-with-slack/.env
+   ```
 
-code-with-slack keeps `state.json` clean on its own, when it starts and then every 6 hours. It
-forgets a channel Slack answers `channel_not_found` about, with its threads, and a thread whose
-Claude Code session no longer exists. Anything it cannot tell for certain stays: a rate limit, a
-server error or an unreadable folder removes nothing, and neither does a thread or a channel
-with a session open at that moment. When Slack finds none of the bound channels it forgets none
-and says so in the log, since that is what a bot token of another workspace looks like.
+8. Open the file in an editor (`nano ~/.config/code-with-slack/.env` works) and write the
+   variables, one `NAME=value` per line. Replace each `<...>` placeholder, brackets included,
+   with the value from Part 1:
 
-A private channel the bot was removed from answers `channel_not_found` too, so it is forgotten
-like a deleted one. After inviting the bot back, send `!bind` there again; `!resume` brings back
-the folder's sessions, which stay on disk.
+   ```
+   SLACK_BOT_TOKEN=<bot token>
+   SLACK_APP_TOKEN=<app-level token>
+   SLACK_OWNER_USER_ID=<member id>
+   ALLOWED_ROOT=~/code
+   ```
 
-Create the directory and the file, readable by you only. code-with-slack refuses to start when
-`.env` is readable by anyone else, is a symbolic link, or belongs to another user, and when a
-token is of the wrong kind (`xoxb-` for the bot token, `xapp-` for the app-level token).
-
-```bash
-mkdir -p ~/.config/code-with-slack
-touch ~/.config/code-with-slack/.env
-chmod 600 ~/.config/code-with-slack/.env
-```
+   Add `SLACK_USER_TOKEN=<user token>` on a line of its own only if you took the optional step in
+   Part 1.
 
 | Variable | Value |
 |---|---|
@@ -175,6 +181,31 @@ to start unless it is yours (`SLACK_OWNER_USER_ID`) in the bot's workspace.
 `ALLOWED_ROOT` guards against a typo such as `!bind /`. It is not a security boundary:
 Claude Code can read and run outside its working directory once you approve it.
 
+### Checkpoint 2: the daemon reads `.env` and connects
+
+Run the daemon in the foreground once, before the LaunchAgent exists:
+
+```bash
+code-with-slack
+```
+
+Within a few seconds the terminal prints a line that ends with:
+
+```
+INFO code_with_slack: connected to Slack workspace <workspace id>
+```
+
+Press Ctrl-C to stop it: it logs `shutting down` and exits. A problem in `.env` ends the start at
+once with a line that holds `ERROR code_with_slack:` and ends with what to fix, for example:
+
+```
+ERROR code_with_slack: SLACK_BOT_TOKEN must be the Bot User OAuth Token (xoxb-...)
+```
+
+and exit status 1. A token that Slack itself refuses ends the start with a Python traceback
+instead. `another code-with-slack is running` means another instance holds the lock: stop it
+first. Leave no foreground run going when you start the LaunchAgent in Part 4.
+
 ## Part 3: Claude Code
 
 code-with-slack drives Claude Code through the Claude Agent SDK, with the login already on the
@@ -182,28 +213,19 @@ machine. Your own Claude Code settings apply: `~/.claude/settings.json`, the pro
 `.claude/settings.json`, and `.claude/settings.local.json`. Whatever Claude Code asks your
 approval for reaches Slack as **Approve** and **Deny** buttons, with the tool's whole input.
 
+9. Trust the project folder in Claude Code. A session starts only in a folder you have trusted in
+   Claude Code. Claude Code shows its trust dialog only in the terminal, and a session started
+   from Slack would otherwise run a repository's own hooks and apply its settings without asking.
+   Before you bind a channel to a repository, open `claude` at its root in the terminal once and
+   accept the dialog. A trusted parent folder does not cover a git repository inside it, such as
+   a clone. How trust reaches worktrees and nested repositories is under
+   [How trust applies to git](#how-trust-applies-to-git).
+
 The models a new thread offers are the ones Claude Code lists, older versions included. To offer
 fewer, set Claude Code's `modelPicker` with `replaceBuiltInOptions: true` in
 `~/.claude/settings.json` (Claude Code reads it only from user or managed settings); it changes
 the terminal's `/model` picker the same way. Rows naming an alias (`opus`, `sonnet`, `haiku`)
 follow the newest version of that model.
-
-A session starts only in a folder you have trusted in Claude Code. Claude Code shows its trust
-dialog only in the terminal, and a session started from Slack would otherwise run a
-repository's own hooks and apply its settings without asking. Before you bind a channel to a
-repository, open `claude` at its root in the terminal once and accept the dialog. A trusted
-parent folder does not cover a git repository inside it, such as a clone. A worktree is covered
-by its main checkout while git registers it there: after moving a worktree's folder by hand, run
-`git worktree repair` in it. The footer and `!status` show the branch and the uncommitted lines,
-and `!open` lists the changed files, only where git may run: in a repository you trusted, or in
-one inside the folder the session started in, which that folder's trust covers (Claude Code
-launched in a trusted folder works in its subfolders too). A repository outside the session's
-folder needs its own trust, since the agent may move anywhere. A repository inside the folder is
-covered only if everything git reads for it lies inside the folder too: a `.git` file or symlink
-that names a git dir elsewhere, a worktree of a checkout elsewhere (one moved in by hand, say) and
-a `commondir` that leads out are not covered. That covers a bound folder that is not a repository
-itself and holds one a level or two below it. Binding a channel is not widened:
-a repository that Claude Code does not trust is still refused.
 
 When Claude Code is logged out, a message in Slack replies with a note asking you to run `claude`
 and `/login` on the machine; the login is never done from Slack. `!login` and `!logout` typed in
@@ -223,10 +245,48 @@ Only one instance may run. Slack spreads a Socket Mode app's events across all i
 connections, so a second instance would receive part of your messages; code-with-slack refuses to
 start while another instance holds its lock.
 
-The plist lives at `~/Library/LaunchAgents/local.code-with-slack.plist`. launchd does not expand
-`~` or `$HOME`, so write your home directory in full where the example says `<home>`:
+### Folders macOS protects
 
-```xml
+10. Give Full Disk Access to the interpreter, only if your projects live in `~/Documents`,
+    `~/Desktop`, `~/Downloads` or another folder macOS protects. Do this before the LaunchAgent
+    starts, or the first session in such a folder fails.
+
+macOS keeps `~/Documents`, `~/Desktop`, `~/Downloads` and a few other folders private to the
+apps you allowed. A program started from Terminal uses Terminal's permission; code-with-slack,
+started by launchd, has none, and Claude Code fails to start in a directory there. The permission
+goes to the Python interpreter that runs code-with-slack:
+
+- Show the interpreter in Finder (it sits in a hidden folder, so this is the simplest way to
+  reach it):
+
+  ```bash
+  open -R "$(readlink -f "$(head -1 ~/.local/share/uv/tools/code-with-slack/bin/code-with-slack | cut -c3-)")"
+  ```
+
+  The installed `code-with-slack` script starts with a line naming its interpreter (`#!` and a
+  path). The command cuts that path out, resolves the links to the real file, and shows it in
+  Finder. That file is what launchd starts, so it is the one macOS asks permission for.
+- Open **System Settings**, **Privacy & Security**, **Full Disk Access**, and drag the selected
+  file (`python3.12` or similar) from Finder into the list. Alternatively choose **+** and press
+  **⌘⇧.** in the file picker to show hidden folders.
+- Check that the new entry is turned on. If the service is already running, restart it:
+  `launchctl kill TERM gui/$(id -u)/local.code-with-slack`.
+
+The permission belongs to that interpreter, which uv shares between the tools that use the same
+Python version: any of them started outside Terminal gets the same access. Projects outside the
+protected folders need no permission at all.
+
+### Write the plist and start it
+
+The plist lives at `~/Library/LaunchAgents/local.code-with-slack.plist`. launchd does not expand
+`~` or `$HOME`, so the command below lets the shell write your home directory in full wherever
+the file needs it.
+
+11. Write the plist, then check it with `plutil`:
+
+```bash
+mkdir -p ~/Library/LaunchAgents ~/Library/Logs/code-with-slack
+cat > ~/Library/LaunchAgents/local.code-with-slack.plist <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -235,12 +295,12 @@ The plist lives at `~/Library/LaunchAgents/local.code-with-slack.plist`. launchd
   <string>local.code-with-slack</string>
   <key>ProgramArguments</key>
   <array>
-    <string><home>/.local/bin/code-with-slack</string>
+    <string>$HOME/.local/bin/code-with-slack</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string><home>/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <string>$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -249,86 +309,59 @@ The plist lives at `~/Library/LaunchAgents/local.code-with-slack.plist`. launchd
   <key>ExitTimeOut</key>
   <integer>60</integer>
   <key>StandardOutPath</key>
-  <string><home>/Library/Logs/code-with-slack/code-with-slack.log</string>
+  <string>$HOME/Library/Logs/code-with-slack/code-with-slack.log</string>
   <key>StandardErrorPath</key>
-  <string><home>/Library/Logs/code-with-slack/code-with-slack.log</string>
+  <string>$HOME/Library/Logs/code-with-slack/code-with-slack.log</string>
 </dict>
 </plist>
+EOF
+plutil -lint ~/Library/LaunchAgents/local.code-with-slack.plist
 ```
 
-Load it, restart it, stop it, and read its state:
+`plutil -lint` prints `<path>/local.code-with-slack.plist: OK` when the file is well formed.
+
+12. Load it. It starts at once, and again at every login:
+
+    ```bash
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.code-with-slack.plist
+    ```
+
+### Checkpoint 3: the LaunchAgent runs it
 
 ```bash
-mkdir -p ~/Library/Logs/code-with-slack
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.code-with-slack.plist
+tail -n 5 ~/Library/Logs/code-with-slack/code-with-slack.log
+```
+
+After a few seconds the log ends with the line of checkpoint 2:
+
+```
+INFO code_with_slack: connected to Slack workspace <workspace id>
+```
+
+A start that fails logs `ERROR code_with_slack:` and what to fix; launchd starts the daemon again
+after each exit (`KeepAlive`), so the same line repeats until you fix it and restart the service.
+
+The log holds what the service did, never the content of your messages.
+
+To restart it, stop it, or read its state later:
+
+```bash
 launchctl kill TERM gui/$(id -u)/local.code-with-slack
 launchctl bootout gui/$(id -u)/local.code-with-slack
 launchctl print gui/$(id -u)/local.code-with-slack
 ```
 
-On `SIGTERM` code-with-slack stops starting turns and lets everything already running finish: the
-turns, the background commands and agents, which end with the Claude Code process, and the turn in
-which Claude reports each one. Then it exits, and `KeepAlive` starts it again. Meanwhile a new
-message gets `code-with-slack is restarting; send this again in a moment.`, a queued one ends with
-the same request. Under that sentence the refusal lists each thread the restart still waits for,
-with a link to it and what holds it there (a turn, an approval or a question waiting for you,
-background tasks), so you know where to answer or send `!stop`; `!status` typed in a channel
-lists that channel's threads the same way and counts those of other channels without naming
-them, since its answer is a post every member of the channel reads. An approval or a question Claude asks meanwhile stays open and can be answered, so
-a session that restarts the daemon can still finish its turn. The daemon's `!words` keep working:
-`!stop` ends a long turn so the restart goes on. A thread left with only background tasks says so
-in the line under its last message (`Restart waits for 1 shell · !stop ends it now`), since
-code-with-slack cannot tell whether a task such as a dev server ever ends; `!stop` there stops
-them and the restart goes on. That line is no message: it does not ring, and it goes with the
-restart. A restart posts nothing in a thread that has nothing running, bypass on or not, since
-bypass outlives it. If Slack refuses the app that line, one message says what the restart waits
-for instead. The signal does not say who sent it, and a session that sends it
-has a turn running at that moment: for every session with a turn running when the signal arrives,
-code-with-slack waits for the turn but not for a background task the session starts after the
-signal, such as a loop waiting for the new process, which could only end once this one has exited.
-The shutdown ends those tasks, and the session's root shows ✅. After 29 minutes code-with-slack stops waiting and ends what still
-runs, whose replies say that it stopped. Sending the signal a second time stops without waiting.
-`SIGINT` (Ctrl-C in a terminal) stops without waiting too, because the terminal sends it to the
-Claude Code processes as well.
+What a restart waits for, and what each way of stopping does, is under
+[Restarts and shutdown](#restarts-and-shutdown).
 
-How long a turn can take to finish depends on who sends the signal. `launchctl kill TERM` only
-sends it, so a restart waits up to those 29 minutes. `launchctl bootout` and `launchctl
-kickstart -k` stop the job themselves and kill it `ExitTimeOut` seconds later; on macOS 27.0
-launchd caps `ExitTimeOut` at 60 (`launchctl print` shows 60 for any larger value, and a job
-stopped with `bootout` was killed within 60 seconds, measured 2026-09-26). A turn still running
-then leaves its reply's stream open until Slack closes it, 5 minutes after it started.
+### Bind the channel and send the first message
 
-`launchctl kill TERM` returns at once, so a Claude Code session running from Slack can restart
-the daemon that hosts it and still finish its turn. `launchctl kickstart -k` waits until the old
-instance has exited, which from such a session means waiting on its own turn, until launchd
-kills the daemon and that turn with it after `ExitTimeOut`.
+13. In the channel of step 6, send `!bind <folder>`, with the folder given relative to
+    `ALLOWED_ROOT` (`!bind my-project`) and trusted in step 9. Then send a message. The thread
+    shows `Choose how this session starts`; choose **Start**, and Claude Code's reply grows in
+    the thread. `!bind` alone lists the folders it accepts, with a **Bind** button each.
 
-The log holds what the service did, never the content of your messages.
-
-### Folders macOS protects
-
-macOS keeps `~/Documents`, `~/Desktop`, `~/Downloads` and a few other folders private to the
-apps you allowed. A program started from Terminal uses Terminal's permission; code-with-slack,
-started by launchd, has none, and Claude Code fails to start in a directory there. If your
-projects live in one of those folders, give Full Disk Access to the Python interpreter that runs
-code-with-slack:
-
-1. Show the interpreter in Finder (it sits in a hidden folder, so this is the simplest way to
-   reach it):
-
-   ```bash
-   open -R "$(readlink -f "$(head -1 ~/.local/share/uv/tools/code-with-slack/bin/code-with-slack | cut -c3-)")"
-   ```
-
-2. Open **System Settings**, **Privacy & Security**, **Full Disk Access**, and drag the selected
-   file (`python3.12` or similar) from Finder into the list. Alternatively choose **+** and press
-   **⌘⇧.** in the file picker to show hidden folders.
-3. Check that the new entry is turned on, then restart the service:
-   `launchctl kill TERM gui/$(id -u)/local.code-with-slack`.
-
-The permission belongs to that interpreter, which uv shares between the tools that use the same
-Python version: any of them started outside Terminal gets the same access. Projects outside the
-protected folders need no permission at all.
+When the reply arrives, the install is done. Go through the checklist in Part 5 next.
 
 ## Part 5: security checklist
 
@@ -501,15 +534,6 @@ under [Star channels and direct messages](https://slack.com/help/articles/201331
 From outside Slack, this link opens the Home tab in the desktop and mobile apps, for the Dock or
 a shortcut: `slack://app?team=<workspace id>&id=<app id>&tab=home`. The workspace id starts with
 `T` and the app id with `A`; the app id is on the app's **Basic Information** page.
-
-Upgrading from an earlier version that held one session per channel: the channel keeps its
-directory, loses its old session pointer and bypass switch, and gets this message once, posted
-top-level, not as a reply:
-
-> code-with-slack now runs one Claude Code session per thread. Send a new message in the channel
-> to start a session; reply in its thread to continue it. The session this channel had is still
-> in the folder: !resume brings it into a thread. Bypass is now set per session: send !bypass on
-> inside a thread.
 
 ### Commands
 
@@ -710,3 +734,108 @@ in [features.md](features.md#notifications), not restated here.
 | `forgot channel ...: Slack no longer has it` in the log | The channel was deleted, or the bot was removed from it: its binding and its threads are gone from `state.json`. If the bot is back in it, send `!bind` there again |
 | `Slack finds none of the ... bound channels: nothing is forgotten` in the log | Every bound channel is out of the bot's reach: check that `SLACK_BOT_TOKEN` is the one of this workspace and that the bot is still in its channels |
 | A session is missing from the Home tab | The page starts on `Last 48 hours`: choose `Any time`. A thread whose root message was deleted, and a channel the bot is no longer in, are left out |
+
+## Reference
+
+Detail that the install sequence links to, kept out of its way.
+
+### The config directory and `state.json`
+
+| File | Written by | Holds |
+|---|---|---|
+| `.env` | you | the tokens and the settings of Part 2 |
+| `state.json` | code-with-slack | for each channel, its directory; for each of its threads, the folder it was opened in, its Claude Code session id, its bypass choice (on, off or never chosen), the effort level set with `/effort` and the status reaction on its root message |
+
+`state.json` looks like this; you never need to edit it:
+
+```json
+{"version": 2, "channels": {"C0123456789": {"directory": "/home/dev/code/project", "notice_pending": false, "threads": {"1700000000.000100": {"directory": "/home/dev/code/project", "session_id": "...", "bypass": false, "effort": null}}}}}
+```
+
+code-with-slack keeps `state.json` clean on its own, when it starts and then every 6 hours. It
+forgets a channel Slack answers `channel_not_found` about, with its threads, and a thread whose
+Claude Code session no longer exists. Anything it cannot tell for certain stays: a rate limit, a
+server error or an unreadable folder removes nothing, and neither does a thread or a channel
+with a session open at that moment. When Slack finds none of the bound channels it forgets none
+and says so in the log, since that is what a bot token of another workspace looks like.
+
+A private channel the bot was removed from answers `channel_not_found` too, so it is forgotten
+like a deleted one. After inviting the bot back, send `!bind` there again; `!resume` brings back
+the folder's sessions, which stay on disk.
+
+### Restarts and shutdown
+
+On `SIGTERM` code-with-slack stops starting turns and lets everything already running finish: the
+turns, the background commands and agents, which end with the Claude Code process, and the turn in
+which Claude reports each one. Then it exits, and `KeepAlive` starts it again. Meanwhile a new
+message gets `code-with-slack is restarting; send this again in a moment.`, a queued one ends with
+the same request. Under that sentence the refusal lists each thread the restart still waits for,
+with a link to it and what holds it there (a turn, an approval or a question waiting for you,
+background tasks), so you know where to answer or send `!stop`; `!status` typed in a channel
+lists that channel's threads the same way and counts those of other channels without naming
+them, since its answer is a post every member of the channel reads. An approval or a question Claude asks meanwhile stays open and can be answered, so
+a session that restarts the daemon can still finish its turn. The daemon's `!words` keep working:
+`!stop` ends a long turn so the restart goes on. A thread left with only background tasks says so
+in the line under its last message (`Restart waits for 1 shell · !stop ends it now`), since
+code-with-slack cannot tell whether a task such as a dev server ever ends; `!stop` there stops
+them and the restart goes on. That line is no message: it does not ring, and it goes with the
+restart. A restart posts nothing in a thread that has nothing running, bypass on or not, since
+bypass outlives it. If Slack refuses the app that line, one message says what the restart waits
+for instead. The signal does not say who sent it, and a session that sends it
+has a turn running at that moment: for every session with a turn running when the signal arrives,
+code-with-slack waits for the turn but not for a background task the session starts after the
+signal, such as a loop waiting for the new process, which could only end once this one has exited.
+The shutdown ends those tasks, and the session's root shows ✅. After 29 minutes code-with-slack stops waiting and ends what still
+runs, whose replies say that it stopped. Sending the signal a second time stops without waiting.
+`SIGINT` (Ctrl-C in a terminal) stops without waiting too, because the terminal sends it to the
+Claude Code processes as well.
+
+How long a turn can take to finish depends on who sends the signal. `launchctl kill TERM` only
+sends it, so a restart waits up to those 29 minutes. `launchctl bootout` and `launchctl
+kickstart -k` stop the job themselves and kill it `ExitTimeOut` seconds later; on macOS 27.0
+launchd caps `ExitTimeOut` at 60 (`launchctl print` shows 60 for any larger value, and a job
+stopped with `bootout` was killed within 60 seconds, measured 2026-09-26). A turn still running
+then leaves its reply's stream open until Slack closes it, 5 minutes after it started.
+
+`launchctl kill TERM` returns at once, so a Claude Code session running from Slack can restart
+the daemon that hosts it and still finish its turn. `launchctl kickstart -k` waits until the old
+instance has exited, which from such a session means waiting on its own turn, until launchd
+kills the daemon and that turn with it after `ExitTimeOut`.
+
+### Slack scopes and what fails without one
+
+If the bot token lacks `files:read`, `files:write` or `reactions:write`, add the missing bot
+scope on the app's **OAuth & Permissions** page, then reinstall the app to the workspace. Without
+`files:read`, every attached file is refused with `HTTP 302`; without `files:write`, `!open`
+answers that it needs the scope; without `reactions:write`, the status reaction is silently
+skipped (logged, never surfaced). The modal of `!open` needs nothing more in the manifest: its
+clicks, typed characters and submit arrive as interactivity events over the same Socket Mode
+connection as the other buttons.
+
+The line under a thread (`Working…`, `1 shell still running`) is Slack's thread status
+(`assistant.threads.setStatus`), which Slack's reference lists under `chat:write`. When Slack
+refuses it, the refusal is logged and the line is skipped.
+
+### How trust applies to git
+
+A worktree is covered by its main checkout while git registers it there: after moving a
+worktree's folder by hand, run `git worktree repair` in it. The footer and `!status` show the
+branch and the uncommitted lines, and `!open` lists the changed files, only where git may run: in
+a repository you trusted, or in one inside the folder the session started in, which that folder's
+trust covers (Claude Code launched in a trusted folder works in its subfolders too). A repository
+outside the session's folder needs its own trust, since the agent may move anywhere. A repository
+inside the folder is covered only if everything git reads for it lies inside the folder too: a
+`.git` file or symlink that names a git dir elsewhere, a worktree of a checkout elsewhere (one
+moved in by hand, say) and a `commondir` that leads out are not covered. That covers a bound
+folder that is not a repository itself and holds one a level or two below it. Binding a channel is
+not widened: a repository that Claude Code does not trust is still refused.
+
+### Upgrading from one session per channel
+
+A channel bound by a version that held one session per channel keeps its directory, loses its old
+session pointer and bypass switch, and gets this message once, posted top-level, not as a reply:
+
+> code-with-slack now runs one Claude Code session per thread. Send a new message in the channel
+> to start a session; reply in its thread to continue it. The session this channel had is still
+> in the folder: !resume brings it into a thread. Bypass is now set per session: send !bypass on
+> inside a thread.
