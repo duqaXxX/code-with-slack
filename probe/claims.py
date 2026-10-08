@@ -220,6 +220,15 @@ CLAIMS = [
         "send `!compact` in a thread with a few turns; the reply is `Compacted the "
         "conversation:` and the tokens before and after",
     ),
+    Claim(
+        "P22",
+        "gesture",
+        "`/compact` opens with a `status` system message that says `compacting`: the thread's "
+        "status line reads `Compacting conversation…` while it runs",
+        "code_with_slack.sessions.ThreadSession._thread_line",
+        "send `!compact` in a thread with a few turns; the line under the thread reads "
+        "`Compacting conversation…` until the reply appears",
+    ),
 ]
 
 

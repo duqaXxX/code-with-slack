@@ -221,6 +221,7 @@ in a release with no notice, so it is the first place to look when a release mis
 | `SystemMessage.data` | `compact_metadata` | key | render/renderer.py: TurnRenderer.feed | measured | none |
 | `SystemMessage.data` | `permissionMode` | key | sessions.py: ThreadSession._dispatch | measured | none |
 | `SystemMessage.data` | `session_id` | key | sessions.py: ThreadSession._dispatch | measured | none |
+| `SystemMessage.data` | `status` | key | sessions.py: ThreadSession._dispatch | measured | P22 |
 | `SystemMessage.data.compact_metadata` | `post_tokens` | key | render/renderer.py: TurnRenderer._compacted | measured | none |
 | `SystemMessage.data.compact_metadata` | `pre_tokens` | key | render/renderer.py: TurnRenderer._compacted | measured | none |
 | `UserMessage.tool_use_result` | `content` | key | render/previews.py: preview | measured | none |
@@ -248,6 +249,7 @@ in a release with no notice, so it is the first place to look when a release mis
 | `StreamEvent.event.type` | `"content_block_start"` | value | render/renderer.py: TurnRenderer.feed | measured | none |
 | `StreamEvent.event.type` | `"message_start"` | value | render/renderer.py: TurnRenderer.feed | measured | P20 |
 | `StreamEvent.event.type` | `"message_stop"` | value | render/renderer.py: TurnRenderer.feed | measured | none |
+| `SystemMessage.data.status` | `"compacting"` | value | sessions.py: ThreadSession._dispatch | measured | P22 |
 | `SystemMessage.subtype` | `"compact_boundary"` | value | sessions.py: ThreadSession._dispatch; render/renderer.py: TurnRenderer.feed | measured | P21 |
 | `SystemMessage.subtype` | `"init"` | value | sessions.py: ThreadSession._dispatch | measured | P1 |
 | `SystemMessage.subtype` | `"status"` | value | sessions.py: ThreadSession._dispatch | measured | none |

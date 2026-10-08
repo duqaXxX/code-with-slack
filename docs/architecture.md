@@ -774,7 +774,9 @@ where the *next* thread starts, and refuses while any of the channel's threads i
 - Each `ThreadSession` also keeps one `render.status.ThreadStatus`: Slack's status line under
   the thread's last message (`assistant.threads.setStatus`), which says
   `ThreadSession._thread_line`. `Working…` while a prompt is queued, taken or sent or a turn
-  is active (a report turn included). Once no turn runs and the thread's latest reply is
+  is active (a report turn included), and `Compacting conversation…` from the `status` system
+  message that says `compacting` to the next `status` message, during which Claude Code sends
+  nothing else; that first message also starts the turn it belongs to, when one is due. Once no turn runs and the thread's latest reply is
   still open, what the session left running, `1 shell still running`, the words the terminal
   ends such a turn with: a count that changes is a state of the thread and stays out of a
   reply whose stream only grows. Once the latest reply has ended its footer says it, and the
