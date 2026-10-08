@@ -222,6 +222,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The confirmation of `!resume` says what a session open in two places does (#41): `If it is
+  open in a terminal, close it there first: while it is open in both, neither sees the other's
+  messages, and a later resume keeps only one side's.` It said the messages of both would mix in
+  one conversation. Measured on 2026-10-03 with claude-agent-sdk 0.2.163 beside a host CLI
+  2.1.288 process on the same session id, both orders: the turns of both land in one transcript
+  file on separate branches, neither process has the other's turns in its context, no error
+  shows on either side, and a later resume continues one branch. The interactive terminal was
+  not part of that measurement.
+
 - `!help` with no text opens with one line on what makes a message a command: its first
   character is `!`, in code or bold too, and anything before the `!` sends it as text (`\!goal`).
   The rule of #178 was in `docs/setup.md` only. A search (`!help <text>`) lists its matches

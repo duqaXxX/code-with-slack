@@ -350,9 +350,13 @@ RESUME_MORE = (
     "Only the newest {rows} are shown: `!resume <id>`, or `!resume <title>` for a session that "
     "has one, resumes an older session."
 )
+# Two processes on one session share its file and not its conversation (measured 2026-10-03,
+# issue #41, SDK 0.2.163 beside a host CLI 2.1.288 process): each keeps the session as it loaded
+# it plus its own turns, and a later resume continues one of the two branches.
 RESUME_OK = (
     "Resumed **{title}**: your next message continues it. If it is open in a terminal, close it "
-    "there first, or the messages of both will mix in one conversation."
+    "there first: while it is open in both, neither sees the other's messages, and a later "
+    "resume keeps only one side's."
 )
 RESUME_NONE = "No session in `{directory}` has the id or name `{target}`: `!resume` lists them."
 RESUME_AMBIGUOUS = (
