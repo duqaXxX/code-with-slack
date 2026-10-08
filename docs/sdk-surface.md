@@ -219,6 +219,7 @@ in a release with no notice, so it is the first place to look when a release mis
 | `StreamEvent.event.message` | `id` | key | render/renderer.py: TurnRenderer.feed | measured | none |
 | `SystemMessage.data` | `claude_code_version` | key | sessions.py: ThreadSession._dispatch | measured | P1 |
 | `SystemMessage.data` | `compact_metadata` | key | render/renderer.py: TurnRenderer.feed | measured | none |
+| `SystemMessage.data` | `compact_result` | key | sessions.py: ThreadSession._dispatch | measured | none |
 | `SystemMessage.data` | `permissionMode` | key | sessions.py: ThreadSession._dispatch | measured | none |
 | `SystemMessage.data` | `session_id` | key | sessions.py: ThreadSession._dispatch | measured | none |
 | `SystemMessage.data` | `status` | key | sessions.py: ThreadSession._dispatch | measured | P22 |

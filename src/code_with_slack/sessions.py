@@ -1494,10 +1494,14 @@ class ThreadSession:
             reported = message.data.get("permissionMode")
             if isinstance(reported, str):
                 self.mode = reported
-            # A compaction opens with `status` `compacting` and nothing follows until it is
-            # over, 14 to 37 seconds later in the recordings (2026-10-08, CLI 2.1.292), when a
-            # `status` frame that says something else comes first.
-            compacting = message.data.get("status") == "compacting"
+            # A compaction opens with `status` `compacting`, repeated while it lasts, and ends
+            # 14 to 37 seconds later in the recordings (2026-10-08, CLI 2.1.292) with a `status`
+            # frame that carries `compact_result`. The frame that reports a permission mode
+            # carries neither, so one that arrives meanwhile ends nothing.
+            status = message.data.get("status")
+            compacting = status == "compacting" or (
+                self._compacting and status is None and "compact_result" not in message.data
+            )
             if compacting != self._compacting:
                 self._compacting = compacting
                 self._show_thread_status()
@@ -1613,7 +1617,10 @@ class ThreadSession:
                 # to end.
                 compaction = (
                     isinstance(message, SystemMessage)
-                    and (self._compacting or message.subtype == "compact_boundary")
+                    and (
+                        message.subtype == "compact_boundary"
+                        or (message.subtype == "status" and self._compacting)
+                    )
                     and (bool(self._sent) or self._injected_expected)
                 )
                 if not isinstance(message, TURN_MESSAGES) and not compaction:
@@ -2229,6 +2236,7 @@ class ThreadSession:
         waiting = ([active.turn] if active and active.turn else []) + dropped
         self._injected_expected = False
         self._interrupting = False  # D10: whatever it was waiting on, this ends it
+        self._compacting = False  # the process that was compacting is gone
         self._show_thread_status()
         if error:
             self._react_error()

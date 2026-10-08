@@ -656,7 +656,7 @@ async def compact(s: Stage) -> dict[str, Observation]:
         for method, args in s.slack.calls[mark.calls :]
         if method == "assistant.threads.setStatus"
     ]
-    announced = "Compacting conversation…" in lines
+    announced = texts.THREAD_COMPACTING in lines
     return {
         "P21": Observation(True, shown, "" if shown else f"the reply reads {reply[:80]!r}"),
         "P22": Observation(True, announced, "" if announced else f"the status line read {lines}"),
