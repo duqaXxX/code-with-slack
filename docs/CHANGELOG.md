@@ -607,6 +607,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A turn cut short after its reply's stream stopped ends with the error line as a new message,
+  where it ended with a message that showed empty (#165). Past 280 seconds, or after an append
+  Slack refused, a reply's end is a new message, the one that notifies. A turn that lost its
+  Claude Code process has no footer, and when its last part was a tool call, or its answer was
+  text alone, there was no ending to move: the new message held one zero-width space, its
+  notification named a tool call or the answer's first words, and the error reached the
+  reply by an edit, which never rings. Seen live on 2026-10-08 with a process killed 320
+  seconds into a turn. `ReplySink._ending_cursor` now takes the daemon's last line as the
+  ending when there is no footer to post. A reply that ends with its footer is unchanged: a
+  line of the daemon's stays where it was written. Not covered: a process lost while no turn
+  is active writes no line at all.
 - A message counts its text as the blocks Slack makes of it, so a reply with many headings or
   tables continues in a new message where an edit of it was refused (#92). Slack translates a
   `markdown` block, and a stream's text, into several stored blocks: a `header` per heading, a

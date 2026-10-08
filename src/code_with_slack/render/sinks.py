@@ -1152,7 +1152,9 @@ class ReplySink:
         last call, whole (a part of the model is never cut: half a list or a heading without
         its body is no ending), with whatever follows it. None when the message holds no such
         text from its start, or would keep nothing of the answer before it (an answer that is
-        text alone): the ending is then the footer alone."""
+        text alone): the ending is then the footer alone. With no footer to post either (a turn
+        cut short), the daemon's last line is the ending: it says how the reply ended, and the
+        message that notifies never shows empty."""
         index = next(
             (
                 i
@@ -1163,6 +1165,10 @@ class ReplySink:
             ),
             None,
         )
+        if (index is None or (index, 0) <= message.start) and not self._closing_blocks():
+            last = self._parts[-1] if self._parts else None
+            if isinstance(last, _Text) and last.notice and last.text.strip():
+                index = len(self._parts) - 1
         if index is None or (index, 0) <= message.start:
             return None
         cursor = (index, 0)
@@ -2014,7 +2020,9 @@ class ReplySink:
         """Post the closing message of a reply whose stream stopped early and that has no ending
         to move into a message of its own (`_end`), or bring it to the footer as it stands: it
         stays once posted, since it is what notified. Its text is Claude's own words, as a
-        banner: never a line of the daemon's."""
+        banner: never a line of the daemon's. With no footer either it holds one zero-width
+        space: a reply that ends on a line of the daemon's, under something of the answer, never
+        comes here (`_ending_cursor`)."""
         blocks = self._closing_blocks() or [context_block(ZERO_WIDTH_SPACE)]
         attempted = self._clock.time()
         try:

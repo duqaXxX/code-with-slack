@@ -450,7 +450,10 @@ little earlier itself.
   has not landed and the one retry follows. When the message holds no such text, or nothing of
   the answer would stay before it (an answer that is text alone), nothing is moved and the new
   message is the footer alone (`ReplySink._write_closing`), its banner the start of Claude's
-  answer, never a line of the daemon's.
+  answer, never a line of the daemon's. A turn cut short has no footer (the Claude Code process
+  was lost, or another error ended it): the daemon's last line, the error, is then the ending
+  that moves into the new message, and its banner. The new message shows empty only when the
+  reply has no footer and no such line either.
 
 A message holds 12,000 characters and 50 blocks or task cards (measured: "Message limits"). Slack
 translates Claude's text into a `header` per heading, a `table` per table, a `divider` per rule and

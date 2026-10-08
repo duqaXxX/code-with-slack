@@ -263,6 +263,34 @@ async def test_an_error_that_cuts_a_turn_ends_the_stream_with_the_cross(
     assert h.slack.pushes() == 1
 
 
+async def test_an_error_that_cuts_a_turn_after_its_stream_stopped_says_so_in_the_message_that_rings(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # Issue #165: the process lost past STREAM_SECONDS, the reply's last part a tool call. The
+    # closing message showed empty, and its text named a command that had run.
+    from tests.fakes import EndOfStream
+
+    messages = sdk_messages("tools")
+    h = harness_for({"turns": [messages[:21]]})
+    clock = FakeClock()
+    h.deps.stream_clock = clock
+    turn = await h.session().submit("list the files")
+    await until(lambda: bool(h.slack.calls_to("chat.startStream")))
+    await asyncio.sleep(0.1)
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    h.clients[0].inject([*messages[21:58], EndOfStream()])  # cut after the second tool result
+    await asyncio.wait_for(turn.done.wait(), 2)
+    await until(lambda: h.reactions()[-1] == Status.ERROR.value)
+    await until(lambda: bool(h.slack.calls_to("chat.postMessage")))
+    [closing] = h.slack.calls_to("chat.postMessage")
+    [block] = closing["blocks"]
+    assert block["type"] == "markdown" and block["text"].startswith("Claude Code reported an error")
+    assert closing["text"].startswith("Claude Code reported an error")
+    await asyncio.sleep(0.1)
+    assert "reported an error" not in str(h.slack.message_blocks()[0])  # moved, not shown twice
+    assert h.slack.pushes() == 2  # the 280 s stop, and the message that says how it ended
+
+
 async def test_a_turn_that_fails_before_claude_answers_is_a_reply_of_its_own(
     harness_for: Callable[..., Harness], tmp_path: Any
 ) -> None:

@@ -537,6 +537,62 @@ async def test_the_closing_message_text_skips_the_daemon_s_own_lines(slack: Fake
     assert closing["blocks"] == [sinks.context_block(sinks.ZERO_WIDTH_SPACE)]  # no footer to show
 
 
+ERROR_LINE = "Claude Code reported an error: `the Claude Code process exited`"
+
+
+async def test_a_reply_cut_short_after_its_stream_stopped_ends_with_the_daemon_s_line(
+    slack: FakeSlack,
+) -> None:
+    # Issue #165, seen live on 2026-10-08: the reply's last part was a tool call, the turn had no
+    # footer, and the message that notified showed empty while the error sat in an edit.
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.task(tool("t1", "Bash"))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("\n\n" + ERROR_LINE, notice=True)
+    await sink.finish([])
+    await sink.close_out(None)
+    [closing] = slack.calls_to("chat.postMessage")
+    assert closing["blocks"] == [{"type": "markdown", "text": ERROR_LINE}]
+    assert closing["text"] == sinks.banner_text(ERROR_LINE, limit=sinks.BANNER_LIMIT)
+    kept = slack.calls_to("chat.update")[-1]["blocks"]
+    assert all(ERROR_LINE not in str(block) for block in kept)  # moved, not shown twice
+
+
+async def test_an_answer_of_text_alone_cut_short_ends_with_the_daemon_s_line(
+    slack: FakeSlack,
+) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.text("Half an answer")
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("\n\n" + ERROR_LINE, notice=True)
+    await sink.finish([])
+    await sink.close_out(None)
+    [closing] = slack.calls_to("chat.postMessage")
+    assert closing["blocks"] == [{"type": "markdown", "text": ERROR_LINE}]
+    assert slack.calls_to("chat.update")[-1]["blocks"] == [
+        {"type": "markdown", "text": "Half an answer"}
+    ]
+
+
+async def test_a_daemon_line_stays_in_the_reply_when_the_footer_is_the_ending(
+    slack: FakeSlack,
+) -> None:
+    clock = FakeClock()
+    sink = reply(slack, clock=clock)
+    await sink.task(tool("t1", "Bash"))
+    await settled()
+    await clock.advance(sinks.STREAM_SECONDS + 1)
+    await sink.text("\n\n_Stopped._", notice=True)
+    await sink.finish([])
+    await sink.close_out("footer")
+    [closing] = slack.calls_to("chat.postMessage")
+    assert closing["blocks"] == [{"type": "divider"}, sinks.context_block("footer")]
+
+
 async def test_a_stream_slack_closed_first_falls_back_to_updates(slack: FakeSlack) -> None:
     sink = reply(slack)
     await sink.text("one")
