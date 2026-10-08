@@ -475,6 +475,8 @@ class ThreadSession:
         self._settled.set()
         self._injected_expected = False
         self._expiry: asyncio.Task[None] | None = None
+        # Claude Code said it is compacting the conversation and has not said it ended.
+        self._compacting = False
         # D9: armed while idle with nothing pending; any turn, task frame, approval or question
         # cancels it, and being idle with nothing pending again (re)starts it.
         self._idle_expiry: asyncio.Task[None] | None = None
@@ -573,13 +575,16 @@ class ThreadSession:
     def _thread_line(self) -> tuple[str, str]:
         """What the thread's status line says, empty for nothing, and the same after the app's
         name (`ThreadStatus.show`). `Working…` while a prompt is on its way to Claude Code or a
-        turn runs (issue #83). Once the turn has ended, what it left running
+        turn runs (issue #83), `Compacting conversation…` while that turn compacts, in the
+        terminal's words (issue #169). Once the turn has ended, what it left running
         (`1 shell still running`, issue #95): a count that changes cannot live in a reply,
         whose stream only grows. Nothing while an approval, a question or a hold waits on the
         owner, while `!stop` winds a turn down, and once the session is closed."""
         if self._closed or self.waiting_for_owner or self._interrupting:
             return "", ""
         if self.busy or self._taken is not None or not self._queue.empty():
+            if self._compacting:
+                return texts.THREAD_COMPACTING, texts.THREAD_COMPACTING_STATUS
             return texts.THREAD_WORKING, texts.THREAD_WORKING_STATUS
         if self.draining and (held := self._running_kinds(awaited_only=True)):
             # A stop that only background tasks hold: said here whatever the footer shows,
@@ -1489,6 +1494,17 @@ class ThreadSession:
             reported = message.data.get("permissionMode")
             if isinstance(reported, str):
                 self.mode = reported
+            # A compaction opens with `status` `compacting`, repeated while it lasts, and ends
+            # 14 to 37 seconds later in the recordings (2026-10-08, CLI 2.1.292) with a `status`
+            # frame that carries `compact_result`. The frame that reports a permission mode
+            # carries neither, so one that arrives meanwhile ends nothing.
+            status = message.data.get("status")
+            compacting = status == "compacting" or (
+                self._compacting and status is None and "compact_result" not in message.data
+            )
+            if compacting != self._compacting:
+                self._compacting = compacting
+                self._show_thread_status()
         if isinstance(message, TASK_MESSAGES) and (inner := self._nesting_reply(message)):
             # A task of a call inside another call (a long command a subagent runs) is that
             # call's root's work: Claude Code reports it to the subagent, so no turn follows it.
@@ -1591,18 +1607,23 @@ class ThreadSession:
                     if isinstance(message, TaskNotificationMessage) and not stopped:
                         self._notified()
                     return
-                # A compaction's boundary comes before every frame of its turn that shows
-                # something, on `/compact` and on an automatic compaction at a turn's start
-                # (recorded: `compact.jsonl`, `auto-compact.jsonl`, CLI 2.1.292). The turn starts
-                # with it, as it would one frame later with the summary Claude Code sends next,
-                # and only a turn that is due: a boundary with no prompt sent and no report
-                # awaited would open a reply that no result is known to end.
-                compacted = (
+                # A compaction comes before every frame of its turn that shows something, on
+                # `/compact` and on an automatic compaction at a turn's start (recorded:
+                # `compact.jsonl`, `auto-compact.jsonl`, CLI 2.1.292). The turn starts when the
+                # compaction does, so a report turn that compacts first is not given up on
+                # after `INJECTED_TURN_WAIT`, and at the latest with the boundary, whose line
+                # the reply shows. Only a turn that is due starts so: with no prompt sent and
+                # no report awaited, either frame would open a reply that no result is known
+                # to end.
+                compaction = (
                     isinstance(message, SystemMessage)
-                    and message.subtype == "compact_boundary"
+                    and (
+                        message.subtype == "compact_boundary"
+                        or (message.subtype == "status" and self._compacting)
+                    )
                     and (bool(self._sent) or self._injected_expected)
                 )
-                if not isinstance(message, TURN_MESSAGES) and not compacted:
+                if not isinstance(message, TURN_MESSAGES) and not compaction:
                     return
                 if call:
                     # A subagent's own frame, whose call no reply holds: an agent continued with
@@ -1633,6 +1654,7 @@ class ThreadSession:
                 stopped = await self._finish(active, message)
             finally:
                 self._active = None
+                self._compacting = False
                 self._show_thread_status()  # whichever way it ended, `!stop` included
             # D10: checked only now, with `_active` cleared: `_finish` alone still reads busy.
             if not stopped:
@@ -2214,6 +2236,7 @@ class ThreadSession:
         waiting = ([active.turn] if active and active.turn else []) + dropped
         self._injected_expected = False
         self._interrupting = False  # D10: whatever it was waiting on, this ends it
+        self._compacting = False  # the process that was compacting is gone
         self._show_thread_status()
         if error:
             self._react_error()

@@ -651,7 +651,16 @@ async def compact(s: Stage) -> dict[str, Observation]:
     await s.turn("/compact")
     reply = s.replies_since(mark)
     shown = reply.startswith("Compacted the conversation")
-    return {"P21": Observation(True, shown, "" if shown else f"the reply reads {reply[:80]!r}")}
+    lines = [
+        "".join(args.get("loading_messages") or [])
+        for method, args in s.slack.calls[mark.calls :]
+        if method == "assistant.threads.setStatus"
+    ]
+    announced = texts.THREAD_COMPACTING in lines
+    return {
+        "P21": Observation(True, shown, "" if shown else f"the reply reads {reply[:80]!r}"),
+        "P22": Observation(True, announced, "" if announced else f"the status line read {lines}"),
+    }
 
 
 SCENES: dict[str, tuple[str, ...]] = {
@@ -669,7 +678,7 @@ SCENES: dict[str, tuple[str, ...]] = {
     "working folder": ("P14",),
     "replay": ("P19",),
     "goal": ("P20",),
-    "compact": ("P21",),
+    "compact": ("P21", "P22"),
 }
 
 

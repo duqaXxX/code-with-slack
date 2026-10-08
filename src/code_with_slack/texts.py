@@ -274,6 +274,9 @@ RUNNING = "⏳ {counts}"
 # `STILL_RUNNING_STATUS` say the same after the app's name, which is what a
 # client that draws `<app name> <status>` shows (measured 2026-10-02, desktop and iOS).
 THREAD_WORKING = "Working…"
+# The terminal's words while it compacts (`Compacting conversation`, read in the CLI 2.1.292).
+THREAD_COMPACTING = "Compacting conversation…"
+THREAD_COMPACTING_STATUS = "is compacting the conversation…"
 STILL_RUNNING = "{counts} still running"
 THREAD_WORKING_STATUS = "is working…"
 STILL_RUNNING_STATUS = "has {counts} still running"

@@ -7,6 +7,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- The thread's status line reads `Compacting conversation…`, the terminal's words, while Claude
+  Code compacts the conversation, on `!compact` and on a compaction of its own (#169). Claude
+  Code opens a compaction with a `status` system message that says `compacting`, repeats it
+  after 30 seconds, and sends nothing else until the `status` message that carries
+  `compact_result`, 14 to 37 seconds later in eleven recordings (2026-10-08, claude-agent-sdk
+  0.2.164, bundled CLI 2.1.292, Haiku); the line said `Working…` meanwhile. That first message
+  now also starts the turn it belongs to, when one is due, so a turn Claude Code starts to
+  report a task and that compacts first is no longer given up on after `INJECTED_TURN_WAIT`,
+  its report then landing in another reply (`tests/fixtures/sdk/auto-compact-report-turn.jsonl`,
+  the end of a session recorded just past its threshold, where that compaction took 23.8
+  seconds). A background subagent that compacts its own context sends neither message on the
+  conversation's stream (one recording). Probe claim P22 reads the line during a `/compact` on
+  every new release.
+
 - With bypass off a thread runs in the mode the owner's settings start Claude Code in
   (`permissions.defaultMode`), auto mode included; the daemon sets none. The `Mode:` line of
   `!status` shows the mode Claude Code reports (`ThreadSession.mode`: the connect's
