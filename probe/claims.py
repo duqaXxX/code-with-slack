@@ -229,6 +229,16 @@ CLAIMS = [
         "send `!compact` in a thread with a few turns; the line under the thread reads "
         "`Compacting conversation…` until the reply appears",
     ),
+    Claim(
+        "P23",
+        "gesture",
+        "each command `docs/limits.md` lists as not offered to a session is answered `isn't "
+        "available in this environment`",
+        "code_with_slack.commands.Passthrough",
+        "send `!rewind` in a thread; the reply is `/rewind isn't available in this "
+        "environment.` A command that answers anything else is no longer a limit: take its "
+        "row out of `docs/limits.md` and say so in the issue it names",
+    ),
 ]
 
 

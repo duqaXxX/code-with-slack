@@ -48,6 +48,7 @@ from code_with_slack.setup import Choice
 from code_with_slack.state import StateStore
 from code_with_slack.trust import Repository, Unkeyed, locate
 from probe.claims import Observation
+from probe.commands import UNAVAILABLE, not_offered
 from tests.fakes import FakeSlack, card_of
 
 # The model the fixture recorder uses: the cheapest that runs every scene.
@@ -679,7 +680,23 @@ SCENES: dict[str, tuple[str, ...]] = {
     "replay": ("P19",),
     "goal": ("P20",),
     "compact": ("P21", "P22"),
+    "commands not offered": ("P23",),
 }
+
+
+async def commands_not_offered(s: Stage) -> dict[str, Observation]:
+    """Send every command the limits page lists as not offered, as the daemon sends a `!name`.
+    Each costs no tokens: Claude Code answers it itself."""
+    answered: dict[str, str] = {}
+    for name in not_offered():
+        mark = s.mark()
+        await s.turn(f"/{name}")
+        answered[name] = s.replies_since(mark)
+    offered = [f"/{name}" for name, text in answered.items() if UNAVAILABLE not in text]
+    detail = f"{len(answered)} commands sent"
+    if offered:
+        detail += f"; answered otherwise: {', '.join(offered)}"
+    return {"P23": Observation(True, not offered, detail)}
 
 
 async def run_scenes(log: Log) -> dict[str, Observation]:
@@ -704,6 +721,7 @@ async def run_scenes(log: Log) -> dict[str, Observation]:
             seen |= await attempt("replay", s, replay(s))
             seen |= await attempt("goal", s, goal(s))
             seen |= await attempt("compact", s, compact(s))
+            seen |= await attempt("commands not offered", s, commands_not_offered(s))
         finally:
             await s.manager.close_all()
             forget_sessions(workdir, log)

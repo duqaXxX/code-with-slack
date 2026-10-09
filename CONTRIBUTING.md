@@ -90,3 +90,13 @@ listed to be read by hand. The rows the reference never named and no claim cover
 `uv run python -m probe --surface` lists them and checks the table alone, with no token spent. A
 change that reads a new field, key or value of the SDK adds its row there in the same pull
 request; `tests/test_sdk_surface.py` fails on an imported SDK name with no row.
+
+The probe also compares the commands a session is offered on the release with the list recorded
+in `tests/fixtures/sdk/server-info.json`, and prints the ones that are new or gone after the
+claims. A new command is typed in Slack as `!name` from the day the release is pinned: try it in
+a thread, decide what Slack shows for it, then record the list again. The comparison stops no
+certificate. `uv run python -m probe --commands` runs it alone, with no token spent.
+
+One claim sends every command that [docs/limits.md](docs/limits.md) lists as not offered to a
+session. A command that no longer answers `isn't available in this environment` makes the claim
+BROKEN: the limit is gone, and its row leaves the page before the release is pinned.
