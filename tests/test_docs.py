@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "code_with_slack"
 README = ROOT / "README.md"
 SETUP = ROOT / "docs" / "setup.md"
+SDK_FIXTURES = ROOT / "tests" / "fixtures" / "sdk"
 # A feature's row is a name to scan: what it does in full is in docs/setup.md or under Details.
 # Raise this when a name cannot be said in fewer characters.
 FEATURE_NAME_LIMIT = 300
@@ -211,3 +212,39 @@ def test_the_readme_stays_a_landing_page() -> None:
     assert words <= README_WORD_LIMIT, (
         f"README.md has {words} words, over {README_WORD_LIMIT}: detail belongs in docs/setup.md"
     )
+
+
+LIMITS = ROOT / "docs" / "limits.md"
+
+
+def _limits_rows(heading: str) -> list[list[str]]:
+    """The cells of each row of the table under `heading` in docs/limits.md."""
+    section = LIMITS.read_text().split(f"## {heading}\n", 1)[1].split("\n## ", 1)[0]
+    rows = [line for line in section.splitlines() if line.startswith("|")]
+    return [[cell.strip() for cell in row.strip("|").split("|")] for row in rows[2:]]
+
+
+def test_a_command_listed_as_not_offered_is_not_in_the_recorded_commands() -> None:
+    # `server-info.json` is what `get_server_info()` returned when the fixtures were recorded:
+    # recorded again on a release that offers one of these commands, it makes this fail, and
+    # the page loses the row.
+    offered = {
+        c["name"] for c in json.loads((SDK_FIXTURES / "server-info.json").read_text())["commands"]
+    }
+    named = [
+        name
+        for row in _limits_rows("Limits of the Claude Agent SDK")
+        for name in re.findall(r"`/([a-z-]+)`", row[1])
+    ]
+    assert len(named) >= 19, named
+    assert [name for name in named if name in offered] == []
+
+
+def test_every_limit_says_whether_an_issue_looks_into_it() -> None:
+    headings = re.findall(r"^## (.+)$", LIMITS.read_text(), flags=re.M)
+    tables = [h for h in headings if h != "Not checked"]
+    assert len(tables) == 4, headings
+    issue = re.compile(r"\[#(\d+)\]\(https://github\.com/duqaXxX/code-with-slack/issues/\1\)")
+    for heading in tables:
+        for row in _limits_rows(heading):
+            assert row[-1] == "none" or issue.fullmatch(row[-1]), (heading, row[0], row[-1])

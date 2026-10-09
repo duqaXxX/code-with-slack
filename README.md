@@ -86,6 +86,7 @@ bypass switch, effort level and the status reaction on its root message. See
 - [docs/setup.md](docs/setup.md): the whole setup and every command.
 - [docs/architecture.md](docs/architecture.md): how the daemon is built.
 - [docs/features.md](docs/features.md): each feature and what verifies it.
+- [docs/limits.md](docs/limits.md): what the terminal does and Slack does not, and why.
 - [docs/CHANGELOG.md](docs/CHANGELOG.md): what changed.
 
 ## Contributing
