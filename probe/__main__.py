@@ -4,6 +4,8 @@
     uv run python -m probe --force    run anyway
     uv run python -m probe --latest   run on the newest release on PyPI, in a temporary worktree
     uv run python -m probe --surface  check docs/sdk-surface.md alone and list its rows: no tokens
+    uv run python -m probe --commands list the commands that are new or gone on this release: no
+                                      tokens
 
 It uses the owner's Claude Code login and real tokens (Haiku), which is why it is not part of
 pytest. Exit status: 0 certified, 3 a claim is BROKEN, 2 not every gesture claim could be proven;
@@ -25,6 +27,8 @@ from pathlib import Path
 from claude_agent_sdk._cli_version import __cli_version__
 
 from probe.claims import CLAIMS, broken, can_certify, certificate, checklist, evaluate, report
+from probe.commands import changes, offered_now, recorded
+from probe.commands import report as commands_report
 from probe.features import by_hand
 from probe.scenes import run_scenes
 from probe.surface import check as check_surface
@@ -116,9 +120,14 @@ def run(path: Path, force: bool) -> int:
     if mapped.broken:
         print("Not certified: the package no longer defines a symbol the daemon uses.")
         return 3
+    # The commands of this release against the recorded list: a new one is typed in Slack from
+    # the day the SDK is pinned. Read before the scenes, like the surface, and printed after the
+    # claims: it asks for a look, and stops no certificate.
+    commands = commands_report(changes(asyncio.run(offered_now()), recorded()), __cli_version__)
     seen = asyncio.run(run_scenes(log))
     results = [evaluate(claim, seen.get(claim.id)) for claim in CLAIMS]
     print(report(results, __cli_version__, sdk))
+    print("\n" + commands)
     if hand := checklist(results):
         print("\n" + hand)
     # What no claim covers at all, from the coverage map: printed on every run, certified or not.
@@ -144,15 +153,25 @@ def show_surface() -> int:
     return 3 if mapped.broken else 0
 
 
+def show_commands() -> int:
+    """The commands a session is offered on the installed release against the recorded list. It
+    starts Claude Code and sends no prompt, so it spends nothing."""
+    print(commands_report(changes(asyncio.run(offered_now()), recorded()), __cli_version__))
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="python -m probe", description=__doc__.split("\n")[0])
     parser.add_argument("--force", action="store_true", help="run even if already certified")
     parser.add_argument("--latest", action="store_true", help="probe the newest release on PyPI")
     parser.add_argument("--surface", action="store_true", help="check the SDK surface map only")
+    parser.add_argument("--commands", action="store_true", help="list new and gone commands only")
     parser.add_argument("--certificate", type=Path, default=CERTIFIED, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.surface:
         return show_surface()
+    if args.commands:
+        return show_commands()
     return on_latest(args.force) if args.latest else run(args.certificate, args.force)
 
 

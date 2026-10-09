@@ -135,3 +135,49 @@ def test_a_certificate_file_of_another_shape_is_refused(tmp_path: Path) -> None:
     path.write_text(json.dumps({"0.2.160": {"cli": "2.1.283"}}))
     with pytest.raises(ValueError):
         certified(path)
+
+
+# --- The commands of a release (probe/commands.py) -----------------------------------------------
+
+
+def test_the_commands_not_offered_are_read_from_the_limits_page() -> None:
+    from probe.commands import not_offered
+
+    names = not_offered()
+    assert {"rewind", "plan", "add-dir", "voice"} <= set(names)
+    assert len(names) == len(set(names))
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        "# Limits\n\n## Limits of Slack\n\n| a | b |\n|---|---|\n| x | `/rewind` |\n",
+        "# Limits\n\n## Limits of the Claude Agent SDK\n\n| a | b |\n|---|---|\n| x | words |\n",
+    ],
+)
+def test_a_limits_page_that_names_no_command_is_an_error(tmp_path: Path, page: str) -> None:
+    # A page that lists nothing would make the claim hold on nothing.
+    from probe.commands import not_offered
+
+    path = tmp_path / "limits.md"
+    path.write_text(page)
+    with pytest.raises(ValueError, match=r"limits\.md"):
+        not_offered(path)
+
+
+def test_new_and_gone_commands_are_told_apart() -> None:
+    from probe.commands import Changes, changes, report
+
+    found = changes({"compact", "model", "brand-new"}, {"compact", "model", "retired"})
+    assert found == Changes(new=("brand-new",), gone=("retired",))
+    told = report(found, "9.9.9")
+    assert "[ ] /brand-new" in told and "[ ] /retired" in told
+    assert "tests/fixtures/sdk/server-info.json" in told
+    same = report(changes({"compact"}, {"compact"}), "9.9.9")
+    assert same == "Commands: the same as recorded (Claude Code 9.9.9)."
+
+
+def test_the_recorded_commands_are_the_fixture_s() -> None:
+    from probe.commands import recorded
+
+    assert {"compact", "model", "clear"} <= recorded()

@@ -7,6 +7,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- The release probe looks at commands (`probe/commands.py`). It compares the commands a session
+  is offered on the release with the recorded `server-info.json` and prints the new and the gone
+  ones, to be tried in Slack before the release is pinned; `uv run python -m probe --commands`
+  does that alone, with no token. A new claim, P23, sends every command `docs/limits.md` lists as
+  not offered: one that answers anything else is a limit that is gone, and the claim is BROKEN
+  until the page says so. On Claude Code 2.1.292 the comparison names one new command,
+  `/plugin-authoring`, and P23 holds on 19 commands.
 - `docs/limits.md` lists what the terminal does and Slack does not, under whoever sets each
   limit: the Claude Agent SDK (the commands and features Claude Code keeps for its interactive
   terminal, 22 of them measured on 2026-10-09 with Claude Code 2.1.292), Slack (a clip's
