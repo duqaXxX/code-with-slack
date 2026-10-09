@@ -337,7 +337,12 @@ def test_the_manifest_asks_for_the_minimum() -> None:
         "groups:read",
         "reactions:write",  # the status reaction on a session's root message (D10)
     ]
-    assert manifest["settings"]["event_subscriptions"]["bot_events"] == ["message.groups"]
+    assert manifest["settings"]["event_subscriptions"]["bot_events"] == [
+        "message.groups",
+        # Slack sends it while it writes a clip's transcript, the only sign that one is ready
+        # (measured 2026-10-09); read under `files:read`, with no scope of its own.
+        "file_change",
+    ]
     assert manifest["settings"]["is_mcp_enabled"] is False
     # The session index is the app's Home tab: published with no scope and no event
     # (views.publish reference, read 2026-10-01). Nobody writes to the app in its Messages tab.

@@ -1227,7 +1227,8 @@ and tried again after `home.RETRY_SECONDS`.
 
 ## Slack handlers
 
-`code_with_slack.slack_app.build_app` registers one listener per inbound path: `message` events, the
+`code_with_slack.slack_app.build_app` registers one listener per inbound path: `message` events,
+the `file_change` event (below, "An audio clip"), the
 Approve, Deny, Answer and Skip buttons, the setup's Model select and Start, the question form's Next
 and Submit, `!open`'s Choose a file button with its modal's search field and Open, and the session
 index's controls (its filters and Show all, and its New thread link button, which is only
@@ -1238,6 +1239,17 @@ checks reaches the owner as an ephemeral error line. A link Slack made from a ty
 (`<url|label>`, `<url>`) reaches Claude Code as typed; a link the owner named reaches it as `label
 (url)`, so the address is not lost; a mention stays in Slack's form (`<@U…>`), since naming the user
 would need a scope the app does not have.
+
+An audio clip: a message whose one file has the subtype `slack_audio` is held instead of being
+sent (`voice.clip`, `WaitingClip`), since Claude Code takes no audio and the daemon transcribes
+nothing. Slack writes a clip's transcript when the owner asks for it and sends `file_change`
+while it does (measured: "Clip transcript"). That event names a file and no user or channel, so
+its listener acts only on a file id the owner's own message left waiting, reads the file with
+`files.info`, and checks the owner, the workspace and the channel again on what Slack returns
+before anything is sent. When `transcription.status` is `complete`, the text (the preview, or
+the file's `vtt` when Slack cut the preview, `voice.vtt_text`) goes through the same path as a
+typed message, so the setup, the holds and the notices apply as they do to text. A clip waits
+`voice.WAIT_SECONDS`, in memory only.
 
 A `message` event is routed by whether it is a reply in an existing thread:
 `slack_app.handle_message` reads `sessions.get(channel, thread_ts)` for a reply (`None` for a thread
@@ -1369,5 +1381,7 @@ repeated by `tests/test_openfile.py`.
 | Permalink opens on the reply | Slack opens a thread on the reply that a permalink names | Mac app and iOS | 2026-10-05 | not recorded |
 | Built-in servers | In a non-interactive run the `init` message lists the user, plugin and claude.ai MCP servers. `computer-use` is absent though switched on for the folder through `/mcp`; `claude-in-chrome` is absent with `/chrome` set to "Enabled by default" and listed, connected, with `--chrome` | The SDK's bundled CLI run with `-p --output-format stream-json`, with and without `--chrome`, reading `mcp_servers` and `tools` | 2026-10-09 | Claude Code 2.1.292 |
 | Chrome in an SDK session | A client started with `extra_args` `chrome` opened a page in the owner's Chrome, read it, took a screenshot (an `image` block in the tool result) and closed the tab. The permission callback was asked for `tabs_context_mcp`, `navigate`, `read_page` and `computer`, and not for `tabs_close_mcp` | `ClaudeSDKClient` with the daemon's options in `default` mode, Haiku, one run | 2026-10-09 | SDK 0.2.164, Claude Code 2.1.292 |
+| Clip transcript | A clip is a message with no text and one file of subtype `slack_audio` (`audio/mp4`). No event follows its posting. After **Generate transcript**, `file_change` arrived four times in 15 seconds and `files.info` then gave `transcription` with `status` `complete`, a `locale` and `preview` (`content`, `has_more` false up to 67 characters); `vtt` on `files.slack.com` returned the transcript as WebVTT to the bot token. Slack chose the locale: `it-IT` once and `en-GB` twice for clips spoken in Italian, the two with wrong words. Not seen: a status other than `complete`, `has_more` true, the body of the `file_change` event (the log names it only) | Three clips from the iOS app, Slack free plan, a workspace set to English | 2026-10-09 | slack-sdk 3.45.0 |
+| Claude Code and audio | The Read tool refuses an `.m4a` file as binary, and `/voice` is not among the commands an SDK session is offered | The SDK's bundled CLI with `-p`, one run; `get_server_info()` of a client with the daemon's options | 2026-10-09 | Claude Code 2.1.292 |
 | Status removal after two minutes | Slack removes a thread status two minutes after it was set and clears it when the app replies | `assistant.threads.setStatus` reference, read | 2026-10-02 | not recorded |
 | Resume and bypass | Claude Code's own `--resume` never restores `bypassPermissions` | sessions reference, read | 2026-09-26 | not recorded |

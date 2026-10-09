@@ -31,7 +31,8 @@
   "settings": {
     "event_subscriptions": {
       "bot_events": [
-        "message.groups"
+        "message.groups",
+        "file_change"
       ]
     },
     "interactivity": {

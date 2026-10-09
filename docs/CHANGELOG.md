@@ -7,6 +7,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- An audio clip recorded in Slack can be the message (#35). The clip waits until the owner
+  chooses Generate transcript on it; Slack then sends `file_change` for the file, and when its
+  `transcription` is `complete` the daemon sends that text to Claude as a typed message
+  (`voice.py`). The daemon transcribes nothing and downloads no audio: Claude Code takes no audio
+  file, and its own dictation is the microphone of an interactive session. The manifest gains the
+  `file_change` bot event; an app created earlier adds it under Event Subscriptions. Known
+  limit: Slack picks the language it hears, and in three clips spoken in Italian it wrote two as
+  English (2026-10-09, free plan, workspace set to English). Not recorded: the events' own
+  payloads, a transcript Slack cut, a status other than `complete`.
 - A session started from Slack has Claude Code's Chrome integration when the owner chose
   "Enabled by default" in `/chrome`. Claude Code applies that choice to interactive sessions
   only, and in the non-interactive mode the Agent SDK uses it connects the `claude-in-chrome`

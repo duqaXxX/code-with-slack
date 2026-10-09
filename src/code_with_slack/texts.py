@@ -157,6 +157,19 @@ BIND_OUTSIDE = (
     "example `!bind my-project`."
 )
 UPLOAD_FAILED = "Nothing was sent to Claude: {name} {reason}. Send the message again without it."
+# An audio clip waits for the transcript only the owner can ask Slack for (`voice.py`).
+CLIP_WAITING = (
+    "Waiting for this clip's transcript: choose `Generate transcript` on the clip, and its text "
+    "is sent to Claude."
+)
+CLIP_NOT_SENT = (
+    "Nothing was sent to Claude: this clip had no transcript after {minutes} minutes. Record it "
+    "again, or type the message."
+)
+CLIP_EMPTY = "Nothing was sent to Claude: Slack's transcript of this clip is empty."
+CLIP_UNREADABLE = (
+    "Nothing was sent to Claude: the transcript of this clip could not be read ({reason})."
+)
 UPLOAD_IMAGE_TYPE = (
     "is an image of type `{mimetype}`, and Claude reads only JPEG, PNG, GIF and WebP images"
 )

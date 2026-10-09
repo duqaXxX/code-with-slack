@@ -1,0 +1,87 @@
+{
+  "team_id": "T000TEAM",
+  "context_team_id": "T000TEAM",
+  "context_enterprise_id": null,
+  "api_app_id": "A000APP",
+  "event": {
+    "type": "message",
+    "text": "",
+    "files": [
+      {
+        "id": "F000CLIP",
+        "created": 1790000000,
+        "timestamp": 1790000000,
+        "mimetype": "audio/mp4",
+        "filetype": "m4a",
+        "pretty_type": "MPEG-4 audio",
+        "user": "U000ALICE",
+        "user_team": "T000TEAM",
+        "editable": false,
+        "size": 100383,
+        "mode": "hosted",
+        "is_external": false,
+        "external_type": "",
+        "is_public": false,
+        "public_url_shared": false,
+        "display_as_bot": false,
+        "username": "",
+        "name": "Audio clip (2026-10-09 10:35:15).m4a",
+        "title": "Audio clip (2026-10-09 10:35:15)",
+        "subtype": "slack_audio",
+        "is_transcription_region_supported": true,
+        "transcription": {
+          "status": "complete",
+          "locale": "en-US",
+          "preview": {
+            "content": "What day is it today?",
+            "has_more": false
+          }
+        },
+        "is_modified_by_ai": false,
+        "url_private": "https://files.slack.com/files-pri/T000TEAM-F000CLIP/audio_clip__2026-10-09_10_35_15_.m4a",
+        "url_private_download": "https://files.slack.com/files-pri/T000TEAM-F000CLIP/download/audio_clip__2026-10-09_10_35_15_.m4a",
+        "vtt": "https://files.slack.com/files-tmb/T000TEAM-F000CLIP-0000000000/file.vtt?_xcb=00000",
+        "duration_ms": 5712,
+        "audio_wave_samples": [
+          0,
+          0,
+          1,
+          4,
+          9,
+          4,
+          1,
+          0
+        ],
+        "media_display_type": "audio",
+        "permalink": "https://example.slack.com/files/U000ALICE/F000CLIP/audio_clip__2026-10-09_10_35_15_.m4a",
+        "permalink_public": "https://slack-files.com/T000TEAM-F000CLIP-0000000000",
+        "is_starred": false,
+        "skipped_shares": true,
+        "has_rich_preview": false,
+        "file_access": "visible"
+      }
+    ],
+    "upload": false,
+    "user": "U000ALICE",
+    "display_as_bot": false,
+    "ts": "1790350306.267839",
+    "client_msg_id": "00000000-0000-4000-8000-000000000001",
+    "channel": "C000CHAN",
+    "subtype": "file_share",
+    "event_ts": "1790350306.267839",
+    "channel_type": "group"
+  },
+  "type": "event_callback",
+  "event_id": "Ev000EVENT",
+  "event_time": 1790350306,
+  "authorizations": [
+    {
+      "enterprise_id": null,
+      "team_id": "T000TEAM",
+      "user_id": "U000BOT",
+      "is_bot": true,
+      "is_enterprise_install": false
+    }
+  ],
+  "is_ext_shared_channel": false
+}
