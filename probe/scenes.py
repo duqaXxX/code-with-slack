@@ -419,14 +419,19 @@ async def background_stop(s: Stage) -> dict[str, Observation]:
     )
 
     def running() -> bool:
-        return any(c.get("details") == RUNNING_CARD for c in s.cards_now())
+        # By the card's status: a streamed card keeps the details an earlier update gave it
+        # (measured 2026-10-08), so "Running in background" stays on a command that has ended.
+        return any(
+            c.get("details") == RUNNING_CARD and c.get("status") == "in_progress"
+            for c in s.cards_now()
+        )
 
     if not await until(running, 20):
         return {"P12": Observation(False, False, "no background command started")}
     stopped = await s.session.stop()
     gone = await until(lambda: not running(), 30)
     detail = "" if stopped else "!stop found nothing to stop"
-    detail = detail or ("" if gone else "the card still shows the command running after 30 s")
+    detail = detail or ("" if gone else "the card is still in progress after 30 s")
     return {"P12": Observation(True, stopped and gone, detail)}
 
 
