@@ -28,13 +28,24 @@ def is_owner(identity: Identity, user_id: str | None, team_id: str | None) -> bo
     return bool(user_id) and user_id == identity.owner_user_id and team_id == identity.team_id
 
 
-def message_actor(event: dict[str, Any]) -> tuple[str | None, str | None]:
-    """The user and the workspace of a message. A file_share event has no `team` (measured
-    2026-09-25): its files name the uploader's workspace, and must all name the same one."""
+def message_actor(event: dict[str, Any], body: dict[str, Any]) -> tuple[str | None, str | None]:
+    """The user and the workspace of a message, `body` being the envelope the event came in. Two
+    events carry no `team`. A file_share (measured 2026-09-25): its files name the uploader's
+    workspace, and must all name the same one. A thread_broadcast, a reply also sent to the
+    channel (recorded 2026-10-09): the envelope's `team_id` stands in, and only when the envelope
+    says the channel is not shared outside the workspace, since that id names where the event
+    happened and not the writer's own workspace. One that carries files follows the files' rule,
+    the stricter of the two."""
     team = event.get("team")
     if team is None and event.get("files"):
         teams = {file.get("user_team") for file in event["files"]}
         team = teams.pop() if len(teams) == 1 else None
+    elif (
+        team is None
+        and event.get("subtype") == "thread_broadcast"
+        and body.get("is_ext_shared_channel") is False
+    ):
+        team = body.get("team_id")
     return event.get("user"), team
 
 
@@ -46,12 +57,17 @@ def interaction_actor(body: dict[str, Any]) -> tuple[str | None, str | None]:
     return user.get("id"), team if home in (None, team) else None
 
 
+# The subtypes a message a person wrote can carry: a message with files, and a thread reply also
+# sent to the channel. Any other subtype is an edit, a deletion or a join.
+PROMPT_SUBTYPES = ("file_share", "thread_broadcast")
+
+
 def is_prompt_message(event: dict[str, Any]) -> bool:
-    """A message a person wrote: with no subtype, or the subtype `file_share` (any other subtype
-    is an edit, a deletion or a join), from no bot, with some text or a file."""
+    """A message a person wrote: with no subtype or one of PROMPT_SUBTYPES, from no bot, with
+    some text or a file."""
     return (
         event.get("type") == "message"
-        and event.get("subtype", "file_share") == "file_share"
+        and event.get("subtype", "file_share") in PROMPT_SUBTYPES
         and "bot_id" not in event
         and bool((event.get("text") or "").strip() or event.get("files"))
     )

@@ -421,7 +421,8 @@ The bot answers one person, and the rest of this list protects what that person 
 ## Using it
 
 A top-level message in a bound channel opens a new Slack thread and starts a session there; a
-reply inside that thread continues the same session, even days later. Before the first message
+reply inside that thread continues the same session, even days later, whether or not **Also
+send to #channel** is ticked on it. Before the first message
 is sent, the thread shows one row of controls under `Choose how this session starts`: a model
 from the list Claude Code offers, an effort (`Effort: default` passes none), **Bypass**, and
 **Start**, which starts the session with them and sends the message. `!stop` in the thread

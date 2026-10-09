@@ -236,9 +236,17 @@ own before anything reaches Claude Code:
    time, so inviting a third person stops the bot in that channel at once.
 
 Messages with a subtype (edits, deletions, joins) and messages from bots are ignored, except
-`file_share`, a message carrying files. A `file_share` event has no `team` field (measured: "File
-share event has no team"): `guards.message_actor` takes the workspace from the files' `user_team`,
-which must be the same for every file, or the message is refused. A refusal reaches the owner as an
+`file_share`, a message carrying files, and `thread_broadcast`, a thread reply sent with **Also
+send to #channel**, which is handled as any reply in its thread. Neither event has a `team` field
+(measured: "File share event has no team", "Thread broadcast event has no team"), so
+`guards.message_actor` reads the workspace elsewhere. For a `file_share` it comes from the files'
+`user_team`, which must be the same for every file, or the message is refused. For a
+`thread_broadcast` it is the `team_id` of the envelope the event came in, and only when the
+envelope's `is_ext_shared_channel` is `false`: that id names the workspace the event happened in,
+not the writer's own, so in a channel shared outside the workspace the message is ignored. The
+channel check below refuses such a channel in any case. A `thread_broadcast` that carries files
+would follow the files' rule; no such event has been recorded. The hidden `message_changed` that Slack
+sends after a `thread_broadcast` is ignored like any edit. A refusal reaches the owner as an
 ephemeral message; everyone else gets nothing.
 
 A control of the session index (the Home tab) runs the first check alone. Its payload names no
@@ -1361,6 +1369,7 @@ repeated by `tests/test_openfile.py`.
 |---|---|---|---|---|
 | Stopped task, no report turn | Claude Code starts no turn to report a task stopped with `ClaudeSDKClient.stop_task` | not recorded | not recorded | Claude Code 2.1.283 |
 | File share event has no team | A `file_share` message event carries no `team` field | not recorded | 2026-09-25 | not recorded |
+| Thread broadcast event has no team | A reply sent with **Also send to #channel** arrives as a `message` event of subtype `thread_broadcast` with `thread_ts`, a `root` copy of the thread's first message and no `team` or `parent_user_id`; its envelope has `team_id` and `is_ext_shared_channel`; a hidden `message_changed` wrapping the same reply follows | A reply recorded in Socket Mode, daemon stopped | 2026-10-09 | slack-bolt 1.30.0 |
 | Download without files:read | Slack answers 302 to a file download when the app lacks `files:read` | not recorded | 2026-09-25 | not recorded |
 | Card text is appended | Slack appends the `details` and the `output` of a `task_update` to what the card already holds | not recorded | 2026-10-01 | slack-sdk 3.44.1 |
 | Stream lifetime | `chat.appendStream` is refused 300.3 seconds after `chat.startStream` | not recorded | 2026-09-28 | not recorded |

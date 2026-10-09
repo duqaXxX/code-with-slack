@@ -50,7 +50,8 @@ def test_is_owner_checks_user_and_team_separately(
 
 
 def test_actors_read_the_recorded_payloads() -> None:
-    assert message_actor(recorded("event_callback-message")["event"]) == (OWNER, TEAM)
+    plain = recorded("event_callback-message")
+    assert message_actor(plain["event"], plain) == (OWNER, TEAM)
     assert interaction_actor(recorded("block_actions")) == (OWNER, TEAM)
 
 
@@ -66,6 +67,7 @@ def test_only_plain_human_messages_are_prompts() -> None:
     assert not is_prompt_message(recorded("event_callback-message_changed")["event"])
     assert not is_prompt_message({**message, "bot_id": "B000BOT"})
     assert not is_prompt_message({**message, "subtype": "message_deleted"})
+    assert not is_prompt_message({**message, "subtype": None})
     assert not is_prompt_message({**message, "text": ""})
 
 
@@ -146,8 +148,66 @@ async def test_a_network_failure_reading_the_channel_is_a_refusal(slack: FakeSla
 
 def test_a_file_share_names_its_workspace_in_the_file() -> None:
     # Measured 2026-09-25: a file_share event has no `team`; each file carries `user_team`.
-    shared = recorded("event_callback-file_share-image")["event"]
+    body = recorded("event_callback-file_share-image")
+    shared = body["event"]
     assert "team" not in shared
-    assert message_actor(shared) == (OWNER, TEAM)
+    assert message_actor(shared, body) == (OWNER, TEAM)
     other = {**shared["files"][0], "user_team": OTHER_TEAM}
-    assert message_actor({**shared, "files": [*shared["files"], other]}) == (OWNER, None)
+    assert message_actor({**shared, "files": [*shared["files"], other]}, body) == (OWNER, None)
+
+
+def test_a_reply_also_sent_to_the_channel_is_a_prompt() -> None:
+    # Recorded 2026-10-09: a thread reply sent with "Also send to #channel" arrives as subtype
+    # thread_broadcast, followed by a hidden message_changed that wraps the same reply.
+    event = recorded("event_callback-thread_broadcast")["event"]
+    assert event["subtype"] == "thread_broadcast"
+    assert is_prompt_message(event)
+    assert not is_prompt_message({**event, "bot_id": "B000BOT"})
+    followed = recorded("event_callback-message_changed-thread_broadcast")["event"]
+    assert followed["message"]["subtype"] == "thread_broadcast"
+    assert not is_prompt_message(followed)
+
+
+def test_a_reply_also_sent_to_the_channel_takes_its_workspace_from_the_envelope() -> None:
+    # Recorded 2026-10-09: the event has no `team` (its `root` names the root author's); the
+    # envelope's `team_id` is where the event happened.
+    body = recorded("event_callback-thread_broadcast")
+    event = body["event"]
+    assert "team" not in event
+    assert message_actor(event, body) == (OWNER, TEAM)
+    assert message_actor(event, {**body, "team_id": OTHER_TEAM}) == (OWNER, OTHER_TEAM)
+    # A team the event names is never replaced by the envelope's.
+    assert message_actor({**event, "team": OTHER_TEAM}, body) == (OWNER, OTHER_TEAM)
+
+
+def test_the_envelope_stands_in_only_in_a_channel_not_shared_outside() -> None:
+    body = recorded("event_callback-thread_broadcast")
+    event = body["event"]
+    assert body["is_ext_shared_channel"] is False
+    assert message_actor(event, {**body, "is_ext_shared_channel": True}) == (OWNER, None)
+    unsaid = {key: value for key, value in body.items() if key != "is_ext_shared_channel"}
+    assert message_actor(event, unsaid) == (OWNER, None)
+    # Only the JSON `false` counts: nothing that merely reads as false.
+    for unclear in (None, 0, "false"):
+        assert message_actor(event, {**body, "is_ext_shared_channel": unclear}) == (OWNER, None)
+
+
+def test_a_reply_also_sent_to_the_channel_with_files_follows_the_files() -> None:
+    # Not recorded: whether Slack sends a broadcast reply with a file as thread_broadcast. If it
+    # does, the files decide, as for any message that carries them, and the envelope never does.
+    body = recorded("event_callback-thread_broadcast")
+    files = recorded("event_callback-file_share-image")["event"]["files"]
+    event = {**body["event"], "files": files}
+    assert message_actor(event, body) == (OWNER, TEAM)
+    mixed = [*files, {**files[0], "user_team": OTHER_TEAM}]
+    assert message_actor({**event, "files": mixed}, body) == (OWNER, None)
+    unnamed = [{key: value for key, value in files[0].items() if key != "user_team"}]
+    assert message_actor({**event, "files": unnamed}, body) == (OWNER, None)
+
+
+def test_the_envelope_stands_in_for_no_other_kind_of_message() -> None:
+    body = recorded("event_callback-thread_broadcast")
+    plain = recorded("event_callback-message")["event"]
+    teamless = {key: value for key, value in plain.items() if key != "team"}
+    assert message_actor(teamless, body) == (OWNER, None)
+    assert message_actor({**teamless, "subtype": "file_share"}, body) == (OWNER, None)
