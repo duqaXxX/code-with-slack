@@ -255,7 +255,10 @@ channel, and all it does is choose what the owner's own page shows: nothing reac
 Where the daemon's own answers go is decided in `slack_app.handle_word`. A word typed at the top
 level, or in a thread that holds no session, acts as a top-level word: its answer is a normal post
 in the channel (`in_channel`, or `say` with no thread), which is neither ephemeral nor a thread
-reply, so it stays after a reload and never notifies. A word typed inside a session's thread is
+reply, so it stays after a reload and never notifies. Three words are the exception in a thread
+that holds no session, where a word reads as being about that thread: `!stop`, `!resume` and
+`!bind` with a folder act on the whole channel, so there they change nothing and say where to
+send them, for the owner alone (`texts.STOP_OUTSIDE_SESSION`, `texts.WORD_IN_THREAD`). A word typed inside a session's thread is
 answered by `tell_owner` or an ephemeral `say` under the owner's message (`chat.postEphemeral` with
 `thread_ts`), which Slack drops on reload; `!bypass` adds `acknowledge`, a ✅ reaction on the word,
 which stays; `!stop` there is answered by a post in the thread, which stays: `texts.STOPPED_THREAD`

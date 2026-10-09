@@ -364,6 +364,40 @@ async def test_a_reply_in_a_thread_that_holds_no_session_is_refused(world: World
     assert world.ephemerals() == [texts.NOT_A_SESSION]
 
 
+@pytest.mark.parametrize(
+    "word",
+    ["!stop", "!resume", "!resume 68da9311-0000-4000-8000-00000000000b", "!bind elsewhere"],
+)
+async def test_a_word_that_acts_on_the_channel_is_refused_in_a_thread_with_no_session(
+    world: World, word: str
+) -> None:
+    # A word typed under a post that is no session reads as being about that thread: one that
+    # would stop every session, bind the channel or turn the thread into a session says where
+    # to send it instead, for the owner alone.
+    await world.dispatch(message("first"))
+    busy = len(world.queries())
+    folder = world.state.channel(CHANNEL)
+    await world.dispatch(reply(word, OTHER_THREAD))
+    name = word.split()[0].removeprefix("!")
+    expected = (
+        texts.STOP_OUTSIDE_SESSION if name == "stop" else texts.WORD_IN_THREAD.format(word=name)
+    )
+    assert world.ephemerals() == [expected]
+    assert said(world) == []
+    assert world.state.channel(CHANNEL) == folder
+    assert world.state.thread(CHANNEL, OTHER_THREAD) is None
+    assert len(world.queries()) == busy
+
+
+@pytest.mark.parametrize("word", ["!help", "!guide", "!status", "!bind"])
+async def test_a_word_that_only_shows_acts_as_in_the_channel_in_a_thread_with_no_session(
+    world: World, word: str
+) -> None:
+    await world.dispatch(reply(word, OTHER_THREAD))
+    assert world.ephemerals() == []
+    assert len(said(world)) == 1
+
+
 async def test_a_reply_in_a_thread_being_deleted_starts_nothing(world: World) -> None:
     # The thread still has its entry while its messages are deleted: a reply sent then must not
     # rebuild a session from it (the delete would leave it running on a thread that is gone).
@@ -1395,13 +1429,13 @@ async def test_a_resume_click_on_a_thread_stored_but_not_live_is_refused(world: 
     assert world.slack.calls_to("chat.update") == []
 
 
-async def test_a_typed_resume_in_a_non_session_thread_names_that_thread(world: World) -> None:
+async def test_a_typed_resume_in_a_non_session_thread_lists_nothing(world: World) -> None:
+    # It listed the folder's sessions with buttons naming that thread, so a click made a thread
+    # under some other post into a session. `!resume` is a word for the channel.
     two_sessions(world)
     await world.dispatch(reply("!resume", OTHER_THREAD))
-    (post,) = world.slack.calls_to("chat.postMessage")
-    values = [b["accessory"]["value"] for b in post["blocks"] if "accessory" in b]
-    assert values == [f"{SESSION_A}@{OTHER_THREAD}", f"{SESSION_B}@{OTHER_THREAD}"]
-    assert "thread_ts" not in post
+    assert world.slack.calls_to("chat.postMessage") == []
+    assert world.ephemerals() == [texts.WORD_IN_THREAD.format(word="resume")]
 
 
 async def test_a_button_is_never_trusted_for_a_session_of_another_directory(world: World) -> None:
@@ -1538,7 +1572,7 @@ async def test_a_word_typed_in_the_channel_is_answered_by_a_top_level_post(
     assert world.ephemerals() == [] and world.clients == []
 
 
-@pytest.mark.parametrize("word", ["!stop", "!resume", "!bind", "!status", "!bypass on"])
+@pytest.mark.parametrize("word", ["!bind", "!status", "!bypass on"])
 async def test_a_word_typed_in_a_thread_that_is_no_session_is_answered_top_level(
     world: World, word: str
 ) -> None:
@@ -1665,16 +1699,15 @@ async def test_a_second_resume_click_on_the_same_list_is_refused(world: World) -
     assert texts.RESUME_HELD in said(world)
 
 
-async def test_a_resume_click_after_a_typed_resume_in_the_same_thread_is_refused(
-    world: World,
-) -> None:
+async def test_a_typed_resume_under_the_picker_resumes_nothing(world: World) -> None:
     two_sessions(world)
-    # A non-session thread that holds the picker: `!resume footer` there acts as top-level.
+    # The picker's own thread holds no session yet: `!resume footer` typed there is refused like
+    # in any such thread, and the picker's buttons still work.
     await world.dispatch(reply("!resume footer", CLICK_THREAD))
-    assert world.state.thread(CHANNEL, CLICK_THREAD).session_id == SESSION_A
-    await world.dispatch(resume_click(SESSION_B, CLICK_THREAD))  # the same `!resume` thread
-    assert world.state.thread(CHANNEL, CLICK_THREAD).session_id == SESSION_A
-    assert texts.RESUME_HELD in said(world)
+    assert world.state.thread(CHANNEL, CLICK_THREAD) is None
+    assert world.ephemerals() == [texts.WORD_IN_THREAD.format(word="resume")]
+    await world.dispatch(resume_click(SESSION_B, CLICK_THREAD))
+    assert world.state.thread(CHANNEL, CLICK_THREAD).session_id == SESSION_B
 
 
 async def test_a_resume_click_never_stores_a_session_of_a_folder_bound_meanwhile(

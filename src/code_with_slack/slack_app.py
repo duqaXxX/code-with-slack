@@ -557,7 +557,14 @@ def build_app(
             await reply_on_failure(
                 channel,
                 thread_ts,
-                handle_word(channel, thread_ts, ts, command, session=session),
+                handle_word(
+                    channel,
+                    thread_ts,
+                    ts,
+                    command,
+                    session=session,
+                    outside=not top_level and session is None,
+                ),
                 report=word_report(channel, thread_ts, session),
             )
             return
@@ -1019,14 +1026,23 @@ def build_app(
         app.action(action_id)(on_hold_decision)
 
     async def handle_word(
-        channel: str, thread_ts: str, ts: str, command: Word, *, session: ThreadSession | None
+        channel: str,
+        thread_ts: str,
+        ts: str,
+        command: Word,
+        *,
+        session: ThreadSession | None,
+        outside: bool = False,
     ) -> None:
         """A word of the daemon's own. Typed in the channel (or in a thread that holds no
         session) it is answered by a normal post in the channel; typed inside a session's thread
         it is answered for the owner alone under their message, or by a reaction, so nothing
         rings a phone; `!stop` and `!open` are the exceptions: `!stop` is answered by a post that
         stays in the thread, and `!open` posts its picker there and shares the file into it.
-        `ts` is the word's own message."""
+        `ts` is the word's own message. `outside` is a thread that holds no session: a word
+        typed there reads as being about that thread, so the ones that act on the whole channel
+        (`!stop`, `!resume`, `!bind` with a folder) say where to send them, for the owner alone,
+        and change nothing."""
         where = None if session is None else thread_ts
         quiet = session is not None
         match command:
@@ -1040,7 +1056,7 @@ def build_app(
             case Guide():
                 await say(channel, where, texts.GUIDE, ephemeral=quiet)
             case Bind():
-                if session is not None:
+                if session is not None or (outside and command.path):
                     await tell_owner(
                         channel, thread_ts, texts.WORD_IN_THREAD.format(word=command.WORD)
                     )
@@ -1069,7 +1085,9 @@ def build_app(
                 else:
                     await say(channel, thread_ts, await session.status(), ephemeral=True)
             case Stop():
-                if session is None:
+                if outside:
+                    await tell_owner(channel, thread_ts, texts.STOP_OUTSIDE_SESSION)
+                elif session is None:
                     stopped = await sessions.stop_channel(channel)
                     # None: only a D8 hold was cancelled somewhere in the channel (`Not sent.`,
                     # from its own waiter); no second notice, since nothing Claude Code was doing
@@ -1103,7 +1121,7 @@ def build_app(
                 else:
                     await open_word(channel, thread_ts, session, words)
             case Resume(target=target):
-                if session is not None:
+                if session is not None or outside:
                     await tell_owner(
                         channel, thread_ts, texts.WORD_IN_THREAD.format(word=command.WORD)
                     )
