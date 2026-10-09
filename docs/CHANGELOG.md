@@ -648,6 +648,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- The probe's claim on stopping a background command (P12) reads the card's status. It read the
+  card's details, and a streamed card keeps the details an earlier update gave it: `Running in
+  background` stays on a command that has ended, so the claim was left unproven although the
+  command was stopped (three runs on 2026-10-09, Claude Code 2.1.292: the process gone, the card
+  complete with `Stopped`).
 - An owner's prompt that crosses a background task's report is answered in its own reply
   (#205). The session decided whose turn was starting from what it was waiting for, and learned
   the answer from the result's origin when the turn had already been written: a report turn
