@@ -337,6 +337,25 @@ async def test_a_reply_in_a_known_session_s_thread_is_a_prompt_too(world: World)
     assert world.queries() == [thread_body["event"]["text"]]
 
 
+async def test_a_reply_also_sent_to_the_channel_is_a_prompt_of_its_thread(world: World) -> None:
+    # Recorded 2026-10-09: "Also send to #channel" makes the reply a thread_broadcast with no
+    # `team`, then a hidden message_changed that wraps it.
+    body = recorded("event_callback-thread_broadcast")
+    world.sessions.open(CHANNEL, body["event"]["thread_ts"])
+    await world.dispatch(copy.deepcopy(body))
+    await world.dispatch(recorded("event_callback-message_changed-thread_broadcast"))
+    assert world.queries() == [body["event"]["text"]]
+
+
+async def test_a_reply_also_sent_to_a_channel_shared_outside_is_ignored(world: World) -> None:
+    body = recorded("event_callback-thread_broadcast")
+    world.sessions.open(CHANNEL, body["event"]["thread_ts"])
+    body["is_ext_shared_channel"] = True
+    await world.dispatch(body)
+    assert world.queries() == []
+    assert world.ephemerals() == []
+
+
 async def test_a_reply_in_a_thread_that_holds_no_session_is_refused(world: World) -> None:
     # Same recorded shape as above, but its thread was never opened: nothing to continue.
     thread_body = _recorded_thread_reply()

@@ -421,10 +421,10 @@ def build_app(
         return True
 
     @app.event("message")
-    async def on_message(event: dict[str, Any]) -> None:
+    async def on_message(event: dict[str, Any], body: dict[str, Any]) -> None:
         if not is_prompt_message(event):
             return
-        user, team = message_actor(event)
+        user, team = message_actor(event, body)
         channel = event.get("channel")
         ts = str(event.get("ts"))
         thread_ts = str(event.get("thread_ts") or ts)

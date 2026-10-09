@@ -648,6 +648,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A thread reply sent with **Also send to #channel** is a prompt of its thread. It was dropped
+  with no answer: Slack delivers it as subtype `thread_broadcast`, and
+  `guards.is_prompt_message` took `file_share` as the only subtype a person's message can have.
+  The event has no `team`, so `guards.message_actor` now takes the envelope as well and reads
+  the workspace from its `team_id`, only for this subtype and only when the envelope's
+  `is_ext_shared_channel` is `false`. Recorded payloads:
+  `tests/fixtures/slack/200-event_callback-thread_broadcast.json` and the hidden
+  `message_changed` that follows it (#73).
 - The probe's claim on stopping a background command (P12) reads the card's status. It read the
   card's details, and a streamed card keeps the details an earlier update gave it: `Running in
   background` stays on a command that has ended, so the claim was left unproven although the
