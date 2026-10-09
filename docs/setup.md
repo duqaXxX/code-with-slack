@@ -453,7 +453,7 @@ Slack chooses the language it hears by itself, clip by clip. Of three clips spok
 a workspace set to English (Slack free plan, iOS app, 2026-10-09), it wrote one in Italian and
 two as English words that were not what was said, and those would have reached Claude as they
 were. Read the transcript Slack shows under the clip before you rely on the answer. An audio
-file you upload is not a clip and is refused like any file Claude cannot read.
+file you upload is taken the same way: Slack shows it with the same player and transcript.
 
 ### Continuing a session in the terminal
 

@@ -12,6 +12,7 @@ CLIP: dict[str, Any] = {
     "id": "F000CLIP",
     "mimetype": "audio/mp4",
     "subtype": "slack_audio",
+    "media_display_type": "audio",
     "transcription": {
         "status": "complete",
         "locale": "en-US",
@@ -28,14 +29,17 @@ VTT = (
 
 def test_a_message_with_one_audio_clip_is_a_clip() -> None:
     assert voice.clip([CLIP]) is CLIP
+    # The same recording uploaded as a file: no `subtype`, the same player and transcript.
+    uploaded = {k: v for k, v in CLIP.items() if k != "subtype"}
+    assert voice.clip([uploaded]) is uploaded
 
 
 @pytest.mark.parametrize(
     "files",
     [
         [],
-        [{**CLIP, "subtype": "slack_video"}],  # a video clip was not measured
-        [{"id": "F000FILE", "mimetype": "audio/mp4"}],  # an uploaded audio file is no clip
+        [{**CLIP, "subtype": "slack_video", "media_display_type": "video"}],  # not measured
+        [{"id": "F000FILE", "mimetype": "text/plain"}],
         [CLIP, {"id": "F000FILE", "mimetype": "text/plain"}],
     ],
 )

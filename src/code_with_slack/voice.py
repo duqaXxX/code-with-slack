@@ -8,8 +8,9 @@ daemon never transcribes: the text is the one Slack makes when the owner asks fo
 
 Measured on 2026-10-09 (Slack free plan, slack-sdk 3.45.0), three clips recorded in the iOS app:
 
-- a clip is a message with no text and one file whose `subtype` is `slack_audio` (`mimetype`
-  `audio/mp4`, `media_display_type` `audio`);
+- a clip is a message with no text and one file whose `media_display_type` is `audio`
+  (`mimetype` `audio/mp4`): a clip recorded in Slack has the `subtype` `slack_audio`, and the
+  same recording uploaded as a file has none and gets a transcript all the same;
 - nothing tells the app when the clip is sent; while Slack makes the transcript it sends
   `file_change` for the file, four times in 15 seconds, and the last leaves
   `transcription.status` at `complete`. Only `complete` was seen as a status;
@@ -28,8 +29,9 @@ VTT_LIMIT = 256 * 1024
 
 
 def clip(files: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The audio clip a message is, when it carries that one file and nothing else."""
-    if len(files) == 1 and files[0].get("subtype") == "slack_audio":
+    """The audio a message is, when it carries that one file and nothing else: a clip recorded
+    in Slack or an audio file, which Slack shows with the same player and transcript."""
+    if len(files) == 1 and files[0].get("media_display_type") == "audio":
         return files[0]
     return None
 
