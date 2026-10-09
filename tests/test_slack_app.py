@@ -832,7 +832,7 @@ async def test_bang_status_shows_a_background_only_session_as_busy_not_idle(worl
     # A task that outlived its turn: `session.busy` is False, yet it is not idle either.
     first = split_turns(sdk_messages("background"))[0]
     await world.dispatch(message("start it", ts=THREAD))
-    world.clients[0].inject(first)
+    world.clients[0].answer(first)
     session = world.sessions.get(CHANNEL, THREAD)
     assert session is not None
     async with asyncio.timeout(2):
@@ -2122,7 +2122,7 @@ async def _idle_message(world: World, text: str, *, ts: str) -> None:
     """A message that opens or continues a thread and lets its turn finish, so the session is
     idle again (D5's `bind` refuses one that is still busy)."""
     await world.dispatch(message(text, ts=ts))
-    world.clients[-1].inject(sdk_messages("tools"))  # a full turn, ResultMessage included
+    world.clients[-1].answer(sdk_messages("tools"))  # a full turn, ResultMessage included
     await asyncio.sleep(0.05)
 
 
@@ -2303,7 +2303,7 @@ async def test_no_hold_when_the_other_session_is_idle(world: World) -> None:
     await world.dispatch(message("hi", ts=OTHER_THREAD))
     session = world.sessions.get(CHANNEL, OTHER_THREAD)
     assert session is not None
-    world.clients[0].inject(sdk_messages("tools"))
+    world.clients[0].answer(sdk_messages("tools"))
     async with asyncio.timeout(2):
         while not session.idle:  # noqa: ASYNC110
             await asyncio.sleep(0.01)
@@ -2345,7 +2345,7 @@ async def test_another_channel_bound_to_the_same_folder_also_holds(world: World)
 async def test_a_background_only_session_counts_as_working(world: World) -> None:
     first = split_turns(sdk_messages("background"))[0]
     await world.dispatch(message("start it", ts=OTHER_THREAD))
-    world.clients[0].inject(first)
+    world.clients[0].answer(first)
     session = world.sessions.get(CHANNEL, OTHER_THREAD)
     assert session is not None
     async with asyncio.timeout(2):
@@ -2569,7 +2569,7 @@ async def test_the_other_session_finishing_does_not_skip_the_question(world: Wor
     hold_id = button_value(posted_blocks(world), HOLD_CONTINUE)
     other = world.sessions.get(CHANNEL, OTHER_THREAD)
     assert other is not None
-    world.clients[0].inject(sdk_messages("tools"))
+    world.clients[0].answer(sdk_messages("tools"))
     async with asyncio.timeout(2):
         while not other.idle:  # noqa: ASYNC110
             await asyncio.sleep(0.01)
@@ -2671,7 +2671,7 @@ async def test_a_report_turn_during_a_hold_keeps_the_raised_hand(world: World) -
     await world.dispatch(message("start it", ts=THREAD))
     target = world.sessions.get(CHANNEL, THREAD)
     assert target is not None
-    world.clients[0].inject(turns[0])
+    world.clients[0].answer(turns[0])
     async with asyncio.timeout(2):
         while target.busy or not target.running_kinds:  # noqa: ASYNC110
             await asyncio.sleep(0.01)
@@ -2696,7 +2696,7 @@ async def test_cancel_after_a_finished_report_turn_shows_done_not_a_stale_reacti
     await world.dispatch(message("start it", ts=THREAD))
     target = world.sessions.get(CHANNEL, THREAD)
     assert target is not None
-    world.clients[0].inject(turns[0])
+    world.clients[0].answer(turns[0])
     async with asyncio.timeout(2):
         while target.busy or not target.running_kinds:  # noqa: ASYNC110
             await asyncio.sleep(0.01)

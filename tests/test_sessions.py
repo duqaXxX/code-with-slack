@@ -1354,7 +1354,8 @@ async def test_an_owner_prompt_sent_during_the_expiry_s_work_runs_after_it(
     h.clients[0].inject(notice)
     await asyncio.wait_for(h.slack.gated.wait(), 1.0)  # the expiry's end is inside its write
     turn = await asyncio.wait_for(session.submit("and now?"), 2)
-    h.clients[0].inject(sdk_messages("tools"))  # its turn starts over that write
+    await until(lambda: h.clients[0].queries[-1] == "and now?", limit=1.0)
+    h.clients[0].answer(sdk_messages("tools"))  # its turn starts over that write
     await until(lambda: session._active is not None, limit=1.0)
     h.slack.gate = None
     gate.set()
@@ -1828,7 +1829,7 @@ async def test_a_notification_after_the_owner_query_was_sent_leaves_the_turn_to_
     await until(lambda: h.clients[0].queries == ["start it", "next"])
     h.clients[0].inject(notice)
     await asyncio.sleep(0.05)
-    h.clients[0].inject(sdk_messages("tools"))
+    h.clients[0].answer(sdk_messages("tools"))
     await asyncio.wait_for(second.done.wait(), 2)
     assert not any(is_report(r) for r in h.replies())
 

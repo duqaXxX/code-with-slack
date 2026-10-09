@@ -486,6 +486,15 @@ class ThreadSession:
         self._settled = asyncio.Event()
         self._settled.set()
         self._injected_expected = False
+        # The prompt whose replay arrived with no turn running: the turn that starts next is
+        # its own (`_acknowledge`, `_whose_turn`).
+        self._announced: Turn | None = None
+        # A report turn was awaited when a prompt's own turn started in its place: it is
+        # awaited again once that turn ends (`_settle`).
+        self._report_due = False
+        # A task's notification arrived with no turn running and no report turn has started
+        # since: Claude Code has a report to make (`_whose_turn`).
+        self._notification_waits = False
         self._expiry: asyncio.Task[None] | None = None
         # Claude Code said it is compacting the conversation and has not said it ended.
         self._compacting = False
@@ -1483,7 +1492,9 @@ class ThreadSession:
         turn = next((t for t in sent if t.uuid == message.uuid), None)
         if turn is None:
             return False
-        if active is not None and turn not in active.taken:
+        if active is None:
+            self._announced = turn
+        elif turn not in active.taken:
             active.taken.append(turn)
         return True
 
@@ -1549,6 +1560,8 @@ class ThreadSession:
             self._expiring.add(expiry)
             expiry.add_done_callback(self._expiring.discard)
         if isinstance(message, TaskNotificationMessage):
+            if self._active is None and not stopped:
+                self._notification_waits = True
             self._unreported.pop(message.task_id, None)
             self._stopped.discard(message.task_id)
             # Read above for the end line, which comes after the terminal task_updated (recorded
@@ -1614,6 +1627,9 @@ class ThreadSession:
                 and bool(self._sent)
                 and not self._injected_expected
             )
+            # Whether the turn opens with its own words: the case in which a prompt's replay is
+            # known to come first (`_whose_turn`).
+            worded = False
             if not starts_owner_turn:
                 if isinstance(message, TASK_MESSAGES):
                     self._held.append(message)
@@ -1638,6 +1654,7 @@ class ThreadSession:
                 )
                 if not isinstance(message, TURN_MESSAGES) and not compaction:
                     return
+                worded = not compaction
                 if call:
                     # A subagent's own frame, whose call no reply holds: an agent continued with
                     # `SendMessage` in a daemon that never saw the call that first started it
@@ -1645,7 +1662,7 @@ class ThreadSession:
                     # that first call, not the `SendMessage` one). It is no turn of the
                     # conversation's, so it starts none and takes no owner prompt's.
                     return
-            self._active = await self._start_turn()
+            self._active = await self._start_turn(worded)
             # A report turn has no prompt behind it: only now does `_thread_line` read it.
             self._show_thread_status()
         active = self._active
@@ -1926,7 +1943,36 @@ class ThreadSession:
         self._idle_expiry = None
         await self.close(reason=texts.ENDED_IDLE)
 
-    async def _start_turn(self) -> ActiveTurn:
+    def _whose_turn(self, worded: bool) -> Turn | None:
+        """The prompt the turn that starts now answers, taken out of `_sent`; None for a turn
+        Claude Code starts itself, to report a task.
+
+        Claude Code replays a prompt of plain text after its turn's `init` and before the turn's
+        first words, and replays nothing before a report turn: so in every turn of the fixtures
+        `prompt-replay-*`, `compact` and `auto-compact*` (CLI 2.1.286 and 2.1.292). A replay
+        therefore names the turn's prompt, whatever was awaited. And when a task's notification
+        is waiting to be reported, a turn that opens with words (`worded`) and no replay is that
+        report, not the plain prompt that waits beside it.
+
+        Everywhere else the answer is the older guess, which `_settle` corrects at the turn's
+        end. No recording covers those turns: one that opens with a compaction starts before
+        its replay, a command (`/compact`) is not replayed as a prompt is, and a prompt with an
+        image, a turn that fails before its first word (a logged-out CLI, a limit reached) and
+        a turn with no notification waiting were never recorded without their replay."""
+        announced, self._announced = self._announced, None
+        if announced is not None and announced in self._sent:
+            self._sent.remove(announced)
+            self._report_due = self._injected_expected
+            return announced
+        if self._injected_expected or not self._sent:
+            return None
+        head = self._sent[0].prompt
+        plain = isinstance(head, str) and not head.lstrip().startswith("/")
+        if worded and self._notification_waits and plain:
+            return None
+        return self._sent.popleft()
+
+    async def _start_turn(self, worded: bool) -> ActiveTurn:
         # D10: skipped while `stop()` is still winding an interrupt down (`_finish` clears the
         # flag once that very turn's own terminal result says so): this can be that turn's own
         # trailing messages, not a new one, and `stop()`'s own ✅ must stand.
@@ -1936,12 +1982,12 @@ class ThreadSession:
             # session; ✋ must stand through it, not be overwritten by ⏳ (`waiting_for_owner`
             # covers a hold the same way it covers an open approval or question).
             self._react(Status.WAITING if self.waiting_for_owner else Status.WORKING)
-        injected = self._injected_expected or not self._sent
+        turn = self._whose_turn(worded)
         self._injected_expected = False
         if self._expiry is not None:
             self._expiry.cancel()
-        turn = None if injected else self._sent.popleft()
         if turn is None:
+            self._notification_waits = False
             # D1: a report turn renders into the reply that started the task it reports, so no
             # new message follows for it; only when that reply is no longer tracked does it get
             # one of its own, as every reply always has.
@@ -2000,6 +2046,7 @@ class ThreadSession:
         self._tasks.clear()
         self._ended.clear()
         self._unreported.clear()
+        self._notification_waits = False
         self._stopped.clear()
         for renderer in renderers:
             with contextlib.suppress(Exception):
@@ -2203,6 +2250,8 @@ class ThreadSession:
         be wrong; this puts the queue back in order (that one reply carries the other's text).
         `released`: prompts Claude Code took into this turn; no result of their own follows."""
         injected = injected_turn(result)
+        # Read once and lowered: only the turn it was raised for may await the report again.
+        report_due, self._report_due = self._report_due, False
         for taken in released:
             if taken in self._sent:
                 self._sent.remove(taken)
@@ -2229,6 +2278,9 @@ class ThreadSession:
             self._settled.set()
         elif turn is not None and not injected:
             turn.done.set()
+            if report_due:
+                # The report that was awaited when this prompt's turn started is still to come.
+                self._expect_injected_turn()
         else:
             self._settled.set()
 
@@ -2248,6 +2300,9 @@ class ThreadSession:
         dropped = [*sent, *(more or [])]
         waiting = ([active.turn] if active and active.turn else []) + dropped
         self._injected_expected = False
+        self._announced = None
+        self._report_due = False
+        self._notification_waits = False
         self._interrupting = False  # D10: whatever it was waiting on, this ends it
         self._compacting = False  # the process that was compacting is gone
         self._show_thread_status()

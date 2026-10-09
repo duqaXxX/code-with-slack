@@ -87,6 +87,7 @@ Facts about a feature that neither `setup.md` nor `architecture.md` states, kept
 ### Background commands and subagents
 
 - A message that Claude Code took into a report turn is released when that turn ends, and the reply says so at its end: `Claude Code took your message into this reply: send it again if it is not answered here.`
+- A message sent while a background task is about to report is answered in a reply of its own, and the report stays with the reply that started the task, whichever of the two turns Claude Code runs first. This holds for a message of plain text; for a command or a message with an image the answer can still land in the task's reply.
 
 ### A restart
 

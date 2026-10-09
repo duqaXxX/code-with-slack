@@ -124,7 +124,7 @@ async def play_the_continued_agent(
     client.inject(r.rest)
     await until(lambda: len(client.queries) == sent_so_far + 1)
     assert session._active is None
-    client.inject(m[r.results[-2] + 1 : answered + 1])
+    client.answer(m[r.results[-2] + 1 : answered + 1])
     await asyncio.wait_for(prompt.done.wait(), 2)
     await until(lambda: session._active is None)
     return h, session

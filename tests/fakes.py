@@ -15,7 +15,14 @@ from pathlib import Path
 from typing import Any
 
 import aiohttp
-from claude_agent_sdk import ClaudeAgentOptions, Message, ResultMessage
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    Message,
+    ResultMessage,
+    StreamEvent,
+    UserMessage,
+)
 from claude_agent_sdk._internal.message_parser import parse_message
 from claude_agent_sdk.types import PermissionResult, ToolPermissionContext
 from slack_sdk.web.async_client import AsyncWebClient
@@ -188,7 +195,32 @@ class FakeClaudeClient:
         only = messages[0]["message"]["content"] if len(messages) == 1 else None
         self.queries.append(only if isinstance(only, str) else messages)
         if self._turns:
-            self._feed.put_nowait(self._turns.pop(0))
+            self._feed.put_nowait(self._replayed(self._turns.pop(0), messages))
+
+    def _replayed(self, batch: list[Any], messages: list[dict[str, Any]]) -> list[Any]:
+        """`batch` with the replay of the prompt it answers, as Claude Code sends it with
+        `--replay-user-messages`: a `user` frame of the prompt's text under the uuid it was sent
+        with, after the turn's `init` and before its first words (recorded 2026-10-06, CLI
+        2.1.286, and 2026-10-09, 2.1.292). A command is not replayed so (`compact.jsonl`), and a
+        prompt with an image was never recorded: those turns are played as scripted."""
+        content = messages[0]["message"]["content"] if len(messages) == 1 else None
+        uuid = messages[0].get("uuid") if messages else None
+        if (
+            "replay-user-messages" not in (self.options.extra_args or {})
+            or not isinstance(content, str)
+            or content.lstrip().startswith("/")
+            or uuid is None
+        ):
+            return batch
+        worded = (StreamEvent, AssistantMessage, UserMessage, ResultMessage)
+        at = next((i for i, item in enumerate(batch) if isinstance(item, worded)), len(batch))
+        replay = UserMessage(content=content, uuid=uuid)
+        return [*batch[:at], replay, *batch[at:]]
+
+    def answer(self, batch: list[Message | CanUseToolCall | HookRun | EndOfStream]) -> None:
+        """Deliver the turn of the last prompt sent, with its replay, when the test rather than
+        `turns` holds that turn."""
+        self._feed.put_nowait(self._replayed(batch, self.sent[-1:]))
 
     def inject(self, batch: list[Message | CanUseToolCall | HookRun | EndOfStream]) -> None:
         """Deliver a turn nobody asked for, as the CLI does for a background-task notification."""
