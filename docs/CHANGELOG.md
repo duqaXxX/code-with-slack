@@ -7,6 +7,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `docs/limits.md` lists what the terminal does and Slack does not, under whoever sets each
+  limit: the Claude Agent SDK (the commands and features Claude Code keeps for its interactive
+  terminal, 22 of them measured on 2026-10-09 with Claude Code 2.1.292), Slack (a clip's
+  transcript), what is done on the machine, and the project's own choices. `docs/setup.md`
+  points to it for computer use in place of stating the limit itself.
 - An audio clip recorded in Slack, or an audio file uploaded to it, can be the message (#35);
   an audio file was refused at once as a type Claude cannot read. The clip waits until the owner
   chooses Generate transcript on it; Slack then sends `file_change` for the file, and when its

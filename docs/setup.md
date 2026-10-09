@@ -241,17 +241,12 @@ If you turn on Claude Code's Bash sandbox, do it in your own settings, where it 
 terminal and to Slack alike. Its auto-allow mode runs sandboxed Bash commands without asking,
 so they would not reach Slack for approval.
 
-The MCP servers you set up in Claude Code are available to a session started from Slack, with
-two limits. Both come from the Agent SDK, which runs Claude Code without its interactive
-terminal:
-
-- A server that needs you to sign in cannot be signed in from Slack. Run `claude mcp login
-  <name>` on the machine, or `/mcp` in the terminal.
-- Computer use is not available. It is Claude Code's built-in server that sees the screen and
-  controls the mouse and the keyboard, and Claude Code offers it in an interactive session only.
-  A session started from Slack cannot click through a native app, whatever `/mcp` shows in the
-  terminal for the same folder. Commands, scripts and command-line tools run from Slack as they
-  do in the terminal.
+The MCP servers you set up in Claude Code are available to a session started from Slack. A
+server that needs you to sign in is signed in on the machine: run `claude mcp login <name>`, or
+`/mcp` in the terminal. Computer use, and the commands Claude Code keeps for its interactive
+terminal, are not available from Slack: [limits.md](limits.md) lists what differs from the
+terminal and whose limit each is. Commands, scripts and command-line tools run from Slack as
+they do in the terminal.
 
 Claude Code's [Chrome integration](https://code.claude.com/docs/en/chrome) follows your choice in
 Claude Code. When `/chrome` shows **Enabled by default: Yes** in the terminal, a session started
