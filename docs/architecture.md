@@ -508,8 +508,16 @@ the daemon's own (`Turn.uuid`, `prompt.user_message`), and the session passes
 replayed after that turn's `init` and before its first stream event, so no turn runs when its replay
 arrives; one the CLI takes into a running turn is replayed inside that turn, and that turn ends with
 one result, with the origin `task-notification`, for both. The session never waits for a replay: a
-frame that names no prompt in `_sent` (or the active turn's own) is an ordinary frame, and a stream
-with no replay frames is read as an ordinary stream. A replay that arrives while a turn runs lands
+frame that names no prompt in `_sent` (or the active turn's own) is an ordinary frame. A replay
+that arrives with no turn running names the prompt of the turn that starts next
+(`ThreadSession._whose_turn`): that turn takes the prompt's reply whatever the session was
+waiting for. When a task's notification is waiting to be reported, a turn that opens with words
+and no replay is that report, so it does not take the reply of a prompt of plain text that waits
+beside it (measured: "Prompt replay", "Prompt sent before a notification"). In every other case
+the session takes the turn for the first waiting prompt's unless it awaits a report: no
+recording covers them. A turn that opens with a compaction starts before its replay, a command
+is not replayed as a prompt is, and a prompt with an image or a turn that fails before its first
+word (a logged-out CLI, a limit reached) was not recorded. A replay that arrives while a turn runs lands
 on `ActiveTurn.taken`; when that turn's result has an injected origin, `ThreadSession._finish`
 releases those prompts (`_settle`: out of `_sent`, `Turn.done` set) and adds the note
 `texts.TAKEN_INTO_REPLY_ONE` to the reply, through the same end notes as a restart's `N messages
@@ -1006,13 +1014,16 @@ refuses while any of the channel's threads is not idle (`SessionManager.bind`).
   `SUMMARY_IS_END_LINE`). No new message follows for it; only when the reply it would render into is
   no longer tracked (a restart or an idle close dropped it) does the report gets a reply of its own.
   The next queued message waits for it to finish. `texts.BACKGROUND_NOTICE` opens it only when no
-  task end was seen. When a message was already sent and waits for its turn, that turn comes first
-  and Claude Code reports the task inside it, with no turn of its own (measured: "Report inside a
-  queued turn"), so nothing waits. If no turn follows within 30 seconds, the queue moves on; a
+  task end was seen. When a message was already sent and waits for its turn, that turn comes first,
+  so nothing waits; the turn that reports the task follows it on its own (measured: "Prompt sent
+  before a notification"; an older observation, "Report inside a queued turn", saw none follow).
+  If no turn follows within 30 seconds, the queue moves on; a
   notification for a task no reply tracks is then posted on its own, and one for a task a reply
   still tracks ends that reply instead, since nothing more is coming for it either. When a queued
-  message and a notification cross, the result's `origin` tells whose turn it was, and the queue is
-  put back in order; that one reply can carry the other's label.
+  message and a notification cross, the prompt's replay tells whose turn starts, before its first
+  word (`ThreadSession._whose_turn`). Where no replay settles it, the result's `origin` tells
+  whose turn it was at its end, and the queue is put back in order (`ThreadSession._settle`,
+  which logs it); that one reply can then carry the other's label.
 - A task that outlives its turn keeps its line in the reply that started it: the session maps
   the task id to that reply, and every later task message for it updates that line only, never
   another reply. A background subagent's own calls (`parent_tool_use_id` pointing at a line of
@@ -1352,6 +1363,7 @@ repeated by `tests/test_openfile.py`.
 | Version on init | Claude Code's version comes with a turn's `init` message and not with the connect | not recorded | 2026-09-26 | claude-agent-sdk 0.2.158, bundled CLI 2.1.280 |
 | Permission mode status | A `status` system message carries `permissionMode` after each `set_permission_mode` | not recorded | 2026-10-08 | claude-agent-sdk 0.2.164 |
 | Model survives resume | `set_model()` on a live client survives a resume and leaves the owner's default alone | not recorded | 2026-09-30 | Claude Code 2.1.285 |
+| Prompt sent before a notification | A prompt sent with no turn running, a moment before a background command's notification, gets its turn first: `init`, the notification, the prompt's replay, then its words and a result of its own. The turn that reports the command follows with a result of origin `task-notification` and no replay before its words. The same holds in every turn of the fixtures `prompt-replay-*`, `compact` and `auto-compact*`: a prompt of plain text is replayed before its turn's first words, and no replay precedes a report turn | Haiku, the prompt sent 19.5 s and 19.9 s after the call of a 20 s command, one run each | 2026-10-09 | claude-agent-sdk 0.2.164, bundled CLI 2.1.292 |
 | Report inside a queued turn | When a message was already sent and waits for its turn, that turn comes first and Claude Code reports the task inside it, with no turn of its own | not recorded | not recorded | Claude Code 2.1.280 |
 | Thread status on iOS | A thread status sent as `status` alone showed nothing on iOS; the loading message shows | Slack iOS and desktop, free plan, an app holding `assistant:write` | 2026-10-02 | slack-sdk 3.44.1 |
 | Permalink opens on the reply | Slack opens a thread on the reply that a permalink names | Mac app and iOS | 2026-10-05 | not recorded |

@@ -623,6 +623,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- An owner's prompt that crosses a background task's report is answered in its own reply
+  (#205). The session decided whose turn was starting from what it was waiting for, and learned
+  the answer from the result's origin when the turn had already been written: a report turn
+  could take the reply of a waiting prompt, and a prompt's turn could land in the reply of the
+  task. Claude Code replays a prompt of plain text before its turn's first words and replays
+  nothing before a report turn (every turn of the `prompt-replay-*`, `compact` and
+  `auto-compact*` fixtures, CLI 2.1.286 and 2.1.292), so `ThreadSession._whose_turn` now reads
+  the replay: it names the prompt of the turn that starts, and with a notification waiting a
+  turn that opens with no replay is the report. The correction at the turn's end stays, for the
+  turns no recording covers: one that opens with a compaction, a command, a prompt with an
+  image, a turn that fails before its first word.
 - The setup guide and the docstring of `code_with_slack.trust` say what a trusted parent folder
   leaves out (#9). Outside a repository a parent's trust lets a session start, and Claude Code
   still holds the `permissions.allow` rules and `additionalDirectories` of the folder's own

@@ -23,7 +23,7 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
-from code_with_slack import texts
+from code_with_slack import sessions, texts
 from code_with_slack.sessions import taken_note
 from tests.fakes import EndOfStream, sdk_messages
 from tests.test_sessions import Harness, until
@@ -367,3 +367,127 @@ async def test_every_prompt_goes_out_with_a_uuid_of_the_daemons_own(
     assert all(isinstance(u, str) and u for u in uuids) and len(set(uuids)) == 3
     assert client.queries[:2] == ["first", "/usage"]  # a string prompt keeps its string content
     assert all(m["type"] == "user" and m["parent_tool_use_id"] is None for m in client.sent)
+
+
+# --- Whose turn starts, known from the replay (issue #205) ---------------------------------------
+# `prompt-replay-before-notification`: recorded on 2026-10-09 with claude-agent-sdk 0.2.164 and
+# its bundled CLI 2.1.292. The prompt is sent just before a background command's notification:
+# its turn opens with `init`, the notification, the replay and then its words; the turn that
+# reports the command follows on its own, with no replay before its words.
+
+
+@dataclass
+class Crossing:
+    owner: list[Any]  # the first prompt's turn, which starts the background command
+    notice: list[Any]  # the task frames that end the command, as they come with no turn running
+    own: list[Any]  # the crossing prompt's turn, replay included, without the task frames
+    report: list[Any]  # the turn Claude Code starts to report the command
+
+
+def crossing() -> Crossing:
+    m = sdk_messages("prompt-replay-before-notification")
+    ends = [i for i, x in enumerate(m) if isinstance(x, ResultMessage)]
+    second = m[ends[0] + 1 : ends[1] + 1]
+    return Crossing(
+        owner=m[: ends[0] + 1],
+        notice=[x for x in second if isinstance(x, sessions.TASK_MESSAGES)],
+        own=[x for x in second if not isinstance(x, sessions.TASK_MESSAGES)],
+        report=m[ends[1] + 1 : ends[2] + 1],
+    )
+
+
+def misrouted(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if " went to a" in r.getMessage()]
+
+
+def reply_with(h: Harness, word: str) -> int:
+    """Which reply holds `word`: its place among the replies that say something."""
+    [place] = [i for i, body in enumerate(h.bodies()) if word in body]
+    return place
+
+
+async def test_the_recorded_crossing_gives_the_prompt_and_the_report_a_reply_each(
+    harness_for: Callable[..., Harness], caplog: pytest.LogCaptureFixture
+) -> None:
+    c = crossing()
+    h = harness_for({})
+    session = h.session()
+    await first_turn(h, session, c)
+    prompt = await send(h, session, PROMPT)
+    play(h, [*c.own[:1], *c.notice, *c.own[1:]])  # as recorded: init, the notification, the replay
+    await asyncio.wait_for(prompt.done.wait(), 2)
+    h.clients[0].inject(c.report)
+    await until(lambda: "REPORTED" in said(h) and session.idle and session._settled.is_set())
+    assert misrouted(caplog) == []
+    assert reply_with(h, "PINEAPPLE") != reply_with(h, "REPORTED")
+
+
+async def test_a_prompt_s_turn_that_comes_while_a_report_is_awaited_goes_to_its_own_reply(
+    harness_for: Callable[..., Harness], caplog: pytest.LogCaptureFixture
+) -> None:
+    # A report turn is awaited and a prompt is sent all the same (the session holds a prompt
+    # while it awaits one, so only a notification read between that check and the send gets
+    # here; the state is set by hand, as the tests of `_settle` do). Claude Code runs the prompt
+    # first, and its replay says so before its first word.
+    c = crossing()
+    h = harness_for({})
+    session = h.session()
+    await first_turn(h, session, c)
+    prompt = await send(h, session, PROMPT)
+    h.clients[0].inject(c.notice)
+    await asyncio.sleep(0.05)
+    session._expect_injected_turn()
+    play(h, c.own)
+    await asyncio.wait_for(prompt.done.wait(), 2)
+    assert misrouted(caplog) == []
+    assert "PINEAPPLE" in h.bodies()[-1] and "STARTED" not in h.bodies()[-1]
+    # The report is awaited again, and lands apart from the prompt's answer.
+    assert session._injected_expected and not session._settled.is_set()
+    h.clients[0].inject(c.report)
+    await until(lambda: "REPORTED" in said(h) and session.idle and session._settled.is_set())
+    assert misrouted(caplog) == []
+    assert reply_with(h, "PINEAPPLE") != reply_with(h, "REPORTED")
+
+
+async def test_a_report_turn_that_starts_while_a_prompt_waits_does_not_take_its_reply(
+    harness_for: Callable[..., Harness], caplog: pytest.LogCaptureFixture
+) -> None:
+    # The prompt is already sent when the command ends, so no report turn is awaited, and the
+    # report turn starts first all the same, with words and no replay. The frames are the
+    # recording's; this order of the two turns is composed here, not recorded: it is the one
+    # the daemon logged as `a background reply ... went to an owner reply`.
+    c = crossing()
+    h = harness_for({})
+    session = h.session()
+    await first_turn(h, session, c)
+    prompt = await send(h, session, PROMPT)
+    h.clients[0].inject(c.notice)
+    await asyncio.sleep(0.05)
+    assert not session._injected_expected
+    h.clients[0].inject(c.report)
+    await until(lambda: session._active is None and "REPORTED" in said(h))
+    assert not prompt.done.is_set()
+    play(h, c.own)
+    await asyncio.wait_for(prompt.done.wait(), 2)
+    await until(lambda: session.idle and session._settled.is_set())
+    assert misrouted(caplog) == []
+    assert reply_with(h, "PINEAPPLE") != reply_with(h, "REPORTED")
+
+
+async def test_a_turn_with_no_replay_and_no_notification_waiting_is_the_prompt_s(
+    harness_for: Callable[..., Harness], caplog: pytest.LogCaptureFixture
+) -> None:
+    # No recording shows a prompt's turn without its replay; if one comes (a turn that fails
+    # before its first word was never recorded), it keeps the prompt's reply as long as Claude
+    # Code has nothing to report.
+    c = crossing()
+    h = harness_for({})
+    session = h.session()
+    await first_turn(h, session, c)
+    prompt = await send(h, session, PROMPT)
+    h.clients[0].inject(
+        [x for x in c.own if not (isinstance(x, UserMessage) and isinstance(x.content, str))]
+    )
+    await asyncio.wait_for(prompt.done.wait(), 2)
+    assert misrouted(caplog) == []
+    assert h.bodies() == ["STARTED", "PINEAPPLE"]
