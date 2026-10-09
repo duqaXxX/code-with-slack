@@ -446,7 +446,9 @@ thread. Until then it tells you, for you alone,
 ``Waiting for this clip's transcript: choose `Generate transcript` on the clip, and its text is sent to Claude.``
 A clip with no transcript after
 5 minutes is dropped, and you are told that nothing was sent; so is a clip that waits when
-code-with-slack restarts, without a message.
+code-with-slack restarts, without a message. Text you type with the clip comes before the
+transcript. What Slack heard is always the message, never a `!word`: a clip cannot turn bypass
+on or stop a session.
 
 The transcript is Slack's: code-with-slack does not listen to the audio and sends it nowhere.
 Slack chooses the language it hears by itself, clip by clip. Of three clips spoken in Italian in

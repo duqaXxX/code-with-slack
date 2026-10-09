@@ -163,9 +163,10 @@ CLIP_WAITING = (
     "is sent to Claude."
 )
 CLIP_NOT_SENT = (
-    "Nothing was sent to Claude: this clip had no transcript after {minutes} minutes. Record it "
+    "Nothing was sent to Claude: this clip had no transcript after {minutes} minutes. Send it "
     "again, or type the message."
 )
+CLIP_NOT_YOURS = "Nothing was sent to Claude: this audio is a file somebody else uploaded."
 CLIP_EMPTY = "Nothing was sent to Claude: Slack's transcript of this clip is empty."
 CLIP_UNREADABLE = (
     "Nothing was sent to Claude: the transcript of this clip could not be read ({reason})."

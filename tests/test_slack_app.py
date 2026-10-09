@@ -4834,11 +4834,68 @@ async def test_a_change_to_a_file_nobody_waits_for_does_nothing(world: World) ->
     assert world.queries() == []
 
 
-async def test_a_clip_whose_file_is_not_the_owner_s_is_not_sent(world: World) -> None:
+@pytest.mark.parametrize("other", [{"user": STRANGER}, {"user_team": OTHER_TEAM}])
+async def test_a_clip_whose_file_is_not_the_owner_s_is_not_sent(
+    world: World, other: dict[str, str]
+) -> None:
+    # The file Slack describes when the transcript is ready is checked like the one that came.
     await world.dispatch(clip_message(transcribed=False))
-    clip_info(world, user=STRANGER)
+    clip_info(world, **other)
     await world.dispatch(recorded("event_callback-file_change"))
     assert world.queries() == []
+    assert owner_was_told(world) == [texts.CLIP_WAITING, texts.CLIP_NOT_YOURS]
+
+
+async def test_a_file_somebody_else_uploaded_is_refused_when_it_comes(world: World) -> None:
+    await world.dispatch(clip_message(transcribed=True, user=STRANGER))
+    assert world.queries() == []
+    assert owner_was_told(world) == [texts.CLIP_NOT_YOURS]
+
+
+async def test_what_slack_heard_is_never_a_word_of_the_daemon(world: World) -> None:
+    # A transcript is the prompt, whatever its first character: speech does not turn bypass on,
+    # and typed as a message `!bypass on` would open no session at all.
+    await world.dispatch(clip_message(transcribed=False))
+    heard = {"status": "complete", "preview": {"content": "!bypass on", "has_more": False}}
+    clip_info(world, transcription=heard)
+    await world.dispatch(recorded("event_callback-file_change"))
+    assert world.queries() == ["!bypass on"]
+    assert world.clients[0].modes == []
+
+
+async def test_text_typed_with_a_clip_comes_before_its_transcript(world: World) -> None:
+    body = clip_message(transcribed=True)
+    body["event"]["text"] = "!status"
+    await world.dispatch(body)
+    assert world.queries() == ["!status\n\nWhat day is it today?"]
+
+
+async def test_a_clip_where_a_message_would_be_refused_does_not_wait(world: World) -> None:
+    body = clip_message(transcribed=False)
+    body["event"]["thread_ts"] = THREAD  # a thread that holds no session
+    await world.dispatch(body)
+    assert owner_was_told(world) == [texts.NOT_A_SESSION]
+    clip_info(world)
+    await world.dispatch(recorded("event_callback-file_change"))
+    assert world.queries() == []
+
+
+async def test_the_same_clip_sent_again_waits_once(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(voice, "WAIT_SECONDS", 0.3)
+    await world.dispatch(clip_message(transcribed=False))
+    await asyncio.sleep(0.15)
+    await world.dispatch(clip_message(transcribed=False, ts="1790190000.777777"))
+    await asyncio.sleep(0.2)  # past the first wait's end, inside the second's
+    assert texts.CLIP_NOT_SENT.format(minutes=0) not in owner_was_told(world)
+    await asyncio.sleep(0.25)
+    assert owner_was_told(world).count(texts.CLIP_NOT_SENT.format(minutes=0)) == 1
+
+
+def test_the_owner_is_told_the_real_wait() -> None:
+    told = texts.CLIP_NOT_SENT.format(minutes=round(voice.WAIT_SECONDS / 60))
+    assert "after 5 minutes" in told
 
 
 async def test_a_long_transcript_is_read_from_the_clip_s_vtt(world: World) -> None:

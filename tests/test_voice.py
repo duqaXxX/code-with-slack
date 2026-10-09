@@ -69,4 +69,10 @@ def test_the_preview_is_the_text_when_slack_did_not_cut_it() -> None:
 def test_the_words_of_a_webvtt_transcript_are_one_line() -> None:
     assert voice.vtt_text(VTT) == "This is an audio clip sent from the phone today."
     assert voice.vtt_text("WEBVTT\n\n") == ""
+    # Not seen from Slack, allowed by WebVTT: a cue id, a note, a voice tag.
+    tagged = (
+        "WEBVTT\n\nNOTE made by a test\n\n1\n00:00:00.000 --> 00:00:01.000\n"
+        "<v Alice>Hello</v> <i>there</i>\n"
+    )
+    assert voice.vtt_text(tagged) == "Hello there"
     assert voice.vtt_text(VTT.replace("\n", "\r\n")) == voice.vtt_text(VTT)

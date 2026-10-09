@@ -448,13 +448,26 @@ def build_app(
     async def take_clip(
         channel: str, thread_ts: str, ts: str, event: dict[str, Any], file: dict[str, Any]
     ) -> None:
-        """An audio clip is a prompt once Slack has its transcript, which only the owner can
-        ask for: until then it waits, and the owner is told what to do."""
+        """An audio clip is a prompt once Slack has its transcript, which Slack writes when
+        asked: until then it waits, and the owner is told what to do. Where a typed message
+        would be refused, the clip is refused at once, before any wait."""
+        if not is_owner(identity, file.get("user"), file.get("user_team")):
+            await tell_owner(channel, thread_ts, texts.CLIP_NOT_YOURS)
+            return
+        if thread_ts != ts and sessions.get(channel, thread_ts) is None:
+            await tell_owner(channel, thread_ts, texts.NOT_A_SESSION)
+            return
+        if thread_ts == ts and state.channel(channel) is None:
+            await in_channel(channel, texts.UNBOUND.format(root=config.allowed_root))
+            return
         waiting = WaitingClip(channel, thread_ts, ts, event)
         if voice.ready(file):
             await send_clip(waiting, file)
             return
         file_id = str(file.get("id"))
+        earlier = clips.get(file_id)
+        if earlier is not None and earlier.expiry is not None:
+            earlier.expiry.cancel()  # the same file sent again: one wait, the later one
         waiting.expiry = asyncio.create_task(give_up(file_id), name=f"clip-{file_id}")
         clips[file_id] = waiting
         await tell_owner(channel, thread_ts, texts.CLIP_WAITING)
@@ -490,7 +503,7 @@ def build_app(
         typed = (waiting.event.get("text") or "").strip()
         said = {**waiting.event, "text": f"{typed}\n\n{text}" if typed else text, "files": []}
         said.pop("blocks", None)  # the composer's blocks describe the typed text alone
-        await handle_message(waiting.channel, waiting.thread_ts, waiting.ts, said)
+        await handle_message(waiting.channel, waiting.thread_ts, waiting.ts, said, spoken=True)
 
     @app.event("file_change")
     async def on_file_change(event: dict[str, Any]) -> None:
@@ -513,21 +526,29 @@ def build_app(
         del clips[file_id]
         if waiting.expiry is not None:
             waiting.expiry.cancel()
+        if not is_owner(identity, file.get("user"), file.get("user_team")):
+            await tell_owner(waiting.channel, waiting.thread_ts, texts.CLIP_NOT_YOURS)
+            return
+        # The channel is read again: its members can have changed while the clip waited.
         if not await admitted(
             file.get("user"), file.get("user_team"), waiting.channel, waiting.thread_ts
         ):
             return
         await reply_on_failure(waiting.channel, waiting.thread_ts, send_clip(waiting, file))
 
-    async def handle_message(channel: str, thread_ts: str, ts: str, event: dict[str, Any]) -> None:
+    async def handle_message(
+        channel: str, thread_ts: str, ts: str, event: dict[str, Any], *, spoken: bool = False
+    ) -> None:
         top_level = thread_ts == ts
         text = slack_unescape(event.get("text") or "")
         files: list[dict[str, Any]] = event.get("files") or []
         # A message with files is a prompt: no daemon word or command takes a file. A word is
         # a word however it is formatted: the event's text carries the marks (a backtick before
         # the `!` of a message in inline code), which the composer's blocks tell from the text.
+        # Nor is a clip's transcript (`spoken`): what Slack heard never turns bypass on, stops a
+        # session or becomes a command, whatever its first character.
         command = None
-        if not files:
+        if not files and not spoken:
             command = parse_bang(text) or parse_bang(unformatted(text, event.get("blocks")))
         # A known session's thread routes a word to it; anywhere else (truly top-level, or a
         # thread that is not a session) a word acts exactly as a top-level one would.

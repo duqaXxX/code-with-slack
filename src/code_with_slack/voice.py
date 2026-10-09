@@ -20,6 +20,7 @@ Measured on 2026-10-09 (Slack free plan, slack-sdk 3.45.0), three clips recorded
   heard one as `it-IT` and two as `en-GB`, and the text of those two was wrong.
 """
 
+import re
 from typing import Any
 
 # How long a clip waits for the owner to ask Slack for its transcript.
@@ -54,7 +55,8 @@ def preview(file: dict[str, Any]) -> str | None:
 
 def vtt_text(body: str) -> str:
     """The words of a WebVTT transcript as Slack writes it: a `WEBVTT` header, then cues of a
-    timing line and text lines, the first of which can open with `- `. One line of text."""
+    timing line and text lines, the first of which can open with `- `. One line of text, without
+    the tags WebVTT allows inside a cue (`<v Name>`, `<i>`), which Slack was not seen to write."""
     words: list[str] = []
     for block in body.lstrip("﻿").replace("\r\n", "\n").split("\n\n"):
         lines = [line.strip() for line in block.split("\n") if line.strip()]
@@ -62,5 +64,5 @@ def vtt_text(body: str) -> str:
             continue  # the header, or a note
         timing = next(i for i, line in enumerate(lines) if "-->" in line)
         for line in lines[timing + 1 :]:
-            words.append(line.removeprefix("- ").strip())
+            words.append(re.sub(r"<[^>]*>", "", line).removeprefix("- ").strip())
     return " ".join(word for word in words if word)

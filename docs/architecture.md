@@ -1242,14 +1242,17 @@ would need a scope the app does not have.
 
 An audio clip: a message whose one file Slack shows as audio (`media_display_type`) is held instead of being
 sent (`voice.clip`, `WaitingClip`), since Claude Code takes no audio and the daemon transcribes
-nothing. Slack writes a clip's transcript when the owner asks for it and sends `file_change`
+nothing. Slack writes a clip's transcript when asked for it and sends `file_change`
 while it does (measured: "Clip transcript"). That event names a file and no user or channel, so
 its listener acts only on a file id the owner's own message left waiting, reads the file with
 `files.info`, and checks the owner, the workspace and the channel again on what Slack returns
 before anything is sent. When `transcription.status` is `complete`, the text (the preview, or
 the file's `vtt` when Slack cut the preview, `voice.vtt_text`) goes through the same path as a
-typed message, so the setup, the holds and the notices apply as they do to text. A clip waits
-`voice.WAIT_SECONDS`, in memory only.
+typed message, so the setup, the holds and the notices apply as they do to text, with one
+difference: a transcript is never read as a word of the daemon or as a command, so what Slack
+heard cannot change the permission mode. A clip that a typed message could not follow (a thread
+with no session, an unbound channel, a file somebody else uploaded) is refused when it comes,
+before any wait. A clip waits `voice.WAIT_SECONDS`, in memory only.
 
 A `message` event is routed by whether it is a reply in an existing thread:
 `slack_app.handle_message` reads `sessions.get(channel, thread_ts)` for a reply (`None` for a thread
