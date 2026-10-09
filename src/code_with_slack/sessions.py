@@ -2294,7 +2294,9 @@ class ThreadSession:
     ) -> None:
         """The client is gone: end the reply that was open with `line`, and release whoever
         waits on it, on the turns sent and on `more` (queued ones, when the session closes). Those
-        get no reply of their own: one note says they were not sent, `because` of what."""
+        get no reply of their own: one note says they were not sent, `because` of what. With no
+        turn active, an `error` says `line` in each reply that still waited for a task, and says
+        nothing at all, the cross included, when nothing ran and nothing waited."""
         active, self._active = self._active, None
         sent, self._sent = list(self._sent), deque()
         dropped = [*sent, *(more or [])]
@@ -2306,9 +2308,25 @@ class ThreadSession:
         self._interrupting = False  # D10: whatever it was waiting on, this ends it
         self._compacting = False  # the process that was compacting is gone
         self._show_thread_status()
-        if error:
+        # The replies still waiting for a task of theirs, when no turn is active: a process lost
+        # then leaves them the only place that can say so (issue #202).
+        # `_task_replies` also keeps replies whose tasks all ended (TASK_REPLIES_KEPT): only one
+        # that has not closed still waits.
+        waiting_replies = (
+            {r for r in self._task_replies.values() if not r.closed_out}
+            if active is None
+            else set()
+        )
+        owed = active is not None or bool(dropped or self._end_notes or waiting_replies)
+        if error and owed:
+            # Not for a session that was idle with nothing running: its last reply ended well,
+            # nothing is lost, and the next message connects a new process.
             self._react_error()
         try:
+            if error:
+                for renderer in waiting_replies:
+                    with contextlib.suppress(Exception):
+                        await renderer.feed_ending(line)
             if active is not None:
                 with contextlib.suppress(Exception):
                     await active.renderer.feed_ending(line)

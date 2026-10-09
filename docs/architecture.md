@@ -467,7 +467,11 @@ little earlier itself.
   (`Claude Code reported an error: …`, `This reply ended before an answer: …`). When Claude
   wrote text after its last call, that line follows the text into the new message, whose
   banner is still the start of the text. When there is no such text to move, the line itself
-  is the ending that moves, with whatever follows it, and is the banner. The sink keeps it as
+  is the ending that moves, with whatever follows it, and is the banner. A process lost
+  while no turn is active is told by what the session still owed: a reply that waited for a
+  background task of its own gets the same line, then ends as above, and the root shows ❌;
+  a session with nothing running and nothing waiting gets no line and keeps the reaction it
+  had, since its last reply ended well and the next message connects a new process. The sink keeps it as
   a part of its own (`ReplySink.text` with `ending`, fed by `TurnRenderer.feed_ending`), so a
   notice written just before it stays in the reply, and a card that closes after it moves
   under it. No other line of the daemon's moves. A footer goes under the line: a report turn

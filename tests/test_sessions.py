@@ -4117,12 +4117,13 @@ async def test_hold_keeps_a_standing_error_and_cancel_restores_it(
 ) -> None:
     # `hold_start`'s own WAITING reaction must not reset `_error_standing` (it did, through
     # `_react`), or Cancel right after turns a standing ❌ back into ✅: a hold is not new work.
-    h = harness_for({"turns": [sdk_messages("tools")]})
+    # The CLI process is gone in the middle of the turn: `_abandon(error=True)`. One lost while
+    # the session is idle leaves no cross (issue #202).
+    h = harness_for({"turns": [[*sdk_messages("tools")[:21], EndOfStream()]]})
     session = h.session()
     await asyncio.wait_for((await session.submit("go")).done.wait(), 2)
-    h.clients[0].inject([EndOfStream()])  # the CLI process is gone: `_abandon(error=True)`
     await until(lambda: session._client is None)
-    assert h.reactions()[-1] == Status.ERROR.value
+    await until(lambda: h.reactions()[-1] == Status.ERROR.value)
     session.hold_start()
     assert session._error_standing is True  # not reset by the WAITING reaction
     await asyncio.sleep(0)
