@@ -270,6 +270,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `!stop`, `!resume` and `!bind <folder>` typed in a thread that holds no session change
+  nothing and say where to send them, for the owner alone. They acted as if typed in the
+  channel: `!stop` under the answer to a `!bind` stopped every session of the channel, and
+  `!resume` there turned that thread into a session. `!help`, `!guide`, `!status` and `!bind`
+  with no folder still answer there as they do in the channel. `!stop` answers with
+  `texts.STOP_OUTSIDE_SESSION`, the other two with `texts.WORD_IN_THREAD` (#73).
 - The docs say that computer use is not available to a session started from Slack. Claude Code
   offers its built-in `computer-use` server in an interactive session only, and the Agent SDK
   runs Claude Code in its non-interactive mode: the server is absent there even when it is

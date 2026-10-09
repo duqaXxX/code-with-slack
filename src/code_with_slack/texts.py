@@ -84,6 +84,11 @@ OPEN_NO_SCOPE = (
 )
 OPEN_FAILED = "Could not open `{path}`: {error}"
 WORD_IN_THREAD = "`!{word}` works in the channel, not inside a thread."
+# `!stop` typed in a thread that holds no session: it would have stopped the whole channel.
+STOP_OUTSIDE_SESSION = (
+    "This thread holds no session. Send `!stop` in the channel to stop every session, or inside "
+    "a session's thread to stop that one."
+)
 CLEAR_IN_THREAD = "One thread is one session: send a new message in the channel to start a new one."
 UPGRADE_NOTICE = (
     "code-with-slack now runs one Claude Code session per thread. Send a new message in the "

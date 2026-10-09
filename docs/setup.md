@@ -658,7 +658,11 @@ session no longer exists: Claude Code deleted it or cannot find it. Send a new m
 channel to start one.`; a reply in a thread that holds no session (a word's own thread, or
 one with no entry in `state.json`) gets ``This thread holds no session. In the channel, send a
 new message to start one, or `!resume` to continue an earlier one.``, except a word, which acts
-as if typed at the top level. A Resume click or
+as if typed at the top level. Three words change nothing there, since they act on the whole
+channel: `!resume` and `!bind <folder>` answer `` `!resume` works in the channel, not inside a
+thread.`` (with the word you typed), and `!stop` answers ``This thread holds no session. Send
+`!stop` in the channel to stop every session, or inside a session's thread to stop that
+one.`` A Resume click or
 `!resume <id or name>` sent to a thread that already holds a session gets
 ``This thread already holds a session: send `!resume` again in the channel to pick another.`` A Resume
 click or
