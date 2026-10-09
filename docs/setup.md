@@ -69,7 +69,9 @@ It prints the command's path, which ends in `.local/bin/code-with-slack`. If it 
 The manifest asks for private channels only (`groups:history`, `groups:read`,
 `message.groups`), `chat:write`, `files:read` to download the files you attach to a message,
 `files:write` for `!open`, which shares a file of the session's folder into its thread, and
-`reactions:write` for the status reaction on a session's root message. It also switches on the
+`reactions:write` for the status reaction on a session's root message. It subscribes to one more
+event, `file_change`, which is how the app learns that Slack has written the transcript of an
+audio clip you sent; reading it needs `files:read` and no scope of its own. It also switches on the
 app's **Home** tab, where code-with-slack keeps the list of your sessions; publishing it needs no
 scope and no event.
 The app registers no slash command: commands are typed as `!word` messages. Socket Mode is on,
@@ -432,6 +434,28 @@ cancels it with `Not sent.`, and a reply in a thread where nothing was sent asks
 thread keeps the folder it was opened in: `!bind` only changes where the *next* thread starts. A
 thread's Claude Code process closes on its own after an hour with nothing to do; the next message
 sent to it resumes the session, as `claude --resume <id>` would.
+
+### Speaking a message: an audio clip
+
+An audio clip recorded in Slack (the microphone in the message field, or **Record an Audio Clip**
+on the phone) can be the message. Send the clip, then choose **Generate transcript** on it: a
+long press on the message on the phone, the transcript button beside the player on desktop. When
+Slack has written the transcript, code-with-slack sends its text to Claude as if you had typed
+it, in a new thread for a clip sent in the channel and in the same session for a clip sent in a
+thread. Until then it tells you, for you alone,
+``Waiting for this clip's transcript: choose `Generate transcript` on the clip, and its text is sent to Claude.``
+A clip with no transcript after
+5 minutes is dropped, and you are told that nothing was sent; so is a clip that waits when
+code-with-slack restarts, without a message. Text you type with the clip comes before the
+transcript. What Slack heard is always the message, never a `!word`: a clip cannot turn bypass
+on or stop a session.
+
+The transcript is Slack's: code-with-slack does not listen to the audio and sends it nowhere.
+Slack chooses the language it hears by itself, clip by clip. Of three clips spoken in Italian in
+a workspace set to English (Slack free plan, iOS app, 2026-10-09), it wrote one in Italian and
+two as English words that were not what was said, and those would have reached Claude as they
+were. Read the transcript Slack shows under the clip before you rely on the answer. An audio
+file you upload is taken the same way: Slack shows it with the same player and transcript.
 
 ### Continuing a session in the terminal
 
@@ -841,6 +865,11 @@ answers that it needs the scope; without `reactions:write`, the status reaction 
 skipped (logged, never surfaced). The modal of `!open` needs nothing more in the manifest: its
 clicks, typed characters and submit arrive as interactivity events over the same Socket Mode
 connection as the other buttons.
+
+An audio clip needs the `file_change` event among the app's bot events. An app created from an
+earlier manifest lacks it: add `file_change` under **Event Subscriptions**, **Subscribe to bot
+events**, and save. Without it a clip waits 5 minutes and is dropped, since nothing tells the
+app that its transcript is ready.
 
 The line under a thread (`Working…`, `1 shell still running`) is Slack's thread status
 (`assistant.threads.setStatus`), which Slack's reference lists under `chat:write`. When Slack

@@ -17,7 +17,7 @@ from slack_bolt.request.async_request import AsyncBoltRequest
 from code_with_slack import openfile as openfile_module
 from code_with_slack import sessions as sessions_module
 from code_with_slack import slack_app as slack_app_module
-from code_with_slack import texts
+from code_with_slack import texts, voice
 from code_with_slack.approvals import Answer, Approvals, Draft
 from code_with_slack.attachments import DownloadFailed
 from code_with_slack.config import Config
@@ -4777,3 +4777,166 @@ async def test_a_second_hold_click_is_logged(
     (line,) = [m for m in _app_log(caplog) if "refused a click" in m]
     assert "(hold decision)" in line and f"action {HOLD_CONTINUE} in {CHANNEL}/{THREAD}" in line
     assert hold_id not in caplog.text and "hello" not in caplog.text
+
+
+# --- An audio clip as a prompt (issue #35) -------------------------------------------------------
+# `file_share-clip` is the recorded file_share envelope with the file object Slack returned for
+# a clip on 2026-10-09 (`conversations.history`, ids and text made synthetic); the event Slack
+# sends when a clip is posted was not recorded, so the envelope is the snippet's. `file_change`
+# follows the event reference (read 2026-10-09): the daemon's log names the event, not its body.
+
+
+def clip_message(*, transcribed: bool, **fields: Any) -> dict[str, Any]:
+    body = shared_file("clip", **fields)
+    if not transcribed:
+        del body["event"]["files"][0]["transcription"]
+    return body
+
+
+def clip_info(world: World, **fields: Any) -> dict[str, Any]:
+    """What `files.info` answers for the clip from now on."""
+    file = {**shared_file("clip")["event"]["files"][0], **fields}
+    world.slack.responses["files.info"] = {"ok": True, "file": file}
+    return file
+
+
+def owner_was_told(world: World) -> list[str]:
+    return [call["text"] for call in world.slack.calls_to("chat.postEphemeral")]
+
+
+async def test_a_clip_with_its_transcript_is_sent_as_the_owner_s_words(world: World) -> None:
+    await world.dispatch(clip_message(transcribed=True))
+    assert world.queries() == ["What day is it today?"]
+    assert owner_was_told(world) == []
+
+
+async def test_a_clip_waits_for_its_transcript_and_is_sent_when_slack_has_it(
+    world: World,
+) -> None:
+    await world.dispatch(clip_message(transcribed=False))
+    assert world.queries() == []
+    assert owner_was_told(world) == [texts.CLIP_WAITING]
+    # Slack sends the event while it still writes the transcript, then again when it is done.
+    clip_info(world, transcription={"status": "processing"})
+    await world.dispatch(recorded("event_callback-file_change"))
+    assert world.queries() == []
+    clip_info(world)
+    await world.dispatch(recorded("event_callback-file_change"))
+    assert world.queries() == ["What day is it today?"]
+    await world.dispatch(recorded("event_callback-file_change"))
+    assert world.queries() == ["What day is it today?"]  # once
+
+
+async def test_a_change_to_a_file_nobody_waits_for_does_nothing(world: World) -> None:
+    clip_info(world)
+    await world.dispatch(recorded("event_callback-file_change"))
+    assert world.slack.calls_to("files.info") == []
+    assert world.queries() == []
+
+
+@pytest.mark.parametrize("other", [{"user": STRANGER}, {"user_team": OTHER_TEAM}])
+async def test_a_clip_whose_file_is_not_the_owner_s_is_not_sent(
+    world: World, other: dict[str, str]
+) -> None:
+    # The file Slack describes when the transcript is ready is checked like the one that came.
+    await world.dispatch(clip_message(transcribed=False))
+    clip_info(world, **other)
+    await world.dispatch(recorded("event_callback-file_change"))
+    assert world.queries() == []
+    assert owner_was_told(world) == [texts.CLIP_WAITING, texts.CLIP_NOT_YOURS]
+
+
+async def test_a_file_somebody_else_uploaded_is_refused_when_it_comes(world: World) -> None:
+    await world.dispatch(clip_message(transcribed=True, user=STRANGER))
+    assert world.queries() == []
+    assert owner_was_told(world) == [texts.CLIP_NOT_YOURS]
+
+
+async def test_what_slack_heard_is_never_a_word_of_the_daemon(world: World) -> None:
+    # A transcript is the prompt, whatever its first character: speech does not turn bypass on,
+    # and typed as a message `!bypass on` would open no session at all.
+    await world.dispatch(clip_message(transcribed=False))
+    heard = {"status": "complete", "preview": {"content": "!bypass on", "has_more": False}}
+    clip_info(world, transcription=heard)
+    await world.dispatch(recorded("event_callback-file_change"))
+    assert world.queries() == ["!bypass on"]
+    assert world.clients[0].modes == []
+
+
+async def test_text_typed_with_a_clip_comes_before_its_transcript(world: World) -> None:
+    body = clip_message(transcribed=True)
+    body["event"]["text"] = "!status"
+    await world.dispatch(body)
+    assert world.queries() == ["!status\n\nWhat day is it today?"]
+
+
+async def test_a_clip_where_a_message_would_be_refused_does_not_wait(world: World) -> None:
+    body = clip_message(transcribed=False)
+    body["event"]["thread_ts"] = THREAD  # a thread that holds no session
+    await world.dispatch(body)
+    assert owner_was_told(world) == [texts.NOT_A_SESSION]
+    clip_info(world)
+    await world.dispatch(recorded("event_callback-file_change"))
+    assert world.queries() == []
+
+
+async def test_the_same_clip_sent_again_waits_once(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(voice, "WAIT_SECONDS", 0.3)
+    await world.dispatch(clip_message(transcribed=False))
+    await asyncio.sleep(0.15)
+    await world.dispatch(clip_message(transcribed=False, ts="1790190000.777777"))
+    await asyncio.sleep(0.2)  # past the first wait's end, inside the second's
+    assert texts.CLIP_NOT_SENT.format(minutes=0) not in owner_was_told(world)
+    await asyncio.sleep(0.25)
+    assert owner_was_told(world).count(texts.CLIP_NOT_SENT.format(minutes=0)) == 1
+
+
+def test_the_owner_is_told_the_real_wait() -> None:
+    told = texts.CLIP_NOT_SENT.format(minutes=round(voice.WAIT_SECONDS / 60))
+    assert "after 5 minutes" in told
+
+
+async def test_a_long_transcript_is_read_from_the_clip_s_vtt(world: World) -> None:
+    await world.dispatch(clip_message(transcribed=False))
+    file = clip_info(
+        world,
+        transcription={"status": "complete", "preview": {"content": "This is", "has_more": True}},
+    )
+    world.downloads[file["vtt"]] = (
+        "﻿WEBVTT \n\n00:00:00.000 --> 00:00:02.000\n- This is the whole\n\n"
+        "00:00:02.000 --> 00:00:03.000\ntranscript.\n"
+    ).encode()
+    await world.dispatch(recorded("event_callback-file_change"))
+    assert world.queries() == ["This is the whole transcript."]
+
+
+async def test_a_transcript_that_cannot_be_read_or_is_empty_sends_nothing(world: World) -> None:
+    await world.dispatch(clip_message(transcribed=False))
+    file = clip_info(
+        world, transcription={"status": "complete", "preview": {"content": "", "has_more": True}}
+    )
+    world.downloads[file["vtt"]] = DownloadFailed("HTTP 404")
+    await world.dispatch(recorded("event_callback-file_change"))
+    # A clip that arrives with a transcript Slack cut, whose whole text has no word in it.
+    world.downloads[file["vtt"]] = b"WEBVTT\n\n"
+    await world.dispatch(clip_message(transcribed=True, transcription={"status": "complete"}))
+    assert world.queries() == []
+    assert owner_was_told(world) == [
+        texts.CLIP_WAITING,
+        texts.CLIP_UNREADABLE.format(reason="HTTP 404"),
+        texts.CLIP_EMPTY,
+    ]
+
+
+async def test_a_clip_with_no_transcript_in_time_is_given_up(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(voice, "WAIT_SECONDS", 0.05)
+    await world.dispatch(clip_message(transcribed=False))
+    await asyncio.sleep(0.15)
+    assert owner_was_told(world) == [texts.CLIP_WAITING, texts.CLIP_NOT_SENT.format(minutes=0)]
+    clip_info(world)
+    await world.dispatch(recorded("event_callback-file_change"))
+    assert world.queries() == []  # the wait is over: a late transcript sends nothing
