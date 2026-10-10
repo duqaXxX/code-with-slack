@@ -2140,7 +2140,7 @@ test("open returns none when the channel is unbound", (t) => {
 test("the footer names the bound folder", async (t) => {
   const h = harnessFor(t)({ turns: [sdkMessages("tools")] });
   await (await h.session().submit("list the files")).done.wait();
-  const folder = h.tmpPath.split("/").at(-1);
+  const folder = basename(h.tmpPath);
   assert.ok(statuses(h).at(-1)?.startsWith("claude-haiku-4-5-20251001 · "));
   assert.ok(statuses(h).at(-1)?.includes(` · ${folder} · `));
 });
