@@ -1,7 +1,7 @@
 # The SDK surface the daemon depends on
 
 Every type, function, method, option, field, key and value of `claude-agent-sdk` that the source
-under `src/code_with_slack/` reads, calls or decides on, with where each is known from. A new SDK
+under `src/awaydesk/` reads, calls or decides on, with where each is known from. A new SDK
 release is checked against this table before it is pinned.
 
 Read against claude-agent-sdk 0.2.165 (bundled Claude Code 2.1.294) and the
@@ -14,7 +14,7 @@ Read against claude-agent-sdk 0.2.165 (bundled Claude Code 2.1.294) and the
 | Owner | For a `type` or a `function`, the module it is imported from. For anything else, the SDK type it belongs to, or a dotted path below one for what a `dict[str, Any]` of the SDK holds (`StreamEvent.event.delta`) |
 | Member | The name, or for a `value` the literal the code compares against, in double quotes |
 | Kind | `type` (an imported class, alias or constant), `function`, `method`, `option` (a keyword the daemon passes), `field`, `key` (of a dict) or `value` |
-| Used in | The files and symbols under `src/code_with_slack/` that depend on it |
+| Used in | The files and symbols under `src/awaydesk/` that depend on it |
 | Source | `reference`: the reference names it, in the section of its type. `package`: the installed package defines it and the reference does not. `measured`: neither does, and it was read off a real stream |
 | Checked by | The probe claim whose text names it, or `none` |
 

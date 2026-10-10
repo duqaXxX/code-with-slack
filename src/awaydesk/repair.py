@@ -24,16 +24,16 @@ from typing import Any
 
 from slack_sdk.web.async_client import AsyncWebClient
 
-from code_with_slack import texts
-from code_with_slack.render.sinks import (
+from awaydesk import texts
+from awaydesk.render.sinks import (
     NOT_STREAMING,
     UpdateLimiter,
     context_block,
     delete_request,
     describe,
 )
-from code_with_slack.render.status import Status, StatusReaction
-from code_with_slack.state import StateStore, ThreadState
+from awaydesk.render.status import Status, StatusReaction
+from awaydesk.state import StateStore, ThreadState
 
 logger = logging.getLogger(__name__)
 

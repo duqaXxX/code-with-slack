@@ -58,7 +58,7 @@ if [ -n "${DRY_RUN:-}" ]; then
 fi
 
 gh label create "$LABEL" --repo "$REPO" --color 5319e7 \
-  --description "A claude-agent-sdk release code-with-slack has not been checked against yet" \
+  --description "A claude-agent-sdk release awaydesk has not been checked against yet" \
   >/dev/null 2>&1 || true
 
 if [ -z "$number" ]; then

@@ -18,8 +18,8 @@ from slack_bolt.async_app import AsyncAck, AsyncApp
 from slack_bolt.authorization import AuthorizeResult
 from slack_sdk.web.async_client import AsyncWebClient
 
-from code_with_slack import texts, voice
-from code_with_slack.approvals import (
+from awaydesk import texts, voice
+from awaydesk.approvals import (
     QUESTION_FORM,
     Answer,
     Approvals,
@@ -33,7 +33,7 @@ from code_with_slack.approvals import (
     is_answered,
     question_view,
 )
-from code_with_slack.attachments import (
+from awaydesk.attachments import (
     DownloadFailed,
     download,
     images_refusal,
@@ -43,7 +43,7 @@ from code_with_slack.attachments import (
     refusal,
     save,
 )
-from code_with_slack.commands import (
+from awaydesk.commands import (
     Bind,
     Bypass,
     Guide,
@@ -61,9 +61,9 @@ from code_with_slack.commands import (
     refused_in_thread,
     unformatted,
 )
-from code_with_slack.config import Config
-from code_with_slack.folders import BIND_ACTION, bind_blocks
-from code_with_slack.guards import (
+from awaydesk.config import Config
+from awaydesk.folders import BIND_ACTION, bind_blocks
+from awaydesk.guards import (
     ChannelGuard,
     Identity,
     interaction_actor,
@@ -71,8 +71,8 @@ from code_with_slack.guards import (
     is_prompt_message,
     message_actor,
 )
-from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, Pending, hold_blocks
-from code_with_slack.home import (
+from awaydesk.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, Pending, hold_blocks
+from awaydesk.home import (
     CLEAN_ACTION,
     DELETE_ACTION,
     EDIT_ACTION,
@@ -83,7 +83,7 @@ from code_with_slack.home import (
     Home,
     read_filter,
 )
-from code_with_slack.openfile import (
+from awaydesk.openfile import (
     OPEN_BUTTON_ACTION,
     OPEN_FORM,
     OPEN_WAIT,
@@ -109,10 +109,10 @@ from code_with_slack.openfile import (
     title_of,
     typed_in,
 )
-from code_with_slack.prompt import Prompt
-from code_with_slack.render.escape import markdown_escape, mrkdwn_escape, shown_as_written
-from code_with_slack.render.renderer import one_line
-from code_with_slack.render.sinks import (
+from awaydesk.prompt import Prompt
+from awaydesk.render.escape import markdown_escape, mrkdwn_escape, shown_as_written
+from awaydesk.render.renderer import one_line
+from awaydesk.render.sinks import (
     FALLBACK_LIMIT,
     context_block,
     delete_request,
@@ -120,14 +120,14 @@ from code_with_slack.render.sinks import (
     notice_text,
     split,
 )
-from code_with_slack.resume import (
+from awaydesk.resume import (
     RESUME_ACTION,
     TITLE_LIMIT,
     matching,
     parse_resume_value,
     resume_blocks,
 )
-from code_with_slack.sessions import (
+from awaydesk.sessions import (
     DirectoryUnavailable,
     SessionClosed,
     SessionGone,
@@ -135,7 +135,7 @@ from code_with_slack.sessions import (
     ThreadSession,
     resolve_directory,
 )
-from code_with_slack.setup import (
+from awaydesk.setup import (
     SETUP_BYPASS,
     SETUP_EFFORT,
     SETUP_MODEL,
@@ -144,8 +144,8 @@ from code_with_slack.setup import (
     read_choice,
     setup_blocks,
 )
-from code_with_slack.setup import summary as setup_summary
-from code_with_slack.state import StateStore
+from awaydesk.setup import summary as setup_summary
+from awaydesk.state import StateStore
 
 logger = logging.getLogger(__name__)
 # How a failure reaches the owner: the text of one line, delivered where the failed act answers.

@@ -9,7 +9,7 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Secrets. code-with-slack reads its configuration from ~/.config/code-with-slack/, never from
+# Secrets. awaydesk reads its configuration from ~/.config/awaydesk/, never from
 # the repository; these lines only catch a copy made here by mistake.
 .env
 .env.*

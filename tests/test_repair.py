@@ -5,11 +5,11 @@ import pytest
 from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_slack_response import AsyncSlackResponse
 
-from code_with_slack import texts
-from code_with_slack.render.sinks import UpdateLimiter
-from code_with_slack.render.status import Status
-from code_with_slack.repair import repair_crash
-from code_with_slack.state import StateStore
+from awaydesk import texts
+from awaydesk.render.sinks import UpdateLimiter
+from awaydesk.render.status import Status
+from awaydesk.repair import repair_crash
+from awaydesk.state import StateStore
 from tests.fakes import CHANNEL, OTHER_THREAD, THREAD, FakeSlack, slack_payload
 
 STOPPED_BLOCK = {

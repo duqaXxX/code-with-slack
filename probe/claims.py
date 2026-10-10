@@ -64,91 +64,91 @@ CLAIMS = [
         "P1",
         "gesture",
         "a session starts and its init message names the CLI version",
-        "code_with_slack.sessions.ThreadSession._dispatch",
+        "awaydesk.sessions.ThreadSession._dispatch",
         "send any message in a bound channel; `!status` shows the Claude Code version",
     ),
     Claim(
         "P2",
         "gesture",
         "`!status` reads the server info and the context usage",
-        "code_with_slack.sessions.ThreadSession.status",
+        "awaydesk.sessions.ThreadSession.status",
         "send `!status`; it lists the model and a `Context:` line",
     ),
     Claim(
         "P3",
         "gesture",
         "a text prompt gets a result whose session id is stored",
-        "code_with_slack.sessions.ThreadSession._finish",
+        "awaydesk.sessions.ThreadSession._finish",
         "send a message; the reply closes with its footer",
     ),
     Claim(
         "P4",
         "gesture",
         "an image prompt reaches Claude, which names the colour of the pixel",
-        "code_with_slack.attachments.prompt_for",
+        "awaydesk.attachments.prompt_for",
         "attach a screenshot and ask what it shows",
     ),
     Claim(
         "P5",
         "model",
         "Claude reads an attached text file and quotes it",
-        "code_with_slack.attachments.prompt_for",
+        "awaydesk.attachments.prompt_for",
         "attach a small text file and ask what it says",
     ),
     Claim(
         "P6",
         "gesture",
         "`!resume` knows the session: held by its thread, it is counted under the list",
-        "code_with_slack.sessions.directory_sessions",
+        "awaydesk.sessions.directory_sessions",
         "send `!resume`; the line under the list counts the session open in its own thread",
     ),
     Claim(
         "P7",
         "gesture",
         "a resumed session remembers what was said before it",
-        "code_with_slack.sessions.SessionManager.resume",
+        "awaydesk.sessions.SessionManager.resume",
         "press Resume on an older session and ask what you were talking about",
     ),
     Claim(
         "P8",
         "gesture",
         "`!stop` interrupts a running turn and its reply ends",
-        "code_with_slack.sessions.ThreadSession.stop",
+        "awaydesk.sessions.ThreadSession.stop",
         "ask for a long answer and send `!stop` while it writes",
     ),
     Claim(
         "P9",
         "model",
         "with `!bypass on`, a Bash call runs without asking",
-        "code_with_slack.sessions.ThreadSession.set_bypass",
+        "awaydesk.sessions.ThreadSession.set_bypass",
         "send `!bypass on`, ask Claude to run a command: no Approve button; then `!bypass off`",
     ),
     Claim(
         "P10",
         "model",
         "a Bash call shows its task card in the reply",
-        "code_with_slack.render.renderer.TurnRenderer",
+        "awaydesk.render.renderer.TurnRenderer",
         "ask Claude to run `echo hello` with Bash",
     ),
     Claim(
         "P11",
         "model",
         "a Bash call asks for approval, and an approved call runs",
-        "code_with_slack.approvals.Approvals",
+        "awaydesk.approvals.Approvals",
         "with bypass off, ask Claude to run a command; press Approve",
     ),
     Claim(
         "P12",
         "model",
         "`!stop` ends a background command",
-        "code_with_slack.sessions.ThreadSession.stop",
+        "awaydesk.sessions.ThreadSession.stop",
         "ask Claude to run `tail -f` on a file in the background, then send `!stop`",
     ),
     Claim(
         "P13",
         "model",
         "a Write and an Edit show the terminal's preview (undocumented tool_use_result)",
-        "code_with_slack.render.previews.preview",
+        "awaydesk.render.previews.preview",
         "ask Claude to create a file and then edit it; each call shows as one container, titled "
         "with its line, and no card",
     ),
@@ -156,7 +156,7 @@ CLAIMS = [
         "P14",
         "model",
         "a hook's `cwd` follows a `cd`, so the footer shows the branch of a trusted repo there",
-        "code_with_slack.sessions.ThreadSession._note_cwd",
+        "awaydesk.sessions.ThreadSession._note_cwd",
         "bind a folder holding a repo you trusted in Claude Code one level down, ask Claude to "
         "`cd` into it; the footer shows the repo's branch",
     ),
@@ -164,7 +164,7 @@ CLAIMS = [
         "P15",
         "gesture",
         "a resumed session keeps the model set with `/model`",
-        "code_with_slack.sessions.client_options",
+        "awaydesk.sessions.client_options",
         "in a thread, send `!model sonnet`, let the session idle-close or restart the daemon, "
         "send a message; `!status` shows the model",
     ),
@@ -173,7 +173,7 @@ CLAIMS = [
         "gesture",
         "a resumed session loses the effort set with `/effort`, and "
         "`ClaudeAgentOptions(effort=...)` restores it",
-        "code_with_slack.sessions.client_options",
+        "awaydesk.sessions.client_options",
         "in a thread, send `!effort low`, restart the daemon, send a message; the footer shows "
         "`low`",
     ),
@@ -181,7 +181,7 @@ CLAIMS = [
         "P17",
         "gesture",
         "the server info lists models with `value`, `displayName` and `supportedEffortLevels`",
-        "code_with_slack.setup.setup_blocks",
+        "awaydesk.setup.setup_blocks",
         "send a message at the top level of a bound channel; its thread offers Model and Effort "
         "with the CLI's own names",
     ),
@@ -189,7 +189,7 @@ CLAIMS = [
         "P18",
         "gesture",
         "a resumed session keeps the model set with `set_model()`",
-        "code_with_slack.sessions.ThreadSession.apply_setup",
+        "awaydesk.sessions.ThreadSession.apply_setup",
         "at the top level, pick a model in the setup and press Start, restart the daemon, reply "
         "in the thread; `!status` shows the model",
     ),
@@ -198,7 +198,7 @@ CLAIMS = [
         "gesture",
         "a prompt sent under a uuid is re-emitted with it (`--replay-user-messages`), before the "
         "first stream event of its turn",
-        "code_with_slack.sessions.ThreadSession._acknowledge",
+        "awaydesk.sessions.ThreadSession._acknowledge",
         "send a message while Claude Code reports a background task, as `docs/features.md` "
         "describes: the reply ends with the note, or the session answers it in a turn of its own",
     ),
@@ -207,7 +207,7 @@ CLAIMS = [
         "gesture",
         "the reply to `/goal` opens with the command's `Goal set:` line: an assistant message "
         "whose `message_id` no `message_start` event announced",
-        "code_with_slack.render.renderer.TurnRenderer._unannounced",
+        "awaydesk.render.renderer.TurnRenderer._unannounced",
         "send `!goal reply with the single word tick`; the reply opens with `Goal set:` and the "
         "condition, then Claude's text, written once",
     ),
@@ -216,7 +216,7 @@ CLAIMS = [
         "gesture",
         "the reply to `/compact` is the compaction's line: its `compact_boundary` comes before "
         "every frame of its turn that starts one, and a result follows it",
-        "code_with_slack.sessions.ThreadSession._dispatch",
+        "awaydesk.sessions.ThreadSession._dispatch",
         "send `!compact` in a thread with a few turns; the reply is `Compacted the "
         "conversation:` and the tokens before and after",
     ),
@@ -225,7 +225,7 @@ CLAIMS = [
         "gesture",
         "`/compact` opens with a `status` system message that says `compacting`: the thread's "
         "status line reads `Compacting conversation…` while it runs",
-        "code_with_slack.sessions.ThreadSession._thread_line",
+        "awaydesk.sessions.ThreadSession._thread_line",
         "send `!compact` in a thread with a few turns; the line under the thread reads "
         "`Compacting conversation…` until the reply appears",
     ),
@@ -234,7 +234,7 @@ CLAIMS = [
         "gesture",
         "each command `docs/limits.md` lists as not offered to a session is answered `isn't "
         "available in this environment`",
-        "code_with_slack.commands.Passthrough",
+        "awaydesk.commands.Passthrough",
         "send `!rewind` in a thread; the reply is `/rewind isn't available in this "
         "environment.` A command that answers anything else is no longer a limit: take its "
         "row out of `docs/limits.md` and say so in the issue it names",

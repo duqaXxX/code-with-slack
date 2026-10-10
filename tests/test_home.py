@@ -9,9 +9,9 @@ from typing import Any
 import pytest
 from claude_agent_sdk import SDKSessionInfo
 
-from code_with_slack import home as home_module
-from code_with_slack import texts
-from code_with_slack.home import (
+from awaydesk import home as home_module
+from awaydesk import texts
+from awaydesk.home import (
     ALL,
     CHANNEL_ACTION,
     CLEAN_ACTION,
@@ -43,8 +43,8 @@ from code_with_slack.home import (
     read_filter,
     thread_facts,
 )
-from code_with_slack.render.status import Status
-from code_with_slack.state import StateStore
+from awaydesk.render.status import Status
+from awaydesk.state import StateStore
 from tests.fakes import FakeSlack, slack_payload
 from tests.test_repair import slack_error
 from tests.test_sessions import until

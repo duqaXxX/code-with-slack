@@ -5,8 +5,8 @@ from collections.abc import Iterator
 import pytest
 from slack_sdk.errors import SlackApiError
 
-from code_with_slack import texts
-from code_with_slack.render.status import Status, StatusReaction, ThreadStatus
+from awaydesk import texts
+from awaydesk.render.status import Status, StatusReaction, ThreadStatus
 from tests.fakes import CHANNEL, THREAD, FakeSlack
 
 

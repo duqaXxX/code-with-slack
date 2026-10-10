@@ -8,7 +8,7 @@ Every default means "pass nothing": the model and the effort the CLI would pick 
 from dataclasses import dataclass
 from typing import Any
 
-from code_with_slack import texts
+from awaydesk import texts
 
 SETUP_BLOCK = "setup"  # the one `actions` block that holds every control
 SETUP_MODEL = "setup_model"

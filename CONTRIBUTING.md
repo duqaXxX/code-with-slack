@@ -3,7 +3,7 @@
 ## Reporting a problem
 
 Open an issue with the **Bug report** or **Feature request** form; blank issues are turned off.
-The bug form asks for the code-with-slack and Claude Code versions, what you did, what you expected
+The bug form asks for the awaydesk and Claude Code versions, what you did, what you expected
 and what happened. Leave out tokens, real Slack ids, paths from your machine and excerpts of real
 sessions. A vulnerability goes to the **Security** tab, never to an issue (see
 [SECURITY.md](SECURITY.md)).
@@ -17,7 +17,7 @@ sessions. A vulnerability goes to the **Security** tab, never to an issue (see
    fails on a name a doc cites that the source no longer defines (`sinks.ReplySink`,
    `ThreadSession.mode`), and on a variable, a Slack scope or a word that
    [docs/setup.md](docs/setup.md) does not name.
-4. A new `!word` of the daemon is a class in the `Word` union of `code_with_slack.commands` with
+4. A new `!word` of the daemon is a class in the `Word` union of `awaydesk.commands` with
    its `WORD`, and needs a line in `texts.GUIDE` (the `!guide` text) and in `texts.HELP_WORDS`:
    `tests/test_commands.py` fails until both explain it. Change the guide whenever a behaviour
    it describes changes. The word also needs a row in the Commands table of
@@ -41,7 +41,7 @@ write the shape of an SDK message or a Slack payload by hand.
 
 ## SDK releases
 
-code-with-slack pins `claude-agent-sdk` and runs the Claude Code CLI it bundles. Every day the
+awaydesk pins `claude-agent-sdk` and runs the Claude Code CLI it bundles. Every day the
 **SDK release watch** workflow (`.github/workflows/sdk-release-watch.yml`) reads the latest release
 from PyPI, runs the test suite on it, and keeps one issue labelled `sdk release` with the versions,
 the outcome and the checks left to do by hand. The body is rewritten on each run; a comment is

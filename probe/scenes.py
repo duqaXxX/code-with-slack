@@ -30,13 +30,13 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
-from code_with_slack import texts
-from code_with_slack.approvals import Approvals, Approve, Deny, Pending
-from code_with_slack.attachments import prompt_for
-from code_with_slack.footer import UsageCache
-from code_with_slack.guards import Identity
-from code_with_slack.resume import resume_blocks
-from code_with_slack.sessions import (
+from awaydesk import texts
+from awaydesk.approvals import Approvals, Approve, Deny, Pending
+from awaydesk.attachments import prompt_for
+from awaydesk.footer import UsageCache
+from awaydesk.guards import Identity
+from awaydesk.resume import resume_blocks
+from awaydesk.sessions import (
     ClaudeClient,
     SessionDeps,
     SessionManager,
@@ -44,9 +44,9 @@ from code_with_slack.sessions import (
     Turn,
     directory_sessions,
 )
-from code_with_slack.setup import Choice
-from code_with_slack.state import StateStore
-from code_with_slack.trust import Repository, Unkeyed, locate
+from awaydesk.setup import Choice
+from awaydesk.state import StateStore
+from awaydesk.trust import Repository, Unkeyed, locate
 from probe.claims import Observation
 from probe.commands import UNAVAILABLE, not_offered
 from tests.fakes import FakeSlack, card_of

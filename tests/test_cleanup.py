@@ -4,9 +4,9 @@ from typing import Any
 
 import pytest
 
-from code_with_slack import cleanup
-from code_with_slack.cleanup import clean, forget_gone_channels
-from code_with_slack.state import StateStore
+from awaydesk import cleanup
+from awaydesk.cleanup import clean, forget_gone_channels
+from awaydesk.state import StateStore
 from tests.fakes import FakeSlack, slack_payload
 from tests.test_repair import slack_error
 

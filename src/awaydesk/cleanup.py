@@ -19,8 +19,8 @@ from pathlib import Path
 from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
-from code_with_slack.render.sinks import describe
-from code_with_slack.state import StateStore
+from awaydesk.render.sinks import describe
+from awaydesk.state import StateStore
 
 logger = logging.getLogger(__name__)
 

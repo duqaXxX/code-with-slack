@@ -10,10 +10,10 @@ import aiohttp
 import pytest
 from claude_agent_sdk.types import TaskNotificationMessage, TaskStartedMessage
 
-from code_with_slack import sessions, texts
-from code_with_slack.approvals import Approve
-from code_with_slack.render import sinks
-from code_with_slack.render.status import Status
+from awaydesk import sessions, texts
+from awaydesk.approvals import Approve
+from awaydesk.render import sinks
+from awaydesk.render.status import Status
 from tests.fakes import CHANNEL, THREAD, CanUseToolCall, FakeClock, sdk_messages, split_turns
 from tests.test_sessions import (
     Harness,
@@ -256,7 +256,7 @@ async def test_a_restart_with_queued_messages_ends_the_running_reply_with_one_no
     assert h.approvals.resolve(approval_id, CHANNEL, THREAD, Approve()) is not None
     await asyncio.wait_for(first.done.wait(), 2)
     [reply] = h.slack.stream_texts()
-    note = "2 messages were not sent because code-with-slack restarted: send them again."
+    note = "2 messages were not sent because awaydesk restarted: send them again."
     assert note in reply
     assert '"second question"' in reply and '"third question"' in reply
     assert len(h.slack.stream_ts) == 1  # the dropped messages get no reply of their own
@@ -278,7 +278,7 @@ async def test_dropped_messages_with_nothing_running_get_one_message(
     await asyncio.sleep(0.05)
     await session.drop_queued(error=True)
     [post] = h.slack.calls_to("chat.postMessage")
-    assert "2 messages were not sent because code-with-slack restarted" in post["text"]
+    assert "2 messages were not sent because awaydesk restarted" in post["text"]
     assert h.slack.stream_ts == []
     gate.set()
 
@@ -294,9 +294,7 @@ async def test_one_dropped_message_is_named_in_the_singular(
     await asyncio.sleep(0.05)
     await session.drop_queued(error=True)
     [post] = h.slack.calls_to("chat.postMessage")
-    assert (
-        "1 message was not sent because code-with-slack restarted: send it again." in post["text"]
-    )
+    assert "1 message was not sent because awaydesk restarted: send it again." in post["text"]
     gate.set()
 
 

@@ -24,10 +24,10 @@ from claude_agent_sdk import SDKSessionInfo
 # covered by tests.
 from claude_agent_sdk._internal.sessions import _canonicalize_path, _find_project_dir
 
-from code_with_slack import texts
-from code_with_slack.render.escape import shown_as_written
-from code_with_slack.render.renderer import one_line
-from code_with_slack.render.sinks import context_block
+from awaydesk import texts
+from awaydesk.render.escape import shown_as_written
+from awaydesk.render.renderer import one_line
+from awaydesk.render.sinks import context_block
 
 logger = logging.getLogger(__name__)
 RESUME_ROWS = 20

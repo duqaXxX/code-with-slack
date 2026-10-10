@@ -23,8 +23,8 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
-from code_with_slack import sessions, texts
-from code_with_slack.sessions import taken_note
+from awaydesk import sessions, texts
+from awaydesk.sessions import taken_note
 from tests.fakes import EndOfStream, sdk_messages
 from tests.test_sessions import Harness, until
 from tests.test_sessions_report_turn import (

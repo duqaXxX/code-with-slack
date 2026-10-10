@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 from claude_agent_sdk import AssistantMessage, ToolResultBlock, ToolUseBlock, UserMessage
 
-from code_with_slack.render.previews import Preview, answered, folded, preview
+from awaydesk.render.previews import Preview, answered, folded, preview
 from tests.fakes import sdk_messages
 
 CWD = "/home/dev/project"

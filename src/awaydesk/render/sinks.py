@@ -24,10 +24,10 @@ from slack_sdk.http_retry.request import HttpRequest
 from slack_sdk.http_retry.state import RetryState
 from slack_sdk.web.async_client import AsyncWebClient
 
-from code_with_slack import texts
-from code_with_slack.render.escape import mrkdwn_escape, shown_as_written
-from code_with_slack.render.fold import Fold
-from code_with_slack.render.renderer import STOPPED, TaskUpdate
+from awaydesk import texts
+from awaydesk.render.escape import mrkdwn_escape, shown_as_written
+from awaydesk.render.fold import Fold
+from awaydesk.render.renderer import STOPPED, TaskUpdate
 
 logger = logging.getLogger(__name__)
 

@@ -18,9 +18,9 @@ from claude_agent_sdk.types import (
     ToolPermissionContext,
 )
 
-from code_with_slack import texts
-from code_with_slack.render.escape import shown_as_written
-from code_with_slack.render.renderer import one_line
+from awaydesk import texts
+from awaydesk.render.escape import shown_as_written
+from awaydesk.render.renderer import one_line
 
 SECTION_LIMIT = 3000
 MESSAGE_BLOCKS = 50  # Slack's limit on blocks in one message

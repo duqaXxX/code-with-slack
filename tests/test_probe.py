@@ -17,8 +17,8 @@ from probe.claims import (
     evaluate,
 )
 
-GESTURE = Claim("P90", "gesture", "a gesture", "code_with_slack.sessions.SessionManager", "do it")
-MODEL = Claim("P91", "model", "a model act", "code_with_slack.approvals.Approvals", "ask for it")
+GESTURE = Claim("P90", "gesture", "a gesture", "awaydesk.sessions.SessionManager", "do it")
+MODEL = Claim("P91", "model", "a model act", "awaydesk.approvals.Approvals", "ask for it")
 
 
 @pytest.mark.parametrize(
@@ -41,7 +41,7 @@ def test_an_observation_becomes_an_outcome(
 
 
 def test_a_retired_claim_stays_retired_whatever_the_run_saw() -> None:
-    retired = Claim("P92", "gesture", "gone", "code_with_slack.sessions", "n/a", retired="measured")
+    retired = Claim("P92", "gesture", "gone", "awaydesk.sessions", "n/a", retired="measured")
     assert evaluate(retired, Observation(caused=True, holds=False)).outcome == "RETIRED"
 
 
@@ -113,7 +113,7 @@ def test_a_behaviour_cannot_hold_without_its_event() -> None:
 @pytest.mark.parametrize("id", ["p1", "P0", "1", "P1 "])
 def test_a_claim_id_is_p_and_a_number(id: str) -> None:
     with pytest.raises(ValueError):
-        Claim(id, "gesture", "t", "code_with_slack.sessions", "how")
+        Claim(id, "gesture", "t", "awaydesk.sessions", "how")
 
 
 def test_the_pin_moves_only_when_there_is_exactly_one() -> None:

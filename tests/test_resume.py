@@ -7,8 +7,8 @@ from typing import Any
 import pytest
 from claude_agent_sdk import SDKSessionInfo
 
-from code_with_slack import resume, texts
-from code_with_slack.resume import (
+from awaydesk import resume, texts
+from awaydesk.resume import (
     RESUME_ROWS,
     by_last_activity,
     matching,
@@ -16,7 +16,7 @@ from code_with_slack.resume import (
     resume_blocks,
     resume_value,
 )
-from code_with_slack.sessions import directory_sessions
+from awaydesk.sessions import directory_sessions
 
 NOW = datetime(2026, 9, 25, 12, 0).astimezone()
 THREAD = "1780000000.000001"  # the thread of the owner's `!resume` message

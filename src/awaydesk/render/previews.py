@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
-from code_with_slack import texts
+from awaydesk import texts
 
 # How the terminal folds finished calls of these tools. Captured from the terminal on Claude Code
 # 2.1.283 (2026-09-27), where Bash also does the searching (the CLI has no Grep or Glob tool):

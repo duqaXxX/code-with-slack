@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from code_with_slack.trust import trusted_repository, workspace_trusted
+from awaydesk.trust import trusted_repository, workspace_trusted
 from tests.git_layouts import (
     add_worktree,
     bare_layout,

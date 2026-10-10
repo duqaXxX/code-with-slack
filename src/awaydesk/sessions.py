@@ -48,8 +48,8 @@ from claude_agent_sdk.types import (
 )
 from slack_sdk.web.async_client import AsyncWebClient
 
-from code_with_slack import texts
-from code_with_slack.approvals import (
+from awaydesk import texts
+from awaydesk.approvals import (
     Answer,
     Approvals,
     answered_blocks,
@@ -57,9 +57,9 @@ from code_with_slack.approvals import (
     question_blocks,
     to_permission,
 )
-from code_with_slack.chrome import chrome_enabled
-from code_with_slack.folders import bindable_folders
-from code_with_slack.footer import (
+from awaydesk.chrome import chrome_enabled
+from awaydesk.folders import bindable_folders
+from awaydesk.footer import (
     FooterData,
     UsageCache,
     effort_change,
@@ -68,11 +68,11 @@ from code_with_slack.footer import (
     git_state,
     session_tokens,
 )
-from code_with_slack.guards import Identity
-from code_with_slack.hold import Holds
-from code_with_slack.prompt import Prompt, user_message
-from code_with_slack.render.escape import markdown_escape, mrkdwn_escape
-from code_with_slack.render.renderer import (
+from awaydesk.guards import Identity
+from awaydesk.hold import Holds
+from awaydesk.prompt import Prompt, user_message
+from awaydesk.render.escape import markdown_escape, mrkdwn_escape
+from awaydesk.render.renderer import (
     INTERRUPTED,
     Sink,
     TaskFrame,
@@ -81,7 +81,7 @@ from code_with_slack.render.renderer import (
     one_line,
     task_title,
 )
-from code_with_slack.render.sinks import (
+from awaydesk.render.sinks import (
     Clock,
     ReplySink,
     UpdateLimiter,
@@ -90,11 +90,11 @@ from code_with_slack.render.sinks import (
     describe,
     notice_text,
 )
-from code_with_slack.render.status import Status, StatusReaction, ThreadStatus
-from code_with_slack.resume import by_last_activity
-from code_with_slack.setup import DEFAULT, Choice
-from code_with_slack.state import StateStore
-from code_with_slack.trust import Repository, trusted_repository, workspace_trusted
+from awaydesk.render.status import Status, StatusReaction, ThreadStatus
+from awaydesk.resume import by_last_activity
+from awaydesk.setup import DEFAULT, Choice
+from awaydesk.state import StateStore
+from awaydesk.trust import Repository, trusted_repository, workspace_trusted
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +184,7 @@ class DirectoryMissing(DirectoryUnavailable):
 
 class DirectoryUntrusted(DirectoryUnavailable):
     """The owner has not trusted the folder in Claude Code: a session would run its hooks and
-    apply its settings with no trust dialog (see `code_with_slack.trust`)."""
+    apply its settings with no trust dialog (see `awaydesk.trust`)."""
 
     def __init__(self, directory: Path) -> None:
         super().__init__(directory, texts.DIRECTORY_UNTRUSTED.format(directory=directory))
@@ -254,7 +254,7 @@ def client_options(
     }
     if chrome:
         # The owner's "Enabled by default" reaches an interactive session only: here the flag
-        # is what connects Claude Code's Chrome integration (`code_with_slack.chrome`).
+        # is what connects Claude Code's Chrome integration (`awaydesk.chrome`).
         extra_args["chrome"] = None
     return ClaudeAgentOptions(
         cwd=str(directory),

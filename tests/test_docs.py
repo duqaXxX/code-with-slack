@@ -14,12 +14,12 @@ from typing import get_args
 
 import pytest
 
-from code_with_slack import config
-from code_with_slack.commands import Invalid, Word
+from awaydesk import config
+from awaydesk.commands import Invalid, Word
 from probe.features import features
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src" / "code_with_slack"
+SRC = ROOT / "src" / "awaydesk"
 README = ROOT / "README.md"
 SETUP = ROOT / "docs" / "setup.md"
 SDK_FIXTURES = ROOT / "tests" / "fixtures" / "sdk"
@@ -171,7 +171,7 @@ def owners() -> dict[str, frozenset[str]]:
 
 def unresolved(span: str) -> bool:
     """True for a dotted name that starts in this package and names something it does not hold."""
-    parts = span.removeprefix("code_with_slack.").removeprefix("render.").split(".")
+    parts = span.removeprefix("awaydesk.").removeprefix("render.").split(".")
     names = owners().get(parts[0])
     if names is None or len(parts) < 2 or parts[-1] in FILE_SUFFIXES or span in NOT_OURS:
         return False
@@ -244,7 +244,7 @@ def test_every_limit_says_whether_an_issue_looks_into_it() -> None:
     headings = re.findall(r"^## (.+)$", LIMITS.read_text(), flags=re.M)
     tables = [h for h in headings if h != "Not checked"]
     assert len(tables) == 4, headings
-    issue = re.compile(r"\[#(\d+)\]\(https://github\.com/duqaXxX/code-with-slack/issues/\1\)")
+    issue = re.compile(r"\[#(\d+)\]\(https://github\.com/duqaXxX/awaydesk/issues/\1\)")
     for heading in tables:
         for row in _limits_rows(heading):
             assert row[-1] == "none" or issue.fullmatch(row[-1]), (heading, row[0], row[-1])

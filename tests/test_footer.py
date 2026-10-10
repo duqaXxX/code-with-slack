@@ -9,8 +9,8 @@ from zoneinfo import ZoneInfo
 import pytest
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage
 
-from code_with_slack import footer
-from code_with_slack.footer import (
+from awaydesk import footer
+from awaydesk.footer import (
     FooterData,
     Limit,
     Usage,

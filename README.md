@@ -1,10 +1,10 @@
-# code-with-slack
+# awaydesk
 
 Code from anywhere with Claude Code: your Mac does the work, Slack is the remote.
 
 <!-- Demo recording goes here: a reply growing in a thread, an Approve click, the footer. -->
 
-Claude Code runs in a terminal on your Mac. code-with-slack is a small daemon on that Mac that
+Claude Code runs in a terminal on your Mac. awaydesk is a small daemon on that Mac that
 lets you keep working with it from Slack, on your phone or on another computer. Each private
 channel is one project and each thread in it is one session: you write a message, Claude Code
 runs in the project's folder with your own login, settings and permissions, and the reply shows
@@ -29,8 +29,8 @@ Powered by Claude, through the
 ## Install
 
 ```bash
-git clone https://github.com/duqaXxX/code-with-slack.git
-cd code-with-slack
+git clone https://github.com/duqaXxX/awaydesk.git
+cd awaydesk
 uv tool install .
 ```
 
@@ -38,7 +38,7 @@ uv tool install .
 
 1. Create the Slack app from [`slack-app-manifest.json`](slack-app-manifest.json) and copy its
    tokens.
-2. Write the tokens and your settings in `~/.config/code-with-slack/.env`.
+2. Write the tokens and your settings in `~/.config/awaydesk/.env`.
 3. Trust your project folder in Claude Code.
 4. Start the LaunchAgent.
 5. In a private channel with you and the bot, send `!bind <folder>`, then your first message.

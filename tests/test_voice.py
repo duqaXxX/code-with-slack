@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from code_with_slack import voice
+from awaydesk import voice
 
 CLIP: dict[str, Any] = {
     "id": "F000CLIP",

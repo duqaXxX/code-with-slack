@@ -1,5 +1,5 @@
 [project]
-name = "code-with-slack"
+name = "awaydesk"
 version = "0.1.0"
 description = "Drive the Claude Code sessions on your own Mac from private Slack channels. Powered by Claude."
 readme = "README.md"
@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-code-with-slack = "code_with_slack.__main__:main"
+awaydesk = "awaydesk.__main__:main"
 
 [dependency-groups]
 dev = [

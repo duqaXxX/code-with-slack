@@ -29,7 +29,7 @@ from slack_sdk.web.async_client import AsyncWebClient
 from slack_sdk.web.async_slack_response import AsyncSlackResponse
 from slack_sdk.web.file_upload_v2_result import FileUploadV2Result
 
-from code_with_slack.trust import Repository, Unkeyed, locate
+from awaydesk.trust import Repository, Unkeyed, locate
 
 FIXTURES = Path(__file__).parent / "fixtures"
 OWNER = "U000ALICE"

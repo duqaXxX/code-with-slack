@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 class AlreadyRunning(Exception):
-    """Another code-with-slack process holds the lock."""
+    """Another awaydesk process holds the lock."""
 
 
 @contextmanager
@@ -22,7 +22,7 @@ def single_instance(directory: Path) -> Iterator[None]:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            message = f"another code-with-slack is running (lock on {directory})"
+            message = f"another awaydesk is running (lock on {directory})"
             raise AlreadyRunning(message) from None
         yield
     finally:

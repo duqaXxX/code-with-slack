@@ -176,7 +176,7 @@ def read_reference(url: str = REFERENCE) -> str | None:
     leaves every `reference` row unproven."""
     # The site answers 403 to urllib's default agent (measured 2026-10-07): the probe names
     # itself.
-    request = urllib.request.Request(url, headers={"User-Agent": "code-with-slack-probe"})
+    request = urllib.request.Request(url, headers={"User-Agent": "awaydesk-probe"})
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             return str(response.read().decode())

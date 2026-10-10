@@ -3,8 +3,8 @@ from typing import Any
 
 import pytest
 
-from code_with_slack import texts
-from code_with_slack.commands import (
+from awaydesk import texts
+from awaydesk.commands import (
     Bind,
     Bypass,
     Help,
@@ -186,7 +186,7 @@ def own_words() -> list[str]:
     """Every word the daemon answers itself: each is a class of the `Word` union with a WORD."""
     from typing import get_args
 
-    from code_with_slack.commands import Word
+    from awaydesk.commands import Word
 
     words = [cls for cls in get_args(Word) if cls is not Invalid]
     # A word class without WORD would slip past the guide and help check below.
@@ -207,7 +207,7 @@ def test_the_guide_and_the_help_explain_every_word_of_the_daemon() -> None:
 
 
 def test_guide_parses() -> None:
-    from code_with_slack.commands import Guide
+    from awaydesk.commands import Guide
 
     assert parse_bang("!guide") == Guide()
     assert parse_bang("!GUIDE") == Guide()
@@ -217,7 +217,7 @@ def test_the_help_titles_are_bold_in_a_markdown_block() -> None:
     # `!help` goes out as a markdown block, where bold is **text** and *text* is italic
     # (markdown block reference, read 2026-09-25).
     text = help_text([], "")
-    assert text.startswith("**code-with-slack**") and "**Claude Code**" in text
+    assert text.startswith("**awaydesk**") and "**Claude Code**" in text
 
 
 # /doctor's description in the bundled CLI 2.1.280, read 2026-09-25: the 100-character cut falls

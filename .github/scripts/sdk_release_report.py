@@ -1,6 +1,6 @@
 """The text of the SDK release watch's issue, from the versions and the test outcome.
 
-code-with-slack pins `claude-agent-sdk` and runs the Claude Code CLI the SDK bundles, whose
+awaydesk pins `claude-agent-sdk` and runs the Claude Code CLI the SDK bundles, whose
 message shapes the fixtures record. A new SDK release is read against the project here: the
 workflow installs it, runs the suite, and this names what is left to check by hand.
 
@@ -72,7 +72,7 @@ def report(
         )
     body = "\n".join(
         [
-            f"`claude-agent-sdk` {latest} is on PyPI; code-with-slack pins {pinned}.",
+            f"`claude-agent-sdk` {latest} is on PyPI; awaydesk pins {pinned}.",
             "",
             "| | Version |",
             "|---|---|",
@@ -94,7 +94,7 @@ def report(
     elif latest != last_commented:
         comment = f"claude-agent-sdk {latest} is out (bundled CLI {latest_cli}); tests: {outcome}."
     return {
-        "title": f"claude-agent-sdk {latest}: test code-with-slack against it",
+        "title": f"claude-agent-sdk {latest}: test awaydesk against it",
         "body": body,
         "comment": comment,
     }

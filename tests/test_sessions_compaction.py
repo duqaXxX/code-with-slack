@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 from claude_agent_sdk import SystemMessage
 
-from code_with_slack import sessions
+from awaydesk import sessions
 from tests.fakes import EndOfStream, sdk_messages, split_turns
 from tests.test_sessions import Harness, status_lines, until
 from tests.test_sessions_prompt_replay import play, send

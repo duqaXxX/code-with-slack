@@ -14,17 +14,17 @@ import pytest
 from claude_agent_sdk import ClaudeAgentOptions, ResultError, SDKSessionInfo
 from slack_bolt.request.async_request import AsyncBoltRequest
 
-from code_with_slack import openfile as openfile_module
-from code_with_slack import sessions as sessions_module
-from code_with_slack import slack_app as slack_app_module
-from code_with_slack import texts, voice
-from code_with_slack.approvals import Answer, Approvals, Draft
-from code_with_slack.attachments import DownloadFailed
-from code_with_slack.config import Config
-from code_with_slack.footer import UsageCache
-from code_with_slack.guards import ChannelGuard, Identity
-from code_with_slack.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, hold_blocks
-from code_with_slack.home import (
+from awaydesk import openfile as openfile_module
+from awaydesk import sessions as sessions_module
+from awaydesk import slack_app as slack_app_module
+from awaydesk import texts, voice
+from awaydesk.approvals import Answer, Approvals, Draft
+from awaydesk.attachments import DownloadFailed
+from awaydesk.config import Config
+from awaydesk.footer import UsageCache
+from awaydesk.guards import ChannelGuard, Identity
+from awaydesk.hold import HOLD_CANCEL, HOLD_CONTINUE, Holds, hold_blocks
+from awaydesk.home import (
     CHANNEL_ACTION,
     CLEAN_ACTION,
     DELETE_ACTION,
@@ -41,7 +41,7 @@ from code_with_slack.home import (
     Home,
     HomeFilter,
 )
-from code_with_slack.openfile import (
+from awaydesk.openfile import (
     CHOICE_ACTION,
     CHOICE_BLOCK,
     OPEN_BUTTON_ACTION,
@@ -52,12 +52,12 @@ from code_with_slack.openfile import (
     Target,
     modal_view,
 )
-from code_with_slack.render.sinks import FALLBACK_LIMIT, UpdateLimiter
-from code_with_slack.render.status import Status
-from code_with_slack.sessions import SessionDeps, SessionManager
-from code_with_slack.setup import SETUP_BYPASS, SETUP_EFFORT, SETUP_MODEL, SETUP_START, Choice
-from code_with_slack.slack_app import action_key, build_app, slack_unescape
-from code_with_slack.state import StateStore
+from awaydesk.render.sinks import FALLBACK_LIMIT, UpdateLimiter
+from awaydesk.render.status import Status
+from awaydesk.sessions import SessionDeps, SessionManager
+from awaydesk.setup import SETUP_BYPASS, SETUP_EFFORT, SETUP_MODEL, SETUP_START, Choice
+from awaydesk.slack_app import action_key, build_app, slack_unescape
+from awaydesk.state import StateStore
 from tests.fakes import (
     BOT,
     CHANNEL,
@@ -99,7 +99,7 @@ async def chrome_off() -> bool:
 
 
 async def always_trusted(directory: Path) -> bool:
-    return True  # code_with_slack.trust has tests of its own
+    return True  # awaydesk.trust has tests of its own
 
 
 class World:
@@ -1556,7 +1556,7 @@ async def test_bang_guide_inside_a_thread_is_for_the_owner_alone(world: World) -
     await world.dispatch(reply("!guide", THREAD))
     assert texts.GUIDE not in said(world)
     (guide,) = world.slack.calls_to("chat.postEphemeral")
-    assert guide["thread_ts"] == THREAD and guide["text"].startswith("**code-with-slack**")
+    assert guide["thread_ts"] == THREAD and guide["text"].startswith("**awaydesk**")
 
 
 @pytest.mark.parametrize(
@@ -1682,7 +1682,7 @@ async def test_only_the_list_reads_the_transcripts_for_dates(
         dated.append(directory)
         return stored
 
-    monkeypatch.setattr("code_with_slack.sessions.by_last_activity", spy)
+    monkeypatch.setattr("awaydesk.sessions.by_last_activity", spy)
     two_sessions(world)
     await world.dispatch(message("!resume footer"))
     await world.dispatch(resume_click(SESSION_B))
@@ -2253,7 +2253,7 @@ async def test_a_thread_in_the_current_folder_never_gets_the_notice(world: World
 
 
 def test_long_answers_fit_slack_s_limit() -> None:
-    from code_with_slack.approvals import SECTION_LIMIT, answered_blocks
+    from awaydesk.approvals import SECTION_LIMIT, answered_blocks
 
     questions = [{"question": "q" * 900} for _ in range(4)]
     answers: dict[str, str | list[str]] = {"q" * 900: "a" * 300}
@@ -3251,7 +3251,7 @@ async def test_a_failing_forget_setup_does_not_hide_the_original_error(
         raise OSError("cannot drop")
 
     monkeypatch.setattr(FakeClaudeClient, "set_model", boom)
-    monkeypatch.setattr("code_with_slack.sessions.ThreadSession._drop_client", worse)
+    monkeypatch.setattr("awaydesk.sessions.ThreadSession._drop_client", worse)
     await manual.dispatch(message("hello", ts=THREAD))
     await manual.dispatch(setup_click(manual, model="opus"))
     await manual.settle(0.3)
@@ -4742,7 +4742,7 @@ async def test_a_name_is_looked_up_in_a_folder_with_no_repository(world: World) 
 
 # Issue #142: which path answered `texts.HOLD_GONE` is read from the log, ids and flags only.
 def _app_log(caplog: pytest.LogCaptureFixture) -> list[str]:
-    return [r.getMessage() for r in caplog.records if r.name == "code_with_slack.slack_app"]
+    return [r.getMessage() for r in caplog.records if r.name == "awaydesk.slack_app"]
 
 
 async def test_an_accepted_setup_start_is_logged(
@@ -4750,7 +4750,7 @@ async def test_an_accepted_setup_start_is_logged(
 ) -> None:
     await manual.dispatch(message("SECRET-PROMPT-CONTENT", ts=THREAD))
     body = setup_click(manual)
-    with caplog.at_level(logging.INFO, logger="code_with_slack"):
+    with caplog.at_level(logging.INFO, logger="awaydesk"):
         await manual.dispatch(body)
     assert f"accepted a setup start in {CHANNEL}/{THREAD} on message {body['message']['ts']}" in (
         _app_log(caplog)
@@ -4763,7 +4763,7 @@ async def test_a_second_start_is_logged_as_accepted_then_refused(
 ) -> None:
     await manual.dispatch(message("SECRET-PROMPT-CONTENT", ts=THREAD))
     body = setup_click(manual)
-    with caplog.at_level(logging.INFO, logger="code_with_slack"):
+    with caplog.at_level(logging.INFO, logger="awaydesk"):
         await manual.dispatch(body)
         await manual.dispatch(body)
     lines = [m for m in _app_log(caplog) if "setup start" in m]
@@ -4782,7 +4782,7 @@ async def test_a_start_for_a_setup_no_longer_held_is_logged(
     await manual.dispatch(message("SECRET-PROMPT-CONTENT", ts=THREAD))
     body = setup_click(manual)
     body["actions"][0]["value"] = "no-such-setup"
-    with caplog.at_level(logging.INFO, logger="code_with_slack"):
+    with caplog.at_level(logging.INFO, logger="awaydesk"):
         await manual.dispatch(body)
     (line,) = [m for m in _app_log(caplog) if "refused a click" in m]
     assert "(setup start, not held)" in line and "held=False" in line
@@ -4793,7 +4793,7 @@ async def test_a_start_that_resolve_refuses_is_logged_with_what_differs(
     manual: World, caplog: pytest.LogCaptureFixture
 ) -> None:
     await manual.dispatch(message("SECRET-PROMPT-CONTENT", ts=THREAD))
-    with caplog.at_level(logging.INFO, logger="code_with_slack"):
+    with caplog.at_level(logging.INFO, logger="awaydesk"):
         await manual.dispatch(setup_click(manual, thread_ts=OTHER_THREAD))
     (line,) = [m for m in _app_log(caplog) if "refused a click" in m]
     assert "(setup start, not resolved)" in line
@@ -4808,7 +4808,7 @@ async def test_a_model_change_after_start_is_logged(
     model = setup_click(manual, SETUP_MODEL, model="haiku")
     await manual.dispatch(setup_click(manual))
     await manual.settle(0.2)
-    with caplog.at_level(logging.INFO, logger="code_with_slack"):
+    with caplog.at_level(logging.INFO, logger="awaydesk"):
         await manual.dispatch(model)
     (line,) = [m for m in _app_log(caplog) if "refused a click" in m]
     assert "(setup model, no open setup)" in line
@@ -4824,7 +4824,7 @@ async def test_a_second_hold_click_is_logged(
     hold_id = button_value(posted_blocks(world), HOLD_CONTINUE)
     body = click_in(HOLD_CONTINUE, hold_id, CHANNEL, THREAD)
     await world.dispatch(body)
-    with caplog.at_level(logging.INFO, logger="code_with_slack"):
+    with caplog.at_level(logging.INFO, logger="awaydesk"):
         await world.dispatch(body)
     (line,) = [m for m in _app_log(caplog) if "refused a click" in m]
     assert "(hold decision)" in line and f"action {HOLD_CONTINUE} in {CHANNEL}/{THREAD}" in line
