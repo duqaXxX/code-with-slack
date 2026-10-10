@@ -1,0 +1,165 @@
+{
+ "recording": "goal",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "Goal set: Reply with the single word tick once in each turn, until you have said it three times in total. Never use a tool.",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "\n\nAcknowledge",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "d. I'll rep",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ly with \"ti",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ck\" once pe",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "r turn unti",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "l I've said",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " it three t",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "imes.\n\ntick",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "\n\ntick",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "\n\ntick",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "Goal set: Reply with the single word tick once in each turn, until you have said it three times in total. Never use a tool.",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "\n\nAcknowledge",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "d. I'll rep",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ly with \"ti",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ck\" once pe",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "r turn unti",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "l I've said",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " it three t",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "imes.\n\ntick",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "\n\ntick",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "\n\ntick",
+    "notice": false
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

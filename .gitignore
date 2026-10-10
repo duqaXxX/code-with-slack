@@ -18,3 +18,9 @@ htmlcov/
 .DS_Store
 /.claude/settings.local.json
 /.superpowers/
+
+# Node.
+/node_modules/
+
+# The tarball `npm pack` builds for the install.
+/awaydesk-*.tgz

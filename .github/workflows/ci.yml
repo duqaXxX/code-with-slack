@@ -59,3 +59,33 @@ jobs:
       # Reports rather than rewrites: CI never edits the code under review.
       - run: uv run ruff check .
       - run: uv run ruff format --check .
+      # The TypeScript daemon, checked beside the Python one until it replaces it. Node 22 is
+      # the oldest release line the package accepts (`engines` in package.json).
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+
+  # The TypeScript unit tests on each system the daemon is meant to run on. They start no
+  # Claude Code process and open no connection.
+  systems:
+    name: TypeScript tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test

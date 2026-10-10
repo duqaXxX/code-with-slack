@@ -1,0 +1,789 @@
+{
+ "recording": "ask",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01P24zAVmj8jzZshmnA3vd6n",
+      "name": "AskUserQuestion",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "AskUserQuestion"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01P24zAVmj8jzZshmnA3vd6n",
+      "name": "AskUserQuestion",
+      "output": "recording only",
+      "preview": null,
+      "status": "error",
+      "task": false,
+      "title": "AskUserQuestion"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "I attempt",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ed to ask",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " you thos",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "e questio",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ns, but i",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "t appears",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " this ses",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "sion is r",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "unning in",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " a non-in",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "teractive",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " mode, wh",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ich means",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " the AskU",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "serQuesti",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "on tool c",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "annot col",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "lect your",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " response",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "s interac",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "tively.\n\n",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "To answer",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " your req",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "uest dire",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ctly, I w",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ould have",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " asked:\n1",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": ". **Which",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " colour d",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "o you pre",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "fer?** (s",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ingle cho",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ice: Red ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "or Blue)\n",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "2. **Do y",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ou also l",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ike green",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "?** (mult",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "i-select:",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " Yes or N",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "o)\n\nIf yo",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "u're in a",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "n interac",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "tive Clau",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "de Code s",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ession, p",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "lease fee",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "l free to",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " provide ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "your answ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ers direc",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "tly, and ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "I can pro",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ceed with",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " whatever",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " task you",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " need hel",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "p with!",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01P24zAVmj8jzZshmnA3vd6n",
+     "name": "AskUserQuestion",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "AskUserQuestion"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01P24zAVmj8jzZshmnA3vd6n",
+     "name": "AskUserQuestion",
+     "output": "recording only",
+     "preview": null,
+     "status": "error",
+     "task": false,
+     "title": "AskUserQuestion"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "I attempt",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ed to ask",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " you thos",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "e questio",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ns, but i",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "t appears",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " this ses",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "sion is r",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "unning in",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " a non-in",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "teractive",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " mode, wh",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ich means",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " the AskU",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "serQuesti",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "on tool c",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "annot col",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "lect your",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " response",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "s interac",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "tively.\n\n",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "To answer",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " your req",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "uest dire",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ctly, I w",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ould have",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " asked:\n1",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": ". **Which",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " colour d",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "o you pre",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "fer?** (s",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ingle cho",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ice: Red ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "or Blue)\n",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "2. **Do y",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ou also l",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ike green",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "?** (mult",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "i-select:",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " Yes or N",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "o)\n\nIf yo",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "u're in a",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "n interac",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "tive Clau",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "de Code s",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ession, p",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "lease fee",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "l free to",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " provide ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "your answ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ers direc",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "tly, and ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "I can pro",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ceed with",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " whatever",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " task you",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " need hel",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "p with!",
+    "notice": false
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

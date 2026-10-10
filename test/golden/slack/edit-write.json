@@ -1,0 +1,1369 @@
+{
+ "discipline": "Each sink call of the seam-1 'whole' list is replayed in order on a ReplySink over FakeSlack. After a text or task call, ReplySink.settle() flushes the reply at once, standing in for the debounced write (one flush per sink call, so the debounce never merges two calls); finish and close_out flush by themselves. The fake clock never advances, so the 280-second stream deadline never fires, and the UpdateLimiter has a budget no recording can spend.",
+ "final": {
+  "message_blocks": [
+   [
+    {
+     "text": "I'll do these steps one at a time as requested.\n\n**Step 1: Write new.txt with numbers 1-15**",
+     "type": "markdown"
+    },
+    {
+     "child_blocks": [
+      {
+       "elements": [
+        {
+         "elements": [
+          {
+           "text": " 1 1\n 2 2\n 3 3\n 4 4\n 5 5\n 6 6\n 7 7\n 8 8\n 9 9\n10 10\n… +5 lines",
+           "type": "text"
+          }
+         ],
+         "type": "rich_text_preformatted"
+        }
+       ],
+       "type": "rich_text"
+      }
+     ],
+     "default_collapsed": true,
+     "is_collapsible": true,
+     "rich_text_title": {
+      "elements": [
+       {
+        "elements": [
+         {
+          "style": {
+           "code": true
+          },
+          "text": "Write(/home/dev/project/new.txt)",
+          "type": "text"
+         }
+        ],
+        "type": "rich_text_section"
+       }
+      ],
+      "type": "rich_text"
+     },
+     "subtitle": {
+      "text": "Wrote 15 lines to /home/dev/project/new.txt",
+      "type": "plain_text"
+     },
+     "title": {
+      "text": "Write(/home/dev/project/new.txt)",
+      "type": "plain_text"
+     },
+     "type": "container",
+     "width": "full"
+    },
+    {
+     "text": "**Step 2: Read notes.txt to see current content**",
+     "type": "markdown"
+    },
+    {
+     "elements": [
+      {
+       "text": "✓ Read 1 file",
+       "type": "mrkdwn"
+      }
+     ],
+     "type": "context"
+    },
+    {
+     "text": "**Step 2: Edit notes.txt to replace 'beta' with 'gamma'**",
+     "type": "markdown"
+    },
+    {
+     "elements": [
+      {
+       "text": "✗ Edit",
+       "type": "mrkdwn"
+      }
+     ],
+     "type": "context"
+    },
+    {
+     "text": "**Step 2: Edit notes.txt (retry)**",
+     "type": "markdown"
+    },
+    {
+     "child_blocks": [
+      {
+       "elements": [
+        {
+         "elements": [
+          {
+           "text": "    1 alpha\n-🟥 2 beta\n+🟩 2 gamma\n    3 delta",
+           "type": "text"
+          }
+         ],
+         "language": "diff",
+         "type": "rich_text_preformatted"
+        }
+       ],
+       "type": "rich_text"
+      }
+     ],
+     "default_collapsed": true,
+     "is_collapsible": true,
+     "rich_text_title": {
+      "elements": [
+       {
+        "elements": [
+         {
+          "style": {
+           "code": true
+          },
+          "text": "Update(/home/dev/project/notes.txt)",
+          "type": "text"
+         }
+        ],
+        "type": "rich_text_section"
+       }
+      ],
+      "type": "rich_text"
+     },
+     "subtitle": {
+      "text": "Added 1 line, removed 1 line",
+      "type": "plain_text"
+     },
+     "title": {
+      "text": "Update(/home/dev/project/notes.txt)",
+      "type": "plain_text"
+     },
+     "type": "container",
+     "width": "full"
+    },
+    {
+     "text": "**Step 3: Write notes.txt with the two lines \"one\" and \"two\"**",
+     "type": "markdown"
+    },
+    {
+     "child_blocks": [
+      {
+       "elements": [
+        {
+         "elements": [
+          {
+           "text": "-🟥 1 alpha\n-🟥 2 gamma\n-🟥 3 delta\n+🟩 1 one\n+🟩 2 two",
+           "type": "text"
+          }
+         ],
+         "language": "diff",
+         "type": "rich_text_preformatted"
+        }
+       ],
+       "type": "rich_text"
+      }
+     ],
+     "default_collapsed": true,
+     "is_collapsible": true,
+     "rich_text_title": {
+      "elements": [
+       {
+        "elements": [
+         {
+          "style": {
+           "code": true
+          },
+          "text": "Write(/home/dev/project/notes.txt)",
+          "type": "text"
+         }
+        ],
+        "type": "rich_text_section"
+       }
+      ],
+      "type": "rich_text"
+     },
+     "subtitle": {
+      "text": "Added 2 lines, removed 3 lines",
+      "type": "plain_text"
+     },
+     "title": {
+      "text": "Write(/home/dev/project/notes.txt)",
+      "type": "plain_text"
+     },
+     "type": "container",
+     "width": "full"
+    },
+    {
+     "text": "Done",
+     "type": "markdown"
+    },
+    {
+     "type": "divider"
+    },
+    {
+     "elements": [
+      {
+       "text": "footer",
+       "type": "mrkdwn"
+      }
+     ],
+     "type": "context"
+    }
+   ]
+  ],
+  "message_cards": [
+   []
+  ],
+  "message_texts": [
+   "I'll do these steps one at a time as requested.\n\n**Step 1: Write new.txt with numbers 1-15**\n\n**Step 2: Read notes.txt to see current content**\n\n**Step 2: Edit notes.txt to replace 'beta' with 'gamma'**\n\n**Step 2: Edit notes.txt (retry)**\n\n**Step 3: Write notes.txt with the two lines \"one\" and \"two\"**\n\nDone"
+  ],
+  "pushes": 1
+ },
+ "recording": "edit-write",
+ "slack_calls": [
+  {
+   "after_sink_call": 0,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "I'll do th",
+      "type": "markdown_text"
+     }
+    ],
+    "recipient_team_id": "T000TEAM",
+    "recipient_user_id": "U000ALICE",
+    "task_display_mode": "timeline",
+    "thread_ts": "1780000000.000001"
+   },
+   "method": "chat.startStream"
+  },
+  {
+   "after_sink_call": 1,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "ese steps ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 2,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "one at a t",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 3,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "ime as req",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 4,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "uested.\n\n*",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 5,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "*Step 1: W",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 6,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "rite new.t",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 7,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "xt with nu",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 8,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "mbers 1-15",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 9,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "**",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 10,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "blocks": [
+       {
+        "child_blocks": [
+         {
+          "elements": [
+           {
+            "elements": [
+             {
+              "text": " 1 1\n 2 2\n 3 3\n 4 4\n 5 5\n 6 6\n 7 7\n 8 8\n 9 9\n10 10\n… +5 lines",
+              "type": "text"
+             }
+            ],
+            "type": "rich_text_preformatted"
+           }
+          ],
+          "type": "rich_text"
+         }
+        ],
+        "default_collapsed": true,
+        "is_collapsible": true,
+        "rich_text_title": {
+         "elements": [
+          {
+           "elements": [
+            {
+             "style": {
+              "code": true
+             },
+             "text": "Write(/home/dev/project/new.txt)",
+             "type": "text"
+            }
+           ],
+           "type": "rich_text_section"
+          }
+         ],
+         "type": "rich_text"
+        },
+        "subtitle": {
+         "text": "Wrote 15 lines to /home/dev/project/new.txt",
+         "type": "plain_text"
+        },
+        "title": {
+         "text": "Write(/home/dev/project/new.txt)",
+         "type": "plain_text"
+        },
+        "type": "container",
+        "width": "full"
+       }
+      ],
+      "type": "blocks"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 11,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "**Step 2: ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 12,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "Read notes",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 13,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": ".txt to se",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 14,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "e current ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 15,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "content**",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 16,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "id": "fold:toolu_01UZ6XRyij8tgTWjuvFsDqh4",
+      "status": "in_progress",
+      "title": "Read: /home/dev/project/notes.txt",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 17,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "id": "fold:toolu_01UZ6XRyij8tgTWjuvFsDqh4",
+      "status": "complete",
+      "title": "Read: /home/dev/project/notes.txt",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 18,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "**Step 2: ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 19,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "Edit notes",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 20,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": ".txt to re",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 21,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "place 'bet",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 22,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "a' with 'g",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 23,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "amma'**",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 24,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "id": "fold:toolu_01UGwcwQUu5z8LDz4ucFDRL4",
+      "status": "error",
+      "title": "Edit: /home/dev/project/notes.txt · <tool_use_error>String to replace not found in file.",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 25,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "**Step",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 26,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " 2: Ed",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 27,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "it not",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 28,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "es.txt",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 29,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " (retr",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 30,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "y)**",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 31,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "blocks": [
+       {
+        "child_blocks": [
+         {
+          "elements": [
+           {
+            "elements": [
+             {
+              "text": "    1 alpha\n-🟥 2 beta\n+🟩 2 gamma\n    3 delta",
+              "type": "text"
+             }
+            ],
+            "language": "diff",
+            "type": "rich_text_preformatted"
+           }
+          ],
+          "type": "rich_text"
+         }
+        ],
+        "default_collapsed": true,
+        "is_collapsible": true,
+        "rich_text_title": {
+         "elements": [
+          {
+           "elements": [
+            {
+             "style": {
+              "code": true
+             },
+             "text": "Update(/home/dev/project/notes.txt)",
+             "type": "text"
+            }
+           ],
+           "type": "rich_text_section"
+          }
+         ],
+         "type": "rich_text"
+        },
+        "subtitle": {
+         "text": "Added 1 line, removed 1 line",
+         "type": "plain_text"
+        },
+        "title": {
+         "text": "Update(/home/dev/project/notes.txt)",
+         "type": "plain_text"
+        },
+        "type": "container",
+        "width": "full"
+       }
+      ],
+      "type": "blocks"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 32,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "**Step 3: W",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 33,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "rite notes.",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 34,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "txt with th",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 35,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "e two lines",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 36,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " \"one\" and ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 37,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "\"two\"**",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 38,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "blocks": [
+       {
+        "child_blocks": [
+         {
+          "elements": [
+           {
+            "elements": [
+             {
+              "text": "-🟥 1 alpha\n-🟥 2 gamma\n-🟥 3 delta\n+🟩 1 one\n+🟩 2 two",
+              "type": "text"
+             }
+            ],
+            "language": "diff",
+            "type": "rich_text_preformatted"
+           }
+          ],
+          "type": "rich_text"
+         }
+        ],
+        "default_collapsed": true,
+        "is_collapsible": true,
+        "rich_text_title": {
+         "elements": [
+          {
+           "elements": [
+            {
+             "style": {
+              "code": true
+             },
+             "text": "Write(/home/dev/project/notes.txt)",
+             "type": "text"
+            }
+           ],
+           "type": "rich_text_section"
+          }
+         ],
+         "type": "rich_text"
+        },
+        "subtitle": {
+         "text": "Added 2 lines, removed 3 lines",
+         "type": "plain_text"
+        },
+        "title": {
+         "text": "Write(/home/dev/project/notes.txt)",
+         "type": "plain_text"
+        },
+        "type": "container",
+        "width": "full"
+       }
+      ],
+      "type": "blocks"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 39,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "Done",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 41,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "blocks": [
+     {
+      "type": "divider"
+     },
+     {
+      "elements": [
+       {
+        "text": "footer",
+        "type": "mrkdwn"
+       }
+      ],
+      "type": "context"
+     }
+    ],
+    "channel": "C000CHAN",
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.stopStream"
+  },
+  {
+   "after_sink_call": 41,
+   "answer": {
+    "ok": true
+   },
+   "args": {
+    "blocks": [
+     {
+      "text": "I'll do these steps one at a time as requested.\n\n**Step 1: Write new.txt with numbers 1-15**",
+      "type": "markdown"
+     },
+     {
+      "child_blocks": [
+       {
+        "elements": [
+         {
+          "elements": [
+           {
+            "text": " 1 1\n 2 2\n 3 3\n 4 4\n 5 5\n 6 6\n 7 7\n 8 8\n 9 9\n10 10\n… +5 lines",
+            "type": "text"
+           }
+          ],
+          "type": "rich_text_preformatted"
+         }
+        ],
+        "type": "rich_text"
+       }
+      ],
+      "default_collapsed": true,
+      "is_collapsible": true,
+      "rich_text_title": {
+       "elements": [
+        {
+         "elements": [
+          {
+           "style": {
+            "code": true
+           },
+           "text": "Write(/home/dev/project/new.txt)",
+           "type": "text"
+          }
+         ],
+         "type": "rich_text_section"
+        }
+       ],
+       "type": "rich_text"
+      },
+      "subtitle": {
+       "text": "Wrote 15 lines to /home/dev/project/new.txt",
+       "type": "plain_text"
+      },
+      "title": {
+       "text": "Write(/home/dev/project/new.txt)",
+       "type": "plain_text"
+      },
+      "type": "container",
+      "width": "full"
+     },
+     {
+      "text": "**Step 2: Read notes.txt to see current content**",
+      "type": "markdown"
+     },
+     {
+      "elements": [
+       {
+        "text": "✓ Read 1 file",
+        "type": "mrkdwn"
+       }
+      ],
+      "type": "context"
+     },
+     {
+      "text": "**Step 2: Edit notes.txt to replace 'beta' with 'gamma'**",
+      "type": "markdown"
+     },
+     {
+      "elements": [
+       {
+        "text": "✗ Edit",
+        "type": "mrkdwn"
+       }
+      ],
+      "type": "context"
+     },
+     {
+      "text": "**Step 2: Edit notes.txt (retry)**",
+      "type": "markdown"
+     },
+     {
+      "child_blocks": [
+       {
+        "elements": [
+         {
+          "elements": [
+           {
+            "text": "    1 alpha\n-🟥 2 beta\n+🟩 2 gamma\n    3 delta",
+            "type": "text"
+           }
+          ],
+          "language": "diff",
+          "type": "rich_text_preformatted"
+         }
+        ],
+        "type": "rich_text"
+       }
+      ],
+      "default_collapsed": true,
+      "is_collapsible": true,
+      "rich_text_title": {
+       "elements": [
+        {
+         "elements": [
+          {
+           "style": {
+            "code": true
+           },
+           "text": "Update(/home/dev/project/notes.txt)",
+           "type": "text"
+          }
+         ],
+         "type": "rich_text_section"
+        }
+       ],
+       "type": "rich_text"
+      },
+      "subtitle": {
+       "text": "Added 1 line, removed 1 line",
+       "type": "plain_text"
+      },
+      "title": {
+       "text": "Update(/home/dev/project/notes.txt)",
+       "type": "plain_text"
+      },
+      "type": "container",
+      "width": "full"
+     },
+     {
+      "text": "**Step 3: Write notes.txt with the two lines \"one\" and \"two\"**",
+      "type": "markdown"
+     },
+     {
+      "child_blocks": [
+       {
+        "elements": [
+         {
+          "elements": [
+           {
+            "text": "-🟥 1 alpha\n-🟥 2 gamma\n-🟥 3 delta\n+🟩 1 one\n+🟩 2 two",
+            "type": "text"
+           }
+          ],
+          "language": "diff",
+          "type": "rich_text_preformatted"
+         }
+        ],
+        "type": "rich_text"
+       }
+      ],
+      "default_collapsed": true,
+      "is_collapsible": true,
+      "rich_text_title": {
+       "elements": [
+        {
+         "elements": [
+          {
+           "style": {
+            "code": true
+           },
+           "text": "Write(/home/dev/project/notes.txt)",
+           "type": "text"
+          }
+         ],
+         "type": "rich_text_section"
+        }
+       ],
+       "type": "rich_text"
+      },
+      "subtitle": {
+       "text": "Added 2 lines, removed 3 lines",
+       "type": "plain_text"
+      },
+      "title": {
+       "text": "Write(/home/dev/project/notes.txt)",
+       "type": "plain_text"
+      },
+      "type": "container",
+      "width": "full"
+     },
+     {
+      "text": "Done",
+      "type": "markdown"
+     },
+     {
+      "type": "divider"
+     },
+     {
+      "elements": [
+       {
+        "text": "footer",
+        "type": "mrkdwn"
+       }
+      ],
+      "type": "context"
+     }
+    ],
+    "channel": "C000CHAN",
+    "text": "I'll do these steps one at a time as requested.",
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.update"
+  }
+ ]
+}

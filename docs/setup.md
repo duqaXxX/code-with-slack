@@ -17,11 +17,11 @@ detail the sequence leaves out.
 - macOS, with a user account that stays logged in on the machine that runs the sessions.
 - Claude Code installed and logged in with a claude.ai subscription: run `claude`, then `/login`.
   The 5-hour and weekly usage figures in the status footer exist only with a subscription.
-- [uv](https://docs.astral.sh/uv/) and Python 3.12 or later.
+- [Node.js](https://nodejs.org/) 22.18 or later, which brings `npm`.
 - A Slack workspace where you are the only member: a workspace admin could read or export what
   Claude prints, and whoever controls your Slack account controls the machine. On the free plan
   Slack allows one workspace; use it only if nobody else is in it (see Part 5).
-- Full Disk Access for the Python interpreter that runs awaydesk, only if your projects
+- Full Disk Access for the Node executable that runs awaydesk, only if your projects
   live in a folder macOS protects, such as `~/Documents` or `~/Desktop`. Without it a session
   there fails to start. The step is under [Folders macOS protects](#folders-macos-protects).
 
@@ -32,11 +32,16 @@ detail the sequence leaves out.
    ```bash
    git clone https://github.com/duqaXxX/awaydesk.git
    cd awaydesk
-   uv tool install .
+   npm ci
+   npm install -g "./$(npm pack --silent)"
    ```
 
-This puts the `awaydesk` command in `~/.local/bin`, where the LaunchAgent of Part 4 runs
-it. To update, pull and run `uv tool install --reinstall .`.
+`npm ci` installs the dependencies the lock file names. `npm pack` builds the package (its
+`prepack` script runs the TypeScript compiler) and prints the name of the tarball it wrote in the
+clone, which `npm install -g` then installs. That puts the `awaydesk` command in the `bin` folder
+of npm's global prefix (`npm prefix -g`) and the package beside it, in `lib/node_modules/awaydesk`;
+the LaunchAgent of Part 4 runs that copy, not the clone. To update, pull and run the last two
+commands again. The tarball can be deleted once it is installed.
 
 awaydesk runs the Claude Code CLI that ships inside the Claude Agent SDK it depends on,
 not the `claude` on your `PATH`. Both read the same login, so logging in once with `claude` and
@@ -48,8 +53,11 @@ not the `claude` on your `PATH`. Both read the same login, so logging in once wi
 command -v awaydesk
 ```
 
-It prints the command's path, which ends in `.local/bin/awaydesk`. If it prints nothing,
-`~/.local/bin` is not on your `PATH`: run `uv tool update-shell` and open a new terminal.
+It prints the command's path, which ends in `bin/awaydesk`. If it prints nothing, the `bin`
+folder of npm's global prefix is not on your `PATH`: add `$(npm prefix -g)/bin` to it in your
+shell profile and open a new terminal. Running `awaydesk` now, before `.env` exists, ends at
+once with `ERROR awaydesk.main:` and a line that says `.env` does not exist and points to Part 2,
+and exit status 1.
 
 ## Part 1: the Slack app
 
@@ -142,7 +150,8 @@ awaydesk keeps its files in `~/.config/awaydesk/`. `.env` is the one you write;
 
 awaydesk refuses to start when `.env` is readable by anyone else, is a symbolic link, or
 belongs to another user, and when a token is of the wrong kind (`xoxb-` for the bot token,
-`xapp-` for the app-level token).
+`xapp-` for the app-level token, `xoxp-` for the user token). It also refuses a missing variable,
+named in the message, and an `ALLOWED_ROOT` that is not a directory.
 
 7. Create the directory and the file, readable by you only:
 
@@ -183,6 +192,19 @@ to start unless it is yours (`SLACK_OWNER_USER_ID`) in the bot's workspace.
 `ALLOWED_ROOT` guards against a typo such as `!bind /`. It is not a security boundary:
 Claude Code can read and run outside its working directory once you approve it.
 
+How the file is read:
+
+- One `NAME=value` per line, with `export ` allowed in front. A value may be in single or double
+  quotes. In an unquoted value a `#` starts a comment even with no space before it, so quote a
+  value that holds one.
+- A value is trimmed, and a variable with an empty value counts as missing.
+- `${NAME}` and `${NAME:-default}` inside a value become the value of `NAME` defined above in the
+  same file, else the one in awaydesk's own environment, else the default, else nothing.
+  `$NAME` without braces stays as written.
+- `ALLOWED_ROOT` may start with `~/`, which becomes your home directory. It must name a directory
+  that exists once links are followed; the message shows the path it resolved to.
+- Nothing is put in the process environment, and the `.env` of a repository is never read.
+
 ### Checkpoint 2: the daemon reads `.env` and connects
 
 Run the daemon in the foreground once, before the LaunchAgent exists:
@@ -194,19 +216,23 @@ awaydesk
 Within a few seconds the terminal prints a line that ends with:
 
 ```
-INFO awaydesk: connected to Slack workspace <workspace id>
+2026-10-10 09:05:03,042 INFO awaydesk.main: connected to Slack workspace <workspace id>
 ```
 
-Press Ctrl-C to stop it: it logs `shutting down` and exits. A problem in `.env` ends the start at
-once with a line that holds `ERROR awaydesk:` and ends with what to fix, for example:
+Each line of the log starts with the local date and time, then the level and the name of the part
+that wrote it. Press Ctrl-C to stop it: it logs `shutting down` and exits. A problem in `.env`
+ends the start at once with a line that holds `ERROR awaydesk.main:` and ends with what to fix,
+for example:
 
 ```
-ERROR awaydesk: SLACK_BOT_TOKEN must be the Bot User OAuth Token (xoxb-...)
+2026-10-10 09:05:03,042 ERROR awaydesk.main: SLACK_BOT_TOKEN must be the Bot User OAuth Token (xoxb-...)
 ```
 
-and exit status 1. A token that Slack itself refuses ends the start with a Python traceback
-instead. `another awaydesk is running` means another instance holds the lock: stop it
-first. Leave no foreground run going when you start the LaunchAgent in Part 4.
+and exit status 1. A token that Slack itself refuses ends the start with
+`ERROR awaydesk.main: stopped by an unexpected error: <name>` instead, where the name is Slack's
+error code (`invalid_auth`, for a bot token Slack does not know). `another awaydesk is running`
+means another instance holds the lock: stop it first. Leave no foreground run going when you
+start the LaunchAgent in Part 4.
 
 ## Part 3: Claude Code
 
@@ -270,44 +296,49 @@ start while another instance holds its lock.
 
 ### Folders macOS protects
 
-10. Give Full Disk Access to the interpreter, only if your projects live in `~/Documents`,
-    `~/Desktop`, `~/Downloads` or another folder macOS protects. Do this before the LaunchAgent
-    starts, or the first session in such a folder fails.
+10. Give Full Disk Access to Node, only if your projects live in `~/Documents`, `~/Desktop`,
+    `~/Downloads` or another folder macOS protects. Do this before the LaunchAgent starts, or the
+    first session in such a folder fails.
 
 macOS keeps `~/Documents`, `~/Desktop`, `~/Downloads` and a few other folders private to the
 apps you allowed. A program started from Terminal uses Terminal's permission; awaydesk,
 started by launchd, has none, and Claude Code fails to start in a directory there. The permission
-goes to the Python interpreter that runs awaydesk:
+goes to the Node executable that runs awaydesk, the one the plist of the next step names:
 
-- Show the interpreter in Finder (it sits in a hidden folder, so this is the simplest way to
-  reach it):
+- Show the executable in Finder (it can sit in a folder Finder does not show, so this is the
+  simplest way to reach it):
 
   ```bash
-  open -R "$(readlink -f "$(head -1 ~/.local/share/uv/tools/awaydesk/bin/awaydesk | cut -c3-)")"
+  open -R "$(readlink -f "$(command -v node)")"
   ```
 
-  The installed `awaydesk` script starts with a line naming its interpreter (`#!` and a
-  path). The command cuts that path out, resolves the links to the real file, and shows it in
+  The command finds `node` on your `PATH`, resolves the links to the real file, and shows it in
   Finder. That file is what launchd starts, so it is the one macOS asks permission for.
 - Open **System Settings**, **Privacy & Security**, **Full Disk Access**, and drag the selected
-  file (`python3.12` or similar) from Finder into the list. Alternatively choose **+** and press
-  **⌘⇧.** in the file picker to show hidden folders.
+  file (`node`) from Finder into the list. Alternatively choose **+** and press **⌘⇧.** in the
+  file picker to show hidden folders.
 - Check that the new entry is turned on. If the service is already running, restart it:
   `launchctl kill TERM gui/$(id -u)/local.awaydesk`.
 
-The permission belongs to that interpreter, which uv shares between the tools that use the same
-Python version: any of them started outside Terminal gets the same access. Projects outside the
-protected folders need no permission at all.
+The permission belongs to that executable: any other program started outside Terminal with the
+same `node` gets the same access. Projects outside the protected folders need no permission at
+all.
 
 ### Write the plist and start it
 
 The plist lives at `~/Library/LaunchAgents/local.awaydesk.plist`. launchd does not expand
-`~` or `$HOME`, so the command below lets the shell write your home directory in full wherever
-the file needs it.
+`~` or `$HOME` and gives a service a minimal `PATH`, so the plist names its program by absolute
+paths: the command below asks the shell for them and writes them in full wherever the file needs
+them. `ProgramArguments` has two entries. The first is the Node executable, `command -v node`; the
+second is the file Node runs, the `dist/main.js` of the installed package, which `command -v
+awaydesk` links to. The `PATH` the service gives Claude Code's commands starts with the folder of
+that Node, so a session finds `node` and `npm` as your terminal does.
 
 11. Write the plist, then check it with `plutil`:
 
 ```bash
+NODE="$(command -v node)"
+MAIN="$(readlink -f "$(command -v awaydesk)")"
 mkdir -p ~/Library/LaunchAgents ~/Library/Logs/awaydesk
 cat > ~/Library/LaunchAgents/local.awaydesk.plist <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -318,12 +349,13 @@ cat > ~/Library/LaunchAgents/local.awaydesk.plist <<EOF
   <string>local.awaydesk</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$HOME/.local/bin/awaydesk</string>
+    <string>$NODE</string>
+    <string>$MAIN</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <string>$(dirname "$NODE"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -341,7 +373,9 @@ EOF
 plutil -lint ~/Library/LaunchAgents/local.awaydesk.plist
 ```
 
-`plutil -lint` prints `<path>/local.awaydesk.plist: OK` when the file is well formed.
+`plutil -lint` prints `<path>/local.awaydesk.plist: OK` when the file is well formed. A plist
+that names a Node installed under a version folder (nvm, for one) stops working when that
+version goes: write it again after changing Node.
 
 12. Load it. It starts at once, and again at every login:
 
@@ -358,10 +392,10 @@ tail -n 5 ~/Library/Logs/awaydesk/awaydesk.log
 After a few seconds the log ends with the line of checkpoint 2:
 
 ```
-INFO awaydesk: connected to Slack workspace <workspace id>
+2026-10-10 09:05:03,042 INFO awaydesk.main: connected to Slack workspace <workspace id>
 ```
 
-A start that fails logs `ERROR awaydesk:` and what to fix; launchd starts the daemon again
+A start that fails logs `ERROR awaydesk.main:` and what to fix; launchd starts the daemon again
 after each exit (`KeepAlive`), so the same line repeats until you fix it and restart the service.
 
 The log holds what the service did, never the content of your messages.

@@ -1,0 +1,922 @@
+{
+ "calls": [],
+ "constants": {
+  "ACTIVITY_BUSY": "running a turn, {queued} queued",
+  "ACTIVITY_IDLE": "idle",
+  "ANSWERED": "User answered Claude's questions:",
+  "APPROVAL_CUT": "_{count} characters of this request are not shown: Deny it unless you know them._",
+  "APPROVAL_GONE": "This request is no longer pending: the turn ended or awaydesk restarted.",
+  "APPROVAL_PROMPT": "Claude Code asks to use *{tool}*",
+  "APPROVAL_UNPOSTED": "awaydesk could not show this request in Slack, so nobody approved it.",
+  "AUTH_FAILED": "Claude Code is not logged in on the host. On that machine, run `claude`, then `/login`. The login is never done from Slack.",
+  "BACKGROUND_NOTICE": "_Background task update_",
+  "BECAUSE_RESTARTED": "awaydesk restarted",
+  "BECAUSE_SHUTDOWN": "awaydesk stopped",
+  "BECAUSE_STOPPED": "Claude Code stopped",
+  "BIND_ALREADY": "This channel is already bound to `{directory}`.",
+  "BIND_BUSY": "Sessions are running in this channel: binding another folder now would cut their work. Let them finish or send `!stop`, then bind again.",
+  "BIND_BUTTON": "Bind",
+  "BIND_CURRENT": " · _current_",
+  "BIND_EMPTY": "No folder under `{root}` is trusted by Claude Code yet. Open one in the terminal with `claude` and accept the trust dialog, then send `!bind` again.",
+  "BIND_LIST": "Folders under `{root}` that Claude Code trusts:",
+  "BIND_MORE": "Only the first {rows} are shown: `!bind <folder>` binds any other.",
+  "BIND_OK": "Bound this channel to `{directory}`. The next message starts a new session there.",
+  "BIND_OK_ELSEWHERE": "Bound this channel to `{directory}`. New messages start sessions there; existing threads keep working in {old}, where their sessions live.",
+  "BIND_OUTSIDE": "`{path}` is not a folder under `{root}`. Give its path relative to that folder, for example `!bind my-project`.",
+  "BIND_UNAVAILABLE": "Bound this channel to `{directory}`, but no session can start there yet. {reason}",
+  "BYPASS_BEFORE_START": "This session has not started yet: tick Bypass in its setup and press Start. If no setup is shown, send a message here first.",
+  "BYPASS_OFF_THREAD": "Bypass is off in this session: Claude Code follows your permission settings again.",
+  "BYPASS_ON_THREAD": "Bypass is on in this session: every tool runs without asking, until `!bypass off`. It survives a restart.",
+  "BYPASS_TOP_LEVEL": "Bypass belongs to one session: send `!bypass on` inside its thread.",
+  "CHANNEL_REFUSED": "awaydesk does not work in this channel: {reason}. It answers only in a private channel whose only members are you and the bot.",
+  "CLEAR_IN_THREAD": "One thread is one session: send a new message in the channel to start a new one.",
+  "CLIP_EMPTY": "Nothing was sent to Claude: Slack's transcript of this clip is empty.",
+  "CLIP_NOT_SENT": "Nothing was sent to Claude: this clip had no transcript after {minutes} minutes. Send it again, or type the message.",
+  "CLIP_NOT_YOURS": "Nothing was sent to Claude: this audio is a file somebody else uploaded.",
+  "CLIP_UNREADABLE": "Nothing was sent to Claude: the transcript of this clip could not be read ({reason}).",
+  "CLIP_WAITING": "Waiting for this clip's transcript: choose `Generate transcript` on the clip, and its text is sent to Claude.",
+  "COMPACTED": "Compacted the conversation: {before} → {after} tokens.",
+  "COMPACTED_PLAIN": "Compacted the conversation.",
+  "DENY_MESSAGE": "The owner denied this from Slack.",
+  "DIRECTORY_MISSING": "The directory `{directory}` no longer exists. Restore it to keep using this thread, or, in the channel, bind another folder with `!bind <path>` and send a new message to start a session there.",
+  "DIRECTORY_UNREADABLE": "macOS does not let awaydesk read `{directory}`. Grant access in System Settings, Privacy & Security, Full Disk Access (see docs/setup.md, Part 4).",
+  "DIRECTORY_UNTRUSTED": "Claude Code has not been trusted in `{directory}`, so its hooks and settings would run without asking. Open `claude` there in the terminal once and accept the trust dialog, then send your message again.",
+  "ENDED": "_This reply ended before an answer: {reason}._",
+  "ENDED_IDLE": "awaydesk closed this idle session",
+  "ENDED_RESTARTING": "awaydesk is restarting; send your message again in a moment",
+  "ENDED_SHUTDOWN": "awaydesk stopped",
+  "ERROR_REPLY": "Claude Code reported an error: `{error}`",
+  "GUIDE": "**awaydesk**\nThis channel runs Claude Code on your Mac, in one folder, and answers you alone. One Slack thread is one Claude Code session: a top-level message starts a new one, and a reply inside its thread continues it, even days later.\n\n**Get started**\n1. `!bind` lists the folders Claude Code trusts, with a Bind button each; `!bind <folder>` binds one by its path relative to your allowed root: `!bind my-project`. Claude Code must trust that folder first: open `claude` there once in the terminal and accept. `!bind` works only as a top-level message in the channel.\n2. Write a message in the channel: it opens a session, and its reply appears in a thread of its own, growing as Claude works, with a line for each tool it uses. Reply inside that thread to continue the same session. Attach images or files to a message: Claude sees a JPEG, PNG, GIF or WebP image directly (other image types are refused) and reads a text, code, PDF, JSON, XML, YAML or notebook file from a copy saved on this Mac; other files are refused.\n3. Before that first message is sent, the thread asks for the **Model**, the **Effort** (`Default` leaves Claude Code's own choice) and **Bypass permissions**; **Start** sends your message with those choices, and `!stop` cancels it instead.\n\n**Commands**\nClaude Code's commands start with `!` instead of `/`: `!compact`, `!model opus`. They run inside a session's thread, where `!help` lists every command that session offers, and `!help <text>` filters the list; typed in the channel, `!help` lists awaydesk's own words instead. `!clear` (`!reset`, `!new`) is refused inside a thread (one thread is one session): start a fresh session with a new top-level message instead.\n\n**Approvals and questions**\nWhen Claude Code asks permission, the request shows what will run, with **Approve** and **Deny**; a very long one shows its start and its end and says how much it leaves out. A question from Claude comes with **Answer**, which opens a short form, and **Skip**.\n\n**Sessions**\n`!status` typed in the channel lists the folder and every session still live, each linked to its thread; inside a thread it shows that session's directory, mode and the footer's values. `!stop` typed in the channel stops every running session and its background tasks; inside a thread it stops only that one. `!resume`, typed in the channel only, lists this folder's twenty newest sessions, from the terminal too, each with the start of its id and a **Resume** button; `!resume <id>` (that start is enough), or `!resume <title>` for a session that has one, resumes it in the thread of your `!resume` message. To continue a session in the terminal, run the `Terminal:` command `!status` shows in its thread.\n\n**Files**\n`!open`, sent inside a session's thread, offers the files changed in that session and a search over the folder's files; choosing one shares it into the thread, where Slack opens it in its file viewer, with Markdown rendered. `!open <path>` opens that file, and `!open <words>` the file whose path contains them, or lists the files that do. The search reads the folder from disk and leaves out what `.gitignore` excludes inside a git repository. A file over 1 MB is not opened.\n\n**Bypass**\n`!bypass on`, sent inside a session's thread, lets Claude Code run every tool without asking in that session, until `!bypass off`; a restart of awaydesk keeps it. The footer shows ⚡ bypass while it is on.\n\n`!guide` shows this text again.",
+  "HELP_CLAUDE": "\n**Claude Code** (this session, now). Any other `!name args` runs that command; these words above come first.",
+  "HELP_NO_MATCH": "No command matches `{query}`.",
+  "HELP_OWN": "**awaydesk**",
+  "HELP_RULE": "A message that starts with `!` is a command, in code or bold too. To send it as text, put anything before the `!`, as in `\\!goal`.",
+  "HELP_UNBOUND": "\nClaude Code's own commands are listed inside a session's thread.",
+  "HOLD_CANCEL_BUTTON": "Don't send",
+  "HOLD_CONTINUE_BUTTON": "Send anyway",
+  "HOLD_GONE": "This question is no longer open: it was already answered, or awaydesk restarted.",
+  "HOLD_QUESTION": "Another session is working in this folder: {link}. Send anyway?",
+  "HOLD_UNPOSTED": "awaydesk could not show this question in Slack, so the message was not sent. Send it again.",
+  "HOME_ALL_CHANNELS": "All channels",
+  "HOME_ALL_STATUSES": "All statuses",
+  "HOME_ANY_TIME": "Any time",
+  "HOME_CHANNEL_CLEANING": ":hourglass_flowing_sand: cleaning up…",
+  "HOME_CHANNEL_DELETING_MANY": ":hourglass_flowing_sand: deleting {count} threads…",
+  "HOME_CHANNEL_DELETING_ONE": ":hourglass_flowing_sand: deleting 1 thread…",
+  "HOME_CLEAN": "Clean up",
+  "HOME_CLEANING_MANY": ":hourglass_flowing_sand: *Cleaning up {count} channels, one at a time.* Slack limits how fast messages are deleted: this can take a few minutes.",
+  "HOME_CLEANING_ONE": ":hourglass_flowing_sand: *Cleaning up 1 channel.* Slack limits how fast messages are deleted: this can take a few minutes.",
+  "HOME_CLEAN_CONFIRM": "Clean up",
+  "HOME_CLEAN_FAILED": "Could not clean up that channel (`{error}`). Clean it up again to continue.",
+  "HOME_CLEAN_REFUSED": "Slack refused to delete {count} of that channel's messages (`cant_delete_message`): your workspace does not let you delete them. Every other one is gone.",
+  "HOME_CLEAN_TEXT": "Deletes from #{channel} what sits outside a thread: your messages there that have no reply, commands like !stop included, and the bot's own messages. Every thread that has a reply stays. This cannot be undone and can take a few minutes.",
+  "HOME_CLEAN_TITLE": "Clean up this channel?",
+  "HOME_DELETE": "Delete",
+  "HOME_DELETE_BUSY": "Not deleted: that thread is working or waiting for you.",
+  "HOME_DELETE_CONFIRM": "Delete thread",
+  "HOME_DELETE_DENY": "Cancel",
+  "HOME_DELETE_FAILED": "Could not delete every message of that thread (`{error}`). Delete it again to continue.",
+  "HOME_DELETE_NAMED": "“{title}” in #{channel}, {replies}. ",
+  "HOME_DELETE_NAMED_BARE": "“{title}” in #{channel}. ",
+  "HOME_DELETE_REFUSED": "Slack refused to delete {count} of that thread's messages (`cant_delete_message`): they are not yours or the bot's, or your workspace does not let you delete them. Every other message is gone and the thread is still listed.",
+  "HOME_DELETE_TEXT": "Every message of the thread is deleted from Slack, yours and the bot's. This cannot be undone. The session stays in Claude Code and can be resumed with !resume. Deleting takes about a minute.",
+  "HOME_DELETE_TITLE": "Delete this thread?",
+  "HOME_DELETING": ":hourglass_flowing_sand: *deleting…*",
+  "HOME_DELETING_MANY": ":hourglass_flowing_sand: *Deleting {count} threads, one at a time.* Slack limits how fast messages are deleted: each takes about a minute, and leaves this page when it is gone.",
+  "HOME_DELETING_ONE": ":hourglass_flowing_sand: *Deleting 1 thread.* Slack limits how fast messages are deleted: a thread takes about a minute, and leaves this page when it is gone.",
+  "HOME_DONE": "Done",
+  "HOME_EDIT": "Edit",
+  "HOME_EMPTY": "No channel is bound yet: `!bind` in a private channel binds it to a folder.",
+  "HOME_ENDED": "ended",
+  "HOME_ERROR": "error",
+  "HOME_HEADER": "Sessions by channel, newest first · updated {time}",
+  "HOME_LAST_30": "Last 30 days",
+  "HOME_LAST_48": "Last 48 hours",
+  "HOME_LAST_7": "Last 7 days",
+  "HOME_LAST_REPLY": "last reply {when}",
+  "HOME_MORE": "Only the first {rows} sessions are shown: narrow the filters.",
+  "HOME_NEW_THREAD": "New thread",
+  "HOME_NO_MATCH": "No session matches these filters.",
+  "HOME_NO_SESSIONS": "No sessions yet.",
+  "HOME_OPEN": "Open",
+  "HOME_REPLIES": "{count} replies",
+  "HOME_REPLY": "1 reply",
+  "HOME_SEARCH_HINT": "Type a word and press Enter",
+  "HOME_SEARCH_LABEL": "Search titles",
+  "HOME_SHOW_ALL": "Show all {count}",
+  "HOME_STARTED": "started {when}",
+  "HOME_TODAY": "Today",
+  "HOME_UNTITLED": "Session {id}",
+  "HOME_WAITING": "waiting for you",
+  "HOME_WORKING": "working",
+  "HOME_YESTERDAY": "Yesterday",
+  "LOGIN_ON_HOST": "Log in on the host: on that machine, run `claude`, then `/login`. The login is never done from Slack.",
+  "LOGOUT_ON_HOST": "Log out on the host: on that machine, run `claude`, then `/logout`. It is never done from Slack.",
+  "NESTED": "    ⎿ ",
+  "NOTHING_TO_STOP": "Nothing is running in this channel.",
+  "NOTHING_TO_STOP_THREAD": "Nothing is running in this session.",
+  "NOT_A_SESSION": "This thread holds no session. In the channel, send a new message to start one, or `!resume` to continue an earlier one.",
+  "NOT_SENT": "Not sent.",
+  "NOT_SENT_MANY": "{count} messages were not sent because {because}: send them again.",
+  "NOT_SENT_ONE": "1 message was not sent because {because}: send it again.",
+  "NO_OUTPUT": "_Done. Claude Code returned no text._",
+  "OLD_THREAD_FOLDER": "This session works in `{old}`, the folder it was created in: Claude Code resumes a session only there. New messages in the channel use `{new}`.",
+  "OPEN_BUTTON": "Choose a file",
+  "OPEN_BY_NAME": "Or type `!open setup` to open a file by name.",
+  "OPEN_EMPTY": "`{path}` is empty: there is nothing to show.",
+  "OPEN_FAILED": "Could not open `{path}`: {error}",
+  "OPEN_FALLBACK": "Open a file",
+  "OPEN_FORM_NOT_OPENED": "The file list could not open (`{error}`). Click Choose a file again.",
+  "OPEN_LOADING": "Looking for files…",
+  "OPEN_MATCHES": "*{count} files match* `{words}`",
+  "OPEN_MATCHES_CAPPED": "The first {shown} of {count} are listed: type more of the name to narrow it.",
+  "OPEN_MATCHES_ONE": "*1 file matches* `{words}`",
+  "OPEN_MATCHES_TOO_LONG": "None of their paths is short enough to list: open one with `!open <path>`.",
+  "OPEN_MODAL_CLOSE": "Close",
+  "OPEN_MODAL_SUBMIT": "Open",
+  "OPEN_MODAL_TITLE": "Open a file",
+  "OPEN_NONE_CHOSEN": "Choose a file first.",
+  "OPEN_NOT_A_FILE": "`{path}` is not a file inside this session's folder.",
+  "OPEN_NO_MATCH": "No file matches `{words}`.",
+  "OPEN_NO_MATCH_PARTIAL": "No file matching `{words}` was found, but the folder could not be listed in full.",
+  "OPEN_NO_SCOPE": "Opening a file needs the `files:write` scope: add it to the app and reinstall it from `slack-app-manifest.json` (docs/setup.md, Part 1).",
+  "OPEN_PARTIAL": "The folder could not be listed in full, so some files may be missing here.",
+  "OPEN_QUERY_HINT": "Type part of a name",
+  "OPEN_QUERY_LABEL": "Search any file",
+  "OPEN_ROWS_CHANGED": "Changed in this session ({count}), newest first",
+  "OPEN_ROWS_MATCH": "{count} files match",
+  "OPEN_ROWS_MATCH_ONE": "1 file matches",
+  "OPEN_TITLE": "*Open a file*",
+  "OPEN_TOO_LARGE": "`{path}` is larger than 1 MB, the most Slack opens in its file viewer.",
+  "OPEN_TOP_LEVEL": "Opening a file belongs to one session: send `!open` inside its thread.",
+  "OPEN_TYPE_A_NAME": "No changed files to show. Type part of a name to find a file.",
+  "PROMPT_IMAGE": "an image",
+  "QUESTIONS_MANY": "Claude Code has {count} questions",
+  "QUESTIONS_ONE": "Claude Code has a question",
+  "QUESTION_ANSWER": "Answer",
+  "QUESTION_CLOSE": "Later",
+  "QUESTION_MISSING": "Choose an option or type your own answer.",
+  "QUESTION_NEXT": "Next ({number}/{count})",
+  "QUESTION_NOT_OPENED": "The form could not open (`{error}`). Click Answer again.",
+  "QUESTION_OTHER": "Other",
+  "QUESTION_OTHER_HINT": "Or type your own answer",
+  "QUESTION_TITLE": "Claude Code asks",
+  "QUESTION_WHERE": "{number} of {count}",
+  "REASON_MEMBERS": "it has members other than you and the bot",
+  "REASON_NOT_PRIVATE": "it is not a private channel",
+  "REASON_SHARED": "it is shared with another workspace",
+  "REASON_UNREADABLE": "the bot cannot read its details",
+  "RESTARTING": "awaydesk is restarting; send this again in a moment.",
+  "RESTART_HOLD_OWNER": "an approval or a question is waiting for you",
+  "RESTART_HOLD_REPORT": "a background task is about to report, within 30 seconds",
+  "RESTART_HOLD_TASKS": "{counts} running",
+  "RESTART_HOLD_TURN": "a turn is running",
+  "RESTART_WAITS": "Restart waits for {counts} · !stop ends {them} now",
+  "RESTART_WAITS_ELSEWHERE": "{count} more in other channels.",
+  "RESTART_WAITS_FOR": "It is waiting for:",
+  "RESTART_WAITS_HEADER": "awaydesk is restarting. It is waiting for:",
+  "RESTART_WAITS_MESSAGE": "awaydesk is restarting once these background tasks end: {counts}. `!stop` ends them now.",
+  "RESTART_WAITS_MORE": "…and {count} more.",
+  "RESTART_WAITS_STATUS": "is waiting to restart: {counts} still running",
+  "RESTART_WAIT_ROW": "• <#{channel}>, {link}: {hold}",
+  "RESTART_WAIT_SESSION": "Session",
+  "RESTART_WAIT_STOP": "`!stop` in a thread ends the wait there.",
+  "RESUME_AMBIGUOUS": "More than one session in `{directory}` is named or starts with `{target}`: pick one from `!resume`.",
+  "RESUME_BUTTON": "Resume",
+  "RESUME_ELSEWHERE": "This session is already open in another thread: {link}.",
+  "RESUME_EMPTY": "No sessions in `{directory}` yet.",
+  "RESUME_GONE": "That session is not in this channel's directory any more: `!resume` lists them.",
+  "RESUME_HELD": "This thread already holds a session: send `!resume` again in the channel to pick another.",
+  "RESUME_LIST": "Sessions in `{directory}`, newest first:",
+  "RESUME_LISTED": "Resumed {title} in {link}.",
+  "RESUME_MORE": "Only the newest {rows} are shown: `!resume <id>`, or `!resume <title>` for a session that has one, resumes an older session.",
+  "RESUME_NONE": "No session in `{directory}` has the id or name `{target}`: `!resume` lists them.",
+  "RESUME_NONE_LEFT": "No session to resume in `{directory}`.",
+  "RESUME_OK": "Resumed **{title}**: your next message continues it. If it is open in a terminal, close it there first: while it is open in both, neither sees the other's messages, and a later resume keeps only one side's.",
+  "RESUME_OPEN_MANY": "{count} more are open in their own threads.",
+  "RESUME_OPEN_ONE": "1 more is open in its own thread.",
+  "RESUME_STALE": "This list is out of date: send `!resume` again for a current one.",
+  "RUNNING": "⏳ {counts}",
+  "SESSION_CLOSED": "Nothing was done: this session closed while it ran (idle for a while, or the daemon restarted). Send it again if it is still meant.",
+  "SESSION_GONE": "This thread's session no longer exists: Claude Code deleted it or cannot find it. Send a new message in the channel to start one.",
+  "SETUP_BYPASS_DESCRIPTION": "Run every tool without asking, until `!bypass off`.",
+  "SETUP_BYPASS_OPTION": "Bypass permissions",
+  "SETUP_EFFORT_DEFAULT": "Default",
+  "SETUP_EFFORT_OPTION": "Effort: {level}",
+  "SETUP_FALLBACK": "Set up this session",
+  "SETUP_HEADER": "*Choose how this session starts*",
+  "SETUP_START_BUTTON": "Start",
+  "SETUP_SUMMARY": "Model: {model} · Effort: {effort} · Bypass: {bypass}",
+  "SKIP_MESSAGE": "The owner dismissed the question without answering.",
+  "STATUS": "Directory: `{directory}`\nSession: `{session}`",
+  "STATUS_BACKGROUND": "Background: `{counts}`",
+  "STATUS_CHANNEL_BUSY": "busy",
+  "STATUS_CHANNEL_BYPASS": " · ⚡ bypass",
+  "STATUS_CHANNEL_EMPTY": "No live session in this channel.",
+  "STATUS_CHANNEL_FOLDER": " · folder `{directory}`",
+  "STATUS_CHANNEL_HEADER": "Directory: `{directory}`",
+  "STATUS_CHANNEL_IDLE": "idle",
+  "STATUS_CHANNEL_LINK_FALLBACK": "thread `{thread_ts}`",
+  "STATUS_CHANNEL_ROW": "{link}: {activity}",
+  "STATUS_CHANNEL_SESSION": "Session",
+  "STATUS_CHANNEL_SINCE": " · {ago}",
+  "STATUS_CHANNEL_WAITING": "waiting for you",
+  "STATUS_STATE": "Mode: `{mode}`\nClaude Code: `{version}`\nNow: {activity}",
+  "STATUS_TERMINAL": "Terminal: {command}",
+  "STATUS_WORKING": "Working in: `{directory}`",
+  "STILL_RUNNING": "{counts} still running",
+  "STILL_RUNNING_STATUS": "has {counts} still running",
+  "STOPPED": "Stopped the current turn.",
+  "STOPPED_BEFORE_ANSWER": "awaydesk stopped before this answer.",
+  "STOPPED_CHANNEL": "Stopped what was running in this channel.",
+  "STOPPED_THREAD": "Stopped.",
+  "STOP_OUTSIDE_SESSION": "This thread holds no session. Send `!stop` in the channel to stop every session, or inside a session's thread to stop that one.",
+  "TAKEN_INTO_REPLY_MANY": "Claude Code took {count} messages into this reply: send them again if they are not answered here.",
+  "TAKEN_INTO_REPLY_ONE": "Claude Code took your message into this reply: send it again if it is not answered here.",
+  "TERMINAL_COMMAND": "cd {directory} && claude --resume {session} --fork-session",
+  "THREAD_COMPACTING": "Compacting conversation…",
+  "THREAD_COMPACTING_STATUS": "is compacting the conversation…",
+  "THREAD_WORKING": "Working…",
+  "THREAD_WORKING_STATUS": "is working…",
+  "UNBOUND": "This channel is not bound to a folder yet. Send `!bind` to choose one of the folders Claude Code trusts, or `!bind <folder>` with the folder's path relative to `{root}`, for example `!bind my-project`. `!guide` explains how awaydesk works.",
+  "UPGRADE_NOTICE": "awaydesk now runs one Claude Code session per thread. Send a new message in the channel to start a session; reply in its thread to continue it. The session this channel had is still in the folder: !resume brings it into a thread. Bypass is now set per session: send !bypass on inside a thread.",
+  "UPLOAD_DOWNLOAD": "could not be downloaded ({error})",
+  "UPLOAD_FAILED": "Nothing was sent to Claude: {name} {reason}. Send the message again without it.",
+  "UPLOAD_FILE_SIZE": "is {size}, over the {limit} limit for a file",
+  "UPLOAD_FILE_TYPE": "is a `{mimetype}` file, and awaydesk passes on only text, source code, PDF, JSON, XML, YAML and notebook files",
+  "UPLOAD_IMAGE_SIDE": "is {width}x{height} px, over the 8000x8000 px Claude accepts for an image",
+  "UPLOAD_IMAGE_SIZE": "is {size}, over the {limit} Claude accepts for an image",
+  "UPLOAD_IMAGE_TYPE": "is an image of type `{mimetype}`, and Claude reads only JPEG, PNG, GIF and WebP images",
+  "UPLOAD_NOT_SHARED": "is not a file shared in this channel that awaydesk can download",
+  "UPLOAD_TOO_HEAVY": "Nothing was sent to Claude: its images total {size}, over the {limit} one message takes.",
+  "UPLOAD_TOO_MANY": "Nothing was sent to Claude: the message has {count} images, over the {limit} one message takes.",
+  "VERSION_PENDING": "started, version shown after the first turn",
+  "WORD_IN_THREAD": "`!{word}` works in the channel, not inside a thread."
+ },
+ "fills": {
+  "ACTIVITY_BUSY": {
+   "output": "running a turn, <queued> queued",
+   "values": {
+    "queued": "<queued>"
+   }
+  },
+  "APPROVAL_CUT": {
+   "output": "_<count> characters of this request are not shown: Deny it unless you know them._",
+   "values": {
+    "count": "<count>"
+   }
+  },
+  "APPROVAL_PROMPT": {
+   "output": "Claude Code asks to use *<tool>*",
+   "values": {
+    "tool": "<tool>"
+   }
+  },
+  "BIND_ALREADY": {
+   "output": "This channel is already bound to `<directory>`.",
+   "values": {
+    "directory": "<directory>"
+   }
+  },
+  "BIND_EMPTY": {
+   "output": "No folder under `<root>` is trusted by Claude Code yet. Open one in the terminal with `claude` and accept the trust dialog, then send `!bind` again.",
+   "values": {
+    "root": "<root>"
+   }
+  },
+  "BIND_LIST": {
+   "output": "Folders under `<root>` that Claude Code trusts:",
+   "values": {
+    "root": "<root>"
+   }
+  },
+  "BIND_MORE": {
+   "output": "Only the first <rows> are shown: `!bind <folder>` binds any other.",
+   "values": {
+    "rows": "<rows>"
+   }
+  },
+  "BIND_OK": {
+   "output": "Bound this channel to `<directory>`. The next message starts a new session there.",
+   "values": {
+    "directory": "<directory>"
+   }
+  },
+  "BIND_OK_ELSEWHERE": {
+   "output": "Bound this channel to `<directory>`. New messages start sessions there; existing threads keep working in <old>, where their sessions live.",
+   "values": {
+    "directory": "<directory>",
+    "old": "<old>"
+   }
+  },
+  "BIND_OUTSIDE": {
+   "output": "`<path>` is not a folder under `<root>`. Give its path relative to that folder, for example `!bind my-project`.",
+   "values": {
+    "path": "<path>",
+    "root": "<root>"
+   }
+  },
+  "BIND_UNAVAILABLE": {
+   "output": "Bound this channel to `<directory>`, but no session can start there yet. <reason>",
+   "values": {
+    "directory": "<directory>",
+    "reason": "<reason>"
+   }
+  },
+  "CHANNEL_REFUSED": {
+   "output": "awaydesk does not work in this channel: <reason>. It answers only in a private channel whose only members are you and the bot.",
+   "values": {
+    "reason": "<reason>"
+   }
+  },
+  "CLIP_NOT_SENT": {
+   "output": "Nothing was sent to Claude: this clip had no transcript after <minutes> minutes. Send it again, or type the message.",
+   "values": {
+    "minutes": "<minutes>"
+   }
+  },
+  "CLIP_UNREADABLE": {
+   "output": "Nothing was sent to Claude: the transcript of this clip could not be read (<reason>).",
+   "values": {
+    "reason": "<reason>"
+   }
+  },
+  "COMPACTED": {
+   "output": "Compacted the conversation: <before> → <after> tokens.",
+   "values": {
+    "after": "<after>",
+    "before": "<before>"
+   }
+  },
+  "DIRECTORY_MISSING": {
+   "output": "The directory `<directory>` no longer exists. Restore it to keep using this thread, or, in the channel, bind another folder with `!bind <path>` and send a new message to start a session there.",
+   "values": {
+    "directory": "<directory>"
+   }
+  },
+  "DIRECTORY_UNREADABLE": {
+   "output": "macOS does not let awaydesk read `<directory>`. Grant access in System Settings, Privacy & Security, Full Disk Access (see docs/setup.md, Part 4).",
+   "values": {
+    "directory": "<directory>"
+   }
+  },
+  "DIRECTORY_UNTRUSTED": {
+   "output": "Claude Code has not been trusted in `<directory>`, so its hooks and settings would run without asking. Open `claude` there in the terminal once and accept the trust dialog, then send your message again.",
+   "values": {
+    "directory": "<directory>"
+   }
+  },
+  "ENDED": {
+   "output": "_This reply ended before an answer: <reason>._",
+   "values": {
+    "reason": "<reason>"
+   }
+  },
+  "ERROR_REPLY": {
+   "output": "Claude Code reported an error: `<error>`",
+   "values": {
+    "error": "<error>"
+   }
+  },
+  "HELP_NO_MATCH": {
+   "output": "No command matches `<query>`.",
+   "values": {
+    "query": "<query>"
+   }
+  },
+  "HOLD_QUESTION": {
+   "output": "Another session is working in this folder: <link>. Send anyway?",
+   "values": {
+    "link": "<link>"
+   }
+  },
+  "HOME_CHANNEL_DELETING_MANY": {
+   "output": ":hourglass_flowing_sand: deleting <count> threads…",
+   "values": {
+    "count": "<count>"
+   }
+  },
+  "HOME_CLEANING_MANY": {
+   "output": ":hourglass_flowing_sand: *Cleaning up <count> channels, one at a time.* Slack limits how fast messages are deleted: this can take a few minutes.",
+   "values": {
+    "count": "<count>"
+   }
+  },
+  "HOME_CLEAN_FAILED": {
+   "output": "Could not clean up that channel (`<error>`). Clean it up again to continue.",
+   "values": {
+    "error": "<error>"
+   }
+  },
+  "HOME_CLEAN_REFUSED": {
+   "output": "Slack refused to delete <count> of that channel's messages (`cant_delete_message`): your workspace does not let you delete them. Every other one is gone.",
+   "values": {
+    "count": "<count>"
+   }
+  },
+  "HOME_CLEAN_TEXT": {
+   "output": "Deletes from #<channel> what sits outside a thread: your messages there that have no reply, commands like !stop included, and the bot's own messages. Every thread that has a reply stays. This cannot be undone and can take a few minutes.",
+   "values": {
+    "channel": "<channel>"
+   }
+  },
+  "HOME_DELETE_FAILED": {
+   "output": "Could not delete every message of that thread (`<error>`). Delete it again to continue.",
+   "values": {
+    "error": "<error>"
+   }
+  },
+  "HOME_DELETE_NAMED": {
+   "output": "“<title>” in #<channel>, <replies>. ",
+   "values": {
+    "channel": "<channel>",
+    "replies": "<replies>",
+    "title": "<title>"
+   }
+  },
+  "HOME_DELETE_NAMED_BARE": {
+   "output": "“<title>” in #<channel>. ",
+   "values": {
+    "channel": "<channel>",
+    "title": "<title>"
+   }
+  },
+  "HOME_DELETE_REFUSED": {
+   "output": "Slack refused to delete <count> of that thread's messages (`cant_delete_message`): they are not yours or the bot's, or your workspace does not let you delete them. Every other message is gone and the thread is still listed.",
+   "values": {
+    "count": "<count>"
+   }
+  },
+  "HOME_DELETING_MANY": {
+   "output": ":hourglass_flowing_sand: *Deleting <count> threads, one at a time.* Slack limits how fast messages are deleted: each takes about a minute, and leaves this page when it is gone.",
+   "values": {
+    "count": "<count>"
+   }
+  },
+  "HOME_HEADER": {
+   "output": "Sessions by channel, newest first · updated <time>",
+   "values": {
+    "time": "<time>"
+   }
+  },
+  "HOME_LAST_REPLY": {
+   "output": "last reply <when>",
+   "values": {
+    "when": "<when>"
+   }
+  },
+  "HOME_MORE": {
+   "output": "Only the first <rows> sessions are shown: narrow the filters.",
+   "values": {
+    "rows": "<rows>"
+   }
+  },
+  "HOME_REPLIES": {
+   "output": "<count> replies",
+   "values": {
+    "count": "<count>"
+   }
+  },
+  "HOME_SHOW_ALL": {
+   "output": "Show all <count>",
+   "values": {
+    "count": "<count>"
+   }
+  },
+  "HOME_STARTED": {
+   "output": "started <when>",
+   "values": {
+    "when": "<when>"
+   }
+  },
+  "HOME_UNTITLED": {
+   "output": "Session <id>",
+   "values": {
+    "id": "<id>"
+   }
+  },
+  "NOT_SENT_MANY": {
+   "output": "<count> messages were not sent because <because>: send them again.",
+   "values": {
+    "because": "<because>",
+    "count": "<count>"
+   }
+  },
+  "NOT_SENT_ONE": {
+   "output": "1 message was not sent because <because>: send it again.",
+   "values": {
+    "because": "<because>"
+   }
+  },
+  "OLD_THREAD_FOLDER": {
+   "output": "This session works in `<old>`, the folder it was created in: Claude Code resumes a session only there. New messages in the channel use `<new>`.",
+   "values": {
+    "new": "<new>",
+    "old": "<old>"
+   }
+  },
+  "OPEN_EMPTY": {
+   "output": "`<path>` is empty: there is nothing to show.",
+   "values": {
+    "path": "<path>"
+   }
+  },
+  "OPEN_FAILED": {
+   "output": "Could not open `<path>`: <error>",
+   "values": {
+    "error": "<error>",
+    "path": "<path>"
+   }
+  },
+  "OPEN_FORM_NOT_OPENED": {
+   "output": "The file list could not open (`<error>`). Click Choose a file again.",
+   "values": {
+    "error": "<error>"
+   }
+  },
+  "OPEN_MATCHES": {
+   "output": "*<count> files match* `<words>`",
+   "values": {
+    "count": "<count>",
+    "words": "<words>"
+   }
+  },
+  "OPEN_MATCHES_CAPPED": {
+   "output": "The first <shown> of <count> are listed: type more of the name to narrow it.",
+   "values": {
+    "count": "<count>",
+    "shown": "<shown>"
+   }
+  },
+  "OPEN_MATCHES_ONE": {
+   "output": "*1 file matches* `<words>`",
+   "values": {
+    "words": "<words>"
+   }
+  },
+  "OPEN_NOT_A_FILE": {
+   "output": "`<path>` is not a file inside this session's folder.",
+   "values": {
+    "path": "<path>"
+   }
+  },
+  "OPEN_NO_MATCH": {
+   "output": "No file matches `<words>`.",
+   "values": {
+    "words": "<words>"
+   }
+  },
+  "OPEN_NO_MATCH_PARTIAL": {
+   "output": "No file matching `<words>` was found, but the folder could not be listed in full.",
+   "values": {
+    "words": "<words>"
+   }
+  },
+  "OPEN_ROWS_CHANGED": {
+   "output": "Changed in this session (<count>), newest first",
+   "values": {
+    "count": "<count>"
+   }
+  },
+  "OPEN_ROWS_MATCH": {
+   "output": "<count> files match",
+   "values": {
+    "count": "<count>"
+   }
+  },
+  "OPEN_TOO_LARGE": {
+   "output": "`<path>` is larger than 1 MB, the most Slack opens in its file viewer.",
+   "values": {
+    "path": "<path>"
+   }
+  },
+  "QUESTIONS_MANY": {
+   "output": "Claude Code has <count> questions",
+   "values": {
+    "count": "<count>"
+   }
+  },
+  "QUESTION_NEXT": {
+   "output": "Next (<number>/<count>)",
+   "values": {
+    "count": "<count>",
+    "number": "<number>"
+   }
+  },
+  "QUESTION_NOT_OPENED": {
+   "output": "The form could not open (`<error>`). Click Answer again.",
+   "values": {
+    "error": "<error>"
+   }
+  },
+  "QUESTION_WHERE": {
+   "output": "<number> of <count>",
+   "values": {
+    "count": "<count>",
+    "number": "<number>"
+   }
+  },
+  "RESTART_HOLD_TASKS": {
+   "output": "<counts> running",
+   "values": {
+    "counts": "<counts>"
+   }
+  },
+  "RESTART_WAITS": {
+   "output": "Restart waits for <counts> · !stop ends <them> now",
+   "values": {
+    "counts": "<counts>",
+    "them": "<them>"
+   }
+  },
+  "RESTART_WAITS_ELSEWHERE": {
+   "output": "<count> more in other channels.",
+   "values": {
+    "count": "<count>"
+   }
+  },
+  "RESTART_WAITS_MESSAGE": {
+   "output": "awaydesk is restarting once these background tasks end: <counts>. `!stop` ends them now.",
+   "values": {
+    "counts": "<counts>"
+   }
+  },
+  "RESTART_WAITS_MORE": {
+   "output": "…and <count> more.",
+   "values": {
+    "count": "<count>"
+   }
+  },
+  "RESTART_WAITS_STATUS": {
+   "output": "is waiting to restart: <counts> still running",
+   "values": {
+    "counts": "<counts>"
+   }
+  },
+  "RESTART_WAIT_ROW": {
+   "output": "• <#<channel>>, <link>: <hold>",
+   "values": {
+    "channel": "<channel>",
+    "hold": "<hold>",
+    "link": "<link>"
+   }
+  },
+  "RESUME_AMBIGUOUS": {
+   "output": "More than one session in `<directory>` is named or starts with `<target>`: pick one from `!resume`.",
+   "values": {
+    "directory": "<directory>",
+    "target": "<target>"
+   }
+  },
+  "RESUME_ELSEWHERE": {
+   "output": "This session is already open in another thread: <link>.",
+   "values": {
+    "link": "<link>"
+   }
+  },
+  "RESUME_EMPTY": {
+   "output": "No sessions in `<directory>` yet.",
+   "values": {
+    "directory": "<directory>"
+   }
+  },
+  "RESUME_LIST": {
+   "output": "Sessions in `<directory>`, newest first:",
+   "values": {
+    "directory": "<directory>"
+   }
+  },
+  "RESUME_LISTED": {
+   "output": "Resumed <title> in <link>.",
+   "values": {
+    "link": "<link>",
+    "title": "<title>"
+   }
+  },
+  "RESUME_MORE": {
+   "output": "Only the newest <rows> are shown: `!resume <id>`, or `!resume <title>` for a session that has one, resumes an older session.",
+   "values": {
+    "rows": "<rows>"
+   }
+  },
+  "RESUME_NONE": {
+   "output": "No session in `<directory>` has the id or name `<target>`: `!resume` lists them.",
+   "values": {
+    "directory": "<directory>",
+    "target": "<target>"
+   }
+  },
+  "RESUME_NONE_LEFT": {
+   "output": "No session to resume in `<directory>`.",
+   "values": {
+    "directory": "<directory>"
+   }
+  },
+  "RESUME_OK": {
+   "output": "Resumed **<title>**: your next message continues it. If it is open in a terminal, close it there first: while it is open in both, neither sees the other's messages, and a later resume keeps only one side's.",
+   "values": {
+    "title": "<title>"
+   }
+  },
+  "RESUME_OPEN_MANY": {
+   "output": "<count> more are open in their own threads.",
+   "values": {
+    "count": "<count>"
+   }
+  },
+  "RUNNING": {
+   "output": "⏳ <counts>",
+   "values": {
+    "counts": "<counts>"
+   }
+  },
+  "SETUP_EFFORT_OPTION": {
+   "output": "Effort: <level>",
+   "values": {
+    "level": "<level>"
+   }
+  },
+  "SETUP_SUMMARY": {
+   "output": "Model: <model> · Effort: <effort> · Bypass: <bypass>",
+   "values": {
+    "bypass": "<bypass>",
+    "effort": "<effort>",
+    "model": "<model>"
+   }
+  },
+  "STATUS": {
+   "output": "Directory: `<directory>`\nSession: `<session>`",
+   "values": {
+    "directory": "<directory>",
+    "session": "<session>"
+   }
+  },
+  "STATUS_BACKGROUND": {
+   "output": "Background: `<counts>`",
+   "values": {
+    "counts": "<counts>"
+   }
+  },
+  "STATUS_CHANNEL_FOLDER": {
+   "output": " · folder `<directory>`",
+   "values": {
+    "directory": "<directory>"
+   }
+  },
+  "STATUS_CHANNEL_HEADER": {
+   "output": "Directory: `<directory>`",
+   "values": {
+    "directory": "<directory>"
+   }
+  },
+  "STATUS_CHANNEL_LINK_FALLBACK": {
+   "output": "thread `<thread_ts>`",
+   "values": {
+    "thread_ts": "<thread_ts>"
+   }
+  },
+  "STATUS_CHANNEL_ROW": {
+   "output": "<link>: <activity>",
+   "values": {
+    "activity": "<activity>",
+    "link": "<link>"
+   }
+  },
+  "STATUS_CHANNEL_SINCE": {
+   "output": " · <ago>",
+   "values": {
+    "ago": "<ago>"
+   }
+  },
+  "STATUS_STATE": {
+   "output": "Mode: `<mode>`\nClaude Code: `<version>`\nNow: <activity>",
+   "values": {
+    "activity": "<activity>",
+    "mode": "<mode>",
+    "version": "<version>"
+   }
+  },
+  "STATUS_TERMINAL": {
+   "output": "Terminal: <command>",
+   "values": {
+    "command": "<command>"
+   }
+  },
+  "STATUS_WORKING": {
+   "output": "Working in: `<directory>`",
+   "values": {
+    "directory": "<directory>"
+   }
+  },
+  "STILL_RUNNING": {
+   "output": "<counts> still running",
+   "values": {
+    "counts": "<counts>"
+   }
+  },
+  "STILL_RUNNING_STATUS": {
+   "output": "has <counts> still running",
+   "values": {
+    "counts": "<counts>"
+   }
+  },
+  "TAKEN_INTO_REPLY_MANY": {
+   "output": "Claude Code took <count> messages into this reply: send them again if they are not answered here.",
+   "values": {
+    "count": "<count>"
+   }
+  },
+  "TERMINAL_COMMAND": {
+   "output": "cd <directory> && claude --resume <session> --fork-session",
+   "values": {
+    "directory": "<directory>",
+    "session": "<session>"
+   }
+  },
+  "UNBOUND": {
+   "output": "This channel is not bound to a folder yet. Send `!bind` to choose one of the folders Claude Code trusts, or `!bind <folder>` with the folder's path relative to `<root>`, for example `!bind my-project`. `!guide` explains how awaydesk works.",
+   "values": {
+    "root": "<root>"
+   }
+  },
+  "UPLOAD_DOWNLOAD": {
+   "output": "could not be downloaded (<error>)",
+   "values": {
+    "error": "<error>"
+   }
+  },
+  "UPLOAD_FAILED": {
+   "output": "Nothing was sent to Claude: <name> <reason>. Send the message again without it.",
+   "values": {
+    "name": "<name>",
+    "reason": "<reason>"
+   }
+  },
+  "UPLOAD_FILE_SIZE": {
+   "output": "is <size>, over the <limit> limit for a file",
+   "values": {
+    "limit": "<limit>",
+    "size": "<size>"
+   }
+  },
+  "UPLOAD_FILE_TYPE": {
+   "output": "is a `<mimetype>` file, and awaydesk passes on only text, source code, PDF, JSON, XML, YAML and notebook files",
+   "values": {
+    "mimetype": "<mimetype>"
+   }
+  },
+  "UPLOAD_IMAGE_SIDE": {
+   "output": "is <width>x<height> px, over the 8000x8000 px Claude accepts for an image",
+   "values": {
+    "height": "<height>",
+    "width": "<width>"
+   }
+  },
+  "UPLOAD_IMAGE_SIZE": {
+   "output": "is <size>, over the <limit> Claude accepts for an image",
+   "values": {
+    "limit": "<limit>",
+    "size": "<size>"
+   }
+  },
+  "UPLOAD_IMAGE_TYPE": {
+   "output": "is an image of type `<mimetype>`, and Claude reads only JPEG, PNG, GIF and WebP images",
+   "values": {
+    "mimetype": "<mimetype>"
+   }
+  },
+  "UPLOAD_TOO_HEAVY": {
+   "output": "Nothing was sent to Claude: its images total <size>, over the <limit> one message takes.",
+   "values": {
+    "limit": "<limit>",
+    "size": "<size>"
+   }
+  },
+  "UPLOAD_TOO_MANY": {
+   "output": "Nothing was sent to Claude: the message has <count> images, over the <limit> one message takes.",
+   "values": {
+    "count": "<count>",
+    "limit": "<limit>"
+   }
+  },
+  "WORD_IN_THREAD": {
+   "output": "`!<word>` works in the channel, not inside a thread.",
+   "values": {
+    "word": "<word>"
+   }
+  }
+ },
+ "functions": [],
+ "sequences": {
+  "HELP_WORDS": [
+   "`!guide` how awaydesk works, in a few lines; in the channel or inside a thread",
+   "`!help [text]` this list, or only the lines that contain the text; in the channel or inside a thread",
+   "`!status` in the channel: every session's state; inside a thread: that session's directory, mode and the footer's values",
+   "`!stop` in the channel: every running session, its background tasks and its pending approvals; inside a thread: only that session",
+   "`!bind [folder]` the folders Claude Code trusts, or bind this channel to one, its path relative to the allowed root; in the channel, refused inside a thread",
+   "`!bypass on|off` run every tool without asking, until `!bypass off`; it survives a restart; inside a thread, refused in the channel",
+   "`!resume [session]` this directory's sessions, or resume one by id or name in the thread of your `!resume` message; in the channel, refused inside a thread",
+   "`!open [file]` share a file of the session's folder into the thread, where Slack opens it in its file viewer: a picker alone, or a path or part of a name; inside a thread, refused in the channel"
+  ]
+ }
+}

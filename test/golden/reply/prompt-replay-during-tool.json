@@ -1,0 +1,322 @@
+{
+ "recording": "prompt-replay-during-tool",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01LCo5tHeWDBK4833FMV9SQi",
+      "name": "Bash",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Bash: sleep 20"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": "Running in background",
+      "folded": null,
+      "id": "toolu_01LCo5tHeWDBK4833FMV9SQi",
+      "name": "Bash",
+      "output": "Command running in background with ID: b90ua4icr. Output is being written to: /private/tmp/claude-502/-home-dev-project/e862f8bb-47b6-4937-8772-e658320dd231/tasks/b90ua4icr.output. You will be notifi…",
+      "preview": null,
+      "status": "in_progress",
+      "task": true,
+      "title": "Bash: sleep 20"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "STARTED",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": [
+      {
+       "calls": 0,
+       "details": "Running in background",
+       "folded": null,
+       "id": "toolu_01LCo5tHeWDBK4833FMV9SQi",
+       "name": "Bash",
+       "output": "Command running in background with ID: b90ua4icr. Output is being written to: /private/tmp/claude-502/-home-dev-project/e862f8bb-47b6-4937-8772-e658320dd231/tasks/b90ua4icr.output. You will be notifi…",
+       "preview": null,
+       "status": "in_progress",
+       "task": true,
+       "title": "Bash: sleep 20"
+      }
+     ]
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": [
+    "b90ua4icr"
+   ]
+  },
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-b90ua4icr",
+      "name": "task",
+      "output": null,
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "b90ua4icr"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-b90ua4icr",
+      "name": "task",
+      "output": "Background command \"Sleep for 20 seconds in background\" completed (exit code 0)",
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "b90ua4icr"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01JTnajtU3fJhEjrcoTjZxN8",
+      "name": "Bash",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Bash: sleep 15"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01JTnajtU3fJhEjrcoTjZxN8",
+      "name": "Bash",
+      "output": "Sleep for 15 seconds in foreground",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Bash: sleep 15"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01JTnajtU3fJhEjrcoTjZxN8",
+      "name": "Bash",
+      "output": "(Bash completed with no output)",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Bash: sleep 15"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "REPORTED",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  },
+  {
+   "calls": [
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "KIWI",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01LCo5tHeWDBK4833FMV9SQi",
+     "name": "Bash",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Bash: sleep 20"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": "Running in background",
+     "folded": null,
+     "id": "toolu_01LCo5tHeWDBK4833FMV9SQi",
+     "name": "Bash",
+     "output": "Command running in background with ID: b90ua4icr. Output is being written to: /private/tmp/claude-502/-home-dev-project/e862f8bb-47b6-4937-8772-e658320dd231/tasks/b90ua4icr.output. You will be notifi…",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Bash: sleep 20"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "STARTED",
+    "notice": false
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01LCo5tHeWDBK4833FMV9SQi",
+     "name": "Bash",
+     "output": null,
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "Bash: sleep 20"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01LCo5tHeWDBK4833FMV9SQi",
+     "name": "Bash",
+     "output": "Background command \"Sleep for 20 seconds in background\" completed (exit code 0)",
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "Bash: sleep 20"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01JTnajtU3fJhEjrcoTjZxN8",
+     "name": "Bash",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Bash: sleep 15"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01JTnajtU3fJhEjrcoTjZxN8",
+     "name": "Bash",
+     "output": "Sleep for 15 seconds in foreground",
+     "preview": null,
+     "status": "complete",
+     "task": false,
+     "title": "Bash: sleep 15"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01JTnajtU3fJhEjrcoTjZxN8",
+     "name": "Bash",
+     "output": "(Bash completed with no output)",
+     "preview": null,
+     "status": "complete",
+     "task": false,
+     "title": "Bash: sleep 15"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "REPORTED",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "\n\nKIWI",
+    "notice": false
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

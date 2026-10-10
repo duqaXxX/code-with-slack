@@ -1,0 +1,746 @@
+{
+ "recording": "report-turn-agent-resume",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+      "name": "Agent",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Agent: Test background agent"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": "Running in background",
+      "folded": null,
+      "id": "toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+      "name": "Agent",
+      "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+      "preview": null,
+      "status": "in_progress",
+      "task": true,
+      "title": "Agent: Test background agent"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 1,
+      "details": "Bash: sleep 3",
+      "folded": null,
+      "id": "toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+      "name": "Agent",
+      "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+      "preview": null,
+      "status": "in_progress",
+      "task": true,
+      "title": "Agent: Test background agent"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 1,
+      "details": "Running sleep 3",
+      "folded": null,
+      "id": "toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+      "name": "Agent",
+      "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+      "preview": null,
+      "status": "in_progress",
+      "task": true,
+      "title": "Agent: Test background agent"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "STARTED",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": [
+      {
+       "calls": 1,
+       "details": "Running in background",
+       "folded": null,
+       "id": "toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+       "name": "Agent",
+       "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+       "preview": null,
+       "status": "in_progress",
+       "task": true,
+       "title": "Agent: Test background agent"
+      }
+     ]
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": [
+    "a0d6caecc437a1298"
+   ]
+  },
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-bxc2i5omc",
+      "name": "local_bash",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": true,
+      "title": "sleep 3"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-bxc2i5omc",
+      "name": "local_bash",
+      "output": "sleep 3",
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "sleep 3"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-a0d6caecc437a1298",
+      "name": "task",
+      "output": null,
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "a0d6caecc437a1298"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-a0d6caecc437a1298",
+      "name": "task",
+      "output": "READY",
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "a0d6caecc437a1298"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "NOTED",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  },
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01EN71a4pBQzXL4JEZkr5vEN",
+      "name": "ToolSearch",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "ToolSearch: select:SendMessage"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01EN71a4pBQzXL4JEZkr5vEN",
+      "name": "ToolSearch",
+      "output": null,
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "ToolSearch: select:SendMessage"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01VeajTuo9DEtDtcPrarZiKB",
+      "name": "SendMessage",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "SendMessage: a0d6caecc437a1298"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": "Running in background",
+      "folded": null,
+      "id": "toolu_01VeajTuo9DEtDtcPrarZiKB",
+      "name": "SendMessage",
+      "output": "{\"success\":true,\"message\":\"Resuming agent a0d6cae\",\"resumedAgentId\":\"a0d6caecc437a1298\",\"pin\":{\"id\":\"a0d6caecc437a1298\",\"name\":\"a0d6caecc437a1298\",\"ref\":\"ecd3c5\"}}",
+      "preview": null,
+      "status": "in_progress",
+      "task": true,
+      "title": "SendMessage: a0d6caecc437a1298"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "SENT",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": [
+      {
+       "calls": 0,
+       "details": "Running in background",
+       "folded": null,
+       "id": "toolu_01VeajTuo9DEtDtcPrarZiKB",
+       "name": "SendMessage",
+       "output": "{\"success\":true,\"message\":\"Resuming agent a0d6cae\",\"resumedAgentId\":\"a0d6caecc437a1298\",\"pin\":{\"id\":\"a0d6caecc437a1298\",\"name\":\"a0d6caecc437a1298\",\"ref\":\"ecd3c5\"}}",
+       "preview": null,
+       "status": "in_progress",
+       "task": true,
+       "title": "SendMessage: a0d6caecc437a1298"
+      }
+     ]
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": [
+    "a0d6caecc437a1298"
+   ]
+  },
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_017gf5kSZb4JxhViLJgtScNc",
+      "name": "Bash",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Bash: sleep 20"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_017gf5kSZb4JxhViLJgtScNc",
+      "name": "Bash",
+      "output": "sleep 20",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Bash: sleep 20"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_017gf5kSZb4JxhViLJgtScNc",
+      "name": "Bash",
+      "output": "(Bash completed with no output)",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Bash: sleep 20"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-a0d6caecc437a1298",
+      "name": "task",
+      "output": null,
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "a0d6caecc437a1298"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-a0d6caecc437a1298",
+      "name": "task",
+      "output": "AGAIN",
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "a0d6caecc437a1298"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01H5wwXkRKqXrGbowxTuLKMV",
+      "name": "Bash",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Bash: sleep 15"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01H5wwXkRKqXrGbowxTuLKMV",
+      "name": "Bash",
+      "output": "sleep 15",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Bash: sleep 15"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01H5wwXkRKqXrGbowxTuLKMV",
+      "name": "Bash",
+      "output": "(Bash completed with no output)",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Bash: sleep 15"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "REPORTED\n",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "PINEAPPLE",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  },
+  {
+   "calls": [
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "KIWI",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+     "name": "Agent",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Agent: Test background agent"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": "Running in background",
+     "folded": null,
+     "id": "toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+     "name": "Agent",
+     "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Agent: Test background agent"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 1,
+     "details": "Bash: sleep 3",
+     "folded": null,
+     "id": "toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+     "name": "Agent",
+     "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Agent: Test background agent"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 1,
+     "details": "Running sleep 3",
+     "folded": null,
+     "id": "toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+     "name": "Agent",
+     "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Agent: Test background agent"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "STARTED",
+    "notice": false
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 1,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+     "name": "Agent",
+     "output": null,
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "Agent: Test background agent"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 1,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+     "name": "Agent",
+     "output": "READY",
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "Agent: Test background agent"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "\n\nNOTED",
+    "notice": false
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01EN71a4pBQzXL4JEZkr5vEN",
+     "name": "ToolSearch",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "ToolSearch: select:SendMessage"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01EN71a4pBQzXL4JEZkr5vEN",
+     "name": "ToolSearch",
+     "output": null,
+     "preview": null,
+     "status": "complete",
+     "task": false,
+     "title": "ToolSearch: select:SendMessage"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01VeajTuo9DEtDtcPrarZiKB",
+     "name": "SendMessage",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "SendMessage: a0d6caecc437a1298"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": "Running in background",
+     "folded": null,
+     "id": "toolu_01VeajTuo9DEtDtcPrarZiKB",
+     "name": "SendMessage",
+     "output": "{\"success\":true,\"message\":\"Resuming agent a0d6cae\",\"resumedAgentId\":\"a0d6caecc437a1298\",\"pin\":{\"id\":\"a0d6caecc437a1298\",\"name\":\"a0d6caecc437a1298\",\"ref\":\"ecd3c5\"}}",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "SendMessage: a0d6caecc437a1298"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "SENT",
+    "notice": false
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 2,
+     "details": "Bash: sleep 3\nBash: sleep 20",
+     "folded": null,
+     "id": "toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+     "name": "Agent",
+     "output": "READY",
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "Agent: Test background agent"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": "Running sleep 20",
+     "folded": null,
+     "id": "toolu_01VeajTuo9DEtDtcPrarZiKB",
+     "name": "SendMessage",
+     "output": "{\"success\":true,\"message\":\"Resuming agent a0d6cae\",\"resumedAgentId\":\"a0d6caecc437a1298\",\"pin\":{\"id\":\"a0d6caecc437a1298\",\"name\":\"a0d6caecc437a1298\",\"ref\":\"ecd3c5\"}}",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "SendMessage: a0d6caecc437a1298"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01VeajTuo9DEtDtcPrarZiKB",
+     "name": "SendMessage",
+     "output": null,
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "SendMessage: a0d6caecc437a1298"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01VeajTuo9DEtDtcPrarZiKB",
+     "name": "SendMessage",
+     "output": "AGAIN",
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "SendMessage: a0d6caecc437a1298"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01H5wwXkRKqXrGbowxTuLKMV",
+     "name": "Bash",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Bash: sleep 15"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01H5wwXkRKqXrGbowxTuLKMV",
+     "name": "Bash",
+     "output": "sleep 15",
+     "preview": null,
+     "status": "complete",
+     "task": false,
+     "title": "Bash: sleep 15"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01H5wwXkRKqXrGbowxTuLKMV",
+     "name": "Bash",
+     "output": "(Bash completed with no output)",
+     "preview": null,
+     "status": "complete",
+     "task": false,
+     "title": "Bash: sleep 15"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "REPORTED\n",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "PINEAPPLE",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "\n\nKIWI",
+    "notice": false
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

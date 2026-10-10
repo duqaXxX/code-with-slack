@@ -1,0 +1,105 @@
+{
+ "recording": "skill-fork-command",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-ac1ab5ef6df9df287",
+      "name": "local_agent",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": true,
+      "title": "/list-files"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-ac1ab5ef6df9df287",
+      "name": "local_agent",
+      "output": "/list-files",
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "/list-files"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "The directory contains only SKILL.md, and notes.txt does not exist in that location.",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "task-ac1ab5ef6df9df287",
+     "name": "local_agent",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "/list-files"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "task-ac1ab5ef6df9df287",
+     "name": "local_agent",
+     "output": "/list-files",
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "/list-files"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "The directory contains only SKILL.md, and notes.txt does not exist in that location.",
+    "notice": false
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

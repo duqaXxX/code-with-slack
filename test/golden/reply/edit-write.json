@@ -1,0 +1,657 @@
+{
+ "recording": "edit-write",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "I'll do th",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ese steps ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "one at a t",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ime as req",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "uested.\n\n*",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "*Step 1: W",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "rite new.t",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "xt with nu",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "mbers 1-15",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "**",
+     "notice": false
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01LNsPBgUNiNWFnk216PQs6q",
+      "name": "Write",
+      "output": "File created successfully at: /home/dev/project/new.txt (file state is current in your context — no need to Read it back)",
+      "preview": {
+       "body": " 1 1\n 2 2\n 3 3\n 4 4\n 5 5\n 6 6\n 7 7\n 8 8\n 9 9\n10 10\n… +5 lines",
+       "language": "",
+       "plain": false,
+       "summary": "Wrote 15 lines to /home/dev/project/new.txt",
+       "title": "Write(/home/dev/project/new.txt)"
+      },
+      "status": "complete",
+      "task": false,
+      "title": "Write: /home/dev/project/new.txt"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "**Step 2: ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "Read notes",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": ".txt to se",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "e current ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "content**",
+     "notice": false
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01UZ6XRyij8tgTWjuvFsDqh4",
+      "name": "Read",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Read: /home/dev/project/notes.txt"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01UZ6XRyij8tgTWjuvFsDqh4",
+      "name": "Read",
+      "output": "1 alpha",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Read: /home/dev/project/notes.txt"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "**Step 2: ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "Edit notes",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": ".txt to re",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "place 'bet",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "a' with 'g",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "amma'**",
+     "notice": false
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01UGwcwQUu5z8LDz4ucFDRL4",
+      "name": "Edit",
+      "output": "<tool_use_error>String to replace not found in file.",
+      "preview": null,
+      "status": "error",
+      "task": false,
+      "title": "Edit: /home/dev/project/notes.txt"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "**Step",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " 2: Ed",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "it not",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "es.txt",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " (retr",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "y)**",
+     "notice": false
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01G23oPQ4Pz1p1Srsji7xLzs",
+      "name": "Edit",
+      "output": "The file /home/dev/project/notes.txt has been updated successfully. (file state is current in your context — no need to Read it back)",
+      "preview": {
+       "body": "    1 alpha\n-🟥 2 beta\n+🟩 2 gamma\n    3 delta",
+       "language": "diff",
+       "plain": false,
+       "summary": "Added 1 line, removed 1 line",
+       "title": "Update(/home/dev/project/notes.txt)"
+      },
+      "status": "complete",
+      "task": false,
+      "title": "Edit: /home/dev/project/notes.txt"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "**Step 3: W",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "rite notes.",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "txt with th",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "e two lines",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " \"one\" and ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "\"two\"**",
+     "notice": false
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01TQ1b4tnjwrCYfjLJguyfGF",
+      "name": "Write",
+      "output": "The file /home/dev/project/notes.txt has been updated successfully. (file state is current in your context — no need to Read it back)",
+      "preview": {
+       "body": "-🟥 1 alpha\n-🟥 2 gamma\n-🟥 3 delta\n+🟩 1 one\n+🟩 2 two",
+       "language": "diff",
+       "plain": false,
+       "summary": "Added 2 lines, removed 3 lines",
+       "title": "Write(/home/dev/project/notes.txt)"
+      },
+      "status": "complete",
+      "task": false,
+      "title": "Write: /home/dev/project/notes.txt"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "Done",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "I'll do th",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ese steps ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "one at a t",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ime as req",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "uested.\n\n*",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "*Step 1: W",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "rite new.t",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "xt with nu",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "mbers 1-15",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "**",
+    "notice": false
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01LNsPBgUNiNWFnk216PQs6q",
+     "name": "Write",
+     "output": "File created successfully at: /home/dev/project/new.txt (file state is current in your context — no need to Read it back)",
+     "preview": {
+      "body": " 1 1\n 2 2\n 3 3\n 4 4\n 5 5\n 6 6\n 7 7\n 8 8\n 9 9\n10 10\n… +5 lines",
+      "language": "",
+      "plain": false,
+      "summary": "Wrote 15 lines to /home/dev/project/new.txt",
+      "title": "Write(/home/dev/project/new.txt)"
+     },
+     "status": "complete",
+     "task": false,
+     "title": "Write: /home/dev/project/new.txt"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "**Step 2: ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "Read notes",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": ".txt to se",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "e current ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "content**",
+    "notice": false
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01UZ6XRyij8tgTWjuvFsDqh4",
+     "name": "Read",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Read: /home/dev/project/notes.txt"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01UZ6XRyij8tgTWjuvFsDqh4",
+     "name": "Read",
+     "output": "1 alpha",
+     "preview": null,
+     "status": "complete",
+     "task": false,
+     "title": "Read: /home/dev/project/notes.txt"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "**Step 2: ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "Edit notes",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": ".txt to re",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "place 'bet",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "a' with 'g",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "amma'**",
+    "notice": false
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01UGwcwQUu5z8LDz4ucFDRL4",
+     "name": "Edit",
+     "output": "<tool_use_error>String to replace not found in file.",
+     "preview": null,
+     "status": "error",
+     "task": false,
+     "title": "Edit: /home/dev/project/notes.txt"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "**Step",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " 2: Ed",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "it not",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "es.txt",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " (retr",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "y)**",
+    "notice": false
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01G23oPQ4Pz1p1Srsji7xLzs",
+     "name": "Edit",
+     "output": "The file /home/dev/project/notes.txt has been updated successfully. (file state is current in your context — no need to Read it back)",
+     "preview": {
+      "body": "    1 alpha\n-🟥 2 beta\n+🟩 2 gamma\n    3 delta",
+      "language": "diff",
+      "plain": false,
+      "summary": "Added 1 line, removed 1 line",
+      "title": "Update(/home/dev/project/notes.txt)"
+     },
+     "status": "complete",
+     "task": false,
+     "title": "Edit: /home/dev/project/notes.txt"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "**Step 3: W",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "rite notes.",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "txt with th",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "e two lines",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " \"one\" and ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "\"two\"**",
+    "notice": false
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01TQ1b4tnjwrCYfjLJguyfGF",
+     "name": "Write",
+     "output": "The file /home/dev/project/notes.txt has been updated successfully. (file state is current in your context — no need to Read it back)",
+     "preview": {
+      "body": "-🟥 1 alpha\n-🟥 2 gamma\n-🟥 3 delta\n+🟩 1 one\n+🟩 2 two",
+      "language": "diff",
+      "plain": false,
+      "summary": "Added 2 lines, removed 3 lines",
+      "title": "Write(/home/dev/project/notes.txt)"
+     },
+     "status": "complete",
+     "task": false,
+     "title": "Write: /home/dev/project/notes.txt"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "Done",
+    "notice": false
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

@@ -32,9 +32,9 @@ awaydesk passes every command through as you type it and decides none of this.
 | Let Claude use the apps on your screen | Computer use, a server built into Claude Code | Not available: Claude Code offers it in an interactive session only | [#219](https://github.com/duqaXxX/awaydesk/issues/219) |
 | Dictate a message | `/voice`, from the microphone | Not offered; an audio clip is the closest thing, below | none |
 
-Measured on 2026-10-09 with Claude Code 2.1.292 and again on 2026-10-10 with 2.1.294, the
-version the pinned SDK bundles, and sent
-again by the release probe on every new SDK (see [CONTRIBUTING.md](../CONTRIBUTING.md)). Claude
+Measured on 2026-10-09 with Claude Code 2.1.292 and again on 2026-10-10 with 2.1.294, and sent
+again by the release probe on every new SDK (see [CONTRIBUTING.md](../CONTRIBUTING.md)); the
+pinned SDK bundles Claude Code 2.1.296. Claude
 Code's commands reference lists 119 built-in commands; a session started through the SDK is
 offered 50 of them. Twenty-two of the others were each sent as awaydesk sends a command:
 the nineteen of the table, `/status`, `/help` and `/chrome`. Each got the answer quoted above,

@@ -1,0 +1,221 @@
+{
+ "recording": "subagent-api-error",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_synthetic161",
+      "name": "Agent",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Agent: Synthetic subtask"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": "Running in background",
+      "folded": null,
+      "id": "toolu_synthetic161",
+      "name": "Agent",
+      "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+      "preview": null,
+      "status": "in_progress",
+      "task": true,
+      "title": "Agent: Synthetic subtask"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "Synthetic answer.",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": [
+      {
+       "calls": 0,
+       "details": "Running in background",
+       "folded": null,
+       "id": "toolu_synthetic161",
+       "name": "Agent",
+       "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+       "preview": null,
+       "status": "in_progress",
+       "task": true,
+       "title": "Agent: Synthetic subtask"
+      }
+     ]
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": [
+    "a27228565625f8660"
+   ]
+  },
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-a27228565625f8660",
+      "name": "task",
+      "output": null,
+      "preview": null,
+      "status": "error",
+      "task": true,
+      "title": "a27228565625f8660"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-a27228565625f8660",
+      "name": "task",
+      "output": "Agent terminated early due to an API error: API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (127.0.0.1:…",
+      "preview": null,
+      "status": "error",
+      "task": true,
+      "title": "a27228565625f8660"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "Synthetic answer.",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_synthetic161",
+     "name": "Agent",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Agent: Synthetic subtask"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": "Running in background",
+     "folded": null,
+     "id": "toolu_synthetic161",
+     "name": "Agent",
+     "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Agent: Synthetic subtask"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "Synthetic answer.",
+    "notice": false
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": "API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (127.0.0.1:58174).",
+     "folded": null,
+     "id": "toolu_synthetic161",
+     "name": "Agent",
+     "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Agent: Synthetic subtask"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_synthetic161",
+     "name": "Agent",
+     "output": null,
+     "preview": null,
+     "status": "error",
+     "task": true,
+     "title": "Agent: Synthetic subtask"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_synthetic161",
+     "name": "Agent",
+     "output": "Agent terminated early due to an API error: API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (127.0.0.1:…",
+     "preview": null,
+     "status": "error",
+     "task": true,
+     "title": "Agent: Synthetic subtask"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "\n\nSynthetic answer.",
+    "notice": false
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

@@ -1,0 +1,1093 @@
+{
+ "recording": "subagent-handback",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01DfXaFraaJ6RoMx2AsQa2b5",
+      "name": "Agent",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Agent: Run echo subagent-ok"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01Y54HD6jqz3tmBKBzz4V8tR",
+      "name": "Bash",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Bash: sleep 15"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": "Running in background",
+      "folded": null,
+      "id": "toolu_01DfXaFraaJ6RoMx2AsQa2b5",
+      "name": "Agent",
+      "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+      "preview": null,
+      "status": "in_progress",
+      "task": true,
+      "title": "Agent: Run echo subagent-ok"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": "Running in background",
+      "folded": null,
+      "id": "toolu_01Y54HD6jqz3tmBKBzz4V8tR",
+      "name": "Bash",
+      "output": "Command running in background with ID: btmuz8js3. Output is being written to: /tmp/claude-1000/-home-dev-project/tasks/btmuz8js3.output. You will be notified when it completes. To check interim outpu…",
+      "preview": null,
+      "status": "in_progress",
+      "task": true,
+      "title": "Bash: sleep 15"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 1,
+      "details": "Bash: echo subagent-ok",
+      "folded": null,
+      "id": "toolu_01DfXaFraaJ6RoMx2AsQa2b5",
+      "name": "Agent",
+      "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+      "preview": null,
+      "status": "in_progress",
+      "task": true,
+      "title": "Agent: Run echo subagent-ok"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 1,
+      "details": "Running Echo subagent-ok",
+      "folded": null,
+      "id": "toolu_01DfXaFraaJ6RoMx2AsQa2b5",
+      "name": "Agent",
+      "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+      "preview": null,
+      "status": "in_progress",
+      "task": true,
+      "title": "Agent: Run echo subagent-ok"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "Both ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "tasks",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " are ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "start",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ed in",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " the ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "backg",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "round",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": ": the",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " suba",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "gent ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "that ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "runs ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "`echo",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " suba",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "gent-",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ok` a",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "nd th",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "e com",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "mand ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "`slee",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "p 15`",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": ". Nei",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ther ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "has f",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "inish",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ed ye",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "t.",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": [
+      {
+       "calls": 1,
+       "details": "Running in background",
+       "folded": null,
+       "id": "toolu_01DfXaFraaJ6RoMx2AsQa2b5",
+       "name": "Agent",
+       "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+       "preview": null,
+       "status": "in_progress",
+       "task": true,
+       "title": "Agent: Run echo subagent-ok"
+      },
+      {
+       "calls": 0,
+       "details": "Running in background",
+       "folded": null,
+       "id": "toolu_01Y54HD6jqz3tmBKBzz4V8tR",
+       "name": "Bash",
+       "output": "Command running in background with ID: btmuz8js3. Output is being written to: /tmp/claude-1000/-home-dev-project/tasks/btmuz8js3.output. You will be notified when it completes. To check interim outpu…",
+       "preview": null,
+       "status": "in_progress",
+       "task": true,
+       "title": "Bash: sleep 15"
+      }
+     ]
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": [
+    "a2212140c7c7bb15e",
+    "btmuz8js3"
+   ]
+  },
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01UBD5wbvijjsTd3xiAriYk1",
+      "name": "SubagentHandback",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "SubagentHandback: subagent-ok"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01UBD5wbvijjsTd3xiAriYk1",
+      "name": "SubagentHandback",
+      "output": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "SubagentHandback: subagent-ok"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-a2212140c7c7bb15e",
+      "name": "task",
+      "output": null,
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "a2212140c7c7bb15e"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-a2212140c7c7bb15e",
+      "name": "task",
+      "output": "This agent's report was delivered to you as a message from \"a2212140c7c7bb15e\" (its SubagentHandback call). Read it there; it is not repeated here.",
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "a2212140c7c7bb15e"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "The sub",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "agent f",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "inished",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": ": `echo",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " subage",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "nt-ok` ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "printed",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " `subag",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ent-ok`",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": ". The c",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ommand ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "`sleep ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "15` is ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "still r",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "unning.",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  },
+  {
+   "calls": [
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "_Done. Claude Code returned no text._",
+     "notice": true
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  },
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-btmuz8js3",
+      "name": "task",
+      "output": null,
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "btmuz8js3"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-btmuz8js3",
+      "name": "task",
+      "output": "Background command \"Wait 15 seconds\" completed (exit code 0)",
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "btmuz8js3"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "The comm",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "and `sle",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ep 15` e",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "nded wit",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "h exit c",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ode 0, s",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "o both t",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "asks are",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " done.",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01DfXaFraaJ6RoMx2AsQa2b5",
+     "name": "Agent",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Agent: Run echo subagent-ok"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01Y54HD6jqz3tmBKBzz4V8tR",
+     "name": "Bash",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Bash: sleep 15"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": "Running in background",
+     "folded": null,
+     "id": "toolu_01DfXaFraaJ6RoMx2AsQa2b5",
+     "name": "Agent",
+     "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Agent: Run echo subagent-ok"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": "Running in background",
+     "folded": null,
+     "id": "toolu_01Y54HD6jqz3tmBKBzz4V8tR",
+     "name": "Bash",
+     "output": "Command running in background with ID: btmuz8js3. Output is being written to: /tmp/claude-1000/-home-dev-project/tasks/btmuz8js3.output. You will be notified when it completes. To check interim outpu…",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Bash: sleep 15"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 1,
+     "details": "Bash: echo subagent-ok",
+     "folded": null,
+     "id": "toolu_01DfXaFraaJ6RoMx2AsQa2b5",
+     "name": "Agent",
+     "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Agent: Run echo subagent-ok"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 1,
+     "details": "Running Echo subagent-ok",
+     "folded": null,
+     "id": "toolu_01DfXaFraaJ6RoMx2AsQa2b5",
+     "name": "Agent",
+     "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Agent: Run echo subagent-ok"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "Both ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "tasks",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " are ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "start",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ed in",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " the ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "backg",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "round",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": ": the",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " suba",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "gent ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "that ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "runs ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "`echo",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " suba",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "gent-",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ok` a",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "nd th",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "e com",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "mand ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "`slee",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "p 15`",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": ". Nei",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ther ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "has f",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "inish",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ed ye",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "t.",
+    "notice": false
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 2,
+     "details": "Bash: echo subagent-ok\nSubagentHandback: subagent-ok",
+     "folded": null,
+     "id": "toolu_01DfXaFraaJ6RoMx2AsQa2b5",
+     "name": "Agent",
+     "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Agent: Run echo subagent-ok"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 2,
+     "details": "Run echo subagent-ok",
+     "folded": null,
+     "id": "toolu_01DfXaFraaJ6RoMx2AsQa2b5",
+     "name": "Agent",
+     "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Agent: Run echo subagent-ok"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 2,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01DfXaFraaJ6RoMx2AsQa2b5",
+     "name": "Agent",
+     "output": null,
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "Agent: Run echo subagent-ok"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 2,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01DfXaFraaJ6RoMx2AsQa2b5",
+     "name": "Agent",
+     "output": "This agent's report was delivered to you as a message from \"a2212140c7c7bb15e\" (its SubagentHandback call). Read it there; it is not repeated here.",
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "Agent: Run echo subagent-ok"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "\n\nThe sub",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "agent f",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "inished",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": ": `echo",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " subage",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "nt-ok` ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "printed",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " `subag",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ent-ok`",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": ". The c",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ommand ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "`sleep ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "15` is ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "still r",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "unning.",
+    "notice": false
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01Y54HD6jqz3tmBKBzz4V8tR",
+     "name": "Bash",
+     "output": null,
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "Bash: sleep 15"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01Y54HD6jqz3tmBKBzz4V8tR",
+     "name": "Bash",
+     "output": "Background command \"Wait 15 seconds\" completed (exit code 0)",
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "Bash: sleep 15"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "\n\nThe comm",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "and `sle",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ep 15` e",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "nded wit",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "h exit c",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ode 0, s",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "o both t",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "asks are",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " done.",
+    "notice": false
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

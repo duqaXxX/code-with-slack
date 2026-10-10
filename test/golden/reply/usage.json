@@ -1,0 +1,45 @@
+{
+ "recording": "usage",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "You are currently using your subscription to power your Claude Code usage\n\nCurrent session: 5% used · resets Oct 1 at 1:29am (Europe/Berlin)\nCurrent week (all models): 29% used · resets Oct 4 at 5:59pm (Europe/Berlin)\nCurrent week (Fable): 0% used · resets Oct 4 at 6pm (Europe/Berlin)\n\nWhat's contributing to your limits usage?\nApproximate, based on local sessions on this machine — does not include other devices or claude.ai. Behaviors are independent characteristics, not a breakdown.\n\nLast 24h · 954 requests · 48 sessions\n  79% of your usage came from subagent-heavy sessions\n  71% of your usage came from sessions active for 8+ hours\n  49% of your usage was at >150k context\n  Top skills: /code-review 2%, /github-issue-create 1%\n  Top subagents: implementer 22%, critical-reviewer 9%, Explore 2%, general-purpose 1%\n\nLast 7d · 13809 requests · 218 sessions\n  92% of your usage came from subagent-heavy sessions\n  76% of your usage was at >150k context\n  66% of your usage came from sessions active for 8+ hours\n  Top skills: /code-review 3%, /claude-security:claude-security 1%\n  Top subagents: implementer 21%, general-purpose 7%, critical-reviewer 3%, claude-security:claude-security 2%, superpowers:subagent-driven-development 1%\n  Top plugins: claude-security 3%, superpowers 1%\n  Top MCP servers: claude-in-chrome 1%",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "You are currently using your subscription to power your Claude Code usage\n\nCurrent session: 5% used · resets Oct 1 at 1:29am (Europe/Berlin)\nCurrent week (all models): 29% used · resets Oct 4 at 5:59pm (Europe/Berlin)\nCurrent week (Fable): 0% used · resets Oct 4 at 6pm (Europe/Berlin)\n\nWhat's contributing to your limits usage?\nApproximate, based on local sessions on this machine — does not include other devices or claude.ai. Behaviors are independent characteristics, not a breakdown.\n\nLast 24h · 954 requests · 48 sessions\n  79% of your usage came from subagent-heavy sessions\n  71% of your usage came from sessions active for 8+ hours\n  49% of your usage was at >150k context\n  Top skills: /code-review 2%, /github-issue-create 1%\n  Top subagents: implementer 22%, critical-reviewer 9%, Explore 2%, general-purpose 1%\n\nLast 7d · 13809 requests · 218 sessions\n  92% of your usage came from subagent-heavy sessions\n  76% of your usage was at >150k context\n  66% of your usage came from sessions active for 8+ hours\n  Top skills: /code-review 3%, /claude-security:claude-security 1%\n  Top subagents: implementer 21%, general-purpose 7%, critical-reviewer 3%, claude-security:claude-security 2%, superpowers:subagent-driven-development 1%\n  Top plugins: claude-security 3%, superpowers 1%\n  Top MCP servers: claude-in-chrome 1%",
+    "notice": false
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

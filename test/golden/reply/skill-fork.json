@@ -1,0 +1,615 @@
+{
+ "recording": "skill-fork",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_015nYaxg1PDzv98FXiMfWDbC",
+      "name": "Skill",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Skill: list-files"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 1,
+      "details": "Bash: ls /home/dev/project/.claude/skills/list-files",
+      "folded": null,
+      "id": "toolu_015nYaxg1PDzv98FXiMfWDbC",
+      "name": "Skill",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": true,
+      "title": "Skill: list-files"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 2,
+      "details": "Bash: ls /home/dev/project/.claude/skills/list-files\nRead: /home/dev/project/.claude/skills/list-files/notes.txt",
+      "folded": null,
+      "id": "toolu_015nYaxg1PDzv98FXiMfWDbC",
+      "name": "Skill",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": true,
+      "title": "Skill: list-files"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 2,
+      "details": null,
+      "folded": null,
+      "id": "toolu_015nYaxg1PDzv98FXiMfWDbC",
+      "name": "Skill",
+      "output": "/list-files",
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "Skill: list-files"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 2,
+      "details": null,
+      "folded": null,
+      "id": "toolu_015nYaxg1PDzv98FXiMfWDbC",
+      "name": "Skill",
+      "output": "Skill \"list-files\" completed (forked execution).",
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "Skill: list-files"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "I've run ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "the list-",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "files ski",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ll. The r",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "esult sho",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ws that t",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "he workin",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "g directo",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ry `/home",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "/dev/proj",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ect/.clau",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "de/skills",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "/list-fil",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "es` conta",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ins only ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "a `SKILL.",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "md` file.",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " There is",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " no `note",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "s.txt` fi",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "le in tha",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "t locatio",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "n.\n\nIf yo",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "u'd like ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "to list t",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "he files ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "in the pr",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "imary wor",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "king dire",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ctory or ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "any other",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " specific",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " director",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "y, please",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " let me k",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "now!",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_015nYaxg1PDzv98FXiMfWDbC",
+     "name": "Skill",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Skill: list-files"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 1,
+     "details": "Bash: ls /home/dev/project/.claude/skills/list-files",
+     "folded": null,
+     "id": "toolu_015nYaxg1PDzv98FXiMfWDbC",
+     "name": "Skill",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Skill: list-files"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 2,
+     "details": "Bash: ls /home/dev/project/.claude/skills/list-files\nRead: /home/dev/project/.claude/skills/list-files/notes.txt",
+     "folded": null,
+     "id": "toolu_015nYaxg1PDzv98FXiMfWDbC",
+     "name": "Skill",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Skill: list-files"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 2,
+     "details": null,
+     "folded": null,
+     "id": "toolu_015nYaxg1PDzv98FXiMfWDbC",
+     "name": "Skill",
+     "output": "/list-files",
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "Skill: list-files"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 2,
+     "details": null,
+     "folded": null,
+     "id": "toolu_015nYaxg1PDzv98FXiMfWDbC",
+     "name": "Skill",
+     "output": "Skill \"list-files\" completed (forked execution).",
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "Skill: list-files"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "I've run ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "the list-",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "files ski",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ll. The r",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "esult sho",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ws that t",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "he workin",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "g directo",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ry `/home",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "/dev/proj",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ect/.clau",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "de/skills",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "/list-fil",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "es` conta",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ins only ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "a `SKILL.",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "md` file.",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " There is",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " no `note",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "s.txt` fi",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "le in tha",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "t locatio",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "n.\n\nIf yo",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "u'd like ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "to list t",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "he files ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "in the pr",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "imary wor",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "king dire",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ctory or ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "any other",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " specific",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " director",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "y, please",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " let me k",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "now!",
+    "notice": false
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

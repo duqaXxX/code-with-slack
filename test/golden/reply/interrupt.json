@@ -1,0 +1,93 @@
+{
+ "recording": "interrupt",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_014RM24vF5EeUNHQ57579Vma",
+      "name": "Bash",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Bash: python3 -c 'import time; time.sleep(30)'"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_014RM24vF5EeUNHQ57579Vma",
+      "name": "Bash",
+      "output": "Stopped",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Bash: python3 -c 'import time; time.sleep(30)'"
+     }
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_014RM24vF5EeUNHQ57579Vma",
+     "name": "Bash",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Bash: python3 -c 'import time; time.sleep(30)'"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_014RM24vF5EeUNHQ57579Vma",
+     "name": "Bash",
+     "output": "Stopped",
+     "preview": null,
+     "status": "complete",
+     "task": false,
+     "title": "Bash: python3 -c 'import time; time.sleep(30)'"
+    }
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}
