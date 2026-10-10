@@ -30,10 +30,11 @@ FEATURE_NAME_LIMIT = 300
 # quarter above the page's length when it was set (677 words, as `str.split` counts them). It is
 # a prompt to ask where new text belongs: raise it when the page needs the words.
 README_WORD_LIMIT = 846
+# `node_modules` holds the documents of the TypeScript daemon's dependencies, which are not ours.
 DOCS = sorted(
     p
     for p in ROOT.rglob("*.md")
-    if not any(part.startswith(".") for part in p.relative_to(ROOT).parts)
+    if not any(part.startswith(".") or part == "node_modules" for part in p.relative_to(ROOT).parts)
 )
 LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 LINE_POINTER = re.compile(r"\b[\w./-]+\.(?:py|md|sh|ya?ml|json|toml):\d+")
