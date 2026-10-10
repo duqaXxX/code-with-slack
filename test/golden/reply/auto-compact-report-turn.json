@@ -1,0 +1,626 @@
+{
+ "recording": "auto-compact-report-turn",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01KQBBbM87jm3tLZFvPivBaW",
+      "name": "Read",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Read: /home/dev/project/notes/ledger-one.txt"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01KQBBbM87jm3tLZFvPivBaW",
+      "name": "Read",
+      "output": "1 Ledger one",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Read: /home/dev/project/notes/ledger-one.txt"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01CEC8Te58RpePUngJB4MwTa",
+      "name": "Read",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Read: /home/dev/project/notes/ledger-two.txt"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01CEC8Te58RpePUngJB4MwTa",
+      "name": "Read",
+      "output": "1 Ledger two",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Read: /home/dev/project/notes/ledger-two.txt"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01RL4WcyU1EgEKBWXV2YuB6M",
+      "name": "Read",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Read: /home/dev/project/notes/ledger-three.txt"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01RL4WcyU1EgEKBWXV2YuB6M",
+      "name": "Read",
+      "output": "1 Ledger three",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Read: /home/dev/project/notes/ledger-three.txt"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01S4Zo6WwvXe5mEVGuBqBXoL",
+      "name": "Bash",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Bash: sleep 25; echo ledger-done"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": "Running in background",
+      "folded": null,
+      "id": "toolu_01S4Zo6WwvXe5mEVGuBqBXoL",
+      "name": "Bash",
+      "output": "Command running in background with ID: bc6460gsr. Output is being written to: /private/tmp/claude-502/-home-dev-project/650a01ad-87f1-4c26-96c5-b466225aea58/tasks/bc6460gsr.output. You will be notifi…",
+      "preview": null,
+      "status": "in_progress",
+      "task": true,
+      "title": "Bash: sleep 25; echo ledger-done"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "started",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": [
+      {
+       "calls": 0,
+       "details": "Running in background",
+       "folded": null,
+       "id": "toolu_01S4Zo6WwvXe5mEVGuBqBXoL",
+       "name": "Bash",
+       "output": "Command running in background with ID: bc6460gsr. Output is being written to: /private/tmp/claude-502/-home-dev-project/650a01ad-87f1-4c26-96c5-b466225aea58/tasks/bc6460gsr.output. You will be notifi…",
+       "preview": null,
+       "status": "in_progress",
+       "task": true,
+       "title": "Bash: sleep 25; echo ledger-done"
+      }
+     ]
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": [
+    "bc6460gsr"
+   ]
+  },
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-bc6460gsr",
+      "name": "task",
+      "output": null,
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "bc6460gsr"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-bc6460gsr",
+      "name": "task",
+      "output": "Background command \"sleep 25; echo ledger-done\" completed (exit code 0)",
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "bc6460gsr"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "Compacted the conversation: 68.2k → 10.7k tokens.\n\n",
+     "notice": true
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01FmbweB6gRA6C1wsCZVQG4L",
+      "name": "Read",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Read: /private/tmp/claude-502/-home-dev-project/650a01ad-87f1-4c26-96c5-b466225…"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01FmbweB6gRA6C1wsCZVQG4L",
+      "name": "Read",
+      "output": "1 ledger-done",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Read: /private/tmp/claude-502/-home-dev-project/650a01ad-87f1-4c26-96c5-b466225…"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "The backgrou",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "nd command c",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ompleted suc",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "cessfully wi",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "th output: `",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ledger-done`",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "\n\nAll files ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "have been re",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ad and the b",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ackground pr",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ocess has fi",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "nished execu",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ting. Waitin",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "g for next i",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "nstruction.",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01KQBBbM87jm3tLZFvPivBaW",
+     "name": "Read",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Read: /home/dev/project/notes/ledger-one.txt"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01KQBBbM87jm3tLZFvPivBaW",
+     "name": "Read",
+     "output": "1 Ledger one",
+     "preview": null,
+     "status": "complete",
+     "task": false,
+     "title": "Read: /home/dev/project/notes/ledger-one.txt"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01CEC8Te58RpePUngJB4MwTa",
+     "name": "Read",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Read: /home/dev/project/notes/ledger-two.txt"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01CEC8Te58RpePUngJB4MwTa",
+     "name": "Read",
+     "output": "1 Ledger two",
+     "preview": null,
+     "status": "complete",
+     "task": false,
+     "title": "Read: /home/dev/project/notes/ledger-two.txt"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01RL4WcyU1EgEKBWXV2YuB6M",
+     "name": "Read",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Read: /home/dev/project/notes/ledger-three.txt"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01RL4WcyU1EgEKBWXV2YuB6M",
+     "name": "Read",
+     "output": "1 Ledger three",
+     "preview": null,
+     "status": "complete",
+     "task": false,
+     "title": "Read: /home/dev/project/notes/ledger-three.txt"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01S4Zo6WwvXe5mEVGuBqBXoL",
+     "name": "Bash",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Bash: sleep 25; echo ledger-done"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": "Running in background",
+     "folded": null,
+     "id": "toolu_01S4Zo6WwvXe5mEVGuBqBXoL",
+     "name": "Bash",
+     "output": "Command running in background with ID: bc6460gsr. Output is being written to: /private/tmp/claude-502/-home-dev-project/650a01ad-87f1-4c26-96c5-b466225aea58/tasks/bc6460gsr.output. You will be notifi…",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Bash: sleep 25; echo ledger-done"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "started",
+    "notice": false
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01S4Zo6WwvXe5mEVGuBqBXoL",
+     "name": "Bash",
+     "output": null,
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "Bash: sleep 25; echo ledger-done"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01S4Zo6WwvXe5mEVGuBqBXoL",
+     "name": "Bash",
+     "output": "Background command \"sleep 25; echo ledger-done\" completed (exit code 0)",
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "Bash: sleep 25; echo ledger-done"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "\n\nCompacted the conversation: 68.2k → 10.7k tokens.\n\n",
+    "notice": true
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01FmbweB6gRA6C1wsCZVQG4L",
+     "name": "Read",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Read: /private/tmp/claude-502/-home-dev-project/650a01ad-87f1-4c26-96c5-b466225…"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01FmbweB6gRA6C1wsCZVQG4L",
+     "name": "Read",
+     "output": "1 ledger-done",
+     "preview": null,
+     "status": "complete",
+     "task": false,
+     "title": "Read: /private/tmp/claude-502/-home-dev-project/650a01ad-87f1-4c26-96c5-b466225…"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "The backgrou",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "nd command c",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ompleted suc",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "cessfully wi",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "th output: `",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ledger-done`",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "\n\nAll files ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "have been re",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ad and the b",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ackground pr",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ocess has fi",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "nished execu",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ting. Waitin",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "g for next i",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "nstruction.",
+    "notice": false
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

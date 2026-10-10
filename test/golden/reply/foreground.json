@@ -1,0 +1,135 @@
+{
+ "recording": "foreground",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01CCT7tcqS5bwexewvv2iUAL",
+      "name": "Bash",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Bash: python3 -c 'import time; time.sleep(12)'"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01CCT7tcqS5bwexewvv2iUAL",
+      "name": "Bash",
+      "output": "Sleep for 12 seconds",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Bash: python3 -c 'import time; time.sleep(12)'"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01CCT7tcqS5bwexewvv2iUAL",
+      "name": "Bash",
+      "output": "(Bash completed with no output)",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Bash: python3 -c 'import time; time.sleep(12)'"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "done",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01CCT7tcqS5bwexewvv2iUAL",
+     "name": "Bash",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Bash: python3 -c 'import time; time.sleep(12)'"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01CCT7tcqS5bwexewvv2iUAL",
+     "name": "Bash",
+     "output": "Sleep for 12 seconds",
+     "preview": null,
+     "status": "complete",
+     "task": false,
+     "title": "Bash: python3 -c 'import time; time.sleep(12)'"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01CCT7tcqS5bwexewvv2iUAL",
+     "name": "Bash",
+     "output": "(Bash completed with no output)",
+     "preview": null,
+     "status": "complete",
+     "task": false,
+     "title": "Bash: python3 -c 'import time; time.sleep(12)'"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "done",
+    "notice": false
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

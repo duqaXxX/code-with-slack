@@ -1,0 +1,80 @@
+{
+ "discipline": "Each sink call of the seam-1 'whole' list is replayed in order on a ReplySink over FakeSlack. After a text or task call, ReplySink.settle() flushes the reply at once, standing in for the debounced write (one flush per sink call, so the debounce never merges two calls); finish and close_out flush by themselves. The fake clock never advances, so the 280-second stream deadline never fires, and the UpdateLimiter has a budget no recording can spend.",
+ "final": {
+  "message_blocks": [
+   [
+    {
+     "type": "divider"
+    },
+    {
+     "elements": [
+      {
+       "text": "footer",
+       "type": "mrkdwn"
+      }
+     ],
+     "type": "context"
+    }
+   ]
+  ],
+  "message_cards": [
+   []
+  ],
+  "message_texts": [
+   "_Done. Claude Code returned no text._"
+  ],
+  "pushes": 1
+ },
+ "recording": "permission-mode-status",
+ "slack_calls": [
+  {
+   "after_sink_call": 0,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "_Done. Claude Code returned no text._",
+      "type": "markdown_text"
+     }
+    ],
+    "recipient_team_id": "T000TEAM",
+    "recipient_user_id": "U000ALICE",
+    "task_display_mode": "timeline",
+    "thread_ts": "1780000000.000001"
+   },
+   "method": "chat.startStream"
+  },
+  {
+   "after_sink_call": 2,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "blocks": [
+     {
+      "type": "divider"
+     },
+     {
+      "elements": [
+       {
+        "text": "footer",
+        "type": "mrkdwn"
+       }
+      ],
+      "type": "context"
+     }
+    ],
+    "channel": "C000CHAN",
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.stopStream"
+  }
+ ]
+}

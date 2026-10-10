@@ -1,0 +1,5699 @@
+{
+ "discipline": "Each sink call of the seam-1 'whole' list is replayed in order on a ReplySink over FakeSlack. After a text or task call, ReplySink.settle() flushes the reply at once, standing in for the debounced write (one flush per sink call, so the debounce never merges two calls); finish and close_out flush by themselves. The fake clock never advances, so the 280-second stream deadline never fires, and the UpdateLimiter has a budget no recording can spend.",
+ "final": {
+  "message_blocks": [
+   [
+    {
+     "type": "divider"
+    },
+    {
+     "elements": [
+      {
+       "text": "footer",
+       "type": "mrkdwn"
+      }
+     ],
+     "type": "context"
+    }
+   ]
+  ],
+  "message_cards": [
+   [
+    {
+     "details": "Running in background",
+     "id": "fold:toolu_01KgcQcyjyseGa1UtXHoTTKL",
+     "status": "complete",
+     "title": "Bash: sleep 20"
+    }
+   ]
+  ],
+  "message_texts": [
+   "STARTED\n\nPINEAPPLE\n\n1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100 101 102 103 104 105 106 107 108 109 110 111 112 113 114 115 116 117 118 119 120 121 122 123 124 125 126 127 128 129 130 131 132 133 134 135 136 137 138 139 140 141 142 143 144 145 146 147 148 149 150 151 152 153 154 155 156 157 158 159 160 161 162 163 164 165 166 167 168 169 170 171 172 173 174 175 176 177 178 179 180 181 182 183 184 185 186 187 188 189 190 191 192 193 194 195 196 197 198 199 200 201 202 203 204 205 206 207 208 209 210 211 212 213 214 215 216 217 218 219 220 221 222 223 224 225 226 227 228 229 230 231 232 233 234 235 236 237 238 239 240 241 242 243 244 245 246 247 248 249 250 251 252 253 254 255 256 257 258 259 260 261 262 263 264 265 266 267 268 269 270 271 272 273 274 275 276 277 278 279 280 281 282 283 284 285 286 287 288 289 290 291 292 293 294 295 296 297 298 299 300 301 302 303 304 305 306 307 308 309 310 311 312 313 314 315 316 317 318 319 320 321 322 323 324 325 326 327 328 329 330 331 332 333 334 335 336 337 338 339 340 341 342 343 344 345 346 347 348 349 350 351 352 353 354 355 356 357 358 359 360 361 362 363 364 365 366 367 368 369 370 371 372 373 374 375 376 377 378 379 380 381 382 383 384 385 386 387 388 389 390 391 392 393 394 395 396 397 398 399 400 401 402 403 404 405 406 407 408 409 410 411 412 413 414 415 416 417 418 419 420 421 422 423 424 425 426 427 428 429 430 431 432 433 434 435 436 437 438 439 440 441 442 443 444 445 446 447 448 449 450 451 452 453 454 455 456 457 458 459 460 461 462 463 464 465 466 467 468 469 470 471 472 473 474 475 476 477 478 479 480 481 482 483 484 485 486 487 488 489 490 491 492 493 494 495 496 497 498 499 500 501 502 503 504 505 506 507 508 509 510 511 512 513 514 515 516 517 518 519 520 521 522 523 524 525 526 527 528 529 530 531 532 533 534 535 536 537 538 539 540 541 542 543 544 545 546 547 548 549 550 551 552 553 554 555 556 557 558 559 560 561 562 563 564 565 566 567 568 569 570 571 572 573 574 575 576 577 578 579 580 581 582 583 584 585 586 587 588 589 590 591 592 593 594 595 596 597 598 599 600 REPORTED\n\nKIWI"
+  ],
+  "pushes": 1
+ },
+ "recording": "prompt-replay-before-notification",
+ "slack_calls": [
+  {
+   "after_sink_call": 0,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "id": "fold:toolu_01KgcQcyjyseGa1UtXHoTTKL",
+      "status": "in_progress",
+      "title": "Bash: sleep 20",
+      "type": "task_update"
+     }
+    ],
+    "recipient_team_id": "T000TEAM",
+    "recipient_user_id": "U000ALICE",
+    "task_display_mode": "timeline",
+    "thread_ts": "1780000000.000001"
+   },
+   "method": "chat.startStream"
+  },
+  {
+   "after_sink_call": 1,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "details": "Running in background",
+      "id": "fold:toolu_01KgcQcyjyseGa1UtXHoTTKL",
+      "status": "in_progress",
+      "title": "Bash: sleep 20",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 2,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "STARTED",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 3,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "id": "fold:toolu_01KgcQcyjyseGa1UtXHoTTKL",
+      "status": "complete",
+      "title": "Bash: sleep 20",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 5,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "\n\nPINEA",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 6,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "PPLE",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 7,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "\n\n1 2 3 4 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 8,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "5 6 7 8 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 9,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "9 10 11 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 10,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "12 13 14",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 11,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " 15 16 1",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 12,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "7 18 19 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 13,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "20 21 22",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 14,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " 23 24 2",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 15,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "5 26 27 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 16,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "28 29 30",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 17,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " 31 32 3",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 18,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "3 34 35 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 19,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "36 37 38",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 20,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " 39 40 4",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 21,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "1 42 43 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 22,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "44 45 46",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 23,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " 47 48 4",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 24,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "9 50 51 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 25,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "52 53 54",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 26,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " 55 56 5",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 27,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "7 58 59 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 28,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "60 61 62",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 29,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " 63 64 6",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 30,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "5 66 67 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 31,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "68 69 70",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 32,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " 71 72 7",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 33,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "3 74 75 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 34,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "76 77 78",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 35,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " 79 80 8",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 36,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "1 82 83 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 37,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "84 85 86",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 38,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " 87 88 8",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 39,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "9 90 91 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 40,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "92 93 94",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 41,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " 95 96 9",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 42,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "7 98 99 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 43,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "100 101 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 44,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "102 103 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 45,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "104 105 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 46,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "106 107 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 47,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "108 109 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 48,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "110 111 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 49,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "112 113 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 50,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "114 115 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 51,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "116 117 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 52,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "118 119 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 53,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "120 121 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 54,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "122 123 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 55,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "124 125 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 56,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "126 127 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 57,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "128 129 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 58,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "130 131 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 59,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "132 133 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 60,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "134 135 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 61,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "136 137 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 62,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "138 139 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 63,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "140 141 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 64,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "142 143 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 65,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "144 145 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 66,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "146 147 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 67,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "148 149 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 68,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "150 151 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 69,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "152 153 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 70,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "154 155 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 71,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "156 157 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 72,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "158 159 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 73,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "160 161 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 74,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "162 163 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 75,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "164 165 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 76,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "166 167 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 77,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "168 169 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 78,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "170 171 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 79,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "172 173 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 80,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "174 175 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 81,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "176 177 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 82,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "178 179 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 83,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "180 181 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 84,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "182 183 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 85,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "184 185 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 86,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "186 187 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 87,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "188 189 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 88,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "190 191 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 89,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "192 193 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 90,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "194 195 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 91,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "196 197 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 92,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "198 199 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 93,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "200 201 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 94,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "202 203 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 95,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "204 205 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 96,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "206 207 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 97,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "208 209 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 98,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "210 211 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 99,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "212 213 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 100,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "214 215 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 101,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "216 217 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 102,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "218 219 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 103,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "220 221 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 104,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "222 223 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 105,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "224 225 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 106,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "226 227 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 107,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "228 229 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 108,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "230 231 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 109,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "232 233 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 110,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "234 235 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 111,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "236 237 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 112,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "238 239 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 113,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "240 241 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 114,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "242 243 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 115,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "244 245 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 116,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "246 247 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 117,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "248 249 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 118,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "250 251 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 119,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "252 253 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 120,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "254 255 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 121,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "256 257 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 122,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "258 259 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 123,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "260 261 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 124,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "262 263 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 125,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "264 265 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 126,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "266 267 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 127,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "268 269 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 128,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "270 271 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 129,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "272 273 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 130,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "274 275 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 131,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "276 277 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 132,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "278 279 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 133,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "280 281 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 134,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "282 283 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 135,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "284 285 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 136,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "286 287 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 137,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "288 289 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 138,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "290 291 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 139,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "292 293 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 140,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "294 295 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 141,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "296 297 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 142,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "298 299 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 143,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "300 301 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 144,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "302 303 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 145,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "304 305 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 146,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "306 307 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 147,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "308 309 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 148,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "310 311 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 149,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "312 313 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 150,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "314 315 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 151,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "316 317 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 152,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "318 319 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 153,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "320 321 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 154,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "322 323 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 155,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "324 325 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 156,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "326 327 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 157,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "328 329 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 158,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "330 331 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 159,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "332 333 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 160,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "334 335 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 161,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "336 337 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 162,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "338 339 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 163,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "340 341 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 164,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "342 343 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 165,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "344 345 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 166,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "346 347 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 167,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "348 349 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 168,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "350 351 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 169,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "352 353 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 170,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "354 355 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 171,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "356 357 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 172,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "358 359 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 173,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "360 361 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 174,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "362 363 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 175,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "364 365 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 176,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "366 367 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 177,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "368 369 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 178,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "370 371 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 179,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "372 373 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 180,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "374 375 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 181,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "376 377 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 182,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "378 379 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 183,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "380 381 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 184,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "382 383 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 185,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "384 385 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 186,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "386 387 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 187,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "388 389 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 188,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "390 391 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 189,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "392 393 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 190,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "394 395 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 191,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "396 397 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 192,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "398 399 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 193,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "400 401 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 194,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "402 403 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 195,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "404 405 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 196,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "406 407 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 197,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "408 409 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 198,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "410 411 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 199,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "412 413 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 200,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "414 415 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 201,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "416 417 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 202,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "418 419 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 203,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "420 421 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 204,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "422 423 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 205,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "424 425 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 206,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "426 427 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 207,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "428 429 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 208,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "430 431 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 209,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "432 433 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 210,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "434 435 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 211,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "436 437 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 212,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "438 439 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 213,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "440 441 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 214,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "442 443 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 215,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "444 445 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 216,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "446 447 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 217,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "448 449 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 218,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "450 451 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 219,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "452 453 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 220,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "454 455 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 221,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "456 457 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 222,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "458 459 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 223,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "460 461 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 224,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "462 463 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 225,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "464 465 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 226,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "466 467 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 227,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "468 469 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 228,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "470 471 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 229,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "472 473 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 230,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "474 475 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 231,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "476 477 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 232,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "478 479 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 233,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "480 481 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 234,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "482 483 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 235,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "484 485 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 236,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "486 487 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 237,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "488 489 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 238,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "490 491 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 239,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "492 493 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 240,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "494 495 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 241,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "496 497 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 242,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "498 499 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 243,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "500 501 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 244,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "502 503 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 245,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "504 505 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 246,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "506 507 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 247,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "508 509 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 248,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "510 511 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 249,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "512 513 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 250,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "514 515 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 251,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "516 517 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 252,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "518 519 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 253,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "520 521 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 254,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "522 523 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 255,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "524 525 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 256,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "526 527 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 257,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "528 529 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 258,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "530 531 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 259,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "532 533 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 260,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "534 535 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 261,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "536 537 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 262,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "538 539 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 263,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "540 541 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 264,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "542 543 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 265,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "544 545 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 266,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "546 547 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 267,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "548 549 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 268,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "550 551 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 269,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "552 553 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 270,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "554 555 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 271,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "556 557 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 272,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "558 559 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 273,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "560 561 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 274,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "562 563 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 275,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "564 565 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 276,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "566 567 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 277,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "568 569 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 278,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "570 571 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 279,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "572 573 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 280,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "574 575 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 281,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "576 577 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 282,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "578 579 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 283,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "580 581 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 284,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "582 583 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 285,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "584 585 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 286,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "586 587 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 287,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "588 589 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 288,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "590 591 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 289,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "592 593 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 290,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "594 595 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 291,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "596 597 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 292,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "598 599 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 293,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "600 REPO",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 294,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "RTED",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 295,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "\n\nKI",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 296,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "WI",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 298,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "blocks": [
+     {
+      "type": "divider"
+     },
+     {
+      "elements": [
+       {
+        "text": "footer",
+        "type": "mrkdwn"
+       }
+      ],
+      "type": "context"
+     }
+    ],
+    "channel": "C000CHAN",
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.stopStream"
+  }
+ ]
+}

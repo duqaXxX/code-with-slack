@@ -1,0 +1,165 @@
+{
+ "recording": "ask-answered",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01KUZwgzwcuiX6bQPhxHr2r6",
+      "name": "AskUserQuestion",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "AskUserQuestion"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01KUZwgzwcuiX6bQPhxHr2r6",
+      "name": "AskUserQuestion",
+      "output": "The user answered: \"Which color do you prefer?\"=\"Blue\", \"Do you also like green?\"=\"Yes,Only in spring\". Read the answers carefully — they may request clarification, changes, or that you not proceed —…",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "AskUserQuestion"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "You prefe",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "r blue an",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "d enjoy g",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "reen espe",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "cially in",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " spring.",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01KUZwgzwcuiX6bQPhxHr2r6",
+     "name": "AskUserQuestion",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "AskUserQuestion"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01KUZwgzwcuiX6bQPhxHr2r6",
+     "name": "AskUserQuestion",
+     "output": "The user answered: \"Which color do you prefer?\"=\"Blue\", \"Do you also like green?\"=\"Yes,Only in spring\". Read the answers carefully — they may request clarification, changes, or that you not proceed —…",
+     "preview": null,
+     "status": "complete",
+     "task": false,
+     "title": "AskUserQuestion"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "You prefe",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "r blue an",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "d enjoy g",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "reen espe",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "cially in",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " spring.",
+    "notice": false
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

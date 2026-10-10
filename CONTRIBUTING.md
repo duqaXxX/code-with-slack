@@ -36,6 +36,20 @@ uv run ruff check .
 uv run ruff format --check .
 ```
 
+A TypeScript daemon is being written beside the Python one, under `src/agent/`, `src/core/` and
+`src/chat/`, with its tests under `test/`. It needs Node 22.18 or later, and its checks are Biome,
+`tsc --noEmit` and the tests, which Node runs from the sources:
+
+```bash
+npm ci
+npm run check
+```
+
+`test/golden/` holds what the Python code does with each recording of `tests/fixtures/sdk/`, at
+the two places where the TypeScript tests compare against it. `uv run python -m tests.golden`
+writes those files again, and `tests/test_golden.py` fails when they differ from what the code
+produces.
+
 Test fixtures are synthetic in content (ids such as `U000ALICE`) and recorded in shape. Never
 write the shape of an SDK message or a Slack payload by hand.
 

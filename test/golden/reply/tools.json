@@ -1,0 +1,213 @@
+{
+ "recording": "tools",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01Xdzy1JrqnyQh4m9GkKaQvo",
+      "name": "Bash",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Bash: ls"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01Xdzy1JrqnyQh4m9GkKaQvo",
+      "name": "Bash",
+      "output": "notes.txt",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Bash: ls"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01LnSiTbh8GtkisVrbigeaKe",
+      "name": "Read",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Read: /home/dev/project/notes.txt"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01LnSiTbh8GtkisVrbigeaKe",
+      "name": "Read",
+      "output": "1 alpha",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Read: /home/dev/project/notes.txt"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "The notes.tx",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "t file conta",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ins two entr",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ies: \"alpha\"",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " and \"beta\".",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01Xdzy1JrqnyQh4m9GkKaQvo",
+     "name": "Bash",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Bash: ls"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01Xdzy1JrqnyQh4m9GkKaQvo",
+     "name": "Bash",
+     "output": "notes.txt",
+     "preview": null,
+     "status": "complete",
+     "task": false,
+     "title": "Bash: ls"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01LnSiTbh8GtkisVrbigeaKe",
+     "name": "Read",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Read: /home/dev/project/notes.txt"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01LnSiTbh8GtkisVrbigeaKe",
+     "name": "Read",
+     "output": "1 alpha",
+     "preview": null,
+     "status": "complete",
+     "task": false,
+     "title": "Read: /home/dev/project/notes.txt"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "The notes.tx",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "t file conta",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ins two entr",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ies: \"alpha\"",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " and \"beta\".",
+    "notice": false
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

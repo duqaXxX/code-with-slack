@@ -1,0 +1,183 @@
+{
+ "recording": "compact",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ok",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  },
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01VQB896fYGjEcrom4wpUzm5",
+      "name": "Read",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Read: /home/dev/project/notes/ledger-one.txt"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01VQB896fYGjEcrom4wpUzm5",
+      "name": "Read",
+      "output": "1 Ledger one",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Read: /home/dev/project/notes/ledger-one.txt"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "read",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  },
+  {
+   "calls": [
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "Compacted the conversation: 20.7k → 5.0k tokens.\n\n",
+     "notice": true
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  },
+  {
+   "calls": [
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "MARK-ALPHA",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ok",
+    "notice": false
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01VQB896fYGjEcrom4wpUzm5",
+     "name": "Read",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Read: /home/dev/project/notes/ledger-one.txt"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01VQB896fYGjEcrom4wpUzm5",
+     "name": "Read",
+     "output": "1 Ledger one",
+     "preview": null,
+     "status": "complete",
+     "task": false,
+     "title": "Read: /home/dev/project/notes/ledger-one.txt"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "read",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "\n\nCompacted the conversation: 20.7k → 5.0k tokens.\n\n",
+    "notice": true
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "MARK-ALPHA",
+    "notice": false
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

@@ -1,0 +1,372 @@
+{
+ "discipline": "Each sink call of the seam-1 'whole' list is replayed in order on a ReplySink over FakeSlack. After a text or task call, ReplySink.settle() flushes the reply at once, standing in for the debounced write (one flush per sink call, so the debounce never merges two calls); finish and close_out flush by themselves. The fake clock never advances, so the 280-second stream deadline never fires, and the UpdateLimiter has a budget no recording can spend.",
+ "final": {
+  "message_blocks": [
+   [
+    {
+     "type": "divider"
+    },
+    {
+     "elements": [
+      {
+       "text": "footer",
+       "type": "mrkdwn"
+      }
+     ],
+     "type": "context"
+    }
+   ]
+  ],
+  "message_cards": [
+   [
+    {
+     "details": "Running in background\nBash: python3 -c 'import time; time.sleep(12)'\nRunning Sleep for 12 seconds\nBash: python3 -c 'import time; time.sleep(12)'\nBash: python3 -c 'import time; time.sleep(12)'\nRunning Sleep for 12 seconds",
+     "id": "fold:toolu_01KmpaRqZVqZ3qZNs2Vqbjv1",
+     "status": "complete",
+     "title": "Agent: Run two 12-second sleep commands and report finished · 2 calls"
+    }
+   ]
+  ],
+  "message_texts": [
+   "started\n\nThe agent finished running both sleep commands and reported finished."
+  ],
+  "pushes": 1
+ },
+ "recording": "subagent-nested-command",
+ "slack_calls": [
+  {
+   "after_sink_call": 0,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "id": "fold:toolu_01KmpaRqZVqZ3qZNs2Vqbjv1",
+      "status": "in_progress",
+      "title": "Agent: Run two 12-second sleep commands and report finished",
+      "type": "task_update"
+     }
+    ],
+    "recipient_team_id": "T000TEAM",
+    "recipient_user_id": "U000ALICE",
+    "task_display_mode": "timeline",
+    "thread_ts": "1780000000.000001"
+   },
+   "method": "chat.startStream"
+  },
+  {
+   "after_sink_call": 1,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "details": "Running in background",
+      "id": "fold:toolu_01KmpaRqZVqZ3qZNs2Vqbjv1",
+      "status": "in_progress",
+      "title": "Agent: Run two 12-second sleep commands and report finished",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 2,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "started",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 3,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "details": "\nBash: python3 -c 'import time; time.sleep(12)'",
+      "id": "fold:toolu_01KmpaRqZVqZ3qZNs2Vqbjv1",
+      "status": "in_progress",
+      "title": "Agent: Run two 12-second sleep commands and report finished · 1 call",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 4,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "details": "\nRunning Sleep for 12 seconds",
+      "id": "fold:toolu_01KmpaRqZVqZ3qZNs2Vqbjv1",
+      "status": "in_progress",
+      "title": "Agent: Run two 12-second sleep commands and report finished · 1 call",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 5,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "details": "\nBash: python3 -c 'import time; time.sleep(12)'\nBash: python3 -c 'import time; time.sleep(12)'",
+      "id": "fold:toolu_01KmpaRqZVqZ3qZNs2Vqbjv1",
+      "status": "in_progress",
+      "title": "Agent: Run two 12-second sleep commands and report finished · 2 calls",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 6,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "details": "\nRunning Sleep for 12 seconds",
+      "id": "fold:toolu_01KmpaRqZVqZ3qZNs2Vqbjv1",
+      "status": "in_progress",
+      "title": "Agent: Run two 12-second sleep commands and report finished · 2 calls",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 7,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "id": "fold:toolu_01KmpaRqZVqZ3qZNs2Vqbjv1",
+      "status": "complete",
+      "title": "Agent: Run two 12-second sleep commands and report finished · 2 calls",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 9,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "\n\nThe agent ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 10,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "finished r",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 11,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "unning bot",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 12,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "h sleep co",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 13,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "mmands and",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 14,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " reported ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 15,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "finished.",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 17,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "blocks": [
+     {
+      "type": "divider"
+     },
+     {
+      "elements": [
+       {
+        "text": "footer",
+        "type": "mrkdwn"
+       }
+      ],
+      "type": "context"
+     }
+    ],
+    "channel": "C000CHAN",
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.stopStream"
+  }
+ ]
+}

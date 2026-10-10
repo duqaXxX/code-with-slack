@@ -1,0 +1,45 @@
+{
+ "recording": "api-error-402",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "API Error: 402 Synthetic billing error.",
+     "notice": true
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "API Error: 402 Synthetic billing error.",
+    "notice": true
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

@@ -1,0 +1,261 @@
+{
+ "recording": "tool-error",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01YYyHT3cAveY6vGoBUSEazb",
+      "name": "Read",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Read: /home/dev/project/missing.txt"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01YYyHT3cAveY6vGoBUSEazb",
+      "name": "Read",
+      "output": "File does not exist. Note: your current working directory is /home/dev/project.",
+      "preview": null,
+      "status": "error",
+      "task": false,
+      "title": "Read: /home/dev/project/missing.txt"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01Q8BHFdBEFU1YJffhnsR7fb",
+      "name": "Bash",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Bash: python3 -c 'import sys; sys.exit(1)'"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01Q8BHFdBEFU1YJffhnsR7fb",
+      "name": "Bash",
+      "output": "Exit code 1",
+      "preview": null,
+      "status": "error",
+      "task": false,
+      "title": "Bash: python3 -c 'import sys; sys.exit(1)'"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "The file mi",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ssing.txt d",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "oesn't exis",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "t, and the ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "Python comm",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "and exited ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "with error ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "code 1 as e",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "xpected.",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01YYyHT3cAveY6vGoBUSEazb",
+     "name": "Read",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Read: /home/dev/project/missing.txt"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01YYyHT3cAveY6vGoBUSEazb",
+     "name": "Read",
+     "output": "File does not exist. Note: your current working directory is /home/dev/project.",
+     "preview": null,
+     "status": "error",
+     "task": false,
+     "title": "Read: /home/dev/project/missing.txt"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01Q8BHFdBEFU1YJffhnsR7fb",
+     "name": "Bash",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Bash: python3 -c 'import sys; sys.exit(1)'"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01Q8BHFdBEFU1YJffhnsR7fb",
+     "name": "Bash",
+     "output": "Exit code 1",
+     "preview": null,
+     "status": "error",
+     "task": false,
+     "title": "Bash: python3 -c 'import sys; sys.exit(1)'"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "The file mi",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ssing.txt d",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "oesn't exis",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "t, and the ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "Python comm",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "and exited ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "with error ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "code 1 as e",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "xpected.",
+    "notice": false
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

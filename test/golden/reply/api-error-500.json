@@ -1,0 +1,45 @@
+{
+ "recording": "api-error-500",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "API Error: 500 Synthetic internal error. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (127.0.0.1:57773).",
+     "notice": true
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "API Error: 500 Synthetic internal error. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (127.0.0.1:57773).",
+    "notice": true
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

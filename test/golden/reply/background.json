@@ -1,0 +1,482 @@
+{
+ "recording": "background",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01LiZwhcy5g12fYSVLgAq5TS",
+      "name": "Bash",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Bash: sleep 5; echo done"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": "Running in background",
+      "folded": null,
+      "id": "toolu_01LiZwhcy5g12fYSVLgAq5TS",
+      "name": "Bash",
+      "output": "Command running in background with ID: bny2rux7d. Output is being written to: /private/tmp/claude-502/-home-dev-project/93f0c865-cbfb-4117-963b-cbcd8c9be267/tasks/bny2rux7d.output. You will be notifi…",
+      "preview": null,
+      "status": "in_progress",
+      "task": true,
+      "title": "Bash: sleep 5; echo done"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "started",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": [
+      {
+       "calls": 0,
+       "details": "Running in background",
+       "folded": null,
+       "id": "toolu_01LiZwhcy5g12fYSVLgAq5TS",
+       "name": "Bash",
+       "output": "Command running in background with ID: bny2rux7d. Output is being written to: /private/tmp/claude-502/-home-dev-project/93f0c865-cbfb-4117-963b-cbcd8c9be267/tasks/bny2rux7d.output. You will be notifi…",
+       "preview": null,
+       "status": "in_progress",
+       "task": true,
+       "title": "Bash: sleep 5; echo done"
+      }
+     ]
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": [
+    "bny2rux7d"
+   ]
+  },
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-bny2rux7d",
+      "name": "task",
+      "output": null,
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "bny2rux7d"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-bny2rux7d",
+      "name": "task",
+      "output": "Background command \"Sleep for 5 seconds then print done\" completed (exit code 0)",
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "bny2rux7d"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "The backgro",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "und command",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " completed ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "successfull",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "y after run",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ning for 5 ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "seconds. Th",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "e sleep per",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "iod elapsed",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " without an",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "y issues, a",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "nd the echo",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " command ex",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ecuted afte",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "rward. The ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "output file",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " contains \"",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "done\", conf",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "irming that",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " the entire",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " command se",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "quence ran ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "as expected",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": ".",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01LiZwhcy5g12fYSVLgAq5TS",
+     "name": "Bash",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Bash: sleep 5; echo done"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": "Running in background",
+     "folded": null,
+     "id": "toolu_01LiZwhcy5g12fYSVLgAq5TS",
+     "name": "Bash",
+     "output": "Command running in background with ID: bny2rux7d. Output is being written to: /private/tmp/claude-502/-home-dev-project/93f0c865-cbfb-4117-963b-cbcd8c9be267/tasks/bny2rux7d.output. You will be notifi…",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Bash: sleep 5; echo done"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "started",
+    "notice": false
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01LiZwhcy5g12fYSVLgAq5TS",
+     "name": "Bash",
+     "output": null,
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "Bash: sleep 5; echo done"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01LiZwhcy5g12fYSVLgAq5TS",
+     "name": "Bash",
+     "output": "Background command \"Sleep for 5 seconds then print done\" completed (exit code 0)",
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "Bash: sleep 5; echo done"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "\n\nThe backgro",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "und command",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " completed ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "successfull",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "y after run",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ning for 5 ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "seconds. Th",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "e sleep per",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "iod elapsed",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " without an",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "y issues, a",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "nd the echo",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " command ex",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ecuted afte",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "rward. The ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "output file",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " contains \"",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "done\", conf",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "irming that",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " the entire",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " command se",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "quence ran ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "as expected",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": ".",
+    "notice": false
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

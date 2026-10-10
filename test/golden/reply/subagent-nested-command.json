@@ -1,0 +1,428 @@
+{
+ "recording": "subagent-nested-command",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01KmpaRqZVqZ3qZNs2Vqbjv1",
+      "name": "Agent",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Agent: Run two 12-second sleep commands and report finished"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": "Running in background",
+      "folded": null,
+      "id": "toolu_01KmpaRqZVqZ3qZNs2Vqbjv1",
+      "name": "Agent",
+      "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+      "preview": null,
+      "status": "in_progress",
+      "task": true,
+      "title": "Agent: Run two 12-second sleep commands and report finished"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "started",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": [
+      {
+       "calls": 0,
+       "details": "Running in background",
+       "folded": null,
+       "id": "toolu_01KmpaRqZVqZ3qZNs2Vqbjv1",
+       "name": "Agent",
+       "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+       "preview": null,
+       "status": "in_progress",
+       "task": true,
+       "title": "Agent: Run two 12-second sleep commands and report finished"
+      }
+     ]
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": [
+    "a99ac728588823f5a"
+   ]
+  },
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01VuYf3xvrqBf6xe5UN5uDWh",
+      "name": "Bash",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Bash: python3 -c 'import time; time.sleep(12)'"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01VuYf3xvrqBf6xe5UN5uDWh",
+      "name": "Bash",
+      "output": "Sleep for 12 seconds",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Bash: python3 -c 'import time; time.sleep(12)'"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01VuYf3xvrqBf6xe5UN5uDWh",
+      "name": "Bash",
+      "output": "(Bash completed with no output)",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Bash: python3 -c 'import time; time.sleep(12)'"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01UHhHBJqasUoU6SUJjct3zq",
+      "name": "Bash",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Bash: python3 -c 'import time; time.sleep(12)'"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01UHhHBJqasUoU6SUJjct3zq",
+      "name": "Bash",
+      "output": "Sleep for 12 seconds",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Bash: python3 -c 'import time; time.sleep(12)'"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01UHhHBJqasUoU6SUJjct3zq",
+      "name": "Bash",
+      "output": "(Bash completed with no output)",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Bash: python3 -c 'import time; time.sleep(12)'"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-a99ac728588823f5a",
+      "name": "task",
+      "output": null,
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "a99ac728588823f5a"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-a99ac728588823f5a",
+      "name": "task",
+      "output": "finished",
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "a99ac728588823f5a"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "The agent ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "finished r",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "unning bot",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "h sleep co",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "mmands and",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " reported ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "finished.",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01KmpaRqZVqZ3qZNs2Vqbjv1",
+     "name": "Agent",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Agent: Run two 12-second sleep commands and report finished"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": "Running in background",
+     "folded": null,
+     "id": "toolu_01KmpaRqZVqZ3qZNs2Vqbjv1",
+     "name": "Agent",
+     "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Agent: Run two 12-second sleep commands and report finished"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "started",
+    "notice": false
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 1,
+     "details": "Bash: python3 -c 'import time; time.sleep(12)'",
+     "folded": null,
+     "id": "toolu_01KmpaRqZVqZ3qZNs2Vqbjv1",
+     "name": "Agent",
+     "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Agent: Run two 12-second sleep commands and report finished"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 1,
+     "details": "Running Sleep for 12 seconds",
+     "folded": null,
+     "id": "toolu_01KmpaRqZVqZ3qZNs2Vqbjv1",
+     "name": "Agent",
+     "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Agent: Run two 12-second sleep commands and report finished"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 2,
+     "details": "Bash: python3 -c 'import time; time.sleep(12)'\nBash: python3 -c 'import time; time.sleep(12)'",
+     "folded": null,
+     "id": "toolu_01KmpaRqZVqZ3qZNs2Vqbjv1",
+     "name": "Agent",
+     "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Agent: Run two 12-second sleep commands and report finished"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 2,
+     "details": "Running Sleep for 12 seconds",
+     "folded": null,
+     "id": "toolu_01KmpaRqZVqZ3qZNs2Vqbjv1",
+     "name": "Agent",
+     "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Agent: Run two 12-second sleep commands and report finished"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 2,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01KmpaRqZVqZ3qZNs2Vqbjv1",
+     "name": "Agent",
+     "output": null,
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "Agent: Run two 12-second sleep commands and report finished"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 2,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01KmpaRqZVqZ3qZNs2Vqbjv1",
+     "name": "Agent",
+     "output": "finished",
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "Agent: Run two 12-second sleep commands and report finished"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "\n\nThe agent ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "finished r",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "unning bot",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "h sleep co",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "mmands and",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " reported ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "finished.",
+    "notice": false
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

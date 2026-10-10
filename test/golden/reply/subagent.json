@@ -1,0 +1,650 @@
+{
+ "recording": "subagent",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_013vuT1tVKbAduiW9vAf1YWk",
+      "name": "Agent",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Agent: Run ls and report contents"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": "Running in background",
+      "folded": null,
+      "id": "toolu_013vuT1tVKbAduiW9vAf1YWk",
+      "name": "Agent",
+      "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+      "preview": null,
+      "status": "in_progress",
+      "task": true,
+      "title": "Agent: Run ls and report contents"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "I've laun",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ched the ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "general-p",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "urpose ag",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ent to ru",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "n `ls` an",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "d report ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "the direc",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "tory cont",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ents. The",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " agent is",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " working ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "in the ba",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ckground ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "now. I'll",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " notify y",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ou when i",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "t complet",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "es with t",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "he result",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "s.",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": [
+      {
+       "calls": 0,
+       "details": "Running in background",
+       "folded": null,
+       "id": "toolu_013vuT1tVKbAduiW9vAf1YWk",
+       "name": "Agent",
+       "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+       "preview": null,
+       "status": "in_progress",
+       "task": true,
+       "title": "Agent: Run ls and report contents"
+      }
+     ]
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": [
+    "a42694cd437f15ed1"
+   ]
+  },
+  {
+   "calls": [
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01NJC7PqCRjvqpuDbQxHDXTp",
+      "name": "Bash",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Bash: ls -la"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01NJC7PqCRjvqpuDbQxHDXTp",
+      "name": "Bash",
+      "output": "total 8",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Bash: ls -la"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-a42694cd437f15ed1",
+      "name": "task",
+      "output": null,
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "a42694cd437f15ed1"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "task-a42694cd437f15ed1",
+      "name": "task",
+      "output": "The current working directory is empty except for a single file: **Files and directories present:** - `notes.txt` (6 bytes, regular file) That's the only item in `/home/dev/project`.",
+      "preview": null,
+      "status": "complete",
+      "task": true,
+      "title": "a42694cd437f15ed1"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "The agent has co",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "mpleted running ",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "`ls`. Here's wha",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "t it found:\n\n**F",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "iles and directo",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ries in the curr",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ent working dire",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ctory:**\n- `note",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "s.txt` (6 bytes,",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " regular file)\n\n",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "The directory co",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "ntains only this",
+     "notice": false
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": " single file.",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_013vuT1tVKbAduiW9vAf1YWk",
+     "name": "Agent",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Agent: Run ls and report contents"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": "Running in background",
+     "folded": null,
+     "id": "toolu_013vuT1tVKbAduiW9vAf1YWk",
+     "name": "Agent",
+     "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Agent: Run ls and report contents"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "I've laun",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ched the ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "general-p",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "urpose ag",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ent to ru",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "n `ls` an",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "d report ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "the direc",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "tory cont",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ents. The",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " agent is",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " working ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "in the ba",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ckground ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "now. I'll",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " notify y",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ou when i",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "t complet",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "es with t",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "he result",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "s.",
+    "notice": false
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 1,
+     "details": "Bash: ls -la",
+     "folded": null,
+     "id": "toolu_013vuT1tVKbAduiW9vAf1YWk",
+     "name": "Agent",
+     "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Agent: Run ls and report contents"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 1,
+     "details": "Running List files and directories in current working directory",
+     "folded": null,
+     "id": "toolu_013vuT1tVKbAduiW9vAf1YWk",
+     "name": "Agent",
+     "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)",
+     "preview": null,
+     "status": "in_progress",
+     "task": true,
+     "title": "Agent: Run ls and report contents"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 1,
+     "details": null,
+     "folded": null,
+     "id": "toolu_013vuT1tVKbAduiW9vAf1YWk",
+     "name": "Agent",
+     "output": null,
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "Agent: Run ls and report contents"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 1,
+     "details": null,
+     "folded": null,
+     "id": "toolu_013vuT1tVKbAduiW9vAf1YWk",
+     "name": "Agent",
+     "output": "The current working directory is empty except for a single file: **Files and directories present:** - `notes.txt` (6 bytes, regular file) That's the only item in `/home/dev/project`.",
+     "preview": null,
+     "status": "complete",
+     "task": true,
+     "title": "Agent: Run ls and report contents"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "\n\nThe agent has co",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "mpleted running ",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "`ls`. Here's wha",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "t it found:\n\n**F",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "iles and directo",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ries in the curr",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ent working dire",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ctory:**\n- `note",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "s.txt` (6 bytes,",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " regular file)\n\n",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "The directory co",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "ntains only this",
+    "notice": false
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": " single file.",
+    "notice": false
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

@@ -1,0 +1,607 @@
+{
+ "discipline": "Each sink call of the seam-1 'whole' list is replayed in order on a ReplySink over FakeSlack. After a text or task call, ReplySink.settle() flushes the reply at once, standing in for the debounced write (one flush per sink call, so the debounce never merges two calls); finish and close_out flush by themselves. The fake clock never advances, so the 280-second stream deadline never fires, and the UpdateLimiter has a budget no recording can spend.",
+ "final": {
+  "message_blocks": [
+   [
+    {
+     "type": "divider"
+    },
+    {
+     "elements": [
+      {
+       "text": "footer",
+       "type": "mrkdwn"
+      }
+     ],
+     "type": "context"
+    }
+   ]
+  ],
+  "message_cards": [
+   [
+    {
+     "details": "Running in background",
+     "id": "fold:toolu_01LiZwhcy5g12fYSVLgAq5TS",
+     "status": "complete",
+     "title": "Bash: sleep 5; echo done"
+    }
+   ]
+  ],
+  "message_texts": [
+   "started\n\nThe background command completed successfully after running for 5 seconds. The sleep period elapsed without any issues, and the echo command executed afterward. The output file contains \"done\", confirming that the entire command sequence ran as expected."
+  ],
+  "pushes": 1
+ },
+ "recording": "background",
+ "slack_calls": [
+  {
+   "after_sink_call": 0,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "id": "fold:toolu_01LiZwhcy5g12fYSVLgAq5TS",
+      "status": "in_progress",
+      "title": "Bash: sleep 5; echo done",
+      "type": "task_update"
+     }
+    ],
+    "recipient_team_id": "T000TEAM",
+    "recipient_user_id": "U000ALICE",
+    "task_display_mode": "timeline",
+    "thread_ts": "1780000000.000001"
+   },
+   "method": "chat.startStream"
+  },
+  {
+   "after_sink_call": 1,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "details": "Running in background",
+      "id": "fold:toolu_01LiZwhcy5g12fYSVLgAq5TS",
+      "status": "in_progress",
+      "title": "Bash: sleep 5; echo done",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 2,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "started",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 3,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "id": "fold:toolu_01LiZwhcy5g12fYSVLgAq5TS",
+      "status": "complete",
+      "title": "Bash: sleep 5; echo done",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 5,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "\n\nThe backgro",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 6,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "und command",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 7,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " completed ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 8,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "successfull",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 9,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "y after run",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 10,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "ning for 5 ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 11,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "seconds. Th",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 12,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "e sleep per",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 13,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "iod elapsed",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 14,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " without an",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 15,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "y issues, a",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 16,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "nd the echo",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 17,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " command ex",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 18,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "ecuted afte",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 19,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "rward. The ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 20,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "output file",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 21,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " contains \"",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 22,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "done\", conf",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 23,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "irming that",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 24,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " the entire",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 25,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": " command se",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 26,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "quence ran ",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 27,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "as expected",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 28,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": ".",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 30,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "blocks": [
+     {
+      "type": "divider"
+     },
+     {
+      "elements": [
+       {
+        "text": "footer",
+        "type": "mrkdwn"
+       }
+      ],
+      "type": "context"
+     }
+    ],
+    "channel": "C000CHAN",
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.stopStream"
+  }
+ ]
+}

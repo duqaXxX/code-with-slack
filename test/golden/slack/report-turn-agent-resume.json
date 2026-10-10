@@ -1,0 +1,601 @@
+{
+ "discipline": "Each sink call of the seam-1 'whole' list is replayed in order on a ReplySink over FakeSlack. After a text or task call, ReplySink.settle() flushes the reply at once, standing in for the debounced write (one flush per sink call, so the debounce never merges two calls); finish and close_out flush by themselves. The fake clock never advances, so the 280-second stream deadline never fires, and the UpdateLimiter has a budget no recording can spend.",
+ "final": {
+  "message_blocks": [
+   [
+    {
+     "status": "complete",
+     "task_id": "fold:toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+     "title": "Agent: Test background agent · 2 calls",
+     "type": "task_card"
+    },
+    {
+     "text": "STARTED\n\nNOTED",
+     "type": "markdown"
+    },
+    {
+     "elements": [
+      {
+       "text": "✓ ToolSearch",
+       "type": "mrkdwn"
+      }
+     ],
+     "type": "context"
+    },
+    {
+     "status": "complete",
+     "task_id": "now:toolu_01VeajTuo9DEtDtcPrarZiKB",
+     "title": "SendMessage: a0d6caecc437a1298",
+     "type": "task_card"
+    },
+    {
+     "text": "SENT",
+     "type": "markdown"
+    },
+    {
+     "elements": [
+      {
+       "text": "✓ Ran 1 shell command",
+       "type": "mrkdwn"
+      }
+     ],
+     "type": "context"
+    },
+    {
+     "text": "REPORTED\nPINEAPPLE\n\nKIWI",
+     "type": "markdown"
+    },
+    {
+     "type": "divider"
+    },
+    {
+     "elements": [
+      {
+       "text": "footer",
+       "type": "mrkdwn"
+      }
+     ],
+     "type": "context"
+    }
+   ]
+  ],
+  "message_cards": [
+   [
+    {
+     "id": "fold:toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+     "status": "complete",
+     "title": "Agent: Test background agent · 2 calls"
+    },
+    {
+     "id": "now:toolu_01VeajTuo9DEtDtcPrarZiKB",
+     "status": "complete",
+     "title": "SendMessage: a0d6caecc437a1298"
+    }
+   ]
+  ],
+  "message_texts": [
+   "STARTED\n\nNOTED\n\nSENT\n\nREPORTED\nPINEAPPLE\n\nKIWI"
+  ],
+  "pushes": 1
+ },
+ "recording": "report-turn-agent-resume",
+ "slack_calls": [
+  {
+   "after_sink_call": 0,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "id": "fold:toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+      "status": "in_progress",
+      "title": "Agent: Test background agent",
+      "type": "task_update"
+     }
+    ],
+    "recipient_team_id": "T000TEAM",
+    "recipient_user_id": "U000ALICE",
+    "task_display_mode": "timeline",
+    "thread_ts": "1780000000.000001"
+   },
+   "method": "chat.startStream"
+  },
+  {
+   "after_sink_call": 1,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "details": "Running in background",
+      "id": "fold:toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+      "status": "in_progress",
+      "title": "Agent: Test background agent",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 2,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "details": "\nBash: sleep 3",
+      "id": "fold:toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+      "status": "in_progress",
+      "title": "Agent: Test background agent · 1 call",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 3,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "details": "\nRunning sleep 3",
+      "id": "fold:toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+      "status": "in_progress",
+      "title": "Agent: Test background agent · 1 call",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 4,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "STARTED",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 5,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "id": "fold:toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+      "status": "complete",
+      "title": "Agent: Test background agent · 1 call",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 7,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "\n\nNOTED",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 8,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "id": "fold:toolu_01EN71a4pBQzXL4JEZkr5vEN",
+      "status": "in_progress",
+      "title": "ToolSearch: select:SendMessage",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 9,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "id": "fold:toolu_01EN71a4pBQzXL4JEZkr5vEN",
+      "status": "complete",
+      "title": "ToolSearch: select:SendMessage",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 10,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "id": "fold:toolu_01EN71a4pBQzXL4JEZkr5vEN",
+      "status": "complete",
+      "title": "ToolSearch",
+      "type": "task_update"
+     },
+     {
+      "id": "now:toolu_01VeajTuo9DEtDtcPrarZiKB",
+      "status": "in_progress",
+      "title": "SendMessage: a0d6caecc437a1298",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 11,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "details": "Running in background",
+      "id": "now:toolu_01VeajTuo9DEtDtcPrarZiKB",
+      "status": "in_progress",
+      "title": "SendMessage: a0d6caecc437a1298",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 12,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "SENT",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 13,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "id": "fold:toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+      "status": "complete",
+      "title": "Agent: Test background agent · 2 calls",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 14,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "details": "\nRunning sleep 20",
+      "id": "now:toolu_01VeajTuo9DEtDtcPrarZiKB",
+      "status": "in_progress",
+      "title": "SendMessage: a0d6caecc437a1298",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 15,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "id": "now:toolu_01VeajTuo9DEtDtcPrarZiKB",
+      "status": "complete",
+      "title": "SendMessage: a0d6caecc437a1298",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 17,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "id": "fold:toolu_01H5wwXkRKqXrGbowxTuLKMV",
+      "status": "in_progress",
+      "title": "Bash: sleep 15",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 18,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "id": "fold:toolu_01H5wwXkRKqXrGbowxTuLKMV",
+      "status": "complete",
+      "title": "Bash: sleep 15",
+      "type": "task_update"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 20,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "REPORTED\n",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 21,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "PINEAPPLE",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 22,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "channel": "C000CHAN",
+    "chunks": [
+     {
+      "text": "\n\nKIWI",
+      "type": "markdown_text"
+     }
+    ],
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.appendStream"
+  },
+  {
+   "after_sink_call": 24,
+   "answer": {
+    "channel": "C000CHAN",
+    "ok": true,
+    "ts": "1790000000.000001"
+   },
+   "args": {
+    "blocks": [
+     {
+      "type": "divider"
+     },
+     {
+      "elements": [
+       {
+        "text": "footer",
+        "type": "mrkdwn"
+       }
+      ],
+      "type": "context"
+     }
+    ],
+    "channel": "C000CHAN",
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.stopStream"
+  },
+  {
+   "after_sink_call": 24,
+   "answer": {
+    "ok": true
+   },
+   "args": {
+    "blocks": [
+     {
+      "status": "complete",
+      "task_id": "fold:toolu_01EfzMcm7QNgePnLTZtMW5Mo",
+      "title": "Agent: Test background agent · 2 calls",
+      "type": "task_card"
+     },
+     {
+      "text": "STARTED\n\nNOTED",
+      "type": "markdown"
+     },
+     {
+      "elements": [
+       {
+        "text": "✓ ToolSearch",
+        "type": "mrkdwn"
+       }
+      ],
+      "type": "context"
+     },
+     {
+      "status": "complete",
+      "task_id": "now:toolu_01VeajTuo9DEtDtcPrarZiKB",
+      "title": "SendMessage: a0d6caecc437a1298",
+      "type": "task_card"
+     },
+     {
+      "text": "SENT",
+      "type": "markdown"
+     },
+     {
+      "elements": [
+       {
+        "text": "✓ Ran 1 shell command",
+        "type": "mrkdwn"
+       }
+      ],
+      "type": "context"
+     },
+     {
+      "text": "REPORTED\nPINEAPPLE\n\nKIWI",
+      "type": "markdown"
+     },
+     {
+      "type": "divider"
+     },
+     {
+      "elements": [
+       {
+        "text": "footer",
+        "type": "mrkdwn"
+       }
+      ],
+      "type": "context"
+     }
+    ],
+    "channel": "C000CHAN",
+    "text": "STARTED",
+    "ts": "1790000000.000001"
+   },
+   "method": "chat.update"
+  }
+ ]
+}

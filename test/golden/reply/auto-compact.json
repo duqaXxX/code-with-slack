@@ -1,0 +1,237 @@
+{
+ "recording": "auto-compact",
+ "turns": [
+  {
+   "calls": [
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "Compacted the conversation: 67.9k → 10.6k tokens.\n\n",
+     "notice": true
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01KoLbfiRVvcd4RcMT6nxuRp",
+      "name": "Read",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Read: /home/dev/project/notes/ledger-one.txt"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01KoLbfiRVvcd4RcMT6nxuRp",
+      "name": "Read",
+      "output": "1 Ledger one",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Read: /home/dev/project/notes/ledger-one.txt"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01V19yNn7aUr4C2ueCBYvWe5",
+      "name": "Read",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Read: /home/dev/project/notes/ledger-two.txt"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01V19yNn7aUr4C2ueCBYvWe5",
+      "name": "Read",
+      "output": "1 Ledger two",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Read: /home/dev/project/notes/ledger-two.txt"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01EbaWzuF2zhhtL9azrQDQsD",
+      "name": "Read",
+      "output": null,
+      "preview": null,
+      "status": "in_progress",
+      "task": false,
+      "title": "Read: /home/dev/project/notes/ledger-three.txt"
+     }
+    },
+    {
+     "call": "task",
+     "update": {
+      "calls": 0,
+      "details": null,
+      "folded": null,
+      "id": "toolu_01EbaWzuF2zhhtL9azrQDQsD",
+      "name": "Read",
+      "output": "1 Ledger three",
+      "preview": null,
+      "status": "complete",
+      "task": false,
+      "title": "Read: /home/dev/project/notes/ledger-three.txt"
+     }
+    },
+    {
+     "call": "text",
+     "ending": false,
+     "markdown": "read",
+     "notice": false
+    },
+    {
+     "call": "finish",
+     "closing": []
+    },
+    {
+     "call": "close_out",
+     "footer": "footer"
+    }
+   ],
+   "result_set": true,
+   "running_tasks": []
+  }
+ ],
+ "whole": {
+  "calls": [
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "Compacted the conversation: 67.9k → 10.6k tokens.\n\n",
+    "notice": true
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01KoLbfiRVvcd4RcMT6nxuRp",
+     "name": "Read",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Read: /home/dev/project/notes/ledger-one.txt"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01KoLbfiRVvcd4RcMT6nxuRp",
+     "name": "Read",
+     "output": "1 Ledger one",
+     "preview": null,
+     "status": "complete",
+     "task": false,
+     "title": "Read: /home/dev/project/notes/ledger-one.txt"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01V19yNn7aUr4C2ueCBYvWe5",
+     "name": "Read",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Read: /home/dev/project/notes/ledger-two.txt"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01V19yNn7aUr4C2ueCBYvWe5",
+     "name": "Read",
+     "output": "1 Ledger two",
+     "preview": null,
+     "status": "complete",
+     "task": false,
+     "title": "Read: /home/dev/project/notes/ledger-two.txt"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01EbaWzuF2zhhtL9azrQDQsD",
+     "name": "Read",
+     "output": null,
+     "preview": null,
+     "status": "in_progress",
+     "task": false,
+     "title": "Read: /home/dev/project/notes/ledger-three.txt"
+    }
+   },
+   {
+    "call": "task",
+    "update": {
+     "calls": 0,
+     "details": null,
+     "folded": null,
+     "id": "toolu_01EbaWzuF2zhhtL9azrQDQsD",
+     "name": "Read",
+     "output": "1 Ledger three",
+     "preview": null,
+     "status": "complete",
+     "task": false,
+     "title": "Read: /home/dev/project/notes/ledger-three.txt"
+    }
+   },
+   {
+    "call": "text",
+    "ending": false,
+    "markdown": "read",
+    "notice": false
+   },
+   {
+    "call": "finish",
+    "closing": []
+   },
+   {
+    "call": "close_out",
+    "footer": "footer"
+   }
+  ],
+  "result_set": true,
+  "running_tasks": []
+ }
+}

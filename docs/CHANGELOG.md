@@ -7,6 +7,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- The foundation of a TypeScript daemon, beside the Python one, which stays the daemon that
+  runs. `package.json` pins `@anthropic-ai/claude-agent-sdk` 0.3.296, `@slack/bolt` 5.1.0 and
+  `@slack/web-api` 8.2.0 and asks for Node 22.18 or later; the checks are Biome, `tsc --noEmit`
+  and `node --test`, which runs the tests from their sources. `src/agent/seam.ts` and
+  `src/chat/seam.ts` hold the types of the two seams: what the core asks of an agent back end
+  and is told by it, and the reply a chat provider draws. `test/imports.test.ts` reads the
+  imports of every source file and fails when the Agent SDK is imported outside the Claude back
+  end (`src/agent/claude/`), a Slack package outside the Slack provider, or a back end or a
+  provider from the core.
+  `tests/golden.py` replays each recording of `tests/fixtures/sdk/` through the Python renderer
+  and the Python reply sink and writes what they did under `test/golden/`, for the TypeScript
+  tests to compare against; `tests/test_golden.py` keeps those files equal to what the code
+  produces. CI runs the TypeScript checks in "Tests, types, lint" and the TypeScript tests on
+  Linux, macOS and Windows.
 - The release probe looks at commands (`probe/commands.py`). It compares the commands a session
   is offered on the release with the recorded `server-info.json` and prints the new and the gone
   ones, to be tried in Slack before the release is pinned; `uv run python -m probe --commands`
