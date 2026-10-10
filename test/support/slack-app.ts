@@ -75,7 +75,6 @@ import {
   type AsyncEvent,
   BOT,
   CHANNEL,
-  FakeClock,
   FakeSlack,
   OTHER_THREAD,
   OWNER,
@@ -85,7 +84,13 @@ import {
 } from "./fake-slack.ts";
 import { type JsonObject, sdkJson, slackPayload, slackPayloads } from "./fixtures.ts";
 import { commitAt, gitInit } from "./git-layouts.ts";
-import { FakeAgentBackend, FakeAgentSession, type Script, sdkMessages } from "./sessions.ts";
+import {
+  FakeAgentBackend,
+  FakeAgentSession,
+  type Script,
+  SettledClock,
+  sdkMessages,
+} from "./sessions.ts";
 
 // biome-ignore lint/suspicious/noExplicitAny: a Slack payload built or read in a test
 export type Body = Record<string, any>;
@@ -222,12 +227,12 @@ export class World {
    */
   autoStart = true;
   /** The sessions' clock. */
-  readonly clock = new FakeClock();
+  readonly clock = new SettledClock();
   /** The Slack provider's clock. */
-  readonly slackClock = new FakeClock();
+  readonly slackClock = new SettledClock();
   /** The handlers' clock. */
-  readonly appClock = new FakeClock();
-  readonly homeClock = new FakeClock();
+  readonly appClock = new SettledClock();
+  readonly homeClock = new SettledClock();
   /** Wall-clock seconds as the handlers read them. */
   now: () => number = () => Date.now() / 1000;
   readonly limiter: Limiter;

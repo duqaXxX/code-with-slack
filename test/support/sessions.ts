@@ -450,6 +450,60 @@ export const WRITES = [
   "chat.update",
 ] as const;
 
+// The work of the daemon that a turn of the event loop does not finish: a file call and the
+// close of its handle, a git process and its pipes. The test runner's own pipes are there from
+// the start, so what counts is what is in flight beyond them.
+const REAL_WORK = new Set([
+  "FSReqPromise",
+  "FSReqCallback",
+  "CloseReq",
+  "ProcessWrap",
+  "PipeWrap",
+  "WriteWrap",
+  "ShutdownWrap",
+]);
+
+function realWorkInFlight(): number {
+  return process.getActiveResourcesInfo().filter((name) => REAL_WORK.has(name)).length;
+}
+
+const AT_REST = realWorkInFlight();
+// Turns of the event loop with no real work in flight before the daemon counts as at rest.
+const CALM_TURNS = 5;
+// The footer's own limit on its `git` is 5 seconds; past this a stuck resource is not waited for.
+const REAL_WORK_LIMIT_MS = 10_000;
+
+/**
+ * Wait until no real work started by the daemon is in flight (a file call, a `git` process): it
+ * answers on the operating system's time, so under load it outlasts any fixed number of turns.
+ * Returns at once when nothing is in flight.
+ */
+export async function realWorkDone(): Promise<void> {
+  const deadline = Date.now() + REAL_WORK_LIMIT_MS;
+  let calm = 0;
+  while (calm < CALM_TURNS && Date.now() < deadline) {
+    if (realWorkInFlight() > AT_REST) {
+      calm = 0;
+      await new Promise<void>((resolve) => setTimeout(resolve, 1));
+    } else {
+      calm += 1;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  }
+}
+
+/**
+ * A fake clock whose `advance` returns once the real work it set going is done: a timer that
+ * fires into an end of turn starts the footer's `git`, and a test that advances a clock and
+ * then asserts the end state would otherwise race the operating system.
+ */
+export class SettledClock extends FakeClock {
+  override async advance(seconds: number): Promise<void> {
+    await super.advance(seconds);
+    await realWorkDone();
+  }
+}
+
 export interface HarnessOptions {
   /** The reply's debounce, in seconds on `slackClock` (Python's tests lowered `DEBOUNCE_SECONDS`). */
   readonly debounceSeconds?: number;
@@ -469,9 +523,9 @@ export class Harness {
   readonly holds = new Holds();
   readonly backend: FakeAgentBackend;
   /** The sessions' own clock. */
-  readonly clock = new FakeClock();
+  readonly clock = new SettledClock();
   /** The Slack provider's clock. */
-  readonly slackClock = new FakeClock();
+  readonly slackClock = new SettledClock();
   readonly chat: SlackChat;
   readonly deps: SessionDeps;
   manager: SessionManager;
@@ -595,16 +649,23 @@ export class Harness {
   /**
    * Let what is ready run to its next wait: every promise callback, and every task that starts
    * on a later turn of the event loop. Where a Python test slept a moment for the daemon to act.
+   * Real work the daemon started (a file read, the footer's `git`) is waited for too: its
+   * answer comes from the operating system, not from a turn of the loop, so no number of turns
+   * stands for it on a loaded machine.
    */
   async idle(): Promise<void> {
     for (let round = 0; round < 20; round += 1) {
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
+    await realWorkDone();
   }
 
   /**
    * What a Python test slept through: what is ready runs, and Slack's clock moves on by
-   * `seconds`, a hundredth at a time. The sessions' clock stays put.
+   * `seconds`, a hundredth at a time. The sessions' clock stays put. A step ends with the real
+   * work it set going done (`SettledClock`), so a pause is never over before an end of turn
+   * that was under way has landed: what a pause asserts afterwards is what it asserted when
+   * the footer's `git` answered at once.
    */
   async sleep(seconds: number): Promise<void> {
     await this.idle();
@@ -617,8 +678,9 @@ export class Harness {
    * Wait for a condition on the fakes, as Python's `until` polled it: what is ready runs, and
    * Slack's clock moves on a hundredth of a second at a time, for two seconds at most, so a
    * reply's debounce passes as it did while Python polled. The sessions' clock stays put.
-   * Each step also yields a moment of real time: some of what a test waits for ends in real
-   * file reads and a `git` subprocess, and a loaded machine must not use up the steps first.
+   * Each step also yields a moment of real time on top of the real work it waits for
+   * (`SettledClock`): some of what a test waits for ends in real file reads and a `git`
+   * subprocess, and a loaded machine must not use up the steps first.
    */
   async until(condition: () => boolean, limit = 2.0): Promise<void> {
     await this.idle();

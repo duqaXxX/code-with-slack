@@ -73,7 +73,7 @@ import {
   TEAM,
 } from "./support/fake-slack.ts";
 import { slackPayload } from "./support/fixtures.ts";
-import { FakeAgentBackend, type Script, sdkMessages } from "./support/sessions.ts";
+import { FakeAgentBackend, realWorkDone, type Script, sdkMessages } from "./support/sessions.ts";
 import { homeAction, reply } from "./support/slack-app.ts";
 
 const ROOT = join(import.meta.dirname, "..");
@@ -229,11 +229,15 @@ class Daemon {
     return this.running;
   }
 
-  /** Advances the clock a second at a time until `done` holds, at most a hundred times. */
+  /**
+   * Advances the clock a second at a time until `done` holds, at most a hundred times. Each step
+   * waits for the file calls it set going, so a loaded machine does not use the steps up.
+   */
   async until(done: () => boolean): Promise<void> {
     for (let round = 0; round < 100; round += 1) {
       if (done()) return;
       await this.clock.advance(1);
+      await realWorkDone();
     }
     assert.ok(done(), "the daemon never reached the state the test waited for");
   }
