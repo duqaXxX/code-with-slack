@@ -487,7 +487,12 @@ export function worldFor(t: TestContext): ((options?: WorldOptions) => World) & 
   // The daemon's log stays out of the test report, as pytest kept it: a test that reads a line
   // replaces the logger's method (`mock.method`), which this does not touch.
   const writer = setWriter(() => {});
+  // A timer that keeps the loop alive for the test's duration: on Node 22 a test that awaits
+  // something which never comes, with only unref'd timers pending, lets the process finish and
+  // cancels the rest of the file. With this it waits for the runner's own timeout instead.
+  const guard = setInterval(() => {}, 1_000);
   t.after(async () => {
+    clearInterval(guard);
     for (const world of made) await world.close();
     rmSync(tmpPath, { recursive: true, force: true });
     setWriter(writer);
