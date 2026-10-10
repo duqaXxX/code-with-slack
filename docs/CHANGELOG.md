@@ -317,12 +317,12 @@ All notable changes to this project are documented here. The format follows
     the name is the runtime's (`TypeError`, `TimeoutError`, `Error`) in place of Python's class.
   - An approval request prints a number with a whole value as JavaScript writes it: a `1.0` in
     a tool's input shows as `1`.
-  - An error nothing caught stops the daemon: it logs the error's name, closes the sessions
-    and the connection without waiting for running turns, and exits with status 1, so the
-    service is started again and the crash repair runs. This covers a Socket Mode connection
-    that cannot come back (a refused token, a request that fails while reconnecting), which
-    `@slack/socket-mode` 3.1.0 reports in no other way. The Python daemon logged such an error
-    and went on. If that stop has not ended after 30 seconds the process exits anyway.
+  - An exception nothing caught stops the daemon: it logs the exception's name, closes the
+    sessions and the connection without waiting for running turns, and exits with status 1,
+    so the service is started again and the crash repair runs. The Python daemon logged such
+    an error and went on; Node documents the process as unsafe to resume after one. If that
+    stop has not ended after 30 seconds the process exits anyway. A rejected promise nothing
+    handled is logged by its name and the daemon goes on, as before.
   - Once a stop has closed the sessions, a message or a click still being handled does nothing
     more: no session starts, nothing is written to `state.json`, nothing is posted. The
     process ends as soon as the stop is over, as the Python one did: the Socket Mode

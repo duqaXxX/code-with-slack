@@ -159,17 +159,18 @@ every client, store and clock the layers use is built here and handed down.
 
 `main.main` is the entry point. A `ConfigError`, a `StateError` or `AlreadyRunning` is logged with
 its message, any other failure of `main.run` by its name alone, and the process exits with 1. A
-rejected promise or an exception nobody handled is logged by its name and stops the daemon
-(`main.installProcessHandlers`) the way a `SIGINT` does, with the shutdown below and no drain, and
-the process exits with 1, so that launchd, which keeps the service alive, starts a clean daemon and
-the crash repair runs. Letting Node end the process there would skip the shutdown and leave open
-replies and a Claude Code process per session; going on would leave a process Node documents as
-unsafe after an uncaught exception. An unhandled rejection stops the daemon too because it is the
-one sign of a Socket Mode connection that is gone for good: `@slack/socket-mode` 3.1.0 reconnects
-from its `close` listener without awaiting the call (`SocketModeClient.delayReconnectAttempt`), and
-a request for a new WebSocket URL that fails with a request error, an HTTP error or an
-unrecoverable platform code is rejected there with no event for it. A daemon that went on would
-stay up with no socket, the lock held and the owner away.
+rejected promise or an exception nobody handled is logged by its name
+(`main.installProcessHandlers`). After a rejected promise the daemon goes on, as the Python daemon
+did after a task's exception. An uncaught exception stops it the way a `SIGINT` does, with the
+shutdown below and no drain, and the process exits with 1, so that launchd, which keeps the
+service alive, starts a clean daemon and the crash repair runs: Node documents the process as
+unsafe to resume after one, and letting Node end it there would skip the shutdown and leave open
+replies and a Claude Code process per session. One rejection leaves the daemon running and deaf.
+`@slack/socket-mode` 3.1.0 reconnects from its `close` listener without awaiting the call
+(`SocketModeClient.delayReconnectAttempt`), and when Slack refuses the app token for good
+(`invalid_auth` and the four other codes the client calls unrecoverable) the request for a new
+WebSocket URL is rejected there with no event for it. The log then holds
+`unhandled rejection: invalid_auth`, and the daemon needs a working token and a restart.
 
 Logs are lines on standard error (`log.getLogger`), which the LaunchAgent writes to
 `~/Library/Logs/awaydesk/awaydesk.log`. A line reads `<time> <LEVEL> <name>: <message>`, the time

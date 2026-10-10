@@ -798,7 +798,7 @@ test("an unexpected error ends with 1 and logs only its name", async (t) => {
   assert.deepEqual(errors(), ["stopped by an unexpected error: invalid_auth"]);
 });
 
-test("a rejection and an exception nobody handled are logged by name and stop the daemon", (t) => {
+test("a rejection and an exception nobody handled are logged by name, and the exception alone stops the daemon", (t) => {
   const errors = written(t, logger, "error");
   const events = new EventEmitter();
   let stops = 0;
@@ -814,44 +814,58 @@ test("a rejection and an exception nobody handled are logged by name and stop th
     "unhandled rejection: string",
     "uncaught exception: TypeError",
   ]);
-  assert.equal(stops, 3);
+  assert.equal(stops, 1);
 });
 
-// S1: what the daemon does with what the process cannot go on from. Python logged it and went
-// on, as asyncio did with a task's exception; here an uncaught exception leaves the process in a
-// state Node documents as unsafe, and a Socket Mode connection that is gone for good shows only
-// as an unhandled rejection (`test/chat/slack/app/socket-mode.test.ts`): deaf, with the owner
-// away, and launchd satisfied. Both take the path of a SIGINT and exit 1, so launchd starts a
-// clean daemon and the crash repair runs.
+// S1: what the daemon does with an error nobody handled. Python logged it and went on, as
+// asyncio did with a task's exception. A rejected promise is the same thing here, a piece of
+// work that failed with nobody waiting for it, and the daemon logs it and goes on: Node only
+// ends the process for it when no listener is set. An uncaught exception leaves the process in
+// a state Node documents as unsafe to resume from, so it takes the path of a SIGINT and exits
+// 1: launchd starts a clean daemon and the crash repair runs.
 
-for (const [event, name] of [
-  ["uncaughtException", "uncaught exception"],
-  ["unhandledRejection", "unhandled rejection"],
-] as const) {
-  test(`an ${name} stops the daemon as a SIGINT does and exits with 1`, async (t) => {
-    const infos = written(t, logger, "info");
-    const d = new Daemon(t);
-    const { exits, timers, running, events } = mainOf(d);
-    await d.connected.wait();
-    events.emit(event, new TypeError("boom"));
-    await running;
-    // No drain, the connection closed, and the lock released.
-    assert.deepEqual(
-      infos().filter((line) => line.startsWith("stopping") || line === "shutting down"),
-      ["shutting down"],
-    );
-    assert.deepEqual(d.events, ["connect", "app.stop"]);
-    await (await singleInstance(d.dir)).release();
-    assert.equal(d.signals.listenerCount("SIGTERM"), 0);
-    // Exit 1 at once: a timer that does not keep the process alive could not give the code.
-    assert.deepEqual(exits, [1]);
-    // The only timer is the deadline of the stop, which the stop beat.
-    assert.deepEqual(
-      timers.map((timer) => timer.seconds),
-      [FAILURE_STOP_SECONDS],
-    );
-  });
-}
+test("an uncaught exception stops the daemon as a SIGINT does and exits with 1", async (t) => {
+  const infos = written(t, logger, "info");
+  const d = new Daemon(t);
+  const { exits, timers, running, events } = mainOf(d);
+  await d.connected.wait();
+  events.emit("uncaughtException", new TypeError("boom"));
+  await running;
+  // No drain, the connection closed, and the lock released.
+  assert.deepEqual(
+    infos().filter((line) => line.startsWith("stopping") || line === "shutting down"),
+    ["shutting down"],
+  );
+  assert.deepEqual(d.events, ["connect", "app.stop"]);
+  await (await singleInstance(d.dir)).release();
+  assert.equal(d.signals.listenerCount("SIGTERM"), 0);
+  // Exit 1 at once: a timer that does not keep the process alive could not give the code.
+  assert.deepEqual(exits, [1]);
+  // The only timer is the deadline of the stop, which the stop beat.
+  assert.deepEqual(
+    timers.map((timer) => timer.seconds),
+    [FAILURE_STOP_SECONDS],
+  );
+});
+
+test("an unhandled rejection is logged and the daemon goes on", async (t) => {
+  const errors = written(t, logger, "error");
+  const d = new Daemon(t);
+  const { exits, timers, running, events } = mainOf(d);
+  await d.connected.wait();
+  events.emit("unhandledRejection", new TypeError("boom"));
+  await tick();
+  assert.deepEqual(errors(), ["unhandled rejection: TypeError"]);
+  // Still up: nothing stopped, no deadline armed, the lock still held.
+  assert.deepEqual(d.events, ["connect"]);
+  assert.deepEqual(exits, []);
+  assert.deepEqual(timers, []);
+  await assert.rejects(singleInstance(d.dir), AlreadyRunning);
+  // And it still stops the ordinary way, with 0.
+  d.signals.emit("SIGTERM");
+  await running;
+  assert.deepEqual(exits, [0]);
+});
 
 test("a stop after a failure that does not finish ends the process with 1", async (t) => {
   const errors = written(t, logger, "error");

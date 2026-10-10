@@ -18,17 +18,18 @@
  *   callback's exception, and went on. A rejected promise or a thrown exception in Node would
  *   end the process at once, without the shutdown below, with open replies and a Claude Code
  *   process per session. `installProcessHandlers` logs each by its name (the message and the
- *   stack can quote a request) and then stops the daemon as a SIGINT would (the shutdown
- *   without a drain: sessions closed, lock released) and ends the process with status 1, so
- *   that launchd starts a clean daemon and the crash repair runs. That differs from the Python
- *   daemon, which went on, for two reasons. Node documents the process as unsafe to continue
- *   after an uncaught exception. And `@slack/socket-mode` 3.1.0 gives no event for a connection
- *   that cannot come back: a reconnect whose request for a new WebSocket URL fails with a
- *   request error, an HTTP error or an unrecoverable platform code is an unawaited call
- *   (`SocketModeClient.delayReconnectAttempt`, called from the `close` listener), so only its
- *   unhandled rejection shows it, and a daemon that went on would stay up deaf, the lock held
- *   and launchd satisfied, with the owner away. Any unhandled rejection therefore stops the
- *   daemon.
+ *   stack can quote a request). After a rejected promise nobody handled the daemon goes on, as
+ *   the Python one did: it is a piece of work that failed with nobody waiting for it, and with
+ *   a listener set Node leaves the process running (`--unhandled-rejections`, default `throw`).
+ *   An uncaught exception stops the daemon as a SIGINT would (the shutdown without a drain:
+ *   sessions closed, lock released) and ends the process with status 1, so that launchd starts
+ *   a clean daemon and the crash repair runs: Node's documentation of the event says it is not
+ *   safe to resume normal operation after it (read 2026-10-10, v22). One rejection the daemon
+ *   goes on from leaves it deaf: `@slack/socket-mode` 3.1.0 reconnects from its `close`
+ *   listener without awaiting the call (`SocketModeClient.delayReconnectAttempt`), and when
+ *   Slack refuses the app token for good (`invalid_auth` and the four other codes of
+ *   `UnrecoverableSocketModeStartError`) nothing but that rejection shows it. The log then
+ *   holds `unhandled rejection: <code>`, and the fix is the token and a restart.
  * - The end of the process. `main` ends it with the code `run` gave as soon as `run` returns,
  *   as the Python interpreter ended when `asyncio.run` did. Node would otherwise stay alive
  *   for as long as anything holds its event loop, and the Socket Mode connection does after
@@ -501,12 +502,11 @@ export async function run(options: RunOptions = {}): Promise<number> {
 
 /**
  * What the process does with a rejection or an exception nobody handled: the name goes to the
- * log and `stop` is asked for, which stops the daemon (see the header).
+ * log, and after an exception `stop` is asked for, which stops the daemon (see the header).
  */
 export function installProcessHandlers(events: ProcessEvents, stop: () => void): void {
   events.on("unhandledRejection", (reason) => {
     logger.error(`unhandled rejection: ${describe(reason)}`);
-    stop();
   });
   events.on("uncaughtException", (error) => {
     logger.error(`uncaught exception: ${describe(error)}`);
