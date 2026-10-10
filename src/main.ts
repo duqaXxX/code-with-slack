@@ -12,10 +12,8 @@
  * - What keeps the process running. A pending promise holds nothing. While the daemon waits for
  *   a signal, the Socket Mode client and the cleanup's timer are what the libraries and the
  *   clock happen to keep alive, so `run` holds one timer of its own until the shutdown ends. On
- *   a clean stop it clears that timer and everything else `run` made is closed (the cleanup's
- *   sleep and the drain's limit are aborted, never left to run out), so the process ends by
- *   itself: nothing calls `process.exit` on success unless something outlives the stop (see
- *   "The end of the process").
+ *   a stop it clears that timer and closes everything else it made (the cleanup's sleep and the
+ *   drain's limit are aborted, never left to run out).
  * - Errors nobody handles. asyncio logged a task's exception that was never retrieved, and a
  *   callback's exception, and went on. A rejected promise or a thrown exception in Node would
  *   end the process at once, without the shutdown below, with open replies and a Claude Code
@@ -31,13 +29,17 @@
  *   unhandled rejection shows it, and a daemon that went on would stay up deaf, the lock held
  *   and launchd satisfied, with the owner away. Any unhandled rejection therefore stops the
  *   daemon.
- * - The end of the process. `run` returns once everything it made is closed, but a Claude Code
- *   child or a socket that something still holds would keep Node alive, and launchd, which sees
- *   a live job, would start nothing. `main` arms a timer that does not keep the process alive
- *   (`deferred`) and ends it with the code `run` gave after `EXIT_GRACE_SECONDS`. A stop that a
- *   failure asked for ends the process with 1 as soon as `run` returns, and after
- *   `FAILURE_STOP_SECONDS` if it has not returned: a shutdown stuck on a connection would leave
- *   the daemon deaf.
+ * - The end of the process. `main` ends it with the code `run` gave as soon as `run` returns,
+ *   as the Python interpreter ended when `asyncio.run` did. Node would otherwise stay alive
+ *   for as long as anything holds its event loop, and the Socket Mode connection does after
+ *   every stop: `SocketModeReceiver.stop` of `@slack/bolt` 5.1.0 does not wait for the client's
+ *   `disconnect`, the WebSocket stays open once the close frame is sent, and
+ *   `@slack/socket-mode` 3.1.0 ends it only when its own ping goes unanswered (measured on
+ *   2026-10-10: 5.9 seconds after the stop, three times out of three). In that time the lock is
+ *   already free, and launchd, which sees a live job, starts nothing. A stop that a failure
+ *   asked for and that has not returned after `FAILURE_STOP_SECONDS` ends the process with 1 on
+ *   a timer that does not keep it alive (`deferred`): a shutdown stuck on a connection would
+ *   leave the daemon deaf.
  * - The entry point. `import.meta.main` (Node 22.18, `@since v22.18.0` in `@types/node`, and
  *   run on 22.23 and 26.5) is true only for the module the process started with, a symlink in
  *   `node_modules/.bin` included: Node runs the real path. Comparing `process.argv[1]` with
@@ -78,9 +80,6 @@ export const logger = getLogger("awaydesk.main");
 // `launchctl kill TERM`, which only sends the signal; a stop launchd makes itself (`bootout`,
 // `kickstart -k`) kills the process after ExitTimeOut, which launchd caps at 60 seconds.
 export const DRAIN_LIMIT_SECONDS = 1740;
-
-// How long the process may outlive `run` before `main` ends it.
-export const EXIT_GRACE_SECONDS = 5;
 
 // How long the stop that a failure asked for may take before `main` ends the process with 1: a
 // stop that hangs on a connection or a child leaves the daemon deaf, with nobody to Ctrl-C it.
@@ -515,18 +514,12 @@ export function installProcessHandlers(events: ProcessEvents, stop: () => void):
   });
 }
 
-/** The entry point: runs the daemon, and ends the process with 1 when it cannot start or fails. */
+/** The entry point: runs the daemon, then ends the process: 0 after a stop, 1 after a failure. */
 export async function main(options: MainOptions = {}): Promise<void> {
   const exit = options.exit ?? ((code: number) => process.exit(code));
   const later = options.later ?? deferred;
   const failure = new AbortController();
-  let stopped = false;
   installProcessHandlers(options.process ?? process, () => {
-    // With the daemon already stopped there is nothing left to shut down.
-    if (stopped) {
-      exit(1);
-      return;
-    }
     if (failure.signal.aborted) return;
     failure.abort();
     later(FAILURE_STOP_SECONDS, () => {
@@ -536,19 +529,9 @@ export async function main(options: MainOptions = {}): Promise<void> {
   });
   try {
     const code = await run({ ...options, failure: failure.signal });
-    stopped = true;
-    if (code !== 0) {
-      // At once: a timer that does not keep the process alive could not give a code the process
-      // would otherwise leave without.
-      exit(code);
-      return;
-    }
-    later(EXIT_GRACE_SECONDS, () => {
-      logger.warning("the process did not end by itself after the stop: ending it");
-      exit(0);
-    });
+    // At once: the Socket Mode connection outlives the stop (see the header).
+    exit(code);
   } catch (error) {
-    stopped = true;
     if (
       error instanceof ConfigError ||
       error instanceof StateError ||

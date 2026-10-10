@@ -325,7 +325,9 @@ All notable changes to this project are documented here. The format follows
     and went on. If that stop has not ended after 30 seconds the process exits anyway.
   - Once a stop has closed the sessions, a message or a click still being handled does nothing
     more: no session starts, nothing is written to `state.json`, nothing is posted. The
-    process then ends within 5 seconds whatever still holds it.
+    process ends as soon as the stop is over, as the Python one did: the Socket Mode
+    connection of `@slack/socket-mode` 3.1.0 stays open for 5.9 seconds after a stop
+    (measured on 2026-10-10) and would keep Node alive that long.
   - The Slack libraries write nothing of their own to the log. `@slack/web-api` 8.2.0 prints
     the sentences Slack attaches to a refusal, which can quote a value of the message; the
     daemon gives its clients a logger that drops them, and logs a failed call by its error
