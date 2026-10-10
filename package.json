@@ -5,11 +5,22 @@
   "license": "MIT",
   "private": true,
   "type": "module",
+  "bin": {
+    "awaydesk": "dist/main.js"
+  },
+  "files": [
+    "dist",
+    "slack-app-manifest.json",
+    "README.md",
+    "LICENSE",
+    "docs"
+  ],
   "engines": {
     "node": ">=22.18.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "prepack": "rm -rf dist && npm run build",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "format": "biome check --write .",
