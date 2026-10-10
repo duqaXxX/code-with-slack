@@ -26,6 +26,7 @@ import {
   UpdateLimiter,
 } from "../../../../src/chat/slack/reply/sinks.ts";
 import type { Clock } from "../../../../src/clock.ts";
+import { TurnRenderer } from "../../../../src/core/reply/renderer.ts";
 import { STOPPED } from "../../../../src/core/reply/words.ts";
 import { StateStore } from "../../../../src/core/state.ts";
 import * as texts from "../../../../src/core/texts.ts";
@@ -43,7 +44,8 @@ import {
   TEAM,
   THREAD,
 } from "../../../support/fake-slack.ts";
-import { golden, type Json, type JsonObject } from "../../../support/fixtures.ts";
+import { golden, type Json, type JsonObject, sdkRecords } from "../../../support/fixtures.ts";
+import { recordedEvents } from "../../../support/replay.ts";
 
 const WRITE_METHODS = [
   "chat.postMessage",
@@ -1637,8 +1639,57 @@ test("a failed call shows its error even if it carries a preview", async () => {
   ]);
 });
 
-// Not ported yet, in this place of the Python file: `an edit and a write show as the terminal
-// shows them`, which feeds `edit-write.jsonl` through a `TurnRenderer` with a session folder.
+test("an edit and a write show as the terminal shows them", async () => {
+  // edit-write.jsonl (CLI 2.1.286): Write a new file, Read, a failed Edit, an Edit, a Write over
+  // the file. The terminal showed each Edit and Write whole, with its sentence and its lines.
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  const renderer = new TurnRenderer(sink, "/home/dev/project");
+  for (const event of recordedEvents("edit-write")) await renderer.feed(event);
+  await renderer.close(null);
+  const chunks = allChunks(slack);
+  // Each one that ended well is a container alone; no card ever named it (issue #136).
+  const cards = chunks.filter((c) => c.type === "task_update");
+  assert.deepEqual(
+    cards.map((c) => str(c.title)).filter((t) => t.startsWith("Write") || t.startsWith("Update(")),
+    [],
+  );
+  assert.deepEqual(
+    cards.filter((c) => str(c.title).startsWith("Edit")).map((c) => [c.title, c.status]),
+    [
+      [
+        "Edit: /home/dev/project/notes.txt · " +
+          "<tool_use_error>String to replace not found in file.",
+        "error",
+      ],
+    ],
+  );
+  const shown = chunks.filter((c) => c.type === "blocks").flatMap((c) => list(c.blocks));
+  assert.deepEqual(
+    shown.map((b) => b.type),
+    ["container", "container", "container"],
+  );
+  assert.deepEqual(
+    shown.map((b) => [get(b, "title", "text"), get(b, "subtitle", "text")]),
+    [
+      ["Write(new.txt)", "Wrote 15 lines to new.txt"],
+      ["Update(notes.txt)", "Added 1 line, removed 1 line"],
+      ["Write(notes.txt)", "Added 2 lines, removed 3 lines"],
+    ],
+  );
+  const [newFile, ...diffs] = shown;
+  assert.deepEqual(
+    diffs.map((d) => sinks.blockText(d as unknown as sinks.Block)),
+    [
+      "    1 alpha\n-\u{1f7e5} 2 beta\n+\u{1f7e9} 2 gamma\n    3 delta",
+      "-\u{1f7e5} 1 alpha\n-\u{1f7e5} 2 gamma\n-\u{1f7e5} 3 delta\n" +
+        "+\u{1f7e9} 1 one\n+\u{1f7e9} 2 two",
+    ],
+  );
+  const lines = sinks.blockText(newFile as unknown as sinks.Block).split("\n");
+  assert.deepEqual(lines.slice(0, 2), [" 1 1", " 2 2"]);
+  assert.equal(lines.at(-1), "… +5 lines");
+});
 
 test("a stopped message shows its previews as blocks", async () => {
   const slack = new FakeSlack();
@@ -1664,9 +1715,58 @@ test("a stopped message shows its previews as blocks", async () => {
   assert.equal(sinks.blockText(blocks[1] as unknown as sinks.Block), "1 hi");
 });
 
-// Not ported yet, in this place of the Python file: `an answered question shows in the reply
-// where it was answered` and `answers to a call the reply has no line for are not kept`, which
-// need `TurnRenderer.answered`.
+test("an answered question shows in the reply where it was answered", async () => {
+  // ask-answered.jsonl (CLI 2.1.286). The terminal keeps `User answered Claude's questions:`
+  // and a line per answer where the question was asked, before what Claude says next.
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  const renderer = new TurnRenderer(sink, "/home/dev/project");
+  // The answers the owner gave, as Claude Code echoed them in the result of the call: the
+  // session holds them itself, and no event carries them.
+  const echoed = sdkRecords("ask-answered").find(
+    (record) => record.type === "user" && record.tool_use_result !== undefined,
+  )?.tool_use_result;
+  let call: { callId: string; questions: { text: string }[] } | null = null;
+  for (const event of recordedEvents("ask-answered")) {
+    if (event.type === "call_started") {
+      const questions = list(event.input.questions as Json).map((q) => ({ text: str(q.question) }));
+      call = { callId: event.callId, questions };
+    }
+    if (event.type === "call_ended" && call !== null) {
+      // The session hands the answers over once the owner gave them, before the result.
+      const answers = get(echoed, "answers");
+      assert.ok(typeof answers === "object" && answers !== null && !Array.isArray(answers));
+      assert.ok(
+        renderer.answered(
+          call.callId,
+          call.questions,
+          answers as Record<string, string | string[]>,
+        ),
+      );
+    }
+    await renderer.feed(event);
+  }
+  await renderer.close(null);
+  const card = only(slack.messageCards()[0] ?? []);
+  assert.deepEqual([card.title, card.status], ["User answered Claude's questions:", "complete"]);
+  assert.ok(!("output" in card) && !("details" in card));
+  const chunks = allChunks(slack);
+  const kinds = chunks.map((c) => c.type);
+  const answers = only(chunks.filter((c) => c.type === "blocks"));
+  assert.deepEqual(answers.blocks, [
+    sinks.contextBlock(
+      `${texts.NESTED}· Which color do you prefer? → Blue\n` +
+        `${texts.NESTED}· Do you also like green? → Yes, Only in spring`,
+    ),
+  ]);
+  // Claude's next words come after the answers, in the same message.
+  assert.ok(kinds.slice(kinds.indexOf("blocks") + 1).includes("markdown_text"));
+});
+
+test("answers to a call the reply has no line for are not kept", () => {
+  const renderer = new TurnRenderer(reply(new FakeSlack()));
+  assert.ok(!renderer.answered("toolu_unseen", [{ text: "Colour?" }], { "Colour?": "blue" }));
+});
 
 test("a stopped message shows the answers under their card", async () => {
   const slack = new FakeSlack();

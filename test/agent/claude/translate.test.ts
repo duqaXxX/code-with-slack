@@ -16,22 +16,17 @@ import {
 } from "../../../src/agent/claude/translate.ts";
 import type { SessionEvent, SessionEventType } from "../../../src/agent/seam.ts";
 import { type JsonObject, sdkRecordings, sdkRecords } from "../../support/fixtures.ts";
-
-type Of<T extends SessionEventType> = Extract<SessionEvent, { type: T }>;
+import {
+  recordedEvents as events,
+  eventsOf as of,
+  splitTurns as turns,
+} from "../../support/replay.ts";
 
 /** The events of each record of a recording, by one translator that was told `sent`. */
 function perRecord(name: string, sent: readonly string[] = []): SessionEvent[][] {
   const translator = new Translator();
   for (const promptId of sent) translator.promptSent(promptId);
   return sdkRecords(name).map((record) => translator.translate(record));
-}
-
-function events(name: string, sent: readonly string[] = []): SessionEvent[] {
-  return perRecord(name, sent).flat();
-}
-
-function of<T extends SessionEventType>(all: readonly SessionEvent[], type: T): Of<T>[] {
-  return all.filter((event): event is Of<T> => event.type === type);
 }
 
 function types(all: readonly SessionEvent[]): SessionEventType[] {
@@ -43,16 +38,6 @@ function record(name: string, index: number): JsonObject {
   const found = sdkRecords(name)[index];
   assert.ok(found, `${name} has no record ${index}`);
   return found;
-}
-
-/** The turns of a recording: its events, cut after each `turn_ended`. */
-function turns(all: readonly SessionEvent[]): SessionEvent[][] {
-  const out: SessionEvent[][] = [[]];
-  for (const event of all) {
-    out.at(-1)?.push(event);
-    if (event.type === "turn_ended") out.push([]);
-  }
-  return out.filter((turn) => turn.length > 0);
 }
 
 const PROJECT = "/home/dev/project";
