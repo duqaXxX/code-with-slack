@@ -79,7 +79,16 @@ export function toRequest(
 ): PermissionRequest | QuestionRequest {
   const callId = words(context.toolUseID);
   const questions = toolName === QUESTION_TOOL ? questionsOf(input) : null;
-  if (questions !== null) return { type: "question", requestId, callId, questions };
+  if (questions !== null) {
+    return {
+      type: "question",
+      requestId,
+      callId,
+      toolName,
+      title: words(context.title),
+      questions,
+    };
+  }
   return {
     type: "permission",
     requestId,

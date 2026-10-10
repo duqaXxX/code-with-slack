@@ -58,6 +58,8 @@ test("a question is a question request, each question with its options", () => {
     type: "question",
     requestId: "request-2",
     callId: "toolu_000",
+    toolName: QUESTION_TOOL,
+    title: null,
     questions: [
       {
         header: "Colour preference",

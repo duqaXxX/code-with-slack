@@ -23,7 +23,6 @@ import {
   projectKey,
   projectsDir,
 } from "../src/agent/claude/listing.ts";
-import { ResumeRefused } from "../src/agent/claude/session.ts";
 import type {
   AgentSession,
   PermissionAnswer,
@@ -34,6 +33,7 @@ import type {
   SessionEvent,
   StartOptions,
 } from "../src/agent/seam.ts";
+import { ResumeRefused } from "../src/agent/seam.ts";
 
 const TURN_MS = 120_000;
 const MODEL = "haiku";

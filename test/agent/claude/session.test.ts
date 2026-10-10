@@ -14,7 +14,6 @@ import { type TestContext, test } from "node:test";
 import {
   ClaudeSession,
   logger,
-  ResumeRefused,
   SessionClosedError,
   type SessionConfig,
 } from "../../../src/agent/claude/session.ts";
@@ -28,6 +27,7 @@ import type {
   RequestHandler,
   SessionEvent,
 } from "../../../src/agent/seam.ts";
+import { ResumeRefused } from "../../../src/agent/seam.ts";
 import {
   ask,
   type Batch,

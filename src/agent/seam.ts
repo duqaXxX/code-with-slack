@@ -2,7 +2,22 @@
  * The agent seam: what the core asks of an agent back end and what a back end tells the core.
  * No type of an agent SDK appears here. One back end exists, `agent/claude`, and it is the only
  * module that imports the SDK.
+ *
+ * The one value declared here is `ResumeRefused`: the core has to tell that failure of a start
+ * from every other, and it may import nothing of a back end.
  */
+
+/**
+ * The agent refused to resume the session a start named (its transcript is gone): the thread
+ * that held it cannot go on. Any other failure of a start rejects with the failure itself, and
+ * the thread's next message tries again.
+ */
+export class ResumeRefused extends Error {
+  constructor(options?: ErrorOptions) {
+    super("the agent could not resume the session", options);
+    this.name = "ResumeRefused";
+  }
+}
 
 /** A permission mode, by the name the back end gives it. */
 export type PermissionMode = string;
@@ -23,6 +38,11 @@ export interface Capabilities {
   readonly backgroundTasks: boolean;
   readonly compaction: boolean;
   readonly effort: boolean;
+  /**
+   * The levels `StartOptions.effort` and `setEffort` take. A stored level outside them is never
+   * sent: the core drops it, with a line in the log.
+   */
+  readonly effortLevels: readonly string[];
   /** `setEffort` changes the live session; without it the core restarts the session. */
   readonly liveEffort: boolean;
   readonly permissionModes: PermissionModes;
@@ -288,6 +308,12 @@ export type SessionEvent =
       readonly text: string;
       readonly parentCallId: string | null;
     }
+  /**
+   * The agent's process is gone and the core did not close it. The last event of the session:
+   * `events` ends after it. `reason` is shown to the owner as the error's name: the back end's
+   * own words for a process that exited, or the name of the failure that ended the stream,
+   * never its message. A session the core closed ends its events with no `process_lost`.
+   */
   | { readonly type: "process_lost"; readonly reason: string };
 
 export type SessionEventType = SessionEvent["type"];
@@ -327,6 +353,10 @@ export interface QuestionRequest {
   readonly type: "question";
   readonly requestId: string;
   readonly callId: string | null;
+  /** The tool that asks, which names the request in one line when the agent writes no title. */
+  readonly toolName: string;
+  /** The agent's own sentence for the request, when it writes one. */
+  readonly title: string | null;
   readonly questions: readonly Question[];
 }
 
@@ -341,7 +371,10 @@ export type QuestionAnswer =
     }
   | { readonly answered: false; readonly message: string };
 
-/** Asked by a back end while a call waits; each resolves once, for as long as it takes. */
+/**
+ * Asked by a back end while a call waits; each resolves once, for as long as it takes. A request
+ * still waiting when the core closes the session resolves as refused (a denial, a skip).
+ */
 export interface RequestHandler {
   permission(request: PermissionRequest): Promise<PermissionAnswer>;
   question(request: QuestionRequest): Promise<QuestionAnswer>;
@@ -351,6 +384,10 @@ export interface RequestHandler {
 export interface AgentSession {
   /** Every event of the session, in order, until the session closes or its process is lost. */
   readonly events: AsyncIterable<SessionEvent>;
+  /**
+   * Hands the prompt to the agent and resolves: the turn's end is the event `turn_ended`. On a
+   * session that has ended it rejects, and the owner is shown the error's name.
+   */
   send(prompt: Prompt): Promise<void>;
   interrupt(): Promise<void>;
   stopTask(taskId: string): Promise<void>;
@@ -359,6 +396,10 @@ export interface AgentSession {
   setEffort(level: string | null): Promise<void>;
   contextUsage(): Promise<ContextUsage>;
   info(): Promise<AgentInfo>;
+  /**
+   * Resolves once the agent's process has gone, so a session started right after may resume
+   * the same id. Safe to call again, and on a session whose process was lost.
+   */
   close(): Promise<void>;
 }
 
@@ -376,9 +417,25 @@ export interface Repository {
 
 export interface AgentBackend {
   readonly capabilities: Capabilities;
+  /**
+   * Starts a session and resolves once the agent answered. Rejects with `ResumeRefused` when
+   * the agent refuses `options.resume`, and with the failure itself for any other reason; no
+   * process is left running either way. Whether the owner trusted the folder is the caller's
+   * to check first (`folderTrusted`). What the owner set in the agent for every session it
+   * starts (the Chrome integration in Claude Code) is read by the back end at each start.
+   */
   start(options: StartOptions, requests: RequestHandler): Promise<AgentSession>;
-  /** The sessions of `folder` alone, newest first. */
+  /** The sessions of `folder` alone, newest first by the time their record last changed. */
   listSessions(folder: string): Promise<readonly ListedSession[]>;
+  /**
+   * `sessions` of `folder` by their last message, newest first, as the agent's own picker
+   * shows them; `lastModified` is then that message's time on each session that was dated.
+   * Dating reads files, so a caller that shows only some of a folder's sessions passes those
+   * alone.
+   */
+  datedSessions(folder: string, sessions: readonly ListedSession[]): Promise<ListedSession[]>;
+  /** The ids of the sessions the agent still holds for `folder`; null when it cannot tell. */
+  aliveSessions(folder: string): Promise<ReadonlySet<string> | null>;
   /** Whether the owner trusted `folder` in the agent, as the agent itself would decide. */
   folderTrusted(folder: string): Promise<boolean>;
   /**

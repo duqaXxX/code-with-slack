@@ -6,6 +6,8 @@ export const CAPABILITIES: Capabilities = Object.freeze({
   backgroundTasks: true,
   compaction: true,
   effort: true,
+  // The SDK's `EffortLevel`.
+  effortLevels: Object.freeze(["low", "medium", "high", "xhigh", "max"]),
   // The TypeScript SDK changes the effort of a live session (`applyFlagSettings`, 36 ms and no
   // reconnect, measured 2026-10-10 on SDK 0.3.296).
   liveEffort: true,

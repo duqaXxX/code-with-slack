@@ -12,6 +12,7 @@ test("the Claude back end supports every capability of the seam", () => {
     backgroundTasks: true,
     compaction: true,
     effort: true,
+    effortLevels: ["low", "medium", "high", "xhigh", "max"],
     liveEffort: true,
     permissionModes: { default: "default", auto: "auto", bypass: "bypassPermissions" },
     changedInput: true,

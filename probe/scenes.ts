@@ -23,7 +23,7 @@ import { query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ClaudeBackend } from "../src/agent/claude/backend.ts";
 import { CAPABILITIES } from "../src/agent/claude/capabilities.ts";
 import { projectsDir } from "../src/agent/claude/listing.ts";
-import { AsyncQueue, ResumeRefused } from "../src/agent/claude/session.ts";
+import { AsyncQueue } from "../src/agent/claude/session.ts";
 import { locate } from "../src/agent/claude/trust.ts";
 import { isRecord, records } from "../src/agent/claude/wire.ts";
 import type {
@@ -38,6 +38,7 @@ import type {
   SessionEvent,
   StartOptions,
 } from "../src/agent/seam.ts";
+import { ResumeRefused } from "../src/agent/seam.ts";
 import { promptFor } from "../src/chat/slack/attachments.ts";
 import { resumeBlocks } from "../src/chat/slack/resume.ts";
 import { gitState } from "../src/core/footer.ts";

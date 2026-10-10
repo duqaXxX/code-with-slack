@@ -19,15 +19,16 @@ import {
   query as sdkQuery,
 } from "@anthropic-ai/claude-agent-sdk";
 import { getLogger } from "../../log.ts";
-import type {
-  AgentInfo,
-  AgentSession,
-  ContextUsage,
-  PermissionMode,
-  Prompt,
-  RequestHandler,
-  SessionEvent,
-  StartOptions,
+import {
+  type AgentInfo,
+  type AgentSession,
+  type ContextUsage,
+  type PermissionMode,
+  type Prompt,
+  type RequestHandler,
+  ResumeRefused,
+  type SessionEvent,
+  type StartOptions,
 } from "../seam.ts";
 import { postToolUseHookEvents, stopHookEvents } from "./hooks.ts";
 import { agentInfo, contextUsage as contextUsageOf } from "./info.ts";
@@ -79,18 +80,6 @@ export class SessionClosedError extends Error {
 
   constructor() {
     super("the Claude Code session is closed");
-  }
-}
-
-/**
- * Claude Code refused to resume the stored session (its transcript is gone): it answers the
- * start with an error result before any turn. Python raised the SDK's `ResultError` at connect.
- */
-export class ResumeRefused extends Error {
-  override readonly name = "ResumeRefused";
-
-  constructor(cause: unknown) {
-    super("Claude Code could not resume the session", { cause });
   }
 }
 
@@ -298,7 +287,8 @@ export class ClaudeSession implements AgentSession {
       // The stream is read to its end first: the error result it carries tells a refused resume
       // from a process that failed to start.
       await this.close();
-      if (this.#config.resume !== null && this.#startRefused) throw new ResumeRefused(error);
+      if (this.#config.resume !== null && this.#startRefused)
+        throw new ResumeRefused({ cause: error });
       throw error;
     }
   }
