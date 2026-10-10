@@ -219,8 +219,15 @@ test("a timeout is a request error wrapping the TimeoutError the client's own ti
         init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
       }),
   });
-  const real = await client.apiCall("chat.update", {}).catch((error: unknown) => error);
-  assert.deepEqual(fieldsOf(timedOut()), fieldsOf(real));
+  // The timer of `AbortSignal.timeout` does not keep the event loop alive, and on Node 22 the
+  // loop ends before it fires when nothing else is pending.
+  const awake = setInterval(() => {}, 1000);
+  try {
+    const real = await client.apiCall("chat.update", {}).catch((error: unknown) => error);
+    assert.deepEqual(fieldsOf(timedOut()), fieldsOf(real));
+  } finally {
+    clearInterval(awake);
+  }
 });
 
 test("a rate limit is the error the client throws when it rejects rate limited calls", async () => {
