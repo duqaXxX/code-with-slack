@@ -331,7 +331,7 @@ for (const [date, expected] of [
   [LAST_30, ["an hour ago", "yesterday evening", "five days ago", "three weeks ago"]],
   [null, ["an hour ago", "yesterday evening", "five days ago", "three weeks ago", "old"]],
 ] as const) {
-  test(`the date filter reads the session s last message [${date}]`, () => {
+  test(`the date filter reads the sessions last message [${date}]`, () => {
     const rows = AGES.map(([title, age]) =>
       row(title, { lastActivity: (NOW.getTime() - age) / 1000, status: null }),
     );
