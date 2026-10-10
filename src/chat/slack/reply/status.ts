@@ -26,16 +26,11 @@
  *   with their autouse fixture.
  */
 import { WebAPIPlatformError, type WebClient } from "@slack/web-api";
+import type { Clock } from "../../../clock.ts";
 import * as texts from "../../../core/texts.ts";
 
 // Kept local until `reply/clock.ts` exists: the part of a clock this module needs.
 /** Time on a clock's own scale, in seconds, and a sleep the signal can cut short. */
-export interface Clock {
-  /** Resolves `seconds` from now; rejects with the signal's reason when it aborts first. */
-  sleep(seconds: number, signal?: AbortSignal): Promise<void>;
-  time(): number;
-}
-
 /** Where a line goes; ids and error names only, never message content. */
 export interface Logger {
   debug(message: string): void;

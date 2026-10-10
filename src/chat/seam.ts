@@ -66,7 +66,10 @@ export interface FooterFields {
   readonly weekLimit: UsageLimit | null;
 }
 
-/** One reply in a thread, as the core writes it. */
+/**
+ * One reply in a thread, as the core writes it. A write that has begun always runs to its end:
+ * a `signal` only releases the caller, who stops waiting for it.
+ */
 export interface ReplySink {
   text(
     markdown: string,
@@ -74,11 +77,11 @@ export interface ReplySink {
   ): Promise<void>;
   task(update: TaskUpdate): Promise<void>;
   /** The reply's body has ended; `closing` are the lines still open, closed. */
-  finish(closing: readonly TaskUpdate[]): Promise<void>;
+  finish(closing: readonly TaskUpdate[], signal?: AbortSignal): Promise<void>;
   /** Ends the reply, with its footer when the turn has one. False when the end did not land. */
-  closeOut(footer: FooterFields | null): Promise<boolean>;
-  waitLanded(): Promise<boolean>;
-  settle(): Promise<boolean>;
+  closeOut(footer: FooterFields | null, signal?: AbortSignal): Promise<boolean>;
+  waitLanded(signal?: AbortSignal): Promise<boolean>;
+  settle(signal?: AbortSignal): Promise<boolean>;
 }
 
 /** What a chat provider supports, and its size limits. */

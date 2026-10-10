@@ -75,13 +75,9 @@ export type Answer = JsonObject | Error;
  */
 export type Scripted = Answer | Answer[] | ((args: Args) => Answer | Answer[]);
 
-/** The clock a source module takes: the reply sink's debounce and 280-second stream deadline. */
-export interface Clock {
-  /** Resolves `seconds` from now; rejects with the signal's reason when it aborts first. */
-  sleep(seconds: number, signal?: AbortSignal): Promise<void>;
-  /** Seconds on this clock's own scale. */
-  time(): number;
-}
+import type { Clock } from "../../src/clock.ts";
+
+export type { Clock };
 
 // What a test needs to build the errors the client throws. Each is built the way the client
 // builds it (`dist/errors.js`, `dist/WebClient.js` `apiCall` and `makeRequest`), so a provider
