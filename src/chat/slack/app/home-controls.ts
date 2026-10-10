@@ -22,6 +22,7 @@ export class HomeControls {
    * payload names no channel, so there is none to guard.
    */
   private homeOwner(body: Payload): boolean {
+    if (this.parts.stopped.aborted) return false; // the daemon is gone: nothing to publish or delete
     const [user, team] = interactionActor(body);
     if (isOwner(this.parts.identity, user, team)) return true;
     logger.info("ignored an inbound event from someone other than the owner");

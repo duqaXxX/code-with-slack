@@ -4,6 +4,9 @@
  * and here crosses the timeout on a `FakeClock`.
  */
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { ClaudeBackend } from "../../../src/agent/claude/backend.ts";
 import { USAGE_TIMEOUT } from "../../../src/agent/claude/usage.ts";
@@ -20,7 +23,7 @@ const NOW = Date.UTC(2026, 8, 30, 22, 0);
 function probeOn(sdk: FakeSdk, clock = new FakeClock()): { probe: UsageProbe; clock: FakeClock } {
   clock.now = NOW / 1000;
   const backend = new ClaudeBackend({ query: sdk.query });
-  const probe = new UsageProbe(FOLDER, backend.start.bind(backend), { clock });
+  const probe = new UsageProbe(FOLDER, backend.startBare.bind(backend), { clock });
   return { probe, clock };
 }
 
@@ -77,6 +80,66 @@ test("the probe takes no setting source of the owner's", LIMIT, async () => {
   await probe.close();
 });
 
+// Python's probe built a bare client: the folder and no setting sources, nothing else
+// (`UsageProbe.__init__` in `footer.py`). A session started like a thread's would be given the
+// permission to bypass and, when the owner enabled it, the Chrome flag.
+test(
+  "the probe's session takes neither the bypass permission nor the Chrome flag",
+  LIMIT,
+  async (t) => {
+    const home = await mkdtemp(join(tmpdir(), "awaydesk-probe-"));
+    t.after(() => rm(home, { recursive: true, force: true }));
+    await writeFile(
+      join(home, ".claude.json"),
+      JSON.stringify({ claudeInChromeDefaultEnabled: true }),
+    );
+    const sdk = new FakeSdk({ turns: [sdkRecords("usage")] });
+    const clock = new FakeClock();
+    clock.now = NOW / 1000;
+    const backend = new ClaudeBackend({ query: sdk.query, home });
+    const probe = new UsageProbe(FOLDER, backend.startBare.bind(backend), { clock });
+    await probe.read();
+    const { options } = sdk.only;
+    assert.notEqual(options.allowDangerouslySkipPermissions, true);
+    assert.equal("chrome" in (options.extraArgs ?? {}), false);
+    assert.deepEqual(options.settingSources, []);
+    assert.equal("resume" in options, false);
+    assert.equal("permissionMode" in options, false);
+    assert.equal("model" in options, false);
+    assert.equal("effort" in options, false);
+    await probe.close();
+  },
+);
+
+test("a session started the ordinary way still carries both", LIMIT, async (t) => {
+  // The control of the test above: the options differ because of the second way to start, not
+  // because the fake drops them.
+  const home = await mkdtemp(join(tmpdir(), "awaydesk-probe-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await writeFile(
+    join(home, ".claude.json"),
+    JSON.stringify({ claudeInChromeDefaultEnabled: true }),
+  );
+  const sdk = new FakeSdk();
+  const session = await new ClaudeBackend({ query: sdk.query, home }).start(
+    {
+      folder: FOLDER,
+      resume: null,
+      settingsSources: [],
+      model: null,
+      effort: null,
+      permissionMode: null,
+    },
+    {
+      permission: async () => ({ allow: false, message: "" }),
+      question: async () => ({ answered: false, message: "" }),
+    },
+  );
+  assert.equal(sdk.only.options.allowDangerouslySkipPermissions, true);
+  assert.ok("chrome" in (sdk.only.options.extraArgs ?? {}));
+  await session.close();
+});
+
 test("the probe keeps its session for the next read", LIMIT, async () => {
   const sdk = new FakeSdk({ turns: [sdkRecords("usage"), sdkRecords("usage")] });
   const { probe } = probeOn(sdk);
@@ -106,6 +169,26 @@ test("an answer that holds no limits reads as none", LIMIT, async () => {
   const { probe } = probeOn(sdk);
   assert.deepEqual(await probe.read(), { session: null, week: null });
   await probe.close();
+});
+
+// A read that comes after the daemon's last close (a footer refresh a listener in flight still
+// asks for) would start a Claude Code process nobody closes.
+test("a stopped probe closes its session and starts no other", LIMIT, async () => {
+  const sdk = new FakeSdk({ turns: [sdkRecords("usage")] });
+  const { probe } = probeOn(sdk);
+  await probe.read();
+  await probe.stop();
+  assert.equal(sdk.only.closed, true);
+  await assert.rejects(probe.read(), /stopped/);
+  assert.equal(sdk.queries.length, 1);
+});
+
+test("a stopped probe that never started refuses a read", LIMIT, async () => {
+  const sdk = new FakeSdk();
+  const { probe } = probeOn(sdk);
+  await probe.stop();
+  await assert.rejects(probe.read(), /stopped/);
+  assert.equal(sdk.queries.length, 0);
 });
 
 test("close is idempotent, and a read after it starts again", LIMIT, async () => {

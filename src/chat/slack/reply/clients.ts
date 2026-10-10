@@ -40,6 +40,7 @@ import {
   type WebClientOptions,
 } from "@slack/web-api";
 import { type Clock, systemClock } from "../../../clock.ts";
+import { silentLogger } from "../quiet-logger.ts";
 
 /** The four calls that create or grow a message: never sent again after a failed connection. */
 export const CREATING_METHODS = [
@@ -66,8 +67,12 @@ export const CONNECTION_RETRIES = 1;
 // `BackoffRetryIntervalCalculator(backoff_factor=0.5)`: 0.5 * 2^attempt seconds, plus a jitter.
 const BACKOFF_FACTOR = 0.5;
 
-/** What a client is built with: the library's options but its retries, which the policy owns. */
-export interface ClientOptions extends Omit<WebClientOptions, keyof typeof SENT_ONCE> {
+/**
+ * What a client is built with: the library's options but its retries, which the policy owns, and
+ * its logger, which writes nothing (`silentLogger`: the library's lines can quote a message, and
+ * a `logLevel` given here is ignored with it).
+ */
+export interface ClientOptions extends Omit<WebClientOptions, keyof typeof SENT_ONCE | "logger"> {
   /** Waits the pause before a retry. */
   readonly clock?: Clock;
   /** The jitter added to a pause, in [0, 1) seconds, as Python's `random.random()`. */
@@ -91,7 +96,7 @@ class PolicyClient extends WebClient {
 
   constructor(token: string | undefined, notRetried: readonly string[], options: ClientOptions) {
     const { clock, random, ...rest } = options;
-    super(token, { timeout: REQUEST_TIMEOUT_MS, ...rest, ...SENT_ONCE });
+    super(token, { timeout: REQUEST_TIMEOUT_MS, ...rest, ...SENT_ONCE, logger: silentLogger() });
     this.#notRetried = new Set(notRetried);
     this.#clock = clock ?? systemClock;
     this.#random = random ?? Math.random;

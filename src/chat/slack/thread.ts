@@ -53,9 +53,10 @@ export interface SlackChatOptions {
   readonly slack: WebClient;
   /**
    * The client replies are written with: one that never sends a create or a stream call twice
-   * after a reset (`repliesClient`). Left out: `slack` itself.
+   * after a reset (`repliesClient`). Required, with no fallback to `slack`: a wiring that
+   * forgot it would send a create twice after a reset and nothing would say so.
    */
-  readonly replies?: WebClient;
+  readonly replies: WebClient;
   readonly identity: SlackIdentity;
   /** Shared by every reply in the process and by every `chat.update` made beside them. */
   readonly limiter: Limiter;
@@ -116,7 +117,7 @@ export class SlackThread implements ThreadChat {
 
   openReply(onOpenMessage: OpenMessageChange): Reply {
     const { identity } = this.options;
-    return new ReplySink(this.options.replies ?? this.slack, {
+    return new ReplySink(this.options.replies, {
       channel: this.channel,
       threadTs: this.threadTs,
       teamId: identity.teamId,

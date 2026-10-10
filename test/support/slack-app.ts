@@ -267,6 +267,7 @@ export class World {
     this.limiter = options.limiter ?? new UpdateLimiter({ burst: 1_000, clock: this.slackClock });
     const chat = new SlackChat({
       slack,
+      replies: slack,
       identity: this.identity,
       limiter: this.limiter,
       clock: this.slackClock,

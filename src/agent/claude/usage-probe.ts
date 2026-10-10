@@ -5,7 +5,6 @@
 import { randomUUID } from "node:crypto";
 import { type Clock, systemClock } from "../../clock.ts";
 import type {
-  AgentBackend,
   AgentSession,
   PermissionAnswer,
   QuestionAnswer,
@@ -22,6 +21,9 @@ const NO_ANSWERS: RequestHandler = {
   question: async (): Promise<QuestionAnswer> => ({ answered: false, message: REFUSAL }),
 };
 
+/** How the probe starts its session: `ClaudeBackend.startBare`, which takes no option of a thread's. */
+export type BareStart = (folder: string, requests: RequestHandler) => Promise<AgentSession>;
+
 export interface UsageProbeOptions {
   readonly clock?: Clock;
   /** Milliseconds one `read` may take, start included. */
@@ -30,16 +32,17 @@ export interface UsageProbeOptions {
 
 export class UsageProbe {
   readonly #folder: string;
-  readonly #start: AgentBackend["start"];
+  readonly #start: BareStart;
   readonly #clock: Clock;
   readonly #timeout: number;
   #session: AgentSession | null = null;
   #events: AsyncIterator<SessionEvent> | null = null;
   // Counts the closes, so a session still starting when one happens is closed as it arrives.
   #epoch = 0;
+  #stopped = false;
 
-  /** `start` is the back end's: the probe session takes no setting source of the owner's. */
-  constructor(folder: string, start: AgentBackend["start"], options: UsageProbeOptions = {}) {
+  /** `start` is the back end's bare one: the probe session takes nothing of the owner's. */
+  constructor(folder: string, start: BareStart, options: UsageProbeOptions = {}) {
     this.#folder = folder;
     this.#start = start;
     this.#clock = options.clock ?? systemClock;
@@ -52,6 +55,7 @@ export class UsageProbe {
    * would answer the next call late.
    */
   async read(): Promise<Usage> {
+    if (this.#stopped) throw new Error("the usage probe is stopped");
     const limit = new AbortController();
     // Settles only by running out: the sleep's own rejection is its cancellation.
     const expiry = new Promise<never>((_, reject) => {
@@ -79,20 +83,20 @@ export class UsageProbe {
     if (session !== null) await session.close();
   }
 
+  /**
+   * The daemon's last close: the session is closed and no `read` starts another. A footer
+   * refresh that a listener in flight still asks for would otherwise start a Claude Code process
+   * nobody closes.
+   */
+  async stop(): Promise<void> {
+    this.#stopped = true;
+    await this.close();
+  }
+
   async #ask(): Promise<Usage> {
     const epoch = this.#epoch;
     if (this.#session === null) {
-      const session = await this.#start(
-        {
-          folder: this.#folder,
-          resume: null,
-          settingsSources: [],
-          model: null,
-          effort: null,
-          permissionMode: null,
-        },
-        NO_ANSWERS,
-      );
+      const session = await this.#start(this.#folder, NO_ANSWERS);
       if (epoch !== this.#epoch) {
         await session.close();
         throw new Error("the usage probe was closed while it started");

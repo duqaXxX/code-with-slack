@@ -14,12 +14,30 @@
  *   clock happen to keep alive, so `run` holds one timer of its own until the shutdown ends. On
  *   a clean stop it clears that timer and everything else `run` made is closed (the cleanup's
  *   sleep and the drain's limit are aborted, never left to run out), so the process ends by
- *   itself: nothing here calls `process.exit` on success.
+ *   itself: nothing calls `process.exit` on success unless something outlives the stop (see
+ *   "The end of the process").
  * - Errors nobody handles. asyncio logged a task's exception that was never retrieved, and a
  *   callback's exception, and went on. A rejected promise or a thrown exception in Node would
  *   end the process at once, without the shutdown below, with open replies and a Claude Code
- *   process per session. `installProcessHandlers` logs each by its name and goes on, as asyncio
- *   did. The message and the stack are never logged: they can quote a request.
+ *   process per session. `installProcessHandlers` logs each by its name (the message and the
+ *   stack can quote a request) and then stops the daemon as a SIGINT would (the shutdown
+ *   without a drain: sessions closed, lock released) and ends the process with status 1, so
+ *   that launchd starts a clean daemon and the crash repair runs. That differs from the Python
+ *   daemon, which went on, for two reasons. Node documents the process as unsafe to continue
+ *   after an uncaught exception. And `@slack/socket-mode` 3.1.0 gives no event for a connection
+ *   that cannot come back: a reconnect whose request for a new WebSocket URL fails with a
+ *   request error, an HTTP error or an unrecoverable platform code is an unawaited call
+ *   (`SocketModeClient.delayReconnectAttempt`, called from the `close` listener), so only its
+ *   unhandled rejection shows it, and a daemon that went on would stay up deaf, the lock held
+ *   and launchd satisfied, with the owner away. Any unhandled rejection therefore stops the
+ *   daemon.
+ * - The end of the process. `run` returns once everything it made is closed, but a Claude Code
+ *   child or a socket that something still holds would keep Node alive, and launchd, which sees
+ *   a live job, would start nothing. `main` arms a timer that does not keep the process alive
+ *   (`deferred`) and ends it with the code `run` gave after `EXIT_GRACE_SECONDS`. A stop that a
+ *   failure asked for ends the process with 1 as soon as `run` returns, and after
+ *   `FAILURE_STOP_SECONDS` if it has not returned: a shutdown stuck on a connection would leave
+ *   the daemon deaf.
  * - The entry point. `import.meta.main` (Node 22.18, `@since v22.18.0` in `@types/node`, and
  *   run on 22.23 and 26.5) is true only for the module the process started with, a symlink in
  *   `node_modules/.bin` included: Node runs the real path. Comparing `process.argv[1]` with
@@ -28,12 +46,12 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ClaudeBackend } from "./agent/claude/backend.ts";
-import { UsageProbe } from "./agent/claude/usage-probe.ts";
+import { type BareStart, UsageProbe } from "./agent/claude/usage-probe.ts";
 import type { AgentBackend } from "./agent/seam.ts";
-import { ChatError } from "./chat/seam.ts";
 import { type BuildAppOptions, buildApp, socketReceiver } from "./chat/slack/app/app.ts";
 import { ChannelGuard, type Identity } from "./chat/slack/app/guards.ts";
 import { prepareUploads, uploadsDir } from "./chat/slack/attachments.ts";
+import { channelLookup } from "./chat/slack/channels.ts";
 import { ThreadDeleter } from "./chat/slack/delete.ts";
 import { Home } from "./chat/slack/home.ts";
 import { repairCrash } from "./chat/slack/repair.ts";
@@ -43,7 +61,7 @@ import { describe } from "./chat/slack/reply/errors.ts";
 import { UpdateLimiter } from "./chat/slack/reply/limiter.ts";
 import { SlackChat } from "./chat/slack/thread.ts";
 import { type Clock, monotonicClock, systemClock } from "./clock.ts";
-import { type ChannelLookup, CLEAN_EVERY_SECONDS, clean } from "./core/cleanup.ts";
+import { CLEAN_EVERY_SECONDS, clean } from "./core/cleanup.ts";
 import { CONFIG_DIR, ConfigError, loadConfig } from "./core/config.ts";
 import { UsageCache } from "./core/footer.ts";
 import { Holds } from "./core/hold.ts";
@@ -61,7 +79,17 @@ export const logger = getLogger("awaydesk.main");
 // `kickstart -k`) kills the process after ExitTimeOut, which launchd caps at 60 seconds.
 export const DRAIN_LIMIT_SECONDS = 1740;
 
-const CHANNEL_NOT_FOUND = "channel_not_found";
+// How long the process may outlive `run` before `main` ends it.
+export const EXIT_GRACE_SECONDS = 5;
+
+// How long the stop that a failure asked for may take before `main` ends the process with 1: a
+// stop that hangs on a connection or a child leaves the daemon deaf, with nobody to Ctrl-C it.
+export const FAILURE_STOP_SECONDS = 30;
+
+/** `action` after `seconds`, on a timer that does not keep the process alive. */
+export function deferred(seconds: number, action: () => void): NodeJS.Timeout {
+  return setTimeout(action, seconds * 1000).unref();
+}
 
 /** The client of the Slack packages every call goes through; its type is all this file names. */
 export type SlackClient = ReturnType<typeof sharedClient>;
@@ -114,6 +142,16 @@ export interface RunOptions {
   readonly receiver?: (appToken: string) => BuildAppOptions["receiver"];
   /** The agent: Claude Code over the Agent SDK. */
   readonly backend?: AgentBackend;
+  /**
+   * How the usage probe starts its session: `ClaudeBackend.startBare`. A test that gives
+   * `backend` gives this too, or the probe would start the real Claude Code.
+   */
+  readonly bareStart?: BareStart;
+  /**
+   * Aborts when the process met what it cannot go on from (see the header): the daemon stops as
+   * a SIGINT does, and `run` answers 1.
+   */
+  readonly failure?: AbortSignal;
   /** Every wait of the daemon; the system clock for wall time and the monotonic one for pauses. */
   readonly clock?: Clock;
   /** `process`. */
@@ -129,6 +167,8 @@ export interface MainOptions extends RunOptions {
   readonly exit?: (code: number) => void;
   /** `process`. */
   readonly process?: ProcessEvents;
+  /** Runs an action after the seconds given, on a timer that does not keep the process alive. */
+  readonly later?: (seconds: number, action: () => void) => unknown;
 }
 
 /** The text of a field `auth.test` must answer, which a log line and an identity rely on. */
@@ -161,24 +201,6 @@ export async function postUpgradeNotices(slack: SlackClient, state: StateStore):
     }
     state.clearNotice(channelId);
   }
-}
-
-/**
- * What the cleanup asks about a bound channel: `conversations.info`. Only `channel_not_found` is
- * an answer that the channel is gone; any other failure crosses as a `ChatError` named by
- * Slack's code, which the cleanup logs as no answer.
- */
-export function channelLookup(slack: SlackClient): ChannelLookup {
-  return async (channelId) => {
-    try {
-      await slack.conversations.info({ channel: channelId });
-      return "there";
-    } catch (error) {
-      const code = describe(error);
-      if (code === CHANNEL_NOT_FOUND) return "gone";
-      throw new ChatError(code, { cause: error });
-    }
-  };
 }
 
 /**
@@ -243,6 +265,8 @@ export async function deleter(
  */
 export class StopSignals {
   readonly received: Stop[] = [];
+  /** Whether the stop was asked for by a failure, not by a signal (`fail`). */
+  failed = false;
   /** Settles on the first signal. */
   readonly requested: Promise<void>;
   readonly #source: SignalSource;
@@ -264,6 +288,17 @@ export class StopSignals {
       this.#listeners.push([signal, listener]);
       source.on(signal, listener);
     }
+  }
+
+  /**
+   * Asks for a stop the process cannot go without (an uncaught exception, a connection that is
+   * gone for good): counted as a SIGINT, so no drain starts and one under way is cut short.
+   */
+  fail(): void {
+    this.failed = true;
+    this.received.push("SIGINT");
+    this.#requested();
+    this.#draining?.abort();
   }
 
   /**
@@ -305,8 +340,11 @@ async function step(name: string, work: () => unknown): Promise<void> {
   }
 }
 
-/** Start the daemon and return once it has stopped. */
-export async function run(options: RunOptions = {}): Promise<void> {
+/**
+ * Start the daemon and return once it has stopped: 0 for a stop by a signal, 1 for one a failure
+ * asked for (`RunOptions.failure`).
+ */
+export async function run(options: RunOptions = {}): Promise<number> {
   const configDir = options.configDir ?? CONFIG_DIR;
   const clients = options.clients ?? CLIENTS;
   // Wall time for what is dated (a reply's footer, the page's hours), the monotonic clock for
@@ -317,6 +355,7 @@ export async function run(options: RunOptions = {}): Promise<void> {
   const config = loadConfig(configDir);
   const lock = await singleInstance(configDir);
   let stop: StopSignals | null = null;
+  const onFailure = (): void => stop?.fail();
   try {
     const state = (options.openState ?? ((path) => new StateStore(path)))(
       join(configDir, "state.json"),
@@ -330,10 +369,12 @@ export async function run(options: RunOptions = {}): Promise<void> {
       teamId: authField(auth, "team_id"),
       botUserId: authField(auth, "user_id"),
     };
-    const backend = options.backend ?? new ClaudeBackend();
-    const probe = new UsageProbe(homedir(), (start, requests) => backend.start(start, requests), {
-      clock: options.clock,
-    });
+    const claude = options.backend === undefined ? new ClaudeBackend() : null;
+    const backend = options.backend ?? (claude as ClaudeBackend);
+    const bare =
+      options.bareStart ??
+      ((folder, requests) => (claude as ClaudeBackend).startBare(folder, requests));
+    const probe = new UsageProbe(homedir(), bare, { clock: options.clock });
     const approvals = new Approvals();
     const holds = new Holds();
     const chat = new SlackChat({
@@ -404,6 +445,9 @@ export async function run(options: RunOptions = {}): Promise<void> {
       // runs to completion either way: the signal is only lost if nothing listens yet.
       const signals = new StopSignals(options.signals ?? process);
       stop = signals;
+      // A failure that came earlier is applied now, like a signal that came during the repair.
+      if (options.failure?.aborted) signals.fail();
+      else options.failure?.addEventListener("abort", onFailure, { once: true });
 
       // Repaired, then cleaned, before the Socket Mode connection opens: `slack` (already
       // `auth.test`'d above) works without it, and opening Socket Mode is what starts delivering
@@ -442,38 +486,69 @@ export async function run(options: RunOptions = {}): Promise<void> {
       await step("close the sessions", () => sessions.closeAll());
       // After the sessions: the page shows them as this stop left them.
       await step("close the session index", () => home.close());
-      await step("close the usage probe", () => probe.close());
+      await step("stop the usage probe", () => probe.stop());
       clearInterval(keepAlive);
     }
   } finally {
+    options.failure?.removeEventListener("abort", onFailure);
     try {
       await lock.release();
     } finally {
       stop?.dispose();
     }
   }
+  return stop?.failed ? 1 : 0;
 }
 
 /**
  * What the process does with a rejection or an exception nobody handled: the name goes to the
- * log and the daemon goes on (see the header).
+ * log and `stop` is asked for, which stops the daemon (see the header).
  */
-export function installProcessHandlers(events: ProcessEvents = process): void {
+export function installProcessHandlers(events: ProcessEvents, stop: () => void): void {
   events.on("unhandledRejection", (reason) => {
     logger.error(`unhandled rejection: ${describe(reason)}`);
+    stop();
   });
   events.on("uncaughtException", (error) => {
     logger.error(`uncaught exception: ${describe(error)}`);
+    stop();
   });
 }
 
 /** The entry point: runs the daemon, and ends the process with 1 when it cannot start or fails. */
 export async function main(options: MainOptions = {}): Promise<void> {
   const exit = options.exit ?? ((code: number) => process.exit(code));
-  installProcessHandlers(options.process);
+  const later = options.later ?? deferred;
+  const failure = new AbortController();
+  let stopped = false;
+  installProcessHandlers(options.process ?? process, () => {
+    // With the daemon already stopped there is nothing left to shut down.
+    if (stopped) {
+      exit(1);
+      return;
+    }
+    if (failure.signal.aborted) return;
+    failure.abort();
+    later(FAILURE_STOP_SECONDS, () => {
+      logger.error("the stop after a failure did not finish: ending the process");
+      exit(1);
+    });
+  });
   try {
-    await run(options);
+    const code = await run({ ...options, failure: failure.signal });
+    stopped = true;
+    if (code !== 0) {
+      // At once: a timer that does not keep the process alive could not give a code the process
+      // would otherwise leave without.
+      exit(code);
+      return;
+    }
+    later(EXIT_GRACE_SECONDS, () => {
+      logger.warning("the process did not end by itself after the stop: ending it");
+      exit(0);
+    });
   } catch (error) {
+    stopped = true;
     if (
       error instanceof ConfigError ||
       error instanceof StateError ||

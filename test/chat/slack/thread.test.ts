@@ -67,7 +67,8 @@ function made(options: { replies?: FakeSlack } = {}): Made {
   const limiter = new CountingLimiter(slack);
   const chat = new SlackChat({
     slack,
-    ...(options.replies !== undefined && { replies: options.replies }),
+    // The tests that do not look at which client a reply is written with share one fake.
+    replies: options.replies ?? slack,
     identity: { teamId: TEAM, ownerUserId: OWNER, botUserId: BOT },
     limiter,
     clock,

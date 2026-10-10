@@ -72,6 +72,11 @@ export interface AppParts {
   readonly fetch: Fetch;
   /** Every wait of a handler: the clip's expiry, the rows of a modal that is opening. */
   readonly clock: Clock;
+  /**
+   * Aborts when the daemon stops (`BuiltApp.close`). A listener still in flight then does
+   * nothing at its next step: the sessions are closed and the lock is released.
+   */
+  readonly stopped: AbortSignal;
   /** Wall-clock seconds, as a Slack ts counts them. */
   readonly now: () => number;
   /** `!open`'s search reads each folder's files from disk, kept for a few seconds. */
@@ -96,6 +101,14 @@ export class Answers {
   }
 
   /**
+   * Whether the daemon has stopped. A listener that finds it so ends silently: asyncio cancelled
+   * the listeners with the loop, where Node's go on at their next await.
+   */
+  get stopped(): boolean {
+    return this.parts.stopped.aborted;
+  }
+
+  /**
    * One message to the channel: a normal post (in `threadTs`'s thread, or top-level when it is
    * null) or, with `ephemeral`, one only the owner sees, under `threadTs`. A normal post pushes
    * only inside a thread the owner started; an ephemeral message never does.
@@ -108,6 +121,7 @@ export class Answers {
     options: { readonly ephemeral: boolean },
   ): Promise<void> {
     const { slack, identity, sessions } = this.parts;
+    if (this.stopped) return;
     const where = threadTs === null ? {} : { thread_ts: threadTs };
     // Built to Block Kit's reference by the modules that make them: opaque to the library's types.
     const shown = blocks as unknown as KnownBlock[];
@@ -245,11 +259,14 @@ export class Answers {
     threadTs: string,
   ): Promise<boolean> {
     const { identity, guard } = this.parts;
+    if (this.stopped) return false;
     if (!channel || !isOwner(identity, user, team)) {
       logger.info("ignored an inbound event from someone other than the owner");
       return false;
     }
     const reason = await guard.refusal(channel);
+    // The check can outlast the daemon: nothing is said, not even to refuse the channel.
+    if (this.stopped) return false;
     if (reason !== null) {
       // For the owner alone, even from a top-level message: a channel the guard refuses may
       // hold people who must not read the bot's words.
@@ -265,6 +282,7 @@ export class Answers {
    * effect).
    */
   async acknowledge(channel: string, ts: string): Promise<void> {
+    if (this.stopped) return;
     try {
       await this.parts.slack.reactions.add({ channel, name: "white_check_mark", timestamp: ts });
     } catch (error) {
@@ -275,7 +293,7 @@ export class Answers {
 
   /** The tool's line in the reply records the call: the request message has done its job. */
   async removeRequest(channel: string, threadTs: string, ts: string | null): Promise<void> {
-    if (ts === null) return;
+    if (ts === null || this.stopped) return;
     await deleteRequest(this.parts.slack, { channel, ts }, { now: this.parts.now });
     try {
       // Crash repair (issue #19): spoken for either way, as the session's own delete does. A

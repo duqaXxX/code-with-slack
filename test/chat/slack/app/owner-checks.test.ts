@@ -14,19 +14,30 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { HOLD_CANCEL, HOLD_CONTINUE } from "../../../../src/chat/slack/hold.ts";
 import {
+  CHANNEL_ACTION,
   CLEAN_ACTION,
+  DATE_ACTION,
   DELETE_ACTION,
   EDIT_ACTION,
   EDIT_ON,
   FILTERS_BLOCK,
   homeFilter,
+  NEW_THREAD_ACTION,
+  SEARCH_ACTION,
   SHOW_ALL_ACTION,
   STATUS_ACTION,
+  TODAY,
 } from "../../../../src/chat/slack/home.ts";
 import { newDraft } from "../../../../src/chat/slack/requests.ts";
-import { SETUP_MODEL, SETUP_START } from "../../../../src/chat/slack/setup.ts";
+import {
+  SETUP_BYPASS,
+  SETUP_EFFORT,
+  SETUP_MODEL,
+  SETUP_START,
+} from "../../../../src/chat/slack/setup.ts";
 import * as texts from "../../../../src/core/texts.ts";
-import { CHANNEL, OTHER_TEAM, OWNER, STRANGER, THREAD } from "../../../support/fake-slack.ts";
+import { fill } from "../../../../src/core/texts.ts";
+import { BOT, CHANNEL, OTHER_TEAM, OWNER, STRANGER, THREAD } from "../../../support/fake-slack.ts";
 import {
   type Body,
   CLICK_THREAD,
@@ -204,21 +215,36 @@ const CASES: readonly Case[] = [
       };
     },
   },
-  {
-    listener: `action ${STATUS_ACTION} (each Home filter shares its listener)`,
-    arrange: async (world, sender) => {
-      const values = { [FILTERS_BLOCK]: { [STATUS_ACTION]: chosenOption("raised_hand") } };
-      const action = {
-        type: "static_select",
-        action_id: STATUS_ACTION,
-        ...chosenOption("raised_hand"),
-      };
-      return {
-        body: homeBy(action, sender, values),
-        acted: () => world.home.chosen.status === "raised_hand",
-      };
-    },
-  },
+  // The four filters share one listener, each is registered on its own `action_id`.
+  ...(
+    [
+      [
+        CHANNEL_ACTION,
+        chosenOption(CHANNEL),
+        (world: World) => world.home.chosen.channel === CHANNEL,
+      ],
+      [
+        STATUS_ACTION,
+        chosenOption("raised_hand"),
+        (world: World) => world.home.chosen.status === "raised_hand",
+      ],
+      [DATE_ACTION, chosenOption(TODAY), (world: World) => world.home.chosen.date === TODAY],
+      [
+        SEARCH_ACTION,
+        { type: "plain_text_input", value: "footer" },
+        (world: World) => world.home.chosen.search === "footer",
+      ],
+    ] as const
+  ).map(
+    ([actionId, control, chosen]): Case => ({
+      listener: `action ${actionId}`,
+      arrange: async (world, sender) => {
+        const values = { [FILTERS_BLOCK]: { [actionId]: control } };
+        const action = { action_id: actionId, ...control };
+        return { body: homeBy(action, sender, values), acted: () => chosen(world) };
+      },
+    }),
+  ),
   {
     listener: `action ${SHOW_ALL_ACTION}`,
     arrange: async (world, sender) => ({
@@ -284,6 +310,123 @@ for (const { listener, arrange } of CASES) {
     });
   }
 }
+
+// The listeners that only acknowledge: they read nothing and do nothing, whoever sends the
+// payload. Each is registered (`BuiltApp.registered` says so), so that one that starts to do
+// something must be moved to the table above, with the checks it then needs.
+
+const ACKNOWLEDGE_ONLY: ReadonlyArray<
+  readonly [listener: string, payload: (sender: Sender) => Body]
+> = [
+  [`action ${SETUP_EFFORT}`, (sender) => sentBy(click(SETUP_EFFORT, "high"), sender)],
+  [`action ${SETUP_BYPASS}`, (sender) => sentBy(click(SETUP_BYPASS, "bypass"), sender)],
+  ["action answer", (sender) => sentBy(click("answer", "0"), sender)],
+  [
+    `action ${NEW_THREAD_ACTION}`,
+    (sender) => homeBy({ type: "button", action_id: NEW_THREAD_ACTION, value: "x" }, sender),
+  ],
+];
+
+for (const [listener, payload] of ACKNOWLEDGE_ONLY) {
+  for (const sender of ["owner", "stranger", "other workspace"] as const) {
+    test(`${listener}: only acknowledges, from ${sender}`, async (t) => {
+      const world = worldOf(t);
+      const response = await world.dispatch(payload(sender));
+      await world.settle();
+      assert.equal(response.status, 200);
+      assert.equal(response.body, null);
+      assert.deepEqual(world.slack.apiCalls, []);
+      assert.deepEqual(world.clients, []);
+      assert.deepEqual(world.home.chosen, homeFilter());
+    });
+  }
+}
+
+// The two events: tested by hand below.
+const EVENTS = ["event message", "event file_change"];
+
+test("every listener the app registers has a row in the table, and every row a listener", (t) => {
+  const world = worldOf(t);
+  const rows = new Set([
+    ...CASES.map((row) => row.listener),
+    ...ACKNOWLEDGE_ONLY.map(([listener]) => listener),
+    ...EVENTS,
+  ]);
+  const registered = world.built.registered.map((entry) => `${entry.kind} ${entry.id}`);
+  assert.deepEqual(
+    registered.filter((listener) => !rows.has(listener)),
+    [],
+    "a listener `buildApp` registers has no row in the table of owner checks",
+  );
+  assert.deepEqual(
+    [...rows].filter((row) => !registered.includes(row)),
+    [],
+    "a row of the table names a listener `buildApp` no longer registers",
+  );
+  // The flag says what the table believes: a listener marked so is in the acknowledge-only rows.
+  const acknowledging = new Set(ACKNOWLEDGE_ONLY.map(([listener]) => listener));
+  for (const entry of world.built.registered) {
+    assert.equal(
+      acknowledging.has(`${entry.kind} ${entry.id}`),
+      entry.acknowledgeOnly,
+      `${entry.kind} ${entry.id}: acknowledgeOnly disagrees with the table`,
+    );
+  }
+});
+
+// Three checks that the table above did not need, and a removal of any of them passed every
+// test of the handlers. A stranger's Next on a form of two questions, the form of a channel the
+// guard now refuses, and a clip whose channel the guard now refuses.
+
+test("view question_form: a stranger's Next on a two-question form is answered with nothing", async (t) => {
+  const world = worldOf(t);
+  const [approvalId, pending] = world.approvals.open(CHANNEL, FORM_THREAD, "Colour", QUESTIONS);
+  const draft = newDraft(approvalId, CHANNEL, FORM_THREAD);
+  // The first question answered: for the owner this is a Next, answered with the next question.
+  const owner = await world.dispatch(formBody("view_submission", draft, picked(0, "0")));
+  assert.equal(owner.body?.response_action, "update");
+  const stranger = await world.dispatch(
+    sentBy(formBody("view_submission", draft, picked(0, "0")), "stranger"),
+  );
+  assert.equal(stranger.status, 200);
+  assert.equal(stranger.body, null); // no view, no error: nothing that says the form exists
+  assert.equal(pending.decided, false);
+  assert.deepEqual(world.slack.apiCalls, []);
+});
+
+test("view question_form: the form of a channel the guard refuses resolves nothing", async (t) => {
+  const world = worldOf(t);
+  const [approvalId, pending] = world.approvals.open(CHANNEL, FORM_THREAD, "Colour", [
+    QUESTIONS[0] as (typeof QUESTIONS)[number],
+  ]);
+  const draft = newDraft(approvalId, CHANNEL, FORM_THREAD);
+  // The channel gained a member while the form was open.
+  world.slack.responses["conversations.members"] = { ok: true, members: [OWNER, BOT, STRANGER] };
+  const response = await world.dispatch(formBody("view_submission", draft, picked(0, "0")));
+  await world.settle();
+  assert.equal(response.status, 200);
+  assert.equal(pending.decided, false);
+  assert.equal(
+    world.ephemerals().at(-1),
+    fill(texts.CHANNEL_REFUSED, { reason: texts.REASON_MEMBERS }),
+  );
+});
+
+test("event file_change: a clip whose channel the guard now refuses is never sent", async (t) => {
+  const world = worldOf(t);
+  await world.dispatch(clipMessage(false));
+  clipInfo(world);
+  // The channel gained a member while the clip waited for its transcript.
+  world.slack.responses["conversations.members"] = { ok: true, members: [OWNER, BOT, STRANGER] };
+  await world.dispatch(recorded("event_callback-file_change"));
+  await world.settle();
+  assert.deepEqual(world.queries(), []);
+  assert.deepEqual(world.clients, []);
+  assert.equal(
+    world.ephemerals().at(-1),
+    fill(texts.CHANNEL_REFUSED, { reason: texts.REASON_MEMBERS }),
+  );
+});
 
 // The one path with no user in its payload: Slack changed a file. It acts only on a clip the
 // owner's own message left waiting, and checks the owner again on the file Slack now describes.

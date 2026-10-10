@@ -159,15 +159,26 @@ every client, store and clock the layers use is built here and handed down.
 
 `main.main` is the entry point. A `ConfigError`, a `StateError` or `AlreadyRunning` is logged with
 its message, any other failure of `main.run` by its name alone, and the process exits with 1. A
-rejected promise or an exception nobody handled is logged by its name and the daemon goes on
-(`main.installProcessHandlers`): ending the process there would skip the shutdown and leave open
-replies and a Claude Code process per session.
+rejected promise or an exception nobody handled is logged by its name and stops the daemon
+(`main.installProcessHandlers`) the way a `SIGINT` does, with the shutdown below and no drain, and
+the process exits with 1, so that launchd, which keeps the service alive, starts a clean daemon and
+the crash repair runs. Letting Node end the process there would skip the shutdown and leave open
+replies and a Claude Code process per session; going on would leave a process Node documents as
+unsafe after an uncaught exception. An unhandled rejection stops the daemon too because it is the
+one sign of a Socket Mode connection that is gone for good: `@slack/socket-mode` 3.1.0 reconnects
+from its `close` listener without awaiting the call (`SocketModeClient.delayReconnectAttempt`), and
+a request for a new WebSocket URL that fails with a request error, an HTTP error or an
+unrecoverable platform code is rejected there with no event for it. A daemon that went on would
+stay up with no socket, the lock held and the owner away.
 
 Logs are lines on standard error (`log.getLogger`), which the LaunchAgent writes to
 `~/Library/Logs/awaydesk/awaydesk.log`. A line reads `<time> <LEVEL> <name>: <message>`, the time
 local, the name that of the module (`awaydesk.core.state`); lines below `INFO` are not written
 unless `log.setLevel` lowers the threshold. A line carries ids, counts and error names, never the
-text of a prompt or of a reply. What Bolt logs goes through the same logger, prefixed `bolt:`.
+text of a prompt or of a reply. The Slack libraries are given loggers that never write their own
+text (`quiet-logger`), since it can quote a message and, at the debug level, the Socket Mode ticket
+in the WebSocket URL: the web clients write nothing, Bolt and the Socket Mode client one line per
+warning or error that names the library, and the daemon logs the states of the connection itself.
 
 ### Shutdown
 
@@ -203,10 +214,22 @@ text of a prompt or of a reply. What Bolt logs goes through the same logger, pre
   task.
 
 When no session is working, after `main.DRAIN_LIMIT_SECONDS`, or on a second signal, the daemon
-stops the scheduled cleanup, closes the connection, gives up the clips still waiting for a
-transcript, closes every session (`SessionManager.closeAll`), publishes the session index a last
-time (`Home.close`), closes the usage probe and releases the lock. A step that fails is logged and
-the rest still runs. After `bootout` launchd kills the daemon once the LaunchAgent's `ExitTimeOut`
+stops the scheduled cleanup, closes the connection, tells the listeners it is stopping and gives up
+the clips still waiting for a transcript (`BuiltApp.close`), closes every session
+(`SessionManager.closeAll`), publishes the session index a last time (`Home.close`), closes the
+usage probe and releases the lock. A step that fails is logged and the rest still runs.
+
+A listener that was in flight when the stop ended goes on at its next step, since Node does not
+cancel it with the loop. From `BuiltApp.close` it does nothing the owner can see: `Answers.admitted`
+refuses, and nothing posts, reacts, opens a modal, submits a prompt or deletes a request. From the
+first line of `SessionManager.closeAll` the manager hands out no session (`get` answers null),
+and `open`, `resume` and `bind` throw `SessionClosed` before they read or write `state.json`;
+`release` answers false. A session started then would never be closed, and with the real back end
+its Claude Code process would keep Node alive after the lock was released. Once `main.run` has
+returned, `main.main` arms a timer that does not keep the process alive (`main.deferred`) and ends
+it with the code `run` gave after `main.EXIT_GRACE_SECONDS`, in case something still holds the
+event loop. A stop that a failure asked for exits with 1 as soon as `run` returns, and at
+`main.FAILURE_STOP_SECONDS` if it has not returned by then. After `bootout` launchd kills the daemon once the LaunchAgent's `ExitTimeOut`
 passes (60 seconds at most), whatever the drain is doing. `SIGINT` skips the drain: from a terminal
 it also reaches the Claude Code processes, which share the daemon's process group. A signal that
 arrives before the daemon waits for one, during a repair for instance, is kept and starts the stop
@@ -303,7 +326,7 @@ removes only what an answer makes certain:
 - `cleanup.forgetGoneChannels` asks about each bound channel through the lookup it is given, which
   answers `gone`, `there` or `no answer` (`cleanup.ChannelAnswer`), and removes, with
   `StateStore.removeChannel`, each one that is `gone`, threads included. The lookup for Slack is
-  `main.channelLookup`: `gone` is `channel_not_found` from `conversations.info`, and any other
+  `channels.channelLookup`: `gone` is `channel_not_found` from `conversations.info`, and any other
   failure is no answer and removes nothing. A private channel the bot was removed from gives the
   same answer as a deleted one, so it is forgotten too. When Slack finds none of the bound channels
   (a channel it gave no answer about is not one it found), nothing is removed and a warning says so:
@@ -814,7 +837,8 @@ of them the footer follows its output (`Set effort level to ...`, read by `foote
 Until Claude Code reports a level on the running process the footer leaves it out, unless the daemon
 itself just set a stored level, which shows at once; when the model takes no effort parameter it
 shows `default`. The limits come from Claude Code's `/usage`, sent on a long-lived session of its
-own, started in the home directory with none of the owner's setting sources (`UsageProbe`), and are
+own, started in the home directory with none of the owner's setting sources, without the permission
+to bypass and without the Chrome flag (`UsageProbe`, over `ClaudeBackend.startBare`), and are
 cached for five minutes (`footer.UsageCache`, `footer.USAGE_TTL`); the event `limits_changed`, which
 the back end makes of the SDK's rate-limit record, invalidates the cache. A probe with no answer
 within `usage.USAGE_TIMEOUT` gives up and closes its session. The limit fields exist only with a

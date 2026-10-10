@@ -86,6 +86,12 @@ export class SessionClosedError extends Error {
 /** What a session is started with: the seam's options, and whether Claude Code gets `--chrome`. */
 export interface SessionConfig extends StartOptions {
   readonly chrome: boolean;
+  /**
+   * A session the daemon starts for itself (the usage probe), not for a thread: it is not given
+   * the permission to bypass that a thread's `!bypass on` needs. Python's probe built a bare
+   * client, the folder and no setting source, nothing else.
+   */
+  readonly bare?: boolean;
 }
 
 /**
@@ -200,7 +206,7 @@ export class ClaudeSession implements AgentSession {
       ...(permissionMode !== null && { permissionMode: modeOf(permissionMode) }),
       settingSources: [...this.#config.settingsSources],
       includePartialMessages: true,
-      allowDangerouslySkipPermissions: true,
+      ...(!this.#config.bare && { allowDangerouslySkipPermissions: true }),
       extraArgs,
       canUseTool: async (toolName, input, context) => {
         // A callback that rejects is answered with a `control_response` of subtype `error`
@@ -316,7 +322,10 @@ export class ClaudeSession implements AgentSession {
     await this.#query.setModel(model ?? undefined);
   }
 
-  /** Live, with no reconnect (`applyFlagSettings`, 36 ms, measured 2026-10-10 on SDK 0.3.296). */
+  /**
+   * Live, with no reconnect (`applyFlagSettings`, SDK 0.3.296): 36 ms in the spike's measurement,
+   * 28 ms in the back end's own live check, both on 2026-10-10.
+   */
   async setEffort(level: string | null): Promise<void> {
     if (level !== null && effortOf(level) === undefined) {
       throw new RangeError(`unknown effort level: ${level}`);

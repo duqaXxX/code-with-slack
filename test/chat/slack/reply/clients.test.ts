@@ -19,12 +19,14 @@ import {
   WebClient,
 } from "@slack/web-api";
 import {
+  type ClientOptions,
   CREATING_METHODS,
   repliesClient,
   sharedClient,
 } from "../../../../src/chat/slack/reply/clients.ts";
 import { describe, unknownOutcome } from "../../../../src/chat/slack/reply/errors.ts";
 import type { Clock } from "../../../../src/clock.ts";
+import { setLevel, setWriter } from "../../../../src/log.ts";
 import { UPLOAD_DONE, UPLOAD_URL } from "../../../support/fake-slack.ts";
 
 type FetchResponse = Awaited<ReturnType<FetchFunction>>;
@@ -322,3 +324,113 @@ test("a file upload is retried one Slack call at a time, never as a whole", asyn
   );
   assert.deepEqual(second, ["files.getUploadURLExternal", "bytes"]);
 });
+
+// F2: `@slack/web-api` 8.2.0 writes lines of its own, to standard output and standard error,
+// unless it is given a logger. At its default level it prints every `[ERROR]` and `[WARN]` entry
+// of a refusal's `response_metadata.messages` (Slack's sentence, which can quote a value of the
+// message: `unsupported type: VALUE [json-pointer:/blocks/0]`), every entry of
+// `response_metadata.warnings`, and `http request failed` with the failure's message; at its
+// debug level the body of each request and each result, which hold the message text and, for
+// `apps.connections.open`, the Socket Mode ticket in the WebSocket URL. `describeRefusal`
+// withholds Slack's sentence and the setup doc says the log never holds message content, so the
+// daemon's clients are given a logger that writes none of the library's text.
+
+const MARKER = "MARKER_VALUE_7";
+
+/** Everything written to the daemon's log and to the process's two outputs while `work` runs. */
+async function everythingWritten(work: () => Promise<void>): Promise<string[]> {
+  const lines: string[] = [];
+  const restoreWriter = setWriter((line) => lines.push(line));
+  // What a library's console logger writes (`[ERROR]  web-api:...`), or quotes the marker. The
+  // test runner talks to its parent over the same outputs: everything is passed on.
+  const ours = /\[(DEBUG|INFO|WARN|ERROR)\]|MARKER_VALUE_7/;
+  const tapped = [process.stdout, process.stderr].map((stream) => {
+    const original = stream.write;
+    stream.write = ((chunk: unknown, ...rest: unknown[]): boolean => {
+      if (typeof chunk === "string" && ours.test(chunk)) lines.push(chunk);
+      return (original as (...args: unknown[]) => boolean).call(stream, chunk, ...rest);
+    }) as typeof stream.write;
+    return [stream, original] as const;
+  });
+  setLevel("DEBUG"); // the most the log would ever take
+  try {
+    await work();
+  } finally {
+    for (const [stream, original] of tapped) stream.write = original;
+    setLevel("INFO");
+    setWriter(restoreWriter);
+  }
+  return lines;
+}
+
+/** Slack answering with a body, whatever the call. */
+function answering(body: object): FetchFunction {
+  return async (url) => respond(url, 200, JSON.stringify(body));
+}
+
+const REFUSAL = {
+  ok: false,
+  error: "invalid_blocks",
+  response_metadata: {
+    messages: [
+      `[ERROR] unsupported type: ${MARKER} [json-pointer:/blocks/0]`,
+      `[WARN] a value that looks odd: ${MARKER}`,
+    ],
+    warnings: [`warning about ${MARKER}`],
+  },
+};
+
+// Built with no `logLevel` of the test's: the library's own default is what is under test.
+const UNMUTED = [
+  ["shared", sharedClient],
+  ["replies", repliesClient],
+] as const;
+
+/** The client for the test, its pauses ended at once. */
+function unmuted(
+  build: typeof sharedClient,
+  fetch: FetchFunction,
+  options: Partial<ClientOptions> = {},
+): WebClient {
+  return build(undefined, { ...STEADY, clock: new Pauses(), fetch, ...options });
+}
+
+for (const [name, build] of UNMUTED) {
+  test(`the ${name} client writes none of the library's text when Slack refuses a call`, async () => {
+    const client = unmuted(build, answering(REFUSAL));
+    const written = await everythingWritten(async () => {
+      await assert.rejects(
+        client.chat.postMessage({ channel: "C000CHAN", text: `hello ${MARKER}` }),
+        WebAPIPlatformError,
+      );
+    });
+    assert.deepEqual(written, []);
+  });
+
+  test(`the ${name} client writes none of the library's text when a call fails on the connection`, async () => {
+    const client = unmuted(build, async () => {
+      throw new TypeError(`fetch failed ${MARKER}`);
+    });
+    const written = await everythingWritten(async () => {
+      await assert.rejects(
+        client.chat.postMessage({ channel: "C000CHAN", text: "x" }),
+        WebAPIRequestError,
+      );
+    });
+    assert.deepEqual(written, []);
+  });
+
+  test(`the ${name} client writes neither a request nor an answer at the debug level`, async () => {
+    // What `apps.connections.open` answers carries the WebSocket URL, and with it the ticket.
+    const ticket = `wss://example.invalid/link/?ticket=${MARKER}`;
+    // Asked for at the debug level, which the library would honour without a logger of ours.
+    const client = unmuted(build, answering({ ok: true, url: ticket, ts: "1790000000.000001" }), {
+      logLevel: LogLevel.DEBUG,
+    });
+    const written = await everythingWritten(async () => {
+      await client.chat.postMessage({ channel: "C000CHAN", text: `hello ${MARKER}` });
+      await client.apps.connections.open({});
+    });
+    assert.deepEqual(written, []);
+  });
+}

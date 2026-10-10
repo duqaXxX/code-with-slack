@@ -48,6 +48,30 @@ export class ClaudeBackend implements AgentBackend {
     return session;
   }
 
+  /**
+   * Starts a session for the daemon's own use, the usage probe's: the folder and no setting
+   * source, without the permission to bypass and without the Chrome flag, which only a thread's
+   * session is given (Python's probe built a bare client). Fails as `start` does.
+   */
+  async startBare(folder: string, requests: RequestHandler): Promise<AgentSession> {
+    const session = new ClaudeSession(
+      {
+        folder,
+        resume: null,
+        settingsSources: [],
+        model: null,
+        effort: null,
+        permissionMode: null,
+        chrome: false,
+        bare: true,
+      },
+      requests,
+      this.#query,
+    );
+    await session.ready();
+    return session;
+  }
+
   /** The sessions of `folder` alone, newest first by their files' times. */
   listSessions(folder: string): Promise<readonly ListedSession[]> {
     return directorySessions(folder);

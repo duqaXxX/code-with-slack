@@ -201,6 +201,7 @@ export class Open {
       await this.answers.tellOwner(channel, threadTs, fill(texts.OPEN_EMPTY, { path: shown }));
       return;
     }
+    if (this.answers.stopped) return;
     try {
       await uploadFile(slack, channel, threadTs, content, relative);
     } catch (error) {
@@ -238,7 +239,7 @@ export class Open {
     await this.modals.lock(viewId).run(async () => {
       if (!this.modals.current(viewId, key)) return;
       const rows = await found();
-      if (!this.modals.current(viewId, key)) return;
+      if (!this.modals.current(viewId, key) || this.answers.stopped) return;
       const view = modalView(target, words, rows.paths, {
         count: rows.count,
         complete: rows.complete,
@@ -299,6 +300,7 @@ export class Open {
             complete: found.complete,
             opening: true,
           });
+    if (this.answers.stopped) return;
     let viewId: unknown;
     try {
       if (triggerId === null) throw new TypeError("the click carries no trigger_id");
@@ -383,6 +385,7 @@ export class Open {
   onOpenQuery = async (ack: Ack, body: Payload): Promise<void> => {
     await ack();
     const { identity, now } = this.parts;
+    if (this.answers.stopped) return;
     const [user, team] = interactionActor(body);
     if (!isOwner(identity, user, team)) {
       logger.info("ignored an inbound event from someone other than the owner");

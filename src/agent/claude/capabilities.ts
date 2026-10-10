@@ -8,8 +8,9 @@ export const CAPABILITIES: Capabilities = Object.freeze({
   effort: true,
   // The SDK's `EffortLevel`.
   effortLevels: Object.freeze(["low", "medium", "high", "xhigh", "max"]),
-  // The TypeScript SDK changes the effort of a live session (`applyFlagSettings`, 36 ms and no
-  // reconnect, measured 2026-10-10 on SDK 0.3.296).
+  // The TypeScript SDK changes the effort of a live session (`applyFlagSettings`, no reconnect,
+  // SDK 0.3.296): 36 ms in the spike's measurement, 28 ms in the back end's own live check, both
+  // on 2026-10-10.
   liveEffort: true,
   permissionModes: Object.freeze({
     default: "default",

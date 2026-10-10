@@ -317,6 +317,20 @@ All notable changes to this project are documented here. The format follows
     the name is the runtime's (`TypeError`, `TimeoutError`, `Error`) in place of Python's class.
   - An approval request prints a number with a whole value as JavaScript writes it: a `1.0` in
     a tool's input shows as `1`.
+  - An error nothing caught stops the daemon: it logs the error's name, closes the sessions
+    and the connection without waiting for running turns, and exits with status 1, so the
+    service is started again and the crash repair runs. This covers a Socket Mode connection
+    that cannot come back (a refused token, a request that fails while reconnecting), which
+    `@slack/socket-mode` 3.1.0 reports in no other way. The Python daemon logged such an error
+    and went on. If that stop has not ended after 30 seconds the process exits anyway.
+  - Once a stop has closed the sessions, a message or a click still being handled does nothing
+    more: no session starts, nothing is written to `state.json`, nothing is posted. The
+    process then ends within 5 seconds whatever still holds it.
+  - The Slack libraries write nothing of their own to the log. `@slack/web-api` 8.2.0 prints
+    the sentences Slack attaches to a refusal, which can quote a value of the message; the
+    daemon gives its clients a logger that drops them, and logs a failed call by its error
+    code as before. From Bolt and the Socket Mode client the log holds one line per warning
+    or error, with no text of theirs, and the connection's states by name.
 - The project is named `awaydesk` (was `code-with-slack`). The package, the command, the
   repository, the Slack app and its bot take the new name. On a machine that ran the old name,
   four places move: the configuration folder is `~/.config/awaydesk/`, the LaunchAgent is

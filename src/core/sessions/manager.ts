@@ -9,7 +9,7 @@ import * as texts from "../texts.ts";
 import { DRAIN_POLL_SECONDS } from "./constants.ts";
 import type { SessionDeps } from "./deps.ts";
 import { checkDirectory } from "./directory.ts";
-import { DirectoryUnavailable } from "./errors.ts";
+import { DirectoryUnavailable, SessionClosed } from "./errors.ts";
 import { describe, logger, ThreadSession } from "./session.ts";
 import type { Event } from "./tasks.ts";
 
@@ -22,6 +22,12 @@ export class SessionManager {
   private readonly sessions = new Map<string, ThreadSession>();
   /** The threads being deleted (`release`): no session is handed out or built in one. */
   private readonly heldThreads = new Set<string>();
+  /**
+   * Set at the top of `closeAll`: a listener still in flight when a stop ends must not build a
+   * session nobody will close, nor write `state.json` after the lock was released (asyncio
+   * cancelled every listener with its loop; Node's keep running).
+   */
+  private closed = false;
   draining = false;
 
   constructor(deps: SessionDeps) {
@@ -30,9 +36,11 @@ export class SessionManager {
 
   /**
    * A top-level owner message: creates the thread's entry, in the channel's current folder,
-   * and its live session. Null when the channel is unbound.
+   * and its live session. Null when the channel is unbound; `SessionClosed` once a stop closed
+   * the sessions, before anything is written.
    */
   open(channelId: string, threadTs: string): ThreadSession | null {
+    this.refuseWhenClosed();
     if (this.deps.state.channel(channelId) === null) return null;
     const thread = this.deps.state.openThread(channelId, threadTs);
     return this.session(channelId, threadTs, thread.directory);
@@ -63,12 +71,18 @@ export class SessionManager {
    * SessionGone branch of `ensureConnected`) is never handed back here: it is discarded and
    * replaced, so a message never reaches a client that is going, or gone. The session handed
    * back has just been touched: its idle-close timer cannot fire before the caller's own next
-   * await, however slow (a download, a slow call to the chat).
+   * await, however slow (a download, a slow call to the chat). Null for every thread once a stop
+   * closed the sessions.
    */
   get(channelId: string, threadTs: string): ThreadSession | null {
+    if (this.closed) return null;
     const thread = this.deps.state.thread(channelId, threadTs);
     if (thread === null || this.heldThreads.has(keyOf(channelId, threadTs))) return null;
     return this.session(channelId, threadTs, thread.directory);
+  }
+
+  private refuseWhenClosed(): void {
+    if (this.closed) throw new SessionClosed();
   }
 
   private session(channelId: string, threadTs: string, directory: string): ThreadSession {
@@ -164,9 +178,10 @@ export class SessionManager {
   /**
    * Bind the channel to `directory`, for the next thread it opens; false, and nothing changed,
    * while any live session of the channel is not idle. A thread already open keeps the folder
-   * it started in.
+   * it started in. `SessionClosed` once a stop closed the sessions.
    */
   async bind(channelId: string, directory: string): Promise<boolean> {
+    this.refuseWhenClosed();
     if (this.sessionsOf(channelId).some((session) => !session.idle)) return false;
     this.deps.state.bind(channelId, directory);
     return true;
@@ -177,9 +192,11 @@ export class SessionManager {
    * False, with nothing closed, when the session is not idle or waits for the owner: the same
    * test the idle close makes, so the close is as silent. True holds the thread until `free`:
    * `get` answers null for it meanwhile and `held` says so, so a message sent in a thread that
-   * is being deleted is told it holds no session.
+   * is being deleted is told it holds no session. False once a stop closed the sessions: no
+   * thread is held for a delete the stop would cut short.
    */
   async release(channelId: string, threadTs: string): Promise<boolean> {
+    if (this.closed) return false;
     const key = keyOf(channelId, threadTs);
     const session = this.sessions.get(key);
     const inUse =
@@ -224,13 +241,15 @@ export class SessionManager {
 
   /**
    * `!resume`: opens a thread at `threadTs` (the `!resume` message's own ts) in the channel's
-   * folder, already on `sessionId`. Null when the channel is unbound.
+   * folder, already on `sessionId`. Null when the channel is unbound; `SessionClosed` once a
+   * stop closed the sessions.
    */
   async resume(
     channelId: string,
     threadTs: string,
     sessionId: string,
   ): Promise<ThreadSession | null> {
+    this.refuseWhenClosed();
     if (this.deps.state.channel(channelId) === null) return null;
     const thread = this.deps.state.openThread(channelId, threadTs, sessionId);
     return this.session(channelId, threadTs, thread.directory);
@@ -315,9 +334,11 @@ export class SessionManager {
    * Close every session and wait for each to be fully torn down, including one an idle close
    * already had in flight: `close()` is safe to call again on a session already closing, but
    * returning as soon as this call's own no-op finds the client already gone would not wait for
-   * whichever call is actually disconnecting it.
+   * whichever call is actually disconnecting it. From its first line the manager refuses to open,
+   * resume or bind, and hands out no session.
    */
   async closeAll(): Promise<void> {
+    this.closed = true;
     const sessions = [...this.sessions.values()];
     for (const session of sessions) {
       if (session.closed) continue;

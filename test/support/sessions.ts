@@ -474,7 +474,7 @@ export class Harness {
   readonly slackClock = new FakeClock();
   readonly chat: SlackChat;
   readonly deps: SessionDeps;
-  readonly manager: SessionManager;
+  manager: SessionManager;
   usageFetches = 0;
 
   constructor(
@@ -490,7 +490,7 @@ export class Harness {
     this.backend = new FakeAgentBackend(scripts);
     this.chat = new SlackChat({
       slack,
-      ...(options.replies !== undefined && { replies: options.replies }),
+      replies: options.replies ?? slack,
       identity: { teamId: TEAM, ownerUserId: OWNER, botUserId: BOT },
       // A generous burst: these tests are about session orchestration, not the shared
       // limiter's own pacing (that lives in the sink's tests).
@@ -515,6 +515,12 @@ export class Harness {
       ...(options.tasksKept !== undefined && { tasksKept: options.tasksKept }),
       ...(options.taskRepliesKept !== undefined && { taskRepliesKept: options.taskRepliesKept }),
     };
+    this.manager = new SessionManager(this.deps);
+  }
+
+  /** A restart of the daemon: every session closed, then a new manager on the same state. */
+  async restart(): Promise<void> {
+    await this.manager.closeAll();
     this.manager = new SessionManager(this.deps);
   }
 

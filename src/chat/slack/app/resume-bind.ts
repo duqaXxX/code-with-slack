@@ -305,7 +305,7 @@ export class ResumeBind {
     options: { readonly remove: boolean },
   ): Promise<void> {
     const { slack, limiter } = this.parts;
-    if (listTs === null) return;
+    if (listTs === null || this.answers.stopped) return;
     if (options.remove) {
       try {
         await slack.chat.delete({ channel, ts: listTs });

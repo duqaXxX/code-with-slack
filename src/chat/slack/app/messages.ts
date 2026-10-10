@@ -303,6 +303,7 @@ export class Messages {
     const { sessions } = this.parts;
     const { requests } = this.others;
     const { inThread } = options;
+    if (this.answers.stopped) return;
     if (inThread && command !== null && isClear(command, opened.commands)) {
       await this.answers.tellOwner(channel, threadTs, texts.CLEAR_IN_THREAD);
       return;
@@ -313,7 +314,7 @@ export class Messages {
       let session = opened;
       let prompt: PromptContent | null =
         files.length > 0 ? await this.withAttachments(channel, threadTs, sent, files) : sent;
-      if (prompt === null) return;
+      if (prompt === null || this.answers.stopped) return;
       // Checked before the hold too: a drain already cancelled every hold open when it
       // started (`SessionManager.drain`) and will never cancel one opened after, so a message
       // that arrives once draining has begun must never open a new one (it would wait
@@ -345,7 +346,8 @@ export class Messages {
         const other = sessions.workingIn({ besides: session });
         if (other !== null) {
           if (!(await requests.holdBeforeSending(channel, threadTs, session, other))) {
-            if (askedSetup) await session.forgetSetup(); // the Start that nothing was sent for
+            // the Start that nothing was sent for
+            if (askedSetup && !this.answers.stopped) await session.forgetSetup();
             return;
           }
           held = session;
@@ -366,7 +368,9 @@ export class Messages {
             }
             // (sync) Checked last, with no await before the submit: a stop can start during a
             // download. The daemon's words still work meanwhile (`!stop` shortens the wait); a
-            // new turn would not finish, and Slack does not resend this event.
+            // new turn would not finish, and Slack does not resend this event. A stop that ended
+            // meanwhile (the daemon is gone) sends nothing and says nothing.
+            if (this.answers.stopped) return;
             if (sessions.draining) {
               await this.answers.refuseRestarting(channel, threadTs);
               return;

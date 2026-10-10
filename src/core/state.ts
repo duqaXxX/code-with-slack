@@ -40,7 +40,8 @@ export interface ThreadState {
   // the ts of every open reply's last message (more than one can be open at once: a background
   // task's own reply can outlive the turn that started it). Each `ReplySink` owns one entry:
   // added on its first message, replaced on a continuation, removed once its final write is
-  // known to have landed (or it has given up retrying for good).
+  // known to have landed. A sink that gave up on that write leaves its entry: the next start's
+  // crash repair (`repairCrash`) finishes the message and removes it.
   readonly openReplies: readonly string[];
   /** ts of every approval, question or same-folder hold request still carrying buttons. */
   readonly requests: readonly string[];

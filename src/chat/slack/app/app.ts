@@ -26,22 +26,18 @@
  *   `app.error`: an `UnknownError` holding the thrown value in `original`, unless it has a
  *   `code` of its own.
  * - `middleware/builtin.js`. `ignoreSelf` (on by default) drops a `bot_message` of this app and
- *   any event whose `user` is the bot. It is switched off: `guards.isPromptMessage` and the
- *   owner check decide what a message from a bot is, as in Python. `app.event("message")`
+ *   any event whose `user` is the bot. It is switched off, which differs from `slack_bolt`'s
+ *   default (it ignores its own events). That is harmless: the listeners drop what a bot wrote
+ *   themselves (`guards.isPromptMessage` refuses any event with a `bot_id`, and the owner check
+ *   refuses a user who is not the owner), so the middleware would add nothing. `app.event("message")`
  *   filters nothing else (`onlyEvents`, `matchEventType`): a `message_changed` reaches the
  *   listener, which drops it. `app.action` matches on `action_id` alone, `app.view` on
  *   `callback_id` and the `view_submission` type.
  * - `conversation-store.js`. The default store adds a lookup per event for a state this app
  *   never keeps: switched off (`convoStore: false`).
  */
-import {
-  App,
-  type Logger as BoltLogger,
-  LogLevel,
-  type Receiver,
-  SocketModeReceiver,
-} from "@slack/bolt";
-import type { WebClient } from "@slack/web-api";
+import { App, LogLevel, type Receiver, SocketModeReceiver } from "@slack/bolt";
+import type { WebClient, WebClientOptions } from "@slack/web-api";
 import { type Clock, monotonicClock } from "../../../clock.ts";
 import type { Config } from "../../../core/config.ts";
 import type { Holds } from "../../../core/hold.ts";
@@ -62,6 +58,7 @@ import {
 } from "../home.ts";
 import { Listings } from "../openfile/listing.ts";
 import { OPEN_BUTTON_ACTION, OPEN_FORM, QUERY_ACTION } from "../openfile/modal.ts";
+import { levelLogger } from "../quiet-logger.ts";
 import type { Limiter } from "../reply/limiter.ts";
 import {
   APPROVAL_ALLOW,
@@ -119,34 +116,60 @@ export interface BuildAppOptions {
   readonly listings?: Listings;
 }
 
+/** One thing the app registered a listener for. */
+export interface Registration {
+  readonly kind: "event" | "action" | "view";
+  /** The event type, the `action_id` or the `callback_id`. */
+  readonly id: string;
+  /** The listener only acknowledges: it reads nothing and does nothing, whoever sent the payload. */
+  readonly acknowledgeOnly: boolean;
+}
+
 /** The Bolt app with its listeners, and what a stop must end besides the connection. */
 export interface BuiltApp {
   readonly app: App;
-  /** Gives up the clips still waiting for a transcript, whose timers would keep the process alive. */
+  /**
+   * Every listener `buildApp` registered, as it registered them: what a test compares with its
+   * table of owner checks, so that a listener added without a row fails there.
+   */
+  readonly registered: readonly Registration[];
+  /**
+   * Tells every listener the daemon is stopping, and gives up the clips still waiting for a
+   * transcript, whose timers would keep the process alive. A listener still in flight does
+   * nothing from its next step on: it posts, opens a modal, submits and writes nothing.
+   */
   close(): void;
 }
 
-/** What Bolt writes, in the daemon's log: its own sentences, and the name of anything else. */
-function boltLogger(): BoltLogger {
-  let level = LogLevel.INFO;
-  const line = (parts: readonly unknown[]): string =>
-    `bolt: ${parts.map((part) => (typeof part === "string" ? part : errorName(part))).join(" ")}`;
-  return {
-    debug: (...parts) => logger.debug(line(parts)),
-    info: (...parts) => logger.info(line(parts)),
-    warn: (...parts) => logger.warning(line(parts)),
-    error: (...parts) => logger.error(line(parts)),
-    setLevel: (wanted) => {
-      level = wanted;
-    },
-    getLevel: () => level,
-    setName: () => {},
-  };
+/** What `socketReceiver` can be given besides the token: the network and the pace of a test. */
+export interface SocketOptions {
+  /** The options of the client that asks Slack for the WebSocket URL (`fetch`, in a test). */
+  readonly clientOptions?: WebClientOptions;
+  /** Milliseconds the client waits for a ping, and before a reconnect (5000 by default). */
+  readonly clientPingTimeout?: number;
 }
 
-/** The Socket Mode connection the daemon's app listens on; `app.start()` opens it, `app.stop()` closes it. */
-export function socketReceiver(appToken: string): SocketModeReceiver {
-  return new SocketModeReceiver({ appToken, logger: boltLogger(), logLevel: LogLevel.INFO });
+/**
+ * The Socket Mode connection the daemon's app listens on; `app.start()` opens it, `app.stop()`
+ * closes it. The libraries' own text is never logged (`levelLogger`): the connection's states
+ * are, by the names the client gives them.
+ */
+export function socketReceiver(appToken: string, options: SocketOptions = {}): SocketModeReceiver {
+  const receiver = new SocketModeReceiver({
+    appToken,
+    logger: levelLogger("socket mode"),
+    logLevel: LogLevel.WARN,
+    ...(options.clientPingTimeout !== undefined && {
+      clientPingTimeout: options.clientPingTimeout,
+    }),
+    ...(options.clientOptions !== undefined && {
+      installerOptions: { clientOptions: options.clientOptions },
+    }),
+  });
+  receiver.client.on("connected", () => logger.info("socket mode: connected"));
+  receiver.client.on("reconnecting", () => logger.warning("socket mode: reconnecting"));
+  receiver.client.on("disconnected", () => logger.info("socket mode: disconnected"));
+  return receiver;
 }
 
 /** The error a listener threw, under Bolt's wrapping of one that has no `code`. */
@@ -159,6 +182,7 @@ function thrown(error: unknown): unknown {
 /** The Bolt app, with one listener per inbound path. */
 export function buildApp(options: BuildAppOptions): BuiltApp {
   const { config, identity, sessions } = options;
+  const stopping = new AbortController();
   const parts: AppParts = {
     slack: options.slack,
     config,
@@ -175,6 +199,7 @@ export function buildApp(options: BuildAppOptions): BuiltApp {
       options.fetch ??
       (({ url, mimetype, limit }) => download(url, config.botToken, mimetype, limit)),
     clock: options.clock ?? monotonicClock,
+    stopped: stopping.signal,
     now: options.now ?? (() => Date.now() / 1000),
     listings:
       options.listings ??
@@ -194,9 +219,11 @@ export function buildApp(options: BuildAppOptions): BuiltApp {
     authorize: async () => ({ teamId: identity.teamId, botUserId: identity.botUserId }),
     ignoreSelf: false,
     convoStore: false,
-    logger: boltLogger(),
-    logLevel: LogLevel.INFO,
+    logger: levelLogger("bolt"),
+    logLevel: LogLevel.WARN,
   });
+
+  const registered: Registration[] = [];
 
   app.event("message", async ({ event, body }) => {
     const message = event as unknown as Payload;
@@ -223,14 +250,28 @@ export function buildApp(options: BuildAppOptions): BuiltApp {
   });
 
   app.event("file_change", ({ event }) => clips.onFileChange(event as unknown as Payload));
+  registered.push(
+    { kind: "event", id: "message", acknowledgeOnly: false },
+    { kind: "event", id: "file_change", acknowledgeOnly: false },
+  );
 
   /** A click or a select: the listener acknowledges, then checks, on its own. */
-  const action = (actionId: string, listener: (ack: Ack, body: Payload) => Promise<void>): void => {
+  const action = (
+    actionId: string,
+    listener: (ack: Ack, body: Payload) => Promise<void>,
+    options: { readonly acknowledgeOnly?: boolean } = {},
+  ): void => {
+    registered.push({
+      kind: "action",
+      id: actionId,
+      acknowledgeOnly: options.acknowledgeOnly ?? false,
+    });
     app.action(actionId, ({ ack, body }) => listener(() => ack(), body as unknown as Payload));
   };
 
   /** A modal's submit: what the listener answers is what the modal does next. */
   const view = (callbackId: string, listener: (ack: Ack, body: Payload) => Promise<void>): void => {
+    registered.push({ kind: "view", id: callbackId, acknowledgeOnly: false });
     app.view(callbackId, ({ ack, body }) =>
       // The answer is built to the view submission reference by the listener itself.
       listener((answer) => ack(answer as never), body as unknown as Payload),
@@ -239,11 +280,12 @@ export function buildApp(options: BuildAppOptions): BuiltApp {
 
   action(SETUP_START, requests.onSetupStart);
   action(SETUP_MODEL, requests.onSetupModel);
-  action(SETUP_EFFORT, requests.onSetupEdit);
-  action(SETUP_BYPASS, requests.onSetupEdit);
+  // The controls' own state rides on Start's click: a change of either needs nothing here.
+  action(SETUP_EFFORT, requests.onSetupEdit, { acknowledgeOnly: true });
+  action(SETUP_BYPASS, requests.onSetupEdit, { acknowledgeOnly: true });
   for (const actionId of [HOLD_CONTINUE, HOLD_CANCEL]) action(actionId, requests.onHoldDecision);
   for (const actionId of DECISION_ACTIONS) action(actionId, requests.onDecision);
-  action("answer", requests.onAnswer);
+  action("answer", requests.onAnswer, { acknowledgeOnly: true });
   action(QUESTION_OPEN, requests.onQuestionOpen);
   view(QUESTION_FORM, requests.onQuestionSubmit);
 
@@ -254,7 +296,7 @@ export function buildApp(options: BuildAppOptions): BuiltApp {
   action(BIND_ACTION, resumeBind.onBind);
   action(RESUME_ACTION, resumeBind.onResume);
 
-  action(NEW_THREAD_ACTION, home.onHomeLink);
+  action(NEW_THREAD_ACTION, home.onHomeLink, { acknowledgeOnly: true });
   for (const actionId of FILTER_ACTIONS) action(actionId, home.onHomeFilter);
   action(SHOW_ALL_ACTION, home.onHomeShowAll);
   action(EDIT_ACTION, home.onHomeEdit);
@@ -265,5 +307,12 @@ export function buildApp(options: BuildAppOptions): BuiltApp {
     logger.error(`handler failed: ${errorName(thrown(error))}`);
   });
 
-  return { app, close: () => clips.close() };
+  return {
+    app,
+    registered,
+    close: () => {
+      stopping.abort();
+      clips.close();
+    },
+  };
 }

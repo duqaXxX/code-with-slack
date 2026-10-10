@@ -1805,7 +1805,7 @@ test("an effort set before a restart is not carried over", async (t) => {
   );
   await (await h.session().submit("/effort low")).done.wait();
   assert.ok(statuses(h).at(-1)?.includes("*effort* low"));
-  await h.manager.closeAll();
+  await h.restart();
   await (await h.session().submit("next")).done.wait();
   assert.ok(statuses(h).at(-1)?.includes("*effort* medium"));
 });
@@ -2248,7 +2248,7 @@ test("a restarted client starts again in the bound folder", GIT_LAYOUT, async (t
   const session = h.session();
   await (await session.submit("list the files")).done.wait();
   assert.ok(statuses(h).at(-1)?.includes("feature-x"));
-  await h.manager.closeAll();
+  await h.restart();
   const text = await h.session().status();
   assert.ok(!text.includes("Working in") && !text.includes("feature-x"));
 });
@@ -2313,7 +2313,7 @@ test("a terminal command holding a backtick is escaped text not a code span", ()
 test("status leaves the terminal command out of a folder that cannot be used", async (t) => {
   const h = harnessFor(t)({ turns: [sdkMessages("tools")] });
   await (await h.session().submit("list the files")).done.wait();
-  await h.manager.closeAll();
+  await h.restart();
   h.backend.trusted = async () => false;
   const text = await h.session().status();
   const stored = thread(h).sessionId;

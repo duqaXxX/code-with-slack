@@ -693,9 +693,11 @@ export class ThreadSession {
       if (this.closedFlag) throw new SessionClosed();
       if (this.client !== null) return this.client;
       if (this.predecessor !== null) {
-        // The agent process this thread had before may still be exiting: it needs real time
-        // to flush the session file after EOF (up to ~20 s). Starting with the same id to
-        // resume before that is done would race it.
+        // The agent process this thread had before may still be exiting: it needs time to
+        // flush the session file after EOF, and starting with the same id to resume before that
+        // is done would race it. The Python SDK needed up to about 20 seconds; with the
+        // TypeScript SDK 0.3.296 `close()` resolved in 282 ms and a resume of the same id right
+        // after it worked (measured 2026-10-10). The wait stays, since it costs nothing then.
         await this.predecessor.wait(signal);
         this.predecessor = null;
       }

@@ -136,7 +136,7 @@ export class Requests {
       const line = setupSummary(models, choice);
       try {
         await limiter.acquire();
-        if (pending.cancelled) return; // the cancel deleted the message during the wait: nothing to edit
+        if (pending.cancelled || this.answers.stopped) return; // nothing to edit: deleted, or the daemon is gone
         await slack.chat.update({
           channel,
           ts: shownAt,
@@ -156,7 +156,9 @@ export class Requests {
       context: models,
     });
     if (answer === null) {
-      await live.forgetSetup(); // a stop or drain that came while Start was applied
+      // A stop or drain that came while Start was applied. Not once the daemon is gone: the
+      // state it would rewrite is the next start's.
+      if (!this.answers.stopped) await live.forgetSetup();
       return null;
     }
     return live;
@@ -181,6 +183,7 @@ export class Requests {
     const { sessions, holds, slack, state } = this.parts;
     // (sync) The check and the hold it guards: a drain cancels every hold open when it starts
     // and never one opened after, so nothing is awaited between the two.
+    if (this.answers.stopped) return null;
     if (sessions.draining) {
       // a restart could have started during an await before this
       await this.answers.refuseRestarting(channel, threadTs);
@@ -355,7 +358,7 @@ export class Requests {
       await limiter.acquire();
       // The wait above can outlast Start: a decided setup now shows its summary, which this
       // edit must not overwrite.
-      if (holds.atMessage(channel, threadTs, shownAt) !== setupId) return;
+      if (holds.atMessage(channel, threadTs, shownAt) !== setupId || this.answers.stopped) return;
       await slack.chat.update({
         channel,
         ts: shownAt,
