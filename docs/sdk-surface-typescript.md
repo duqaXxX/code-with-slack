@@ -146,11 +146,13 @@ a release with no notice, so it is the first place to look when a release misbeh
 | `SDKControlInitializeResponse` | `models` | field | info.ts: agentInfo | reference | P17 |
 | `SDKMessage` | `subtype` | field | translate.ts: kindOf | package | none |
 | `SDKMessage` | `type` | field | translate.ts: kindOf | package | none |
-| `SDKMessageOrigin` | `kind` | field | translate.ts: result | reference | none |
+| `SDKMessageOrigin` | `kind` | field | translate.ts: result, user | reference | none |
+| `SDKMessageOrigin` | `senderTaskId` | field | translate.ts: user | reference | none |
 | `SDKPartialAssistantMessage` | `event` | field | translate.ts: kindOf, messageStart, contentBlockStart, contentBlockDelta | reference | none |
 | `SDKPartialAssistantMessage` | `parent_tool_use_id` | field | translate.ts: parentOf | reference | none |
 | `SDKResultMessage` | `is_error` | field | translate.ts: endingOf; session.ts: ClaudeSession.#pump | reference | none |
 | `SDKResultMessage` | `modelUsage` | field | translate.ts: result | reference | none |
+| `SDKResultMessage` | `num_turns` | field | translate.ts: result | reference | none |
 | `SDKResultMessage` | `origin` | field | translate.ts: result | reference | none |
 | `SDKResultMessage` | `result` | field | translate.ts: result | reference | none |
 | `SDKResultMessage` | `session_id` | field | translate.ts: result | reference | P3 |
@@ -177,6 +179,7 @@ a release with no notice, so it is the first place to look when a release misbeh
 | `SDKTaskUpdatedMessage` | `task_id` | field | translate.ts: taskUpdated | reference | none |
 | `SDKTaskUpdatedMessage.patch` | `status` | field | translate.ts: taskUpdated | package | none |
 | `SDKUserMessage` | `message` | field | translate.ts: user | reference | none |
+| `SDKUserMessage` | `origin` | field | translate.ts: user | reference | none |
 | `SDKUserMessage` | `parent_tool_use_id` | field | translate.ts: parentOf | reference | none |
 | `SDKUserMessage` | `tool_use_result` | field | translate.ts: user | reference | P13 |
 | `SDKUserMessageReplay` | `uuid` | field | translate.ts: user | reference | P19 |
@@ -257,6 +260,7 @@ a release with no notice, so it is the first place to look when a release misbeh
 | `SDKAssistantMessageError` | `"authentication_failed"` | value | translate.ts: AUTHENTICATION_FAILED, assistant | package | none |
 | `SDKCompactBoundaryMessage.subtype` | `"compact_boundary"` | value | translate.ts: HANDLERS | reference | P21 |
 | `SDKMessageOrigin.kind` | `"human"` | value | translate.ts: result | reference | none |
+| `SDKMessageOrigin.kind` | `"peer"` | value | translate.ts: user | reference | none |
 | `SDKPartialAssistantMessage.event.content_block.type` | `"text"` | value | translate.ts: contentBlockStart | measured | none |
 | `SDKPartialAssistantMessage.event.delta.type` | `"text_delta"` | value | translate.ts: contentBlockDelta | measured | none |
 | `SDKPartialAssistantMessage.event.type` | `"content_block_delta"` | value | translate.ts: HANDLERS | measured | none |

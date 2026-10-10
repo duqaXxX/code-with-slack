@@ -153,6 +153,7 @@ test("a turn's end carries its last text, who started it and the tokens of each 
       startedBy: "owner",
       finalText: 'The notes.txt file contains two entries: "alpha" and "beta".',
       ending: "done",
+      steps: 3,
       tokens: {
         [HAIKU]: { input: 936, output: 328, cacheRead: 26480, cacheCreation: 4645 },
       },
@@ -1211,4 +1212,54 @@ test("the first record of a turn that Python's session starts it on gives an eve
       if (entry?.type === "result") open = false;
     });
   }
+});
+
+// A background subagent's hand-back (`subagent-handback`, recorded on 2026-10-10 with
+// `@anthropic-ai/claude-agent-sdk` 0.3.296, Claude Code 2.1.296, the owner's setting sources
+// loaded). The subagent's report reaches the main agent as a `user` record whose `origin` is a
+// peer with the task's id, which starts a turn; the task's own notification then gets a turn
+// that does nothing: an `init`, then a `result` with `num_turns` 0 and no text.
+
+test("a subagent's hand-back names the task whose report the turn is", () => {
+  const all = events("subagent-handback");
+  const started = of(all, "task_started").find((event) => event.taskType === "local_agent");
+  assert.ok(started);
+  assert.deepEqual(of(all, "report_started"), [{ type: "report_started", taskId: started.taskId }]);
+  // Before the first word of the turn it opens, and after the turn before it has ended.
+  const at = all.findIndex((event) => event.type === "report_started");
+  const ended = all.findIndex((event) => event.type === "turn_ended");
+  const worded = all.findIndex((event, index) => index > at && event.type === "text_started");
+  assert.ok(ended < at && at < worded);
+});
+
+test("a message from a peer that names no task of the session starts no report", () => {
+  const peer = sdkRecords("subagent-handback").find(
+    (found) => found.type === "user" && typeof found.origin === "object" && found.origin !== null,
+  );
+  assert.ok(peer);
+  const origin = { ...(peer.origin as JsonObject) };
+  delete origin.senderTaskId;
+  assert.deepEqual(new Translator().translate({ ...peer, origin }), []);
+  assert.deepEqual(new Translator().translate({ ...peer, origin: { kind: "channel" } }), []);
+});
+
+test("a turn's end says how many steps the agent took, none for a turn that did nothing", () => {
+  const ends = of(events("subagent-handback"), "turn_ended");
+  assert.deepEqual(
+    ends.map((event) => [event.startedBy, event.steps, event.finalText === ""]),
+    [
+      ["owner", 3, false],
+      ["agent", 1, false],
+      ["agent", 0, true],
+      ["agent", 1, false],
+    ],
+  );
+});
+
+test("a result that names no count of steps reads as one that took some", () => {
+  const result = sdkRecords("tools").find((found) => found.type === "result");
+  assert.ok(result);
+  const { num_turns: _, ...bare } = result;
+  const [ended] = of(new Translator().translate(bare), "turn_ended");
+  assert.equal(ended?.steps, null);
 });

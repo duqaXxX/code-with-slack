@@ -226,6 +226,9 @@ export class ThreadSession {
   // A task's notification arrived with no turn running and no report turn has started since:
   // the agent has a report to make (`whoseTurn`).
   private notificationWaits = false;
+  // The task the agent said its next turn reports (`report_started`): that turn is no prompt's,
+  // and it renders in the reply that started the task, whether or not the task's end came yet.
+  private reportOf: string | null = null;
   private expiry: Task | null = null;
   /** The agent said it is compacting the conversation and has not said it ended. */
   private compacting = false;
@@ -1453,6 +1456,11 @@ export class ThreadSession {
       case "prompt_taken":
         this.acknowledge(event.promptId);
         return;
+      case "report_started":
+        // Said with no turn running, right before the turn it names. Inside a running turn it
+        // names no turn to come.
+        if (this.active === null) this.reportOf = event.taskId;
+        return;
       case "effort_observed":
         // The Stop hook's input carries the level, absent when the model takes none.
         this.effort = event.level;
@@ -1570,6 +1578,10 @@ export class ThreadSession {
       return;
     }
     if (this.active === null) {
+      if (event.type === "turn_ended" && this.saidNothing(event)) {
+        await this.nothingReported(event, signal);
+        return;
+      }
       // A task started by no call, while an owner prompt is sent and no report turn is
       // expected, is that prompt's: a skill with `context: fork` typed as a command (`!review`
       // → `/review`) runs its agent before the turn's first message (recorded:
@@ -1687,16 +1699,73 @@ export class ThreadSession {
    * tracked. Null when it is not (a restart or an idle close dropped it, or it already ended: a
    * notification later than INJECTED_TURN_WAIT let `expireUnreported` end it first): the report
    * then gets a reply of its own, as it always has, rather than an edit of a reply that ended
-   * and will not notify again.
+   * and will not notify again. The text is null for a report the agent named the task of
+   * (`report_started`) that renders in that task's reply with no end line to open it.
    */
-  private openingTarget(): readonly [text: string, target: TurnRenderer | null] {
+  private openingTarget(): readonly [text: string | null, target: TurnRenderer | null] {
     const lines = this.ended;
     this.ended = [];
-    const first = lines[0];
-    let target = first === undefined ? null : (this.taskReplies.get(first[0]) ?? null);
+    // The task the agent named for this turn, when no end line names one: a subagent's
+    // hand-back can come before its task's end, or after an end that came inside a turn.
+    const reported = this.reportOf;
+    this.reportOf = null;
+    const first = lines[0]?.[0] ?? reported;
+    let target = first === null ? null : (this.taskReplies.get(first) ?? this.showing(first));
     if (target?.closedOut) target = null;
-    const text = lines.map(([, line]) => line).join("\n") || texts.BACKGROUND_NOTICE;
-    return [text, target];
+    const ends = lines.map(([, line]) => line).join("\n");
+    // In the reply that started the task the report needs no line to say what it is about:
+    // the task's card is there. Anywhere else the notice says it, as it always has.
+    const named = lines.length === 0 && reported !== null && target !== null;
+    return [named ? null : ends || texts.BACKGROUND_NOTICE, target];
+  }
+
+  /**
+   * A reply still tracked that shows `taskId`'s line though the task is not its to wait for: a
+   * task that ended inside the turn that started it is tracked nowhere (`closeReply` records the
+   * ones that outlive the turn), and its reply stays open only for another task of that turn.
+   */
+  private showing(taskId: string): TurnRenderer | null {
+    for (const reply of this.taskReplies.values()) {
+      if (reply.taskTitle(taskId) !== null) return reply;
+    }
+    return null;
+  }
+
+  /**
+   * Whether a turn's end is all there is of a turn the agent started and nothing waits to be
+   * said with it: no step taken, no text, no task's end line, no held task event, no notice.
+   * Claude Code gives a task's notification such a turn once the task's report was handed back
+   * (measured 2026-10-10, `subagent-handback.jsonl`). With an end line or a held event waiting,
+   * the turn is the report that says them, as before.
+   */
+  private saidNothing(event: TurnEnded): boolean {
+    return (
+      event.startedBy === "agent" &&
+      event.steps === 0 &&
+      !event.finalText &&
+      event.ending === "done" &&
+      this.ended.length === 0 &&
+      this.held.length === 0 &&
+      this.notice === null
+    );
+  }
+
+  /**
+   * The turn the agent started and that did nothing has ended: no reply is opened for it, and
+   * what waited on a report turn stops waiting, as at the end of one (`startTurn`, `settle`).
+   */
+  private async nothingReported(event: TurnEnded, signal?: AbortSignal): Promise<void> {
+    if (event.sessionId) {
+      this.deps.state.setSession(this.channelId, this.threadTs, event.sessionId);
+    }
+    this.reportOf = null;
+    this.injectedExpected = false;
+    this.expiry?.cancel();
+    this.notificationWaits = false;
+    this.settled.set();
+    // A reply that waited only for this report has nothing more coming.
+    await this.sweepClosedOut(live(signal));
+    await this.reactDoneIfIdle(signal);
   }
 
   /**
@@ -1946,6 +2015,8 @@ export class ThreadSession {
       this.reportDue = this.injectedExpected;
       return announced;
     }
+    // The agent said whose report this turn is: no prompt's, even with one waiting.
+    if (this.reportOf !== null) return null;
     const first = this.sent[0];
     if (this.injectedExpected || first === undefined) return null;
     const head = first.prompt;
@@ -1980,6 +2051,7 @@ export class ThreadSession {
       renderer = target ?? this.newRenderer(this.newReply());
       opening = text;
     } else {
+      this.reportOf = null; // the prompt's own turn: what was named is not the next turn
       renderer = this.newRenderer(turn.sink);
     }
     // (sync) The turn is the active one before its first write. Python set it once this method
@@ -2005,11 +2077,11 @@ export class ThreadSession {
    */
   private async standalone(
     events: readonly TaskEvent[],
-    text: string,
+    text: string | null,
     renderer: TurnRenderer,
     signal?: AbortSignal,
   ): Promise<void> {
-    await renderer.feedNotice(text);
+    if (text !== null) await renderer.feedNotice(text);
     for (const event of events) await renderer.feed(event);
     await this.closeReply(renderer, null, { signal });
   }

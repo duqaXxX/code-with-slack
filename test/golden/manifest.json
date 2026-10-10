@@ -38,6 +38,7 @@
   "subagent-api-error",
   "subagent-api-error-foreground",
   "subagent-foreground",
+  "subagent-handback",
   "subagent-nested-background",
   "subagent-nested-background-mid-turn",
   "subagent-nested-command",

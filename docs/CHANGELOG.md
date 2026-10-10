@@ -317,6 +317,12 @@ All notable changes to this project are documented here. The format follows
     the name is the runtime's (`TypeError`, `TimeoutError`, `Error`) in place of Python's class.
   - An approval request prints a number with a whole value as JavaScript writes it: a `1.0` in
     a tool's input shows as `1`.
+  - A background subagent that hands its report back no longer leaves a message of its own
+    reading `Background task update` and `Done. Claude Code returned no text.` With the
+    owner's settings loaded, Claude Code 2.1.294 and 2.1.296 deliver the report as a message
+    from the subagent, which starts a turn, and then give the task's notification a turn
+    that does nothing; the Python daemon opened a reply for that one. The report now renders
+    in the reply that started the subagent, and the turn that does nothing opens none.
   - An exception nothing caught stops the daemon: it logs the exception's name, closes the
     sessions and the connection without waiting for running turns, and exits with status 1,
     so the service is started again and the crash repair runs. The Python daemon logged such

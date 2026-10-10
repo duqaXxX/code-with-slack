@@ -273,6 +273,14 @@ function user(memory: Memory, record: WireRecord): SessionEvent[] {
     // uuid that names no prompt of ours (a resumed session's, a command's output) is none.
     return [{ type: "prompt_taken", promptId }];
   }
+  // A background subagent hands its report back as a message from a peer that names its task
+  // (`SDKMessageOrigin`, kind `peer`, `senderTaskId`), and the agent answers it in a turn of
+  // its own: measured 2026-10-10 on Claude Code 2.1.294 and 2.1.296 with the owner's setting
+  // sources loaded (`tests/fixtures/sdk/subagent-handback.jsonl`). A peer with no task of this
+  // session (another session's message) says nothing about a task's report.
+  const origin = isRecord(record.origin) ? record.origin : {};
+  const sender = origin.kind === "peer" ? string(origin.senderTaskId) : null;
+  if (sender !== null) return [{ type: "report_started", taskId: sender }];
   const message = isRecord(record.message) ? record.message : {};
   if (!Array.isArray(message.content)) return [];
   const blocks = records(message.content);
@@ -440,6 +448,8 @@ function result(memory: Memory, record: WireRecord): SessionEvent[] {
       startedBy: origin === null || origin === "human" ? "owner" : "agent",
       finalText: string(record.result),
       ending: endingOf(record),
+      // 0 for the turn a task's notification gets once its report was already handed back.
+      steps: typeof record.num_turns === "number" ? record.num_turns : null,
       tokens: tokensOf(record.modelUsage),
     },
   ];

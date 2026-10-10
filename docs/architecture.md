@@ -685,6 +685,22 @@ ends every other reply left eligible. A turn Claude Code starts on its own to re
 task renders into the reply that started the task (`ThreadSession.openingTarget`); when that reply
 has already ended, the report gets a reply of its own.
 
+A background subagent can hand its report back before, or without, a turn of that kind (measured
+2026-10-10 on Claude Code 2.1.294 and 2.1.296 with the owner's setting sources loaded, recorded in
+`tests/fixtures/sdk/subagent-handback.jsonl`). Its last call is a tool named `SubagentHandback`;
+the report reaches the main agent as a `user` record whose `origin` is a peer that names the task
+(`SDKMessageOrigin`, `senderTaskId`), and the agent answers it in a turn of its own; the task's
+notification then gets a turn that does nothing, an `init` and a `result` with `num_turns` 0 and
+no text. The back end says the first as the event `report_started` with the task's id, and the
+second as a `turn_ended` whose `steps` is 0. On `report_started` the session takes the turn that
+follows as the report of that task whatever prompt waits (`ThreadSession.whoseTurn`) and renders
+it in the reply that shows the task, also when the task ended inside the turn that started it and
+is tracked nowhere (`ThreadSession.showing`); with no end line to open it, the report follows the
+reply's text with no line of the daemon's between. A turn that did nothing and has nothing to say
+(no end line, no held task event) opens no reply, and ends the wait for a report as a report turn
+would (`ThreadSession.saidNothing`, `ThreadSession.nothingReported`). With an end line waiting, it
+is the turn that writes that line, as before.
+
 A prompt taken into a report turn: every prompt a session sends is one user message under a uuid of
 the daemon's own (`Turn.uuid`, `prompt.userMessage`), and the back end starts Claude Code with
 `--replay-user-messages`, so Claude Code re-emits it as a `user` record with that uuid, which the

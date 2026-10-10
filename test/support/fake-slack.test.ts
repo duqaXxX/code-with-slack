@@ -674,7 +674,7 @@ function slacksOwn(answer: unknown): Json {
 }
 
 test("there is a golden for every recording", () => {
-  assert.equal(GOLDENS.length, 42);
+  assert.equal(GOLDENS.length, 43);
 });
 
 for (const name of GOLDENS) {

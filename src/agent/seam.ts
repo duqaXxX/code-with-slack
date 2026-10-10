@@ -287,12 +287,23 @@ export type SessionEvent =
   | { readonly type: "limits_changed" }
   /** The agent took a prompt the core sent: into the running turn, or as the next turn's. */
   | { readonly type: "prompt_taken"; readonly promptId: string }
+  /**
+   * The turn the agent is about to start by itself answers what the background task `taskId`
+   * told it (a subagent handing its report back). It comes before that turn's first event,
+   * whether or not the task's own end was told yet.
+   */
+  | { readonly type: "report_started"; readonly taskId: string }
   | {
       readonly type: "turn_ended";
       readonly sessionId: string | null;
       readonly startedBy: "owner" | "agent";
       readonly finalText: string | null;
       readonly ending: TurnEnding;
+      /**
+       * How many times the agent went to its model in the turn, null when it does not say. 0
+       * is a turn that did nothing: no message, no call, no text.
+       */
+      readonly steps: number | null;
       /** By model. Empty when the turn used none (a command the agent ran itself). */
       readonly tokens: Readonly<Record<string, ModelTokens>>;
     }
