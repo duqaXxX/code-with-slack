@@ -9,6 +9,13 @@
  * every reply in the process: a token bucket that paces writes evenly under the app's own budget,
  * rather than letting several busy threads exhaust it together and then freeze until it resets.
  *
+ * The client is the replies client of `clients.ts` (`repliesClient`), and the sink relies on its
+ * policy: a rate limited call is sent again by the client, a call that failed on the connection
+ * is sent again once EXCEPT the four that create or grow a message (start, append, stop, post),
+ * which are never sent twice, since Slack may have applied them. The sink reads the thread back
+ * for those and adopts what landed. Constructed with another client, the sink would post or
+ * append twice after a reset.
+ *
  * How asyncio's cancellation is said here. Whoever stops a sink (`!stop`, a close, a restart)
  * follows the same rule:
  *
@@ -406,11 +413,6 @@ export interface ReplySinkOptions {
    * line when the app replies. Synchronous, never awaited here.
    */
   readonly onWrite?: () => void;
-  /**
-   * The client the calls that create or grow a message go through (`creatingClient`), which
-   * never sends a call twice. The sink's own client when left out.
-   */
-  readonly creating?: WebClient;
   readonly logger?: Logger;
   /** DEBOUNCE_SECONDS, unless a test shortens it. */
   readonly debounceSeconds?: number;
@@ -435,7 +437,6 @@ export interface ReplySinkOptions {
  */
 export class ReplySink implements Sink {
   private readonly slack: WebClient;
-  private readonly creating: WebClient;
   private readonly channel: string;
   private readonly threadTs: string;
   private readonly teamId: string;
@@ -495,9 +496,9 @@ export class ReplySink implements Sink {
   private version = 0;
   private rev = 0;
 
+  /** `slack` is the replies client (`repliesClient`), whatever the sink calls goes through it. */
   constructor(slack: WebClient, options: ReplySinkOptions) {
     this.slack = slack;
-    this.creating = options.creating ?? slack;
     this.channel = options.channel;
     this.threadTs = options.threadTs;
     this.teamId = options.teamId;
@@ -1523,7 +1524,7 @@ export class ReplySink implements Sink {
     let posted: { ts?: string };
     try {
       this.wrote = true;
-      posted = await this.creating.chat.postMessage({
+      posted = await this.slack.chat.postMessage({
         channel: this.channel,
         thread_ts: this.threadTs,
         text: plainText(blocks),
@@ -1560,7 +1561,7 @@ export class ReplySink implements Sink {
       // Claude's text can carry a link built to leak data when Slack fetches it for a preview:
       // no previews for anything the daemon posts.
       this.wrote = true;
-      posted = await this.creating.chat.postMessage({
+      posted = await this.slack.chat.postMessage({
         channel: this.channel,
         thread_ts: this.threadTs,
         text: banner,
@@ -1671,7 +1672,7 @@ export class ReplySink implements Sink {
       let streamTs: string;
       try {
         this.wrote = true;
-        const started = await this.creating.chat.startStream({
+        const started = await this.slack.chat.startStream({
           channel: this.channel,
           thread_ts: this.threadTs,
           recipient_team_id: this.teamId,
@@ -1710,7 +1711,7 @@ export class ReplySink implements Sink {
         return [true, plan.overflow];
       }
       this.wrote = true;
-      await this.creating.chat.appendStream({
+      await this.slack.chat.appendStream({
         channel: this.channel,
         ts: message.ts,
         chunks: plan.chunks,
@@ -1775,7 +1776,7 @@ export class ReplySink implements Sink {
     let result: "stopped" | "gone" = "stopped";
     try {
       this.wrote = true;
-      await this.creating.chat.stopStream({
+      await this.slack.chat.stopStream({
         channel: this.channel,
         ts,
         ...(footer === null ? {} : { blocks: footer }),
@@ -2021,7 +2022,7 @@ export class ReplySink implements Sink {
     try {
       if (this.closing === null) {
         this.wrote = true;
-        const posted = await this.creating.chat.postMessage({
+        const posted = await this.slack.chat.postMessage({
           channel: this.channel,
           thread_ts: this.threadTs,
           text: this.banner(),

@@ -11,7 +11,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, beforeEach, test } from "node:test";
+import { isDeepStrictEqual } from "node:util";
+import type { WebAPICallResult } from "@slack/web-api";
 import type { Preview, TaskStatus, TaskUpdate } from "../../../../src/chat/seam.ts";
+import { formatFooter } from "../../../../src/chat/slack/footer.ts";
 import { blank, len } from "../../../../src/chat/slack/reply/chars.ts";
 import * as sinks from "../../../../src/chat/slack/reply/sinks.ts";
 import {
@@ -31,9 +34,11 @@ import {
   BOT,
   CHANNEL,
   FakeClock,
+  type FakeMessage,
   FakeSlack,
   networkDown,
   OWNER,
+  ResetAfterApply,
   rejected,
   TEAM,
   THREAD,
@@ -2261,3 +2266,1865 @@ export function tooMany(error = "invalid_blocks"): ReturnType<typeof rejected> {
   const notes = ["[ERROR] no more than 50 items allowed [json-pointer:/blocks]"];
   return rejected(error, { response_metadata: { messages: notes } });
 }
+
+// An append Slack refuses for its content (`msg_too_long` on `chat.appendStream`, measured
+// 2026-10-01, slack-sdk 3.44.1): the same append would be refused again.
+
+/** The reply's first stream, as Slack holds it. */
+function firstStream(slack: FakeSlack): FakeMessage {
+  const message = slack.messages.get(slack.streamTs[0] ?? "");
+  assert.ok(message !== undefined, "the reply started no stream");
+  return message;
+}
+
+/** The text of the last block of a message, a context block's. */
+function footerOf(blocks: JsonObject[]): Maybe {
+  return get(blocks, -1, "elements", 0, "text");
+}
+
+test("an append refused for its content stops the stream and goes on by update", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.text("Hello. ");
+  await settled();
+  slack.responses["chat.appendStream"] = rejected("msg_too_long");
+  await sink.text("World.");
+  await settled();
+  // stopped at once, and written from the model: nothing waits for the next change
+  assert.equal(firstStream(slack).streaming, false);
+  assert.deepEqual(slack.streamTexts(), ["Hello. World."]);
+  await sink.text(" Again.");
+  await settled();
+  assert.equal(slack.callsTo("chat.appendStream").length, 1); // the refused append is never repeated
+  assert.deepEqual(slack.streamTexts(), ["Hello. World. Again."]);
+  assert.deepEqual(slack.postedTs, []);
+});
+
+test("a final append refused for its content still ends the reply", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.text("Hello. ");
+  await settled();
+  slack.responses["chat.appendStream"] = rejected("msg_too_long");
+  await sink.text("Done.");
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted("footer"), true); // landed in this pass: no retry is owed
+  assert.deepEqual(slack.streamTexts(), ["Hello. Done."]);
+  // as a reply past STREAM_SECONDS ends: the bare stop, then the closing message
+  assert.equal(slack.callsTo("chat.stopStream")[0]?.blocks, undefined);
+  const closing = only(slack.postedTs);
+  assert.equal(footerOf(slack.messages.get(closing)?.blocks ?? []), "footer");
+  assert.equal(slack.pushes(), 2);
+});
+
+test("an update refused after a refused append is an end that did not land", async () => {
+  // The message shows less than the model and no later write can fix it: never a checkmark.
+  const slack = new FakeSlack();
+  const sink = reply(slack, { finalRetrySeconds: 0.01 });
+  await sink.text("Hello. ");
+  await settled();
+  slack.responses["chat.appendStream"] = rejected("msg_too_long");
+  slack.responses["chat.update"] = rejected("msg_too_long");
+  await sink.text("Done.");
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted("footer"), false);
+  await passed(0.01);
+  assert.equal(await soon(sink.waitLanded()), false);
+  assert.deepEqual(slack.streamTexts(), ["Hello."]); // what the stream held when it was stopped
+  assert.equal(slack.postedTs.length, 1); // the closing message, posted once: the retry adds none
+});
+
+test("a later update that passes lands the reply after a refused one", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.text("Hello. ");
+  await settled();
+  slack.responses["chat.appendStream"] = rejected("msg_too_long");
+  slack.responses["chat.update"] = [rejected("msg_too_long"), { ok: true }];
+  await sink.text("World.");
+  await settled();
+  assert.deepEqual(slack.streamTexts(), ["Hello."]); // the update was refused too: the change is dropped
+  await sink.text(" Done.");
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted("footer"), true);
+  assert.deepEqual(slack.streamTexts(), ["Hello. World. Done."]);
+});
+
+test("an append refused for another reason stays a failed write", async () => {
+  // Not measured on `chat.appendStream`, and an update of the same content may be refused
+  // too, which would drop it: the end is reported lost, so the session shows the cross.
+  const slack = new FakeSlack();
+  const sink = reply(slack, { finalRetrySeconds: 0.01 });
+  await sink.text("Hello. ");
+  await settled();
+  slack.responses["chat.appendStream"] = rejected("invalid_blocks");
+  await sink.text("Done.");
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted("footer"), false);
+  await passed(0.01);
+  assert.equal(await soon(sink.waitLanded()), false);
+  assert.equal(firstStream(slack).streaming, true);
+  assert.deepEqual(slack.callsTo("chat.stopStream"), []);
+  assert.deepEqual(slack.callsTo("chat.update"), []);
+});
+
+test("a refused append logs the method and the sizes without content", async () => {
+  const slack = new FakeSlack();
+  const log = new Recorded();
+  const sink = reply(slack, { logger: log });
+  await sink.text("Hello. ");
+  await sink.task(tool("t1", "Bash", "in_progress"));
+  await settled();
+  slack.responses["chat.appendStream"] = rejected("msg_too_long");
+  await sink.text("World.");
+  await settled();
+  const line = only(
+    log.messages().filter((message) => message.includes("chat.appendStream refused")),
+  );
+  assert.ok(line.includes("msg_too_long"));
+  // what the message would hold: both texts, three elements (text, card, text), one card,
+  // whose title was sent before and is not in the refused append
+  assert.ok(line.includes("text 13, elements 3, cards 1"));
+  assert.ok(line.includes(`card text sent ${len("Bash: t1")} and 0 more`));
+  assert.ok(!log.text.includes("Bash") && !log.text.includes("Hello"));
+});
+
+// A call whose outcome is unknown: Slack may have applied it. Stream calls are not idempotent.
+
+test("an append of unknown outcome is never sent again", async () => {
+  const slack = new ResetAfterApply();
+  const sink = reply(slack);
+  await sink.text("Hello. ");
+  await settled();
+  slack.resetNext = "chat.appendStream";
+  await sink.text("World. ");
+  await settled();
+  await sink.text("Again.");
+  await settled();
+  // the message went on by update, from the model: each word once
+  assert.equal(slack.callsTo("chat.appendStream").length, 1);
+  assert.equal(slack.streamTexts()[0]?.split("World.").length, 2);
+  assert.equal(slack.streamTexts()[0], "Hello. World. Again.");
+  assert.equal(firstStream(slack).streaming, false);
+});
+
+test("a stop of unknown outcome that carried the footer ends once", async () => {
+  const slack = new ResetAfterApply();
+  const sink = reply(slack, { finalRetrySeconds: 0.05 });
+  await sink.text("Answer.");
+  await settled();
+  slack.resetNext = "chat.stopStream";
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted("footer"), false);
+  await passed(0.05);
+  assert.equal(await soon(sink.waitLanded()), true);
+  await passed(0.1);
+  assert.equal(slack.pushes(), 1); // no closing message, footer once
+  assert.deepEqual(slack.postedTs, []);
+  assert.equal(footerOf(firstStream(slack).blocks), "footer");
+});
+
+test("a start of unknown outcome says so in the log", async () => {
+  const slack = new ResetAfterApply();
+  slack.resetNext = "chat.startStream";
+  const log = new Recorded();
+  const sink = reply(slack, { logger: log });
+  await sink.text("one");
+  await settled();
+  assert.ok(log.text.includes("outcome unknown"));
+});
+
+// `the connection retry skips the calls that create a message` is in `clients.test.ts`: the policy
+// moved from a slack-sdk handler to the client, and is tested there on the real `WebClient`.
+
+/**
+ * Slack applies the call, and its answer is held until `release` is set: the Python test slept
+ * 0.1 s on the wall clock (`SlowAfterApply`) where this one waits for the event.
+ */
+class HeldAfterApply extends FakeSlack {
+  holdMethod: string | null = null;
+  readonly applied = new AsyncEvent();
+  readonly release = new AsyncEvent();
+
+  override async apiCall(
+    method: string,
+    options: Record<string, unknown> = {},
+  ): Promise<WebAPICallResult> {
+    const answer = await super.apiCall(method, options);
+    if (method === this.holdMethod) {
+      this.applied.set();
+      await this.release.wait();
+    }
+    return answer;
+  }
+}
+
+test("settle during the retry does not lose the stop", async () => {
+  const slack = new HeldAfterApply();
+  const sink = reply(slack, { finalRetrySeconds: 0.01 });
+  await sink.text("Answer.");
+  await settled();
+  slack.responses["chat.stopStream"] = [rejected("ratelimited"), { ok: true }];
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted("footer"), false);
+  // the retry's stop is applied and its answer still on the way when the shutdown settles
+  slack.holdMethod = "chat.stopStream";
+  await passed(0.01);
+  await slack.applied.wait();
+  const settling = sink.settle();
+  await tick();
+  slack.release.set();
+  assert.equal(await soon(settling), true);
+  assert.equal(slack.pushes(), 1);
+  assert.deepEqual(slack.postedTs, []);
+});
+
+/** The (old, new) transitions a sink reported to its open-replies list. */
+function tracking(): [
+  Array<[string | null, string | null]>,
+  (a: string | null, b: string | null) => void,
+] {
+  const seen: Array<[string | null, string | null]> = [];
+  return [seen, (old, fresh) => void seen.push([old, fresh])];
+}
+
+function sawTransition(
+  seen: ReadonlyArray<readonly [string | null, string | null]>,
+  old: string | null,
+  fresh: string | null,
+): boolean {
+  return seen.some(([a, b]) => a === old && b === fresh);
+}
+
+test("a message stays tracked while its cards run after a roll over", async () => {
+  const slack = new FakeSlack();
+  const [seen, onOpenReply] = tracking();
+  const sink = reply(slack, { onOpenReply });
+  await sink.task(
+    tool("t0", "Bash", "in_progress", { task: true, details: "Running in background" }),
+  );
+  for (let i = 1; i < 60; i += 1)
+    await sink.task(tool(`t${i}`, "Agent", "complete", { task: true }));
+  await settled();
+  const [first, second] = slack.streamTs;
+  assert.ok(first !== undefined && second !== undefined);
+  // a card still runs in the first
+  assert.ok(sawTransition(seen, null, second) && !sawTransition(seen, first, null));
+  await sink.task(tool("t0", "Bash", "complete", { task: true }));
+  await settled();
+  assert.ok(sawTransition(seen, first, null)); // final now: nothing left for a repair to close
+});
+
+test("a reply whose body landed is not tracked when only the closing post fails", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const [seen, onOpenReply] = tracking();
+  const sink = reply(slack, { clock, onOpenReply, finalRetrySeconds: 60.0 });
+  await sink.text("A complete answer.");
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  slack.responses["chat.postMessage"] = networkDown();
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted("footer"), false);
+  // the answer is whole: a repair must not say it stopped before it
+  assert.deepEqual(seen.at(-1), [slack.streamTs[0], null]);
+  await sink.settle();
+});
+
+test("a footerless stop of unknown outcome does not stand for the footer", async () => {
+  // The 280 s stop lands and its answer is lost. The stream is over, without the footer: the
+  // end must post the closing message, not count the earlier stop as its own.
+  const slack = new ResetAfterApply();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock, finalRetrySeconds: 0.05 });
+  await sink.text("Answer.");
+  await settled();
+  slack.resetNext = "chat.stopStream";
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  await settled();
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted("footer"), true);
+  const closing = only(slack.callsTo("chat.postMessage"));
+  assert.equal(footerOf(list(closing.blocks)), "footer");
+  assert.equal(slack.pushes(), 2); // the 280 s stop, and the end
+});
+
+// Adopting what a create of unknown outcome made, before writing again.
+
+test("a start of unknown outcome is adopted not started again", async () => {
+  const slack = new ResetAfterApply();
+  const [seen, onOpenReply] = tracking();
+  slack.resetNext = "chat.startStream";
+  const sink = reply(slack, { onOpenReply });
+  await sink.text("one");
+  await settled();
+  await sink.text(" two");
+  await settled();
+  assert.equal(slack.callsTo("chat.startStream").length, 1); // never started again
+  assert.deepEqual(slack.streamTexts(), ["one two"]); // the adopted stream took the rest
+  assert.deepEqual(seen, [[null, slack.streamTs[0]]]); // and a repair can find it
+  await sink.finish([]);
+  await sink.closeOutFormatted("footer");
+  assert.equal(slack.pushes(), 1);
+});
+
+test("a start that never landed is started again", async () => {
+  const slack = new FakeSlack();
+  slack.responses["chat.startStream"] = [
+    networkDown(),
+    slack.responses["chat.startStream"] as JsonObject,
+  ];
+  const sink = reply(slack);
+  await sink.text("one");
+  await settled();
+  await sink.text(" two");
+  await settled();
+  assert.deepEqual(slack.streamTexts(), ["one two"]);
+  assert.equal(slack.callsTo("chat.startStream").length, 2);
+});
+
+test("a continuation post of unknown outcome is adopted", async () => {
+  const slack = new ResetAfterApply();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock });
+  await sink.text("start\n");
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  slack.resetNext = "chat.postMessage";
+  await sink.text("a line of text\n".repeat(1_000));
+  await settled();
+  await sink.finish([]);
+  await sink.closeOutFormatted("footer");
+  const posts = slack.callsTo("chat.postMessage");
+  assert.equal(posts.length, 2); // the continuation once, then the closing message
+  assert.equal(slack.postedTs.length, 2);
+});
+
+test("a closing post of unknown outcome is adopted", async () => {
+  const slack = new ResetAfterApply();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock, finalRetrySeconds: 0.02 });
+  await sink.text("A complete answer.");
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  slack.resetNext = "chat.postMessage";
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted("footer"), true); // read back, found: nothing to retry
+  assert.equal(slack.postedTs.length, 1); // one closing message, not two
+  assert.equal(slack.pushes(), 2);
+});
+
+// A stop that failed on the connection: landed, or expired at Slack's 5 minutes?
+
+test("a stop of unknown outcome past the streams life is taken as expired", async () => {
+  const slack = new ResetAfterApply();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock, finalRetrySeconds: 60.0 });
+  await sink.text("Answer.");
+  await settled();
+  slack.resetNext = "chat.stopStream";
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted("footer"), false); // the stop landed, its answer was lost
+  clock.now += sinks.STREAM_LIFE + 10; // what the retry finds is Slack's own end, or ours
+  assert.equal(await sink.settle(), true);
+  // past the stream's life it cannot be told from an expiry: the footer gets its own message
+  assert.equal(slack.postedTs.length, 1);
+});
+
+// What a message holds: a preview that arrives late never passes the limit.
+
+test("a late preview that does not fit its message is cut with a pointer", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.task(tool("t0", "Write", "in_progress"));
+  for (let i = 1; i < 60; i += 1)
+    await sink.task(tool(`t${i}`, "Agent", "complete", { task: true }));
+  await settled();
+  const first = slack.streamTs[0];
+  const body = Array.from({ length: 100 }, (_, i) => marker(i)).join("\n"); // about 9,000 characters
+  const view = preview("Write(big.txt)", "Wrote 100 lines to big.txt", body);
+  await sink.task(tool("t0", "Write", "complete", { preview: view }));
+  await settled();
+  const updates = slack.callsTo("chat.update").filter((u) => u.ts === first);
+  assert.ok(updates.length > 0);
+  for (const update of slack.callsTo("chat.update")) {
+    const blocks = list(update.blocks);
+    assert.ok(blocks.length <= 50);
+    const size = blocks.reduce(
+      (sum, b) => sum + len(sinks.blockText(b as unknown as sinks.Block)),
+      0,
+    );
+    assert.ok(size <= 12_000);
+  }
+  const blocks = list(last(updates).blocks);
+  assert.equal(blocks.find((b) => b.type === "task_card")?.status, "complete");
+  assert.ok(blocks.some((b) => isDeepStrictEqual(b, sinks.contextBlock(sinks.PREVIEW_CUT))));
+});
+
+// The sink's own cost: a message whose span did not change is not rendered again.
+
+test("a message whose span did not change is not rendered again", async () => {
+  // Python patched the module's `piece_blocks` and counted its calls. An ES export cannot be
+  // patched, and `pieceBlocks` reads the text of a piece through `Tool.piece` alone: the test
+  // counts the calls of that method on the one tool that holds a preview.
+  // The Python test filled the message with 60 `Read` calls, which the fold keeps to two cards:
+  // the reply never rolled over, there was no frozen message, and `calls == []` held whether or
+  // not the skip existed (checked by running it, 2026-10-10). The calls here are task cards,
+  // which the fold leaves alone, so the first message does freeze with its preview.
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  const view = preview("Write(a.txt)", "Wrote 1 line to a.txt", "1 hi");
+  await sink.task(tool("w", "Write", "complete", { preview: view }));
+  for (let i = 0; i < 60; i += 1) {
+    await sink.task(tool(`t${i}`, "Agent", "complete", { task: true }));
+  }
+  await settled();
+  await sink.text("warm"); // the first pass over a message that just froze
+  await settled();
+  const reach = sink as unknown as { tools: Map<string, sinks.Tool>; messages: unknown[] };
+  assert.ok(reach.messages.length > 1, "the first message did not freeze");
+  const written = reach.tools.get("w");
+  assert.ok(written !== undefined);
+  const calls: number[] = [];
+  const real = written.piece.bind(written);
+  written.piece = (index: number) => {
+    calls.push(index);
+    return real(index);
+  };
+  for (let i = 0; i < 5; i += 1) {
+    await sink.text(`more ${i}`);
+    await settled();
+  }
+  assert.deepEqual(calls, []); // the first message, frozen with its preview, was left alone
+});
+
+test("a banner is cut before it is escaped", () => {
+  const text = "&".repeat(400);
+  assert.ok(len(sinks.bannerText(text, { limit: sinks.BANNER_LIMIT })) <= sinks.BANNER_LIMIT);
+  assert.equal(sinks.bannerText(text, { limit: 10 }), "&amp;".repeat(2)); // never half an entity
+});
+
+test("many late previews in a full message get one note and stay in the limit", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  for (let w = 0; w < 10; w += 1) await sink.task(tool(`w${w}`, "Write", "in_progress"));
+  for (let i = 0; i < 60; i += 1)
+    await sink.task(tool(`t${i}`, "Agent", "complete", { task: true }));
+  await settled();
+  const first = slack.streamTs[0];
+  const body = Array.from({ length: 100 }, (_, i) => marker(i)).join("\n");
+  for (let w = 0; w < 10; w += 1) {
+    const view = preview("Write(big.txt)", "Wrote 100 lines to big.txt", body);
+    await sink.task(tool(`w${w}`, "Write", "complete", { preview: view }));
+  }
+  await settled();
+  const updates = slack.callsTo("chat.update").filter((u) => u.ts === first);
+  assert.ok(updates.length > 0);
+  for (const update of updates) assert.ok(list(update.blocks).length <= 50);
+  const note = sinks.contextBlock(sinks.PREVIEW_CUT);
+  const notes = list(last(updates).blocks).filter((b) => isDeepStrictEqual(b, note));
+  assert.equal(notes.length, 1); // one note for the message, however many previews it left out
+});
+
+test("a stream is adopted from slack s converted read back", async () => {
+  // Slack reads markdown back converted (`**b**` as `*b*`, a heading without its `## `, a link
+  // as `<url|label>`, the blank lines kept): the words are compared, not the markup.
+  const slack = new ResetAfterApply();
+  slack.resetNext = "chat.startStream";
+  const sink = reply(slack);
+  await sink.text("## Title\n\n**bold** and [a link](https://example.com) follow.");
+  await settled();
+  await sink.text(" More.");
+  await settled();
+  assert.equal(slack.callsTo("chat.startStream").length, 1);
+});
+
+test("a start that holds only a container is adopted by its title", async () => {
+  // A reply that opens on an Edit that ended well starts its stream with a `blocks` chunk
+  // alone (issue #136): the container's title is what the read-back is compared with.
+  const slack = new ResetAfterApply();
+  slack.resetNext = "chat.startStream";
+  const sink = reply(slack);
+  const view = preview("Update(a.txt)", "Added 1 line", "+x", "diff");
+  await sink.task(tool("e", "Edit", "complete", { preview: view }));
+  await settled();
+  await sink.text("Done.");
+  await settled();
+  assert.equal(slack.callsTo("chat.startStream").length, 1); // never started again
+  assert.deepEqual(slack.streamTexts(), ["Done."]); // the adopted stream took the rest
+});
+
+test("a start with nothing to compare is not adopted", async () => {
+  const slack = new ResetAfterApply();
+  slack.resetNext = "chat.startStream";
+  const sink = reply(slack);
+  await sink.text("…");
+  await settled();
+  await sink.text(" and then more words");
+  await settled();
+  assert.equal(slack.callsTo("chat.startStream").length, 2); // tried again, not guessed at
+});
+
+// A run of calls: two cards while the reply is written, a line of counts once its body ended.
+
+/** Whether `blocks` holds `block`, by value. */
+function includesBlock(blocks: readonly JsonObject[], block: object): boolean {
+  return blocks.some((b) => isDeepStrictEqual(b, block));
+}
+
+test("a run of calls streams as the counts and the call shown", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await runOfCalls(sink);
+  assert.deepEqual(slack.messageCards(), [
+    [
+      { id: "fold:a", title: "Ran 1 shell command · Read 1 file", status: "complete" },
+      { id: "now:b", title: "Bash: c · Exit code 1", status: "error" },
+    ],
+  ]);
+  // No chunk carries text Slack would append to what a reused card holds.
+  assert.ok(!allChunks(slack).some((c) => "details" in c || "output" in c));
+  assert.deepEqual(slack.callsTo("chat.update"), []);
+});
+
+test("the end folds the run into a line with a silent update", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await runOfCalls(sink);
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted("main · ctx 6%"), true);
+  assert.deepEqual(methods(slack).slice(-2), ["chat.stopStream", "chat.update"]);
+  const update = only(slack.callsTo("chat.update"));
+  assert.equal(update.ts, slack.streamTs[0]);
+  assert.deepEqual(update.blocks, [
+    { type: "markdown", text: "Let me look." },
+    context("✓ Ran 1 shell command · Read 1 file · ✗ Ran 1 shell command"),
+    { type: "markdown", text: "One test fails." },
+    { type: "divider" },
+    context("main · ctx 6%"),
+  ]);
+  assert.equal(slack.pushes(), 1); // the stop pushed; the update that folds never does
+});
+
+test("a reply with no run of calls gets no update at its end", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.text("Working.\n\n");
+  await sink.task(tool("t", "Agent", "in_progress", { task: true }));
+  await sink.task(tool("t", "Agent", "complete", { task: true, calls: 2 }));
+  await settled();
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted("footer"), true);
+  assert.deepEqual(slack.callsTo("chat.update"), []);
+});
+
+test("a fold that cannot be written does not undo the end", async () => {
+  const slack = new FakeSlack();
+  const [seen, onOpenReply] = tracking();
+  const sink = reply(slack, { onOpenReply });
+  await sink.task(tool("a", "Bash"));
+  await settled();
+  await sink.finish([]);
+  slack.responses["chat.update"] = [rejected("ratelimited"), { ok: true }];
+  // The stop carried the footer and pushed: the reply has ended, whatever the fold does.
+  assert.equal(await sink.closeOutFormatted("footer"), true);
+  assert.equal(await sink.waitLanded(), true);
+  assert.ok(sawTransition(seen, slack.streamTs[0] ?? "", null)); // nothing is left for a crash repair to close
+  await settled(); // the fold Slack refused is tried again with the next write
+  const updates = slack.callsTo("chat.update");
+  assert.equal(updates.length, 2);
+  assert.deepEqual(get(last(updates), "blocks", 0), context("✓ Ran 1 shell command"));
+  assert.equal(slack.pushes(), 1); // no second stop, no closing message
+  assert.deepEqual(slack.postedTs, []);
+});
+
+test("a fold that keeps failing is given up and the cards stay", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.task(tool("a", "Bash"));
+  await settled();
+  await sink.finish([]);
+  slack.responses["chat.update"] = rejected("ratelimited");
+  assert.equal(await sink.closeOutFormatted("footer"), true);
+  await settled();
+  await settled();
+  assert.equal(slack.callsTo("chat.update").length, 2); // once at the end, once more, then no loop
+  assert.equal(await sink.settle(), true);
+});
+
+test("a stream slack closed first is folded before its closing message", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.task(tool("a", "Bash"));
+  await settled();
+  await sink.finish([]);
+  slack.expire(slack.streamTs[0] ?? "");
+  assert.equal(await sink.closeOutFormatted("footer"), true);
+  const update = only(slack.callsTo("chat.update"));
+  assert.deepEqual(update.blocks, [context("✓ Ran 1 shell command")]);
+  assert.equal(slack.postedTs.length, 1); // the footer's own message, as for any stream Slack closed
+});
+
+test("past the window the run keeps its two cards until the body ends", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock });
+  await sink.task(tool("a", "Bash"));
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  await sink.task(tool("b", "Read", "in_progress"));
+  await settled();
+  const blocks = list(last(slack.callsTo("chat.update")).blocks);
+  assert.deepEqual(
+    blocks.map((b) => [b.type, b.title, b.status]),
+    [
+      ["task_card", "Ran 1 shell command", "complete"],
+      ["task_card", "Read: b", "in_progress"],
+    ],
+  );
+  await sink.finish([tool("b", "Read")]);
+  assert.deepEqual(last(slack.callsTo("chat.update")).blocks, [
+    context("✓ Ran 1 shell command · Read 1 file"),
+  ]);
+});
+
+test("a task that outlives the turn keeps its card beside the folded line", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.task(tool("a", "Read"));
+  await sink.task(
+    tool("t", "Bash", "in_progress", { task: true, details: "Running in background" }),
+  );
+  await settled();
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted(null), true);
+  const blocks = list(last(slack.callsTo("chat.update")).blocks);
+  assert.deepEqual(blocks[0], context("✓ Read 1 file"));
+  assert.ok(blocks[1]?.type === "task_card" && blocks[1].status === "in_progress");
+});
+
+test("a run in a message the reply has left is folded at the end too", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.task(tool("a", "Bash"));
+  for (let i = 0; i < sinks.BLOCKS_LIMIT + 5; i += 1) {
+    await sink.task(tool(`t${i}`, "Agent", "complete", { task: true }));
+  }
+  await settled();
+  assert.equal(slack.streamTs.length, 2);
+  await sink.text("More."); // a later pass finds the first message as its stream left it
+  await settled();
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted(null), true);
+  const first = slack.messageBlocks()[0] ?? [];
+  assert.deepEqual(first[0], context("✓ Ran 1 shell command"));
+  assert.ok(first.every((block) => block.task_id !== "fold:a"));
+});
+
+test("every pass that wrote tells the thread status", async () => {
+  const slack = new FakeSlack();
+  const passes: number[] = [];
+  const sink = reply(slack, { onWrite: () => void passes.push(slack.apiCalls.length) });
+  await sink.text("Hello.");
+  await settled();
+  assert.deepEqual(passes, [1]); // after the stream's start
+  assert.ok(await sink.settle()); // a pass with nothing to write: the status was not cleared
+  assert.deepEqual(passes, [1]);
+  await sink.finish([]);
+  await sink.closeOutFormatted("footer");
+  assert.ok(passes.length >= 2 && passes.at(-1) === slack.apiCalls.length);
+});
+
+// A reply that has ended never opens a message below its footer or its closing message.
+
+test("a late preview never opens a message after the footer", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.text("w".repeat(sinks.MESSAGE_LIMIT - 200));
+  await sink.task(tool("t1", "Write", "in_progress", { task: true }));
+  await settled();
+  await sink.finish([]);
+  await sink.closeOutFormatted("footer");
+  const posted = slack.callsTo("chat.postMessage").length;
+  await sink.task(tool("t1", "Write", "complete", { preview: latePreview() }));
+  await settled();
+  assert.equal(slack.callsTo("chat.postMessage").length, posted);
+  const update = last(slack.callsTo("chat.update"));
+  assert.equal(update.ts, slack.streamTs[0]);
+  const blocks = list(update.blocks);
+  assert.deepEqual(last(blocks), sinks.contextBlock("footer")); // the footer stays last
+  assert.ok(shows(blocks, "w".repeat(sinks.MESSAGE_LIMIT - 200))); // what was shown stays
+  assert.deepEqual(cardsOf(blocks), { t1: "complete" }); // the card took the update in place
+  assert.ok(includesBlock(blocks, CUT_NOTE) && !shows(blocks, marker(0))); // the preview did not fit
+});
+
+test("a late preview never opens a message after the closing message", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock });
+  await sink.text("w".repeat(sinks.MESSAGE_LIMIT - 200));
+  await sink.task(tool("t1", "Write", "in_progress", { task: true }));
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  await sink.finish([]);
+  await sink.closeOutFormatted("footer");
+  const closing = only(slack.callsTo("chat.postMessage")); // an answer of text alone: a footer message
+  await sink.task(tool("t1", "Write", "complete", { preview: latePreview() }));
+  await settled();
+  assert.deepEqual(slack.callsTo("chat.postMessage"), [closing]);
+  const update = last(slack.callsTo("chat.update"));
+  assert.equal(update.ts, slack.streamTs[0]);
+  const blocks = list(update.blocks);
+  assert.ok(shows(blocks, "w".repeat(sinks.MESSAGE_LIMIT - 200)));
+  assert.deepEqual(cardsOf(blocks), { t1: "complete" });
+  assert.ok(includesBlock(blocks, CUT_NOTE) && !shows(blocks, marker(0)));
+});
+
+test("a late preview never opens a message after the ending", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock });
+  await sink.task(tool("t1", "Read"));
+  await sink.text("w".repeat(sinks.MESSAGE_LIMIT - 200));
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  await sink.finish([]);
+  await sink.closeOutFormatted("footer");
+  const ending = only(slack.callsTo("chat.postMessage"));
+  const updates = slack.callsTo("chat.update").length;
+  await sink.task(tool("late", "Write", "in_progress"));
+  await sink.task(tool("late", "Write", "complete", { preview: latePreview() }));
+  await settled();
+  assert.deepEqual(slack.callsTo("chat.postMessage"), [ending]);
+  // A late card with its preview does not fit the ending: left out whole, no note, and the
+  // ending message already shows what it should.
+  assert.equal(slack.callsTo("chat.update").length, updates);
+  assert.deepEqual(get(ending, "blocks", -1), sinks.contextBlock("footer"));
+  assert.ok(shows(list(ending.blocks), "w".repeat(sinks.MESSAGE_LIMIT - 200)));
+});
+
+test("a late card never opens a message past the blocks limit", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  for (let i = 0; i < sinks.BLOCKS_LIMIT; i += 1) {
+    await sink.task(tool(`t${i}`, "Agent", "in_progress", { task: true }));
+  }
+  await settled();
+  await sink.finish([]);
+  await sink.closeOutFormatted("footer");
+  const posted = slack.callsTo("chat.postMessage").length;
+  await sink.task(tool("late", "Agent", "in_progress", { task: true }));
+  await sink.setRunning("1 agent");
+  await settled();
+  assert.equal(slack.callsTo("chat.postMessage").length, posted);
+  const blocks = list(last(slack.callsTo("chat.update")).blocks);
+  assert.deepEqual(
+    Object.keys(cardsOf(blocks)).sort(),
+    Array.from({ length: sinks.BLOCKS_LIMIT }, (_, i) => `t${i}`).sort(),
+  );
+  assert.deepEqual(last(blocks), sinks.contextBlock("footer · 1 agent"));
+});
+
+// What the last message showed when the end was written stays; late content takes the room left.
+
+test("late words never remove a preview that was shown", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.text("w".repeat(6000));
+  await sink.task(tool("t1", "Write", "complete", { preview: previewOf(42) })); // about 4,000 characters
+  await settled();
+  await sink.finish([]);
+  await sink.closeOutFormatted("footer");
+  await sink.text("late ".repeat(1_200)); // 6,000 characters, with room for 5,000: none shows
+  await settled();
+  assert.equal(slack.createdTs.length, 1);
+  const blocks = list(last(slack.callsTo("chat.update")).blocks);
+  assert.ok(shows(blocks, marker(0)) && shows(blocks, marker(41)));
+  assert.ok(shows(blocks, "w".repeat(6000)));
+  assert.ok(!includesBlock(blocks, CUT_NOTE)); // late words get no note
+  assert.ok(!shows(blocks, "late"));
+});
+
+test("late cards never remove a preview that was shown", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  for (let i = 0; i < 44; i += 1) {
+    // a preview each, with no card: 44 blocks
+    await sink.task(tool(`w${i}`, "Write", "complete", { preview: previewOf(1) }));
+  }
+  await settled();
+  await sink.finish([]);
+  await sink.closeOutFormatted("footer");
+  for (let i = 0; i < 3; i += 1) {
+    await sink.task(tool(`late${i}`, "Agent", "in_progress", { task: true }));
+  }
+  await settled();
+  assert.equal(slack.createdTs.length, 1);
+  const blocks = list(last(slack.callsTo("chat.update")).blocks);
+  assert.equal(
+    blocks.filter((b) => sinks.blockText(b as unknown as sinks.Block).includes(marker(0))).length,
+    44,
+  );
+  assert.ok(!includesBlock(blocks, CUT_NOTE));
+  assert.deepEqual(cardsOf(blocks), {}); // none of the late
+});
+
+test("a late preview never removes the one a later call showed", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock });
+  await sink.text("w".repeat(9_000)); // b's container adds no characters to an update: the words do
+  await sink.task(tool("a", "Write", "in_progress", { task: true }));
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  await sink.task(tool("b", "Write", "complete", { preview: previewOf(95) })); // about 9,000 characters
+  await settled();
+  await sink.finish([]);
+  await sink.closeOutFormatted("footer");
+  await sink.task(tool("a", "Write", "complete", { preview: previewOf(32) })); // about 3,000: no room left
+  await settled();
+  assert.ok(slack.streamTs.length === 1 && slack.postedTs.length === 1); // and the closing message
+  const blocks = list(
+    last(slack.callsTo("chat.update").filter((u) => u.ts === slack.streamTs[0])).blocks,
+  );
+  assert.ok(shows(blocks, marker(94))); // b's preview, whole
+  assert.deepEqual(cardsOf(blocks), { a: "complete" }); // b never had a card
+  assert.ok(includesBlock(blocks, CUT_NOTE));
+  const counted = blocks.filter((b) => b.type !== "container");
+  const size = counted.reduce(
+    (sum, b) => sum + len(sinks.blockText(b as unknown as sinks.Block)),
+    0,
+  );
+  assert.ok(size <= sinks.MESSAGE_LIMIT + 100);
+});
+
+test("a failed closing post is not a written end", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock, finalRetrySeconds: 30 }); // the late update comes first
+  await sink.text("w".repeat(sinks.MESSAGE_LIMIT - 200));
+  await sink.task(tool("t1", "Write", "in_progress", { task: true }));
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  await sink.finish([]);
+  const taken = slack.responses["chat.postMessage"];
+  slack.responses["chat.postMessage"] = rejected("ratelimited");
+  assert.equal(await sink.closeOutFormatted("footer"), false); // no closing message exists
+  if (taken !== undefined) slack.responses["chat.postMessage"] = taken;
+  await sink.task(tool("t1", "Write", "complete", { preview: latePreview() }));
+  await settled();
+  const posts = slack.callsTo("chat.postMessage");
+  // The preview goes on in a message of its own, and the closing message comes last.
+  assert.ok(shows(list(posts.at(-2)?.blocks), marker(0)));
+  assert.deepEqual(get(last(posts), "blocks", -1), sinks.contextBlock("footer"));
+  assert.ok(!slack.callsTo("chat.update").some((u) => includesBlock(list(u.blocks), CUT_NOTE)));
+  await sink.settle();
+});
+
+test("a late card that is dropped leaves the sink caught up", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  for (let i = 0; i < sinks.BLOCKS_LIMIT; i += 1) {
+    await sink.task(tool(`t${i}`, "Agent", "in_progress", { task: true }));
+  }
+  await settled();
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted("footer"), true);
+  await sink.task(tool("late", "Agent", "in_progress", { task: true }));
+  assert.equal(await sink.settle(), true); // nothing failed: no retry, no error
+  const calls = slack.apiCalls.length;
+  assert.equal(await sink.settle(), true);
+  await settled();
+  assert.equal(slack.apiCalls.length, calls); // caught up: the same pass writes nothing more
+});
+
+test("late text past the limit is cut and never opens a message", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock });
+  await sink.text("w".repeat(sinks.MESSAGE_LIMIT - 200));
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  await sink.finish([]);
+  await sink.closeOutFormatted("footer");
+  const posted = slack.callsTo("chat.postMessage").length;
+  await sink.text(`\n\n${"late words ".repeat(100)}`);
+  await settled();
+  assert.equal(slack.callsTo("chat.postMessage").length, posted);
+  for (const update of slack.callsTo("chat.update")) {
+    const size = list(update.blocks).reduce(
+      (sum, b) => sum + len(sinks.blockText(b as unknown as sinks.Block)),
+      0,
+    );
+    assert.ok(size <= 12_000); // Slack's cap
+  }
+});
+
+test("the running counts after the end edit the message that carries the footer", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.text("w".repeat(sinks.MESSAGE_LIMIT - 200));
+  await sink.task(tool("t1", "Write", "in_progress", { task: true }));
+  await settled();
+  await sink.finish([]);
+  await sink.closeOutFormatted("footer");
+  const posted = slack.callsTo("chat.postMessage").length;
+  await sink.setRunning("1 agent");
+  await settled();
+  assert.deepEqual(
+    get(last(slack.callsTo("chat.update")), "blocks", -1),
+    sinks.contextBlock("footer · 1 agent"),
+  );
+  await sink.setLatest(false);
+  await settled();
+  assert.deepEqual(
+    get(last(slack.callsTo("chat.update")), "blocks", -1),
+    sinks.contextBlock("footer"),
+  );
+  assert.equal(slack.callsTo("chat.postMessage").length, posted);
+});
+
+test("a reply still open splits into a new message as before", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.text("w".repeat(sinks.MESSAGE_LIMIT - 200));
+  await sink.task(tool("t1", "Write", "in_progress", { task: true }));
+  await settled();
+  await sink.task(tool("t1", "Write", "complete", { preview: latePreview() }));
+  await settled();
+  assert.equal(slack.createdTs.length, 2); // the preview went on in a message of its own
+});
+
+test("a close whose first write failed still opens the messages it needs", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock, finalRetrySeconds: 0.02 });
+  await sink.text("Start.\n");
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1); // from here the message goes on by update
+  const lines = Math.floor((sinks.MESSAGE_LIMIT * 5) / 2 / 100);
+  await sink.text(`${"x".repeat(99)}\n`);
+  await sink.text(`${"x".repeat(99)}\n`.repeat(lines - 1));
+  slack.responses["chat.update"] = rejected("ratelimited");
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted("footer"), false);
+  delete slack.responses["chat.update"]; // Slack takes the retry
+  await passed(0.02);
+  assert.equal(await soon(sink.waitLanded()), true);
+  const shown = slack.messageTexts().join("");
+  assert.equal(shown.split("x").length - 1, 99 * lines); // nothing cut
+  assert.ok(slack.messageTexts().length >= 3);
+});
+
+test("late content that fits is shown as the open path computes it", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.text("Start.");
+  await sink.task(tool("t1", "Write", "in_progress", { task: true }));
+  await settled();
+  await sink.finish([]);
+  await sink.closeOutFormatted("footer");
+  await sink.task(tool("t1", "Write", "complete", { preview: previewOf(3) }));
+  await sink.text("And a late word.");
+  await sink.task(tool("t2", "Read", "complete", { task: true }));
+  await settled();
+  assert.equal(slack.createdTs.length, 1);
+  const blocks = list(last(slack.callsTo("chat.update")).blocks);
+  const reach = sink as unknown as {
+    messages: unknown[];
+    render(message: unknown, end: null, held: null): [sinks.Block[], unknown];
+    closingBlocks(): sinks.Block[];
+  };
+  const final = reach.messages.at(-1);
+  assert.deepEqual(blocks, [...reach.render(final, null, null)[0], ...reach.closingBlocks()]);
+  assert.ok(shows(blocks, marker(2)) && shows(blocks, "And a late word."));
+  assert.deepEqual(cardsOf(blocks), { t1: "complete", t2: "complete" });
+  assert.ok(!includesBlock(blocks, CUT_NOTE));
+});
+
+test("words that reach the model while the end is written open no message", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.text("Hello.");
+  await settled();
+  await sink.finish([]);
+  // The stream's stop takes a while: Python delayed every call 20 ms and sent the words 5 ms in.
+  const gate = new AsyncEvent();
+  slack.gate = gate;
+  slack.gated.clear();
+  const closing = sink.closeOutFormatted("footer");
+  await slack.gated.wait();
+  await sink.text(`\n\n${"z".repeat(20_000)}`); // past one message, and held without being shown
+  slack.gate = null;
+  gate.set();
+  await closing;
+  await settled();
+  assert.equal(await sink.settle(), true);
+  assert.equal(slack.createdTs.length, 1);
+  assert.deepEqual(slack.callsTo("chat.postMessage"), []);
+  // Only what fits the message is held: a later edit stays inside the limit Slack enforces,
+  // so the footer still changes.
+  await sink.setRunning("1 agent");
+  await settled();
+  const edit = list(last(slack.callsTo("chat.update")).blocks);
+  const words = edit
+    .filter((b) => b.type === "markdown")
+    .reduce((sum, b) => sum + len(str(b.text)), 0);
+  assert.ok(words <= sinks.MESSAGE_LIMIT);
+  assert.ok(shows(edit, "footer · 1 agent"));
+});
+
+// A refused edit or post logs its method and the sizes it sent, never its content.
+
+test("a refused update logs the method and the sizes without content", async () => {
+  const slack = new FakeSlack();
+  const log = new Recorded();
+  const sink = reply(slack, { logger: log });
+  await sink.text("Hello.");
+  await sink.task(tool("t1", "Agent", "complete", { task: true }));
+  await sink.finish([]);
+  assert.ok(await sink.closeOutFormatted("footer"));
+  slack.responses["chat.update"] = rejected("msg_too_long");
+  await sink.setRunning("1 agent");
+  await settled();
+  const line = only(log.messages().filter((message) => message.includes("chat.update failed")));
+  assert.ok(line.includes("msg_too_long"));
+  // the message sent: its words, the card, and the footer under a divider
+  assert.ok(line.includes("text 22, elements 4, cards 1"));
+  assert.ok(!log.text.includes("Agent") && !log.text.includes("Hello"));
+});
+
+test("a refused post logs the method and the sizes without content", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const log = new Recorded();
+  const sink = reply(slack, { clock, logger: log });
+  await sink.text("start\n");
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  slack.responses["chat.postMessage"] = rejected("msg_too_long");
+  await sink.text("secret line\n".repeat(1_500)); // past one message: the rest is posted
+  await settled();
+  const line = only(
+    log.messages().filter((message) => message.includes("chat.postMessage failed")),
+  );
+  assert.ok(line.includes("msg_too_long"));
+  const attempt = only(slack.callsTo("chat.postMessage"));
+  const sent = list(attempt.blocks).reduce((sum, b) => sum + len(str(b.text)), 0);
+  assert.ok(sent > 0 && sent < sinks.MESSAGE_LIMIT);
+  assert.ok(line.includes(`text ${sent}, elements 1, cards 0`));
+  assert.ok(!log.text.includes("secret") && !log.text.includes("start"));
+});
+
+test("a stopped message holds large diffs a stream would continue", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock });
+  await sink.task(tool("e0", "Edit", "complete", { preview: largeDiff(0) }));
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  for (let i = 1; i < 4; i += 1) {
+    await sink.task(tool(`e${i}`, "Edit", "complete", { preview: largeDiff(i) }));
+  }
+  await settled();
+  assert.ok(slack.callsTo("chat.postMessage").length === 0 && slack.streamTs.length === 1);
+  const update = last(slack.callsTo("chat.update"));
+  assert.equal(update.ts, slack.streamTs[0]);
+  assert.deepEqual(
+    containersOf(list(update.blocks)).map((b) => get(b, "title", "text")),
+    Array.from({ length: 4 }, (_, i) => `Update(f${i}.txt)`),
+  );
+});
+
+test("a stream still continues in a new message past the limit with diffs", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack); // no stop: the diffs go to a stream, which counts their text
+  for (let i = 0; i < 4; i += 1) {
+    await sink.task(tool(`e${i}`, "Edit", "complete", { preview: largeDiff(i) }));
+  }
+  await settled();
+  assert.ok(slack.streamTs.length >= 2);
+  for (const call of [
+    ...slack.callsTo("chat.startStream"),
+    ...slack.callsTo("chat.appendStream"),
+  ]) {
+    const shown = list(call.chunks ?? [])
+      .filter((c) => c.type === "blocks")
+      .flatMap((c) => list(c.blocks))
+      .reduce((sum, b) => sum + len(sinks.blockText(b as unknown as sinks.Block)), 0);
+    assert.ok(shown <= sinks.MESSAGE_LIMIT);
+  }
+});
+
+test("a fixed span no longer cuts a late diff for its size", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.task(tool("t0", "Edit", "in_progress"));
+  await sink.text("w".repeat(sinks.MESSAGE_LIMIT - 200));
+  await settled();
+  await sink.text("v".repeat(1_000)); // does not fit: the reply goes on in a second stream
+  await settled();
+  assert.equal(slack.streamTs.length, 2);
+  await sink.task(tool("t0", "Edit", "complete", { preview: largeDiff(0) }));
+  await settled();
+  const blocks = list(
+    last(slack.callsTo("chat.update").filter((u) => u.ts === slack.streamTs[0])).blocks,
+  );
+  assert.ok(containersOf(blocks).length === 1 && !includesBlock(blocks, CUT_NOTE));
+});
+
+test("a fixed span still cuts a late diff for the blocks limit", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.task(tool("t0", "Edit", "in_progress"));
+  for (let i = 1; i < 60; i += 1)
+    await sink.task(tool(`t${i}`, "Agent", "complete", { task: true }));
+  await settled();
+  const first = slack.streamTs[0];
+  await sink.task(tool("t0", "Edit", "complete", { preview: largeDiff(0) }));
+  await settled();
+  const blocks = list(last(slack.callsTo("chat.update").filter((u) => u.ts === first)).blocks);
+  assert.ok(blocks.length <= 50);
+  assert.ok(includesBlock(blocks, CUT_NOTE) && containersOf(blocks).length === 0);
+});
+
+test("a preview in markdown still counts toward the limit on an update", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock });
+  await sink.task(tool("a", "Write", "in_progress"));
+  await sink.text("w".repeat(6_000));
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  await sink.task(tool("a", "Write", "complete", { preview: previewOf(95) })); // about 9,000 characters
+  await settled();
+  assert.equal(slack.callsTo("chat.postMessage").length, 1); // it did not fit the first message
+  for (const update of slack.callsTo("chat.update")) {
+    const size = list(update.blocks).reduce(
+      (sum, b) => sum + len(sinks.blockText(b as unknown as sinks.Block)),
+      0,
+    );
+    assert.ok(size <= 12_000); // Slack's cap
+  }
+});
+
+test("a continuation post grows by update to what an update holds", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  await continuationWithDiffs(slack, clock);
+  await settled();
+  const post = only(slack.callsTo("chat.postMessage")); // the post counts a container: one fits
+  assert.equal(containersOf(list(post.blocks)).length, 1);
+  const ts = slack.postedTs[0];
+  const update = last(slack.callsTo("chat.update").filter((u) => u.ts === ts));
+  assert.equal(containersOf(list(update.blocks)).length, 3); // the other two reached it by update
+});
+
+test("a refused growth of a continuation goes on in a new message", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const refused: string[] = [];
+  slack.responses["chat.update"] = (args) => {
+    if (slack.postedTs.includes(String(args.ts)) && refused.length === 0) {
+      refused.push(String(args.ts));
+      return rejected("invalid_blocks");
+    }
+    return { ok: true };
+  };
+  await continuationWithDiffs(slack, clock);
+  await settled();
+  const posts = slack.callsTo("chat.postMessage"); // what the update was refused went on
+  assert.equal(posts.length, 2);
+  assert.deepEqual(
+    posts.map((p) => containersOf(list(p.blocks)).length),
+    [1, 1],
+  );
+  const update = last(slack.callsTo("chat.update").filter((u) => u.ts === slack.postedTs[1]));
+  assert.equal(containersOf(list(update.blocks)).length, 2); // and it took the last by update
+  // the refused update is the only one of the posted message: it is not rewritten with what
+  // its post already holds
+  assert.equal(slack.callsTo("chat.update").filter((u) => u.ts === slack.postedTs[0]).length, 1);
+});
+
+test("a refused update with containers counts them from then on", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock });
+  await sink.task(tool("e0", "Edit", "complete", { preview: largeDiff(0) }));
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  const refused = refusingContainers(slack);
+  for (let i = 1; i < 3; i += 1) {
+    await sink.task(tool(`e${i}`, "Edit", "complete", { preview: largeDiff(i) }));
+  }
+  await settled();
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted("footer"), true); // the reply's outcome is not an error
+  // what fits by the post's counting stays, the rest went on in new messages, each shown whole
+  assert.ok(refused.length > 0 && slack.postedTs.length >= 2);
+  const titles = slack
+    .messageBlocks()
+    .flatMap((blocks) => containersOf(blocks).map((b) => get(b, "title", "text")));
+  assert.deepEqual(
+    titles,
+    Array.from({ length: 3 }, (_, i) => `Update(f${i}.txt)`),
+  );
+  assert.ok(
+    slack.messageBlocks().some((blocks) => includesBlock(blocks, sinks.contextBlock("footer"))),
+  );
+  await sink.task(tool("e3", "Edit", "complete", { preview: largeDiff(3) })); // a later diff, in the last message
+  await settled();
+  const tried = refused.length; // that message was refused once too, and counts from then on
+  await sink.setRunning("1 agent"); // a later change to it: no refused blocks again
+  await settled();
+  assert.equal(refused.length, tried);
+});
+
+test("a refused update of a fixed span cuts the late diff with the note", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.task(tool("t0", "Edit", "in_progress"));
+  await sink.text("w".repeat(sinks.MESSAGE_LIMIT - 200));
+  await settled();
+  await sink.text("v".repeat(1_000));
+  await settled();
+  const first = slack.streamTs[0];
+  slack.responses["chat.update"] = (args) =>
+    containersOf(list(args.blocks)).length > 0 ? rejected("invalid_blocks") : { ok: true };
+  await sink.task(tool("t0", "Edit", "complete", { preview: largeDiff(0) }));
+  await settled();
+  const blocks = list(last(slack.callsTo("chat.update").filter((u) => u.ts === first)).blocks);
+  assert.ok(containersOf(blocks).length === 0 && includesBlock(blocks, CUT_NOTE));
+  assert.deepEqual(Object.values(cardsOf(blocks)), ["complete"]); // card and words updated
+  assert.ok(shows(blocks, "w".repeat(sinks.MESSAGE_LIMIT - 200)));
+});
+
+test("a refused update with no container is dropped as before", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock });
+  await sink.text("partial");
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  slack.responses["chat.update"] = rejected("invalid_blocks");
+  await sink.text(" more");
+  await settled();
+  assert.equal(slack.callsTo("chat.update").length, 1); // no second try with other counting
+  slack.responses["chat.update"] = { ok: true };
+  await sink.text(" again");
+  await settled();
+  assert.equal(slack.callsTo("chat.update").length, 2); // the next change is tried
+});
+
+test("a request slack refuses to delete is not logged as removed", async () => {
+  // Issue #71 reads the removal's timing from the log: a delete that failed must not be in it.
+  const slack = new FakeSlack();
+  const log = new Recorded();
+  slack.responses["chat.delete"] = { ok: false, error: "cant_delete_message" };
+  await sinks.deleteRequest(slack, { channel: CHANNEL, ts: "1790000000.000100" }, { logger: log });
+  assert.ok(log.text.includes("could not remove a request"));
+  assert.ok(!log.text.includes("removed a request"));
+  slack.responses["chat.delete"] = { ok: false, error: "message_not_found" };
+  await sinks.deleteRequest(slack, { channel: CHANNEL, ts: "1790000000.000100" }, { logger: log });
+  assert.ok(log.text.includes("removed a request")); // already gone counts as done
+});
+
+// A stream's card: Slack adds the details and the output of every chunk to what the card holds
+// (measured 2026-10-01 and 2026-10-08), so a stream is sent only what the card lacks.
+
+for (const [held, wanted, more] of [
+  ["", "a\nb", "a\nb"],
+  ["a\nb", "a\nb", ""],
+  ["a\nb", "a\nb\nc", "\nc"],
+  ["a\nb\nc", "b\nc\nd\ne", "\nd\ne"],
+  ["a\nb", "c", "\nc"],
+  ["a\na", "a\na\na", "\na"],
+  ["x\na", "a\na", "\na"],
+] as const) {
+  test(`a card is sent the lines it lacks [${JSON.stringify(held)}, ${JSON.stringify(wanted)}]`, () => {
+    assert.equal(sinks.lacking(held, wanted), more);
+  });
+}
+
+test("a subagent card is sent each of its lines once", async () => {
+  const slack = new FakeSlack();
+  // room for a write per line
+  const limiter = new UpdateLimiter({ burst: 20, clock: new SelfPacedClock() });
+  const sink = reply(slack, { limiter });
+  const lines = Array.from({ length: 12 }, (_, i) => `Bash: step ${i + 1}`);
+  for (let n = 1; n <= 12; n += 1) {
+    const window = lines.slice(Math.max(0, n - 10), n).join("\n"); // the last ten, as the renderer keeps them
+    await sink.task(tool("a1", "Agent", "in_progress", { details: window, task: true, calls: n }));
+    await settled();
+  }
+  // However the writes were batched, the chunks carry each line once, in order.
+  const sent = cardChunks(slack, "a1")
+    .map((chunk) => chunk.details ?? "")
+    .join("");
+  assert.equal(sent, lines.join("\n"));
+  const card = only(only(slack.messageCards()));
+  assert.equal(card.details, lines.join("\n"));
+  assert.ok(str(card.title).endsWith(" · 12 calls"));
+});
+
+test("a card whose title alone changes is sent no text again", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.task(tool("a1", "Agent", "in_progress", { details: "Read: notes.md", task: true }));
+  await settled();
+  await sink.task(
+    tool("a1", "Agent", "in_progress", { details: "Read: notes.md", task: true, calls: 1 }),
+  );
+  await settled();
+  await sink.task(tool("b1", "Agent", "error", { output: "exit 2", task: true }));
+  await settled();
+  await sink.task(
+    tool("b1", "Agent", "error", { title: "Agent: again", output: "exit 2", task: true }),
+  );
+  await settled();
+  let [first, second] = cardChunks(slack, "a1");
+  assert.ok(first?.details === "Read: notes.md" && second !== undefined && !("details" in second));
+  [first, second] = cardChunks(slack, "b1");
+  assert.ok(first?.output === "exit 2" && second !== undefined && !("output" in second));
+  assert.deepEqual(
+    (slack.messageCards()[0] ?? []).map((c) => c.details ?? c.output),
+    ["Read: notes.md", "exit 2"],
+  );
+});
+
+test("a card whose one line changes gains a line", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  for (const words of ["Reading the tests", "Running the tests"]) {
+    await sink.task(tool("k1", "task", "in_progress", { details: words, task: true }));
+    await settled();
+  }
+  const card = only(only(slack.messageCards()));
+  assert.equal(card.details, "Reading the tests\nRunning the tests");
+});
+
+test("cards whose text fills the message continue in a new stream", async () => {
+  // Measured 2026-10-01: a stream took 4 error cards with 2,900 characters of output and
+  // refused the fifth. Three of them are counted as a full message.
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  for (let i = 0; i < 6; i += 1) {
+    await sink.task(
+      tool(`t${i}`, "Agent", "error", { output: `${i}`.repeat(sinks.CARD_TEXT_LIMIT), task: true }),
+    );
+    await settled();
+  }
+  await sink.finish([]);
+  await sink.closeOutFormatted(null);
+  assert.equal(slack.streamTs.length, 2);
+  assert.deepEqual(
+    slack.messageCards().map((cards) => cards.length),
+    [3, 3],
+  );
+});
+
+test("text after cards that fill the message continues in a new stream", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  for (let i = 0; i < 3; i += 1) {
+    await sink.task(
+      tool(`t${i}`, "Agent", "error", { output: `${i}`.repeat(sinks.CARD_TEXT_LIMIT), task: true }),
+    );
+  }
+  await settled();
+  await sink.text("a line of text\n".repeat(200)); // 3,000 characters: the cards left room for less
+  await settled();
+  const [first, second] = slack.messageTexts();
+  assert.ok(first && second && len(first) + len(second) >= 2_990);
+  assert.ok(len(first) < 1_500);
+});
+
+test("a running card in a full message keeps its title and gains no line", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.task(tool("a1", "Agent", "in_progress", { details: "Read: notes.md", task: true }));
+  await sink.text("a line of text\n".repeat(700)); // 10,500 characters
+  await settled();
+  await sink.task(
+    tool("a1", "Agent", "in_progress", {
+      details: `Read: notes.md\n${"x".repeat(400)}`,
+      task: true,
+      calls: 2,
+    }),
+  );
+  await settled();
+  const final = last(cardChunks(slack, "a1"));
+  assert.ok(str(final.title).endsWith(" · 2 calls") && !("details" in final));
+  assert.equal(slack.messageCards()[0]?.[0]?.details, "Read: notes.md");
+  assert.equal(slack.streamTs.length, 1);
+});
+
+test("a card that ends is sent no text for the details it no longer says", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.task(tool("a1", "Agent", "in_progress", { details: "Read: notes.md", task: true }));
+  await settled();
+  await sink.task(tool("a1", "Agent", "complete", { task: true }));
+  await settled();
+  const [, second] = cardChunks(slack, "a1");
+  assert.deepEqual(second, {
+    type: "task_update",
+    id: "a1",
+    title: "Agent: a1",
+    status: "complete",
+  });
+  assert.equal(slack.messageCards()[0]?.[0]?.details, "Read: notes.md"); // Slack keeps them
+});
+
+test("a card that fails in a full message still says why", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  await sink.task(tool("a1", "Agent", "in_progress", { task: true }));
+  await sink.text("a line of text\n".repeat(720)); // 10,800 characters
+  await settled();
+  await sink.task(tool("a1", "Agent", "error", { output: "x".repeat(400), task: true }));
+  await settled();
+  assert.equal(last(cardChunks(slack, "a1")).output, "x".repeat(400));
+  assert.equal(slack.streamTs.length, 1);
+});
+
+// The blocks Slack makes of markdown: a header per heading, a table per table, a divider per
+// rule, rich text for each run between them. A post or an update whose message passes 50 of them
+// is refused; a stream is not, and the update after its stop is (measured 2026-10-08).
+
+/** `UpdateLimiter(burst=...)`, on a clock that never makes a test wait. */
+function burstOf(burst: number): UpdateLimiter {
+  return new UpdateLimiter({ burst, clock: new SelfPacedClock() });
+}
+
+for (const [text, stored] of [
+  // each shape was posted alone on 2026-10-08 and its stored blocks counted
+  ["one\n\ntwo", 1],
+  ["## Title\n\ntext", 2],
+  ["before\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nafter", 3],
+  ["| a | b |\n|---|---|\n| 1 | 2 |\n\nmid\n\n| c | d |\n|---|---|\n| 3 | 4 |", 3],
+  ["- one\n- two\n\ntext", 1],
+  ["text\n\n```\ncode\n```\n\nmore", 1],
+  ["## A\n\na\n\n## B\n\nb\n\n## C\n\nc", 6],
+  ["before\n\n> quoted\n\nafter", 1],
+  ["before\n\n---\n\nafter", 3],
+  ["before\n\n![alt](https://example.com/a.png)\n\nafter", 1],
+  ["- [ ] one\n- [x] two\n\nafter", 1],
+  ["```\n# not a heading\n```\n\nafter", 1],
+  ["# one\n\n## two\n\n### three\n\ntext", 4],
+  ["## one\n## two\n\ntext", 3],
+  ["**Title**\n\ntext\n\n**Title 2**\n\ntext", 1],
+  [sections(25), 50],
+] as const) {
+  test(`markdown counts the blocks slack stored for it [${JSON.stringify(text.slice(0, 40))}]`, () => {
+    assert.equal(sinks.markdownBlocks(text), stored);
+  });
+}
+
+test("markdown is cut at the line that starts one block too many", () => {
+  const text = sections(3);
+  assert.equal(sinks.markdownCut(text, 6), null);
+  const cut = sinks.markdownCut(text, 4);
+  assert.ok(cut !== null && text.slice(cut) === "## Heading 3\n\nparagraph 3");
+});
+
+test("a streamed text with many headings continues in a new stream", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  const text = sections(60); // 120 blocks, 1,600 characters: far below the size limit
+  for (let i = 0; i < text.length; i += 400) {
+    await sink.text(text.slice(i, i + 400));
+    await settled();
+  }
+  await sink.finish([]);
+  await sink.closeOutFormatted(null);
+  const shown = slack.messageTexts();
+  assert.equal(slack.streamTs.length, 3);
+  assert.ok(shown.every((words) => sinks.markdownBlocks(words) <= sinks.BLOCKS_LIMIT));
+  assert.deepEqual(linesOf(...shown), linesOf(text)); // nothing left out
+});
+
+test("an updated message with many headings continues in a post", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock, limiter: burstOf(50) });
+  await sink.text("start\n\n");
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  const text = sections(60);
+  for (let i = 0; i < text.length; i += 400) {
+    await sink.text(text.slice(i, i + 400));
+    await settled();
+  }
+  await sink.finish([]);
+  await sink.closeOutFormatted(null);
+  const writes = [...slack.callsTo("chat.update"), ...slack.callsTo("chat.postMessage")];
+  const most = Math.max(
+    ...writes
+      .filter((w) => w.blocks)
+      .map((w) => sinks.blocksCount(list(w.blocks) as unknown as sinks.Block[])),
+  );
+  assert.ok(most <= 50);
+  assert.deepEqual(linesOf(...slack.messageTexts()), linesOf("start", text));
+});
+
+test("cards and headings share the room of a message", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack);
+  for (let i = 0; i < 30; i += 1)
+    await sink.task(tool(`t${i}`, "Agent", "complete", { task: true }));
+  await settled();
+  await sink.text(sections(20)); // 40 blocks: 15 fit beside the 30 cards
+  await settled();
+  await sink.finish([]);
+  await sink.closeOutFormatted(null);
+  const [first, second] = slack.messageTexts();
+  assert.ok(first !== undefined && second !== undefined);
+  assert.equal(sinks.markdownBlocks(first), 14); // the fifteenth is a heading: it goes with its text
+  assert.deepEqual(linesOf(first, second), linesOf(sections(20)));
+});
+
+test("an update refused for too many blocks goes on in a new message", async () => {
+  // Slack counts more than the daemon does: here every list item is a block of its own.
+  const slack = new FakeSlack();
+  slack.responses["chat.update"] = (args) => {
+    const items = list(args.blocks)
+      .filter((b) => b.type === "markdown")
+      .reduce((sum, b) => sum + str(b.text).split("\n- ").length - 1, 0);
+    return items > 20 ? tooMany() : { ok: true };
+  };
+  const clock = new FakeClock();
+  const log = new Recorded();
+  const sink = reply(slack, { clock, limiter: burstOf(50), logger: log });
+  await sink.text("start\n");
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  const items = Array.from(
+    { length: 40 },
+    (_, i) => `\n- item ${i + 1}\n\n## Heading ${i + 1}\n`,
+  ).join("");
+  await sink.text(items);
+  await settled();
+  await sink.finish([]);
+  assert.ok(await sink.closeOutFormatted(null));
+  assert.deepEqual(linesOf(...slack.messageTexts()), linesOf("start", items)); // nothing was dropped
+  assert.ok(slack.postedTs.length >= 2);
+  assert.ok(
+    log.text.includes(
+      "chat.update failed (invalid_blocks at /blocks, over 50 blocks once translated)",
+    ),
+  );
+  assert.ok(!log.text.includes("item"));
+});
+
+test("an update refused for another reason is not split", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock });
+  await sink.text("start\n");
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  slack.responses["chat.update"] = () => rejected("invalid_blocks");
+  await sink.text(sections(5));
+  await settled();
+  assert.deepEqual(slack.postedTs, []); // the change is dropped, as before
+});
+
+test("a post refused for too many blocks is posted with less", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock });
+  await sink.text("start\n");
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  slack.responses["chat.postMessage"] = [
+    tooMany(),
+    slack.responses["chat.postMessage"] as JsonObject,
+  ];
+  const text = "a line of text\n".repeat(1_000); // past one message: the rest is posted
+  await sink.text(text);
+  await settled();
+  assert.equal(slack.callsTo("chat.postMessage").length, 2); // refused, then posted
+  assert.deepEqual(linesOf(...slack.messageTexts()), linesOf("start", text));
+});
+
+for (const [text, blocks] of [
+  // Not measured on Slack: read as CommonMark and GFM define them.
+  ["Title\n=====\n\ntext", 3],
+  ["````md\n```\n# inside\n```\n````\n\n## after\n\ntext", 3],
+  ["```x``` then words\n\n## after\n\ntext", 3],
+  ["~~~\n# inside\n~~~\n\n## after", 2],
+  ["before\r\n\r\n---\r\n\r\nafter", 3],
+  ["before\n\n- - -\n\nafter", 3],
+  ["```\n# the fence is still open while the text streams", 1],
+] as const) {
+  test(`markdown shapes that were not measured are read as commonmark [${JSON.stringify(text.slice(0, 40))}]`, () => {
+    assert.equal(sinks.markdownBlocks(text), blocks);
+  });
+}
+
+test("a fold refused for too many blocks keeps the text the stream showed", async () => {
+  // Slack counts more than the daemon does: here every list item is a block of its own.
+  const slack = new FakeSlack();
+  slack.responses["chat.update"] = (args) => {
+    const items = list(args.blocks)
+      .filter((b) => b.type === "markdown")
+      .reduce((sum, b) => sum + str(b.text).split("- item").length - 1, 0);
+    return items > 10 ? tooMany() : { ok: true };
+  };
+  const sink = reply(slack);
+  await sink.task(tool("t1", "Bash"));
+  const text = Array.from(
+    { length: 20 },
+    (_, i) => `- item ${i + 1}\n\n## Heading ${i + 1}\n\n`,
+  ).join("");
+  await sink.text(text);
+  await settled();
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted(null), true); // nothing is missing: the reply ended well
+  await settled();
+  assert.deepEqual(linesOf(...slack.messageTexts()), linesOf(text)); // the fold is dropped, not the text
+});
+
+test("an update refused down to one block repeats nothing", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock, limiter: burstOf(50) });
+  await sink.text("start\n");
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  slack.responses["chat.update"] = () => tooMany();
+  await sink.text(sections(5));
+  await settled();
+  assert.deepEqual(slack.postedTs, []); // no rest posted while the message still shows what it showed
+  slack.responses["chat.update"] = { ok: true };
+  await sink.text("\n\nthe end");
+  await settled();
+  assert.deepEqual(linesOf(...slack.messageTexts()), linesOf("start", sections(5), "the end"));
+});
+
+test("a sent line that turns into a table is not cut in two", async () => {
+  const slack = new FakeSlack();
+  const sink = reply(slack, { limiter: burstOf(50) });
+  await sink.text(`${sections(22)}\n\nintro\n\na | b`); // 45 blocks, the last one a run of text
+  await settled();
+  await sink.text("\n---|---\n1 | 2\n\n## Next\n\nlast");
+  await settled();
+  await sink.finish([]);
+  await sink.closeOutFormatted(null);
+  const [first, second] = slack.messageTexts();
+  assert.ok(first !== undefined && second !== undefined);
+  assert.ok(first.endsWith("a | b\n---|---\n1 | 2") && second.startsWith("## Next"));
+});
+
+test("a heading is not left as the last block before a cut", () => {
+  const text = sections(3);
+  const third = text.indexOf("## Heading 3");
+  assert.equal(sinks.markdownCut(text, 5), third); // the fifth block is the third heading
+  assert.equal(sinks.markdownCut(text, 4), third);
+  // a text that ends on the heading that fills the room: whatever follows would be cut off it
+  assert.equal(sinks.markdownCut(text.slice(0, third + "## Heading 3".length), 5), third);
+  assert.equal(sinks.markdownCut("## Only\n\ntext", 1), "## Only\n\n".length); // never an empty message
+  // a stream cannot take back a heading it was sent
+  assert.equal(sinks.markdownCut(text, 5, third + 3), text.indexOf("paragraph 3"));
+});
+
+test("a streamed heading goes to the next message with its text", async () => {
+  // Seen on 2026-10-08: 40 sections, the first message ended on the heading of the 23rd.
+  const slack = new FakeSlack();
+  const sink = reply(slack, { limiter: burstOf(200) });
+  const text = sections(40);
+  for (let i = 0; i < text.length; i += 7) {
+    // in small pieces, as a stream brings it
+    await sink.text(text.slice(i, i + 7));
+    await settled();
+  }
+  await sink.finish([]);
+  await sink.closeOutFormatted(null);
+  const [first, second] = slack.messageTexts();
+  assert.ok(first !== undefined && second !== undefined);
+  assert.ok(first.endsWith("paragraph 22") && second.startsWith("## Heading 23"));
+  assert.deepEqual(linesOf(first, second), linesOf(text));
+});
+
+// A dropped update leaves the message short of what Claude wrote: the reply's end does not land,
+// which the session shows as a failed turn, until an update of that message passes.
+
+test("a dropped update of a message written by edit is an end that did not land", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock, finalRetrySeconds: 0.01 });
+  await sink.text("partial");
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1); // from here the message grows by update
+  slack.responses["chat.update"] = rejected("invalid_blocks");
+  await sink.text(" and more");
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted("footer"), false);
+  await passed(0.01);
+  assert.equal(await soon(sink.waitLanded()), false);
+  assert.deepEqual(slack.streamTexts(), ["partial"]);
+});
+
+test("a dropped update followed by one that passes lands the reply", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock });
+  await sink.text("partial");
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  slack.responses["chat.update"] = [rejected("invalid_blocks"), { ok: true }];
+  await sink.text(" and more");
+  await settled();
+  assert.deepEqual(slack.streamTexts(), ["partial"]); // the change was dropped
+  await sink.text(", then the end");
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted("footer"), true);
+  assert.ok(slack.streamTexts()[0]?.startsWith("partial and more, then the end"));
+});
+
+test("a dropped update of a continuation is an end that did not land", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock, limiter: burstOf(50), finalRetrySeconds: 0.01 });
+  await sink.text("start\n");
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  await sink.text("a line of text\n".repeat(1_000)); // past one message: the rest is a post
+  await settled();
+  const posted = slack.postedTs[0];
+  slack.responses["chat.update"] = (args) =>
+    args.ts === posted ? rejected("invalid_blocks") : { ok: true };
+  await sink.text("the last line");
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted("footer"), false);
+});
+
+// Behaviours of the TypeScript port that no test of `tests/test_sinks.py` reaches, found by
+// mutating the source and running the tests above (2026-10-10): each fails when its line is
+// taken out.
+
+test("an ending posted from a stream that sent everything leaves the first message without it", async () => {
+  // The stopped stream shows its whole span, so it needs no write: until the ending leaves the
+  // span. The message must then be edited, or the ending would show twice.
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock });
+  await sink.text("Before.\n\n");
+  await sink.task(tool("t1", "Agent", "complete", { task: true }));
+  await sink.text("The build passed.");
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted("footer"), true);
+  const ending = only(slack.callsTo("chat.postMessage"));
+  assert.equal(get(ending, "blocks", 0, "text"), "The build passed.");
+  const [first] = slack.messageBlocks();
+  assert.ok(first !== undefined && !shows(first, "The build passed."));
+  assert.ok(shows(first, "Before."));
+});
+
+test("a start of unknown outcome is looked for from the attempt's time less the skew", async () => {
+  const slack = new ResetAfterApply();
+  const clock = new FakeClock();
+  clock.now = 1_790_000_000;
+  slack.resetNext = "chat.startStream";
+  const sink = reply(slack, { clock });
+  await sink.text("one");
+  await settled();
+  const read = only(slack.callsTo("conversations.replies"));
+  assert.equal(read.oldest, (1_790_000_000 - sinks.ADOPT_SKEW_SECONDS).toFixed(6));
+  assert.equal(read.ts, THREAD);
+});
+
+test("a thread that cannot be read back is logged and the lost start is made again", async () => {
+  const slack = new ResetAfterApply();
+  const log = new Recorded();
+  slack.resetNext = "chat.startStream";
+  slack.responses["conversations.replies"] = rejected("ratelimited");
+  const sink = reply(slack, { logger: log });
+  await sink.text("one");
+  await settled();
+  assert.ok(log.text.includes("could not read the thread back for a lost write: ratelimited"));
+  await sink.text(" two");
+  await settled();
+  assert.equal(slack.callsTo("chat.startStream").length, 2); // nothing found: written again
+});
+
+test("a continuation post Slack refuses at the end is retried as text and logged when that fails too", async () => {
+  // Once the reply is closed out, a continuation whose blocks Slack refuses is posted as text
+  // alone: nothing else would ever show it.
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const log = new Recorded();
+  const sink = reply(slack, { clock, logger: log, finalRetrySeconds: 60 });
+  await sink.text("start\n");
+  await settled();
+  await clock.advance(sinks.STREAM_SECONDS + 1);
+  await sink.text("a line of text\n".repeat(1_000)); // past one message: the rest is posted
+  slack.responses["chat.postMessage"] = rejected("invalid_blocks");
+  await sink.finish([]);
+  assert.equal(await sink.closeOutFormatted("footer"), false);
+  assert.ok(log.text.includes("could not write a reply to Slack as plain text: invalid_blocks"));
+  assert.equal(slack.postedTs.length, 0);
+  await sink.settle();
+});
+
+test("a change that arrives while a write waits its turn is sent with it", async () => {
+  // The plan is worked out again after the limiter's wait (Python: `_flush_stream`'s second
+  // `_plan`), so one append carries both texts.
+  const slack = new FakeSlack();
+  const gate = new AsyncEvent();
+  const waiting = new AsyncEvent();
+  let acquired = 0;
+  const limiter: Limiter = {
+    async acquire() {
+      acquired += 1;
+      if (acquired === 1) {
+        waiting.set();
+        await gate.wait();
+      }
+    },
+    async refund() {},
+  };
+  const sink = reply(slack, { limiter });
+  await sink.text("Hello. ");
+  await settled();
+  await sink.text("World. ");
+  await settled();
+  await waiting.wait(); // the append is out of its debounce, waiting for the budget
+  await sink.text("More.");
+  gate.set();
+  await settled();
+  const appends = slack.callsTo("chat.appendStream");
+  assert.equal(appends.length, 1);
+  assert.deepEqual(
+    list(appends[0]?.chunks).map((c) => c.text),
+    ["World. More."],
+  );
+});
+
+test("the footer's fields are formatted into the line the end writes", async () => {
+  const slack = new FakeSlack();
+  const clock = new FakeClock();
+  const sink = reply(slack, { clock });
+  await sink.text("Answer.");
+  await settled();
+  await sink.finish([]);
+  const fields = {
+    bypass: true,
+    model: "opus",
+    effort: null,
+    folder: null,
+    branch: null,
+    changes: null,
+    sessionTokens: null,
+    contextPercent: 6,
+    sessionLimit: null,
+    weekLimit: null,
+  };
+  assert.equal(await sink.closeOut(fields), true);
+  const line = formatFooter(fields, clock.time() * 1000);
+  assert.ok(line.startsWith("⚡ bypass"));
+  assert.equal(footerOf(firstStream(slack).blocks), line);
+});
