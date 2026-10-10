@@ -18,11 +18,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, beforeEach, test } from "node:test";
+import { afterEach, beforeEach, test as nodeTest } from "node:test";
 import { trustedRepository } from "../../src/agent/claude/trust.ts";
 import type { Repository } from "../../src/agent/seam.ts";
 import { gitState } from "../../src/core/footer.ts";
 import { addWorktree, bareLayout, committed, git, trust } from "../support/git-layouts.ts";
+import { GIT_LAYOUT } from "../support/platform.ts";
+
+const test = GIT_LAYOUT.skip ? nodeTest.skip : nodeTest;
 
 type Lookup = (directory: string) => Promise<Repository | null>;
 
