@@ -7,20 +7,6 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- The foundation of a TypeScript daemon, beside the Python one, which stays the daemon that
-  runs. `package.json` pins `@anthropic-ai/claude-agent-sdk` 0.3.296, `@slack/bolt` 5.1.0 and
-  `@slack/web-api` 8.2.0 and asks for Node 22.18 or later; the checks are Biome, `tsc --noEmit`
-  and `node --test`, which runs the tests from their sources. `src/agent/seam.ts` and
-  `src/chat/seam.ts` hold the types of the two seams: what the core asks of an agent back end
-  and is told by it, and the reply a chat provider draws. `test/imports.test.ts` reads the
-  imports of every source file and fails when the Agent SDK is imported outside the Claude back
-  end (`src/agent/claude/`), a Slack package outside the Slack provider, or a back end or a
-  provider from the core.
-  `tests/golden.py` replays each recording of `tests/fixtures/sdk/` through the Python renderer
-  and the Python reply sink and writes what they did under `test/golden/`, for the TypeScript
-  tests to compare against; `tests/test_golden.py` keeps those files equal to what the code
-  produces. CI runs the TypeScript checks in "Tests, types, lint" and the TypeScript tests on
-  Linux, macOS and Windows.
 - The release probe looks at commands (`probe/commands.py`). It compares the commands a session
   is offered on the release with the recorded `server-info.json` and prints the new and the gone
   ones, to be tried in Slack before the release is pinned; `uv run python -m probe --commands`
@@ -284,6 +270,53 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The daemon is written in TypeScript and runs on Node 22.18 or later, in place of Python and
+  uv. It has three layers behind two seams: `src/agent/` holds the only code that knows an agent
+  SDK (the Claude back end, on `@anthropic-ai/claude-agent-sdk` 0.3.296, which bundles Claude Code
+  2.1.296), `src/core/` holds the sessions, the state and the reply model and imports neither the
+  Agent SDK nor a Slack package, and `src/chat/` holds the only code that knows a chat library
+  (the Slack provider, on `@slack/bolt` 5.1.0 and `@slack/web-api` 8.2.0). `src/agent/seam.ts` and
+  `src/chat/seam.ts` hold the types that cross the two seams, and `test/imports.test.ts` fails
+  when a layer imports what it must not. What an owner sees is unchanged: the same words, the same
+  texts in Slack, the same Slack app manifest, and the same `~/.config/awaydesk/.env` and
+  `state.json` (version 2). The command is installed with npm, from a tarball `npm pack` builds (`docs/setup.md`, Part 0), in place of `uv tool install`. The checks are Biome, `tsc --noEmit` and `node --test`,
+  which runs the tests from their sources (`npm run check`); the release probe is
+  `node probe/main.ts` and `node probe/live-agent.ts` runs 23 live checks of the Claude back end.
+  `tests/golden.py` replays each recording of `tests/fixtures/sdk/` through the Python renderer
+  and the Python reply sink and writes what they did under `test/golden/`, for the TypeScript
+  tests to compare against; CI runs the TypeScript tests on Linux, macOS and Windows. Numbers are
+  rounded as before, ties to the even digit as Python's `format` and `round` do, in the footer's
+  figures and in the minutes of a clip's wait. What does differ:
+  - The single-instance lock on macOS is the lock Python took, on the configuration directory
+    itself, so it adds no file and a Python daemon and a TypeScript one refuse each other. On
+    Linux and Windows, which are not supported hosts, the lock is a socket `lock.sock` in the
+    directory (a named pipe on Windows) and does not exclude a Python daemon.
+  - `.env` is read by Node's `util.parseEnv` with `${NAME}` and `${NAME:-default}` expanded as
+    python-dotenv expands them. Five inputs `docs/setup.md` does not show read differently
+    (compared with python-dotenv 1.2.4 on 2026-10-10, Node 26.5.1): in an unquoted value a `#` ends it even with
+    no space before (`KEY=ab#cd` reads `ab`), a quoted value ends at an escaped quote
+    (`"a\"b"` reads `a\`), a value in backticks loses them, a lone carriage return is not a
+    line end, and a key repeated in the file is expanded once, from its last value. Not
+    verified: that an owner's own file reads the same in both.
+  - A write to Slack that has begun is never cut short. A `!stop`, a restart or a cancel takes
+    effect when the call in flight returns, where the Python daemon cancelled the task that was
+    writing.
+  - The retries of a Slack call are the daemon's own policy: a rate limit is waited out up to 3
+    times, and a call that failed on the connection is sent again once, except the four calls that
+    create or grow a message in a reply, which the reply reads back from the thread instead. A
+    rate limit with no usable `Retry-After` header is raised at once; slack-sdk waited a second or
+    two and tried again, and Slack always sends the header.
+  - An effort chosen in a session's setup is applied to the running session in place, where the
+    Python daemon started a new Claude Code client for it. The footer shows the same level.
+  - The log names the module of each line: `awaydesk.main` where the Python daemon wrote
+    `awaydesk`, so the line a start prints reads `INFO awaydesk.main: connected to Slack
+    workspace <workspace id>`. A start that fails on a token Slack refuses logs `ERROR
+    awaydesk.main: stopped by an unexpected error: <Slack's error>` and exits with status 1, in
+    place of a traceback.
+  - Where a text names the error that stopped something (a failed download, a turn that failed),
+    the name is the runtime's (`TypeError`, `TimeoutError`, `Error`) in place of Python's class.
+  - An approval request prints a number with a whole value as JavaScript writes it: a `1.0` in
+    a tool's input shows as `1`.
 - The project is named `awaydesk` (was `code-with-slack`). The package, the command, the
   repository, the Slack app and its bot take the new name. On a machine that ran the old name,
   four places move: the configuration folder is `~/.config/awaydesk/`, the LaunchAgent is

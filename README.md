@@ -19,8 +19,8 @@ Powered by Claude, through the
 - It needs a Slack workspace where you are the only member. The bot checks who writes, but a
   workspace admin could still read or export what Claude prints, and whoever controls your Slack
   account controls the machine.
-- It needs Claude Code logged in with a claude.ai subscription,
-  [uv](https://docs.astral.sh/uv/) and Python 3.12 or later.
+- It needs Claude Code logged in with a claude.ai subscription and
+  [Node 22.18](https://nodejs.org/) or later.
 - If your projects live in a folder macOS protects, such as `~/Documents` or `~/Desktop`, the
   daemon needs Full Disk Access.
 - Status: version 0.1.0, no tagged release yet. [docs/features.md](docs/features.md) lists what
@@ -31,7 +31,8 @@ Powered by Claude, through the
 ```bash
 git clone https://github.com/duqaXxX/awaydesk.git
 cd awaydesk
-uv tool install .
+npm ci
+npm install -g "./$(npm pack --silent)"
 ```
 
 [docs/setup.md](docs/setup.md) takes you through the rest:
