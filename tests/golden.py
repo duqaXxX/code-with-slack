@@ -5,14 +5,18 @@ the committed files differ from what this produces.
 
 Seam 1 (`reply/<name>.json`): the calls `TurnRenderer` makes on its `Sink`, in order.
 Seam 2 (`slack/<name>.json`): the Slack calls a real `ReplySink` makes for those sink calls.
+Texts (`texts.json`): every constant of `awaydesk.texts`, and the call of every public function of
+it on fixed arguments.
 
 The files must be byte-for-byte reproducible: no wall clock, no sets, no `default=str`."""
 
 import argparse
 import asyncio
 import dataclasses
+import inspect
 import json
 import shutil
+import string
 import subprocess
 from importlib.metadata import version
 from pathlib import Path
@@ -20,6 +24,7 @@ from typing import Any
 
 from slack_sdk.web.async_slack_response import AsyncSlackResponse
 
+from awaydesk import texts
 from awaydesk.render.previews import Preview
 from awaydesk.render.renderer import TaskUpdate, TurnRenderer
 from awaydesk.render.sinks import ReplySink, UpdateLimiter
@@ -204,6 +209,63 @@ async def slack_golden(name: str, reply: dict[str, Any]) -> dict[str, Any]:
     return {"recording": name, "discipline": DISCIPLINE, **body}
 
 
+# The texts.
+
+# The arguments each public function of `awaydesk.texts` is recorded with, as (args, kwargs). The
+# module holds constants only today: a function added to it fails `texts_golden` until it is
+# listed here, so the TypeScript port cannot miss it.
+TEXT_CALLS: dict[str, list[tuple[list[Any], dict[str, Any]]]] = {}
+
+
+def template_fields(template: str) -> list[str]:
+    return [field for _, field, _, _ in string.Formatter().parse(template) if field]
+
+
+def texts_golden() -> dict[str, Any]:
+    """Every module-level constant of `awaydesk.texts` by name (a tuple of strings as a list), the
+    output of `str.format` for each template on one value per field, and the recorded calls of
+    its public functions."""
+    constants: dict[str, str] = {}
+    sequences: dict[str, list[str]] = {}
+    for name, value in vars(texts).items():
+        if name.startswith("_"):
+            continue
+        if isinstance(value, str):
+            constants[name] = value
+        elif isinstance(value, tuple) and all(isinstance(item, str) for item in value):
+            sequences[name] = list(value)
+    fills = {}
+    for name, template in constants.items():
+        fields = template_fields(template)
+        if fields:
+            values = {field: f"<{field}>" for field in fields}
+            fills[name] = {"values": values, "output": template.format(**values)}
+    functions = sorted(
+        name
+        for name, value in vars(texts).items()
+        if inspect.isfunction(value) and value.__module__ == texts.__name__ and name[0] != "_"
+    )
+    if unlisted := [name for name in functions if name not in TEXT_CALLS]:
+        raise ValueError(f"texts functions without recorded calls: {unlisted}")
+    calls = [
+        {
+            "function": name,
+            "args": args,
+            "kwargs": kwargs,
+            "output": getattr(texts, name)(*args, **kwargs),
+        }
+        for name in functions
+        for args, kwargs in TEXT_CALLS[name]
+    ]
+    return {
+        "constants": constants,
+        "sequences": sequences,
+        "fills": fills,
+        "functions": functions,
+        "calls": calls,
+    }
+
+
 # The files.
 
 
@@ -235,6 +297,7 @@ async def build() -> dict[str, str]:
         reply = await reply_golden(name)
         files[f"reply/{name}.json"] = dump(reply)
         files[f"slack/{name}.json"] = dump(await slack_golden(name, reply))
+    files["texts.json"] = dump(texts_golden())
     return files
 
 
