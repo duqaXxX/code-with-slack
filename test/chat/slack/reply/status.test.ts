@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import {
-  type Logger,
   resetStatusFlags,
   Status,
   StatusReaction,
   ThreadStatus,
 } from "../../../../src/chat/slack/reply/status.ts";
 import * as texts from "../../../../src/core/texts.ts";
+import type { Logger } from "../../../../src/log.ts";
 import {
   AsyncEvent,
   CHANNEL,

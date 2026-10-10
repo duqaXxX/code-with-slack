@@ -6,6 +6,9 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import { dirname, join } from "node:path";
+import { getLogger } from "../log.ts";
+
+export const logger = getLogger("awaydesk.core.state");
 
 // A thread with no session id whose root message is older than this never finished its first
 // turn: `prune` drops it. A Slack `thread_ts` is the root message's epoch time in seconds.
@@ -252,7 +255,7 @@ export class StateStore {
 
   constructor(path: string, options: StateStoreOptions = {}) {
     this.path = path;
-    this.warn = options.warn ?? ((message) => console.warn(message));
+    this.warn = options.warn ?? ((message) => logger.warning(message));
     this.channelsById = this.load();
   }
 

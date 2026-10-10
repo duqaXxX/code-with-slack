@@ -11,6 +11,7 @@ import { ChatError, type SessionStatus } from "../../../src/chat/seam.ts";
 import type { Limiter } from "../../../src/chat/slack/reply/limiter.ts";
 import {
   resetStatusFlags,
+  logger as statusLogger,
   THREAD_STATUS_AFTER_WRITE_SECONDS,
 } from "../../../src/chat/slack/reply/status.ts";
 import {
@@ -288,7 +289,7 @@ test("the activity line is refused once slack says the token cannot set one", as
   const { slack, clock, thread } = made();
   assert.equal(thread.activityRefused, false);
   slack.responses["assistant.threads.setStatus"] = rejected("missing_scope");
-  const warnings = mock.method(console, "error", () => {});
+  const warnings = mock.method(statusLogger, "warning", () => {});
   try {
     thread.showActivity("Working…", "is working…");
     await settle(clock);

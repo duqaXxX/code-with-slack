@@ -8,15 +8,9 @@
  */
 import { lstat, opendir, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { getLogger } from "../log.ts";
 
-/** Where a debug line goes; ids and error names only. */
-export interface Logger {
-  debug(message: string): void;
-}
-
-export const logger: Logger = {
-  debug: (message) => console.error(`DEBUG core.folders: ${message}`),
-};
+export const logger = getLogger("awaydesk.core.folders");
 
 export const FOLDER_ROWS = 20;
 export const FOLDER_DEPTH = 2;

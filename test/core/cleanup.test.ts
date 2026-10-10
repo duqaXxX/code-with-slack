@@ -8,9 +8,9 @@ import {
   type ChannelLookup,
   clean,
   forgetGoneChannels,
-  type Logger,
 } from "../../src/core/cleanup.ts";
 import { StateStore, type ThreadKey } from "../../src/core/state.ts";
+import type { Logger } from "../../src/log.ts";
 
 const CHANNEL = "C000CHAN";
 const GONE_CHANNEL = "C000GONE";
@@ -31,7 +31,7 @@ after(() => {
 });
 
 /** The lines a pass logs, by level. */
-interface Logged extends Logger {
+interface Logged extends Pick<Logger, "info" | "warning"> {
   readonly lines: string[];
 }
 

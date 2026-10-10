@@ -28,23 +28,11 @@
 import { WebAPIPlatformError, type WebClient } from "@slack/web-api";
 import type { Clock } from "../../../clock.ts";
 import * as texts from "../../../core/texts.ts";
+import { getLogger, type Logger } from "../../../log.ts";
 
 // Kept local until `reply/clock.ts` exists: the part of a clock this module needs.
 /** Time on a clock's own scale, in seconds, and a sleep the signal can cut short. */
-/** Where a line goes; ids and error names only, never message content. */
-export interface Logger {
-  debug(message: string): void;
-  info(message: string): void;
-  warning(message: string): void;
-  error(message: string): void;
-}
-
-export const logger: Logger = {
-  debug: (message) => console.error(`DEBUG chat.slack.reply.status: ${message}`),
-  info: (message) => console.error(`INFO chat.slack.reply.status: ${message}`),
-  warning: (message) => console.error(`WARNING chat.slack.reply.status: ${message}`),
-  error: (message) => console.error(`ERROR chat.slack.reply.status: ${message}`),
-};
+export const logger = getLogger("awaydesk.chat.slack.reply.status");
 
 // Slack removes a status two minutes after it was set (the method's reference): set again well
 // before that.

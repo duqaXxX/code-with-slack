@@ -2,6 +2,9 @@
 import { spawn } from "node:child_process";
 import type { ModelTokens, Repository } from "../agent/seam.ts";
 import type { FooterFields, UsageLimit } from "../chat/seam.ts";
+import { getLogger } from "../log.ts";
+
+export const logger = getLogger("awaydesk.core.footer");
 
 export const USAGE_TTL = 300_000;
 // For every git call of one footer together: the reply waits for it.
@@ -72,7 +75,7 @@ export class UsageCache {
     this.fetch = fetch;
     this.ttl = options.ttl ?? USAGE_TTL;
     this.clock = options.clock ?? (() => performance.now());
-    this.warn = options.warn ?? ((message) => console.warn(message));
+    this.warn = options.warn ?? ((message) => logger.warning(message));
   }
 
   invalidate(): void {

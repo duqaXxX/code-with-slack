@@ -11,18 +11,13 @@
  * `StateStore.prune`'s. The chat provider supplies the lookup that turns Slack's answer into a
  * `ChannelAnswer`.
  */
+import { getLogger, type Logger } from "../log.ts";
 import type { StateStore, ThreadKey } from "./state.ts";
 
-/** Where a line goes; ids and error names only, never message content. */
-export interface Logger {
-  info(message: string): void;
-  warning(message: string): void;
-}
+export const logger = getLogger("awaydesk.core.cleanup");
 
-export const logger: Logger = {
-  info: (message) => console.error(`INFO core.cleanup: ${message}`),
-  warning: (message) => console.error(`WARNING core.cleanup: ${message}`),
-};
+/** What a pass writes to the log, so a test can hand it a smaller object. */
+type Log = Pick<Logger, "info" | "warning">;
 
 export const CLEAN_EVERY_SECONDS = 6 * 60 * 60;
 
@@ -51,7 +46,7 @@ export interface CleanOptions {
   readonly live: Live;
   /** Seconds since the epoch. */
   readonly now?: () => number;
-  readonly logger?: Logger;
+  readonly logger?: Log;
 }
 
 /** The name a log line gives a failure: the errno code of a system error, else the error's name. */
@@ -74,7 +69,7 @@ export async function forgetGoneChannels(
   lookup: ChannelLookup,
   state: StateStore,
   live: Live,
-  log: Logger = logger,
+  log: Log = logger,
 ): Promise<string[]> {
   const bound = state.channels();
   const gone: string[] = [];

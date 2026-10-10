@@ -6,21 +6,12 @@ import {
   WebAPIRequestError,
   type WebClient,
 } from "@slack/web-api";
+import { getLogger, type Logger } from "../../../log.ts";
 
-/** Where a line goes; ids, sizes and error codes only, never message content. */
-export interface Logger {
-  debug(message: string): void;
-  info(message: string): void;
-  warning(message: string): void;
-  error(message: string): void;
-}
-
-export const logger: Logger = {
-  debug: (message) => console.error(`DEBUG chat.slack.reply.sinks: ${message}`),
-  info: (message) => console.error(`INFO chat.slack.reply.sinks: ${message}`),
-  warning: (message) => console.error(`WARNING chat.slack.reply.sinks: ${message}`),
-  error: (message) => console.error(`ERROR chat.slack.reply.sinks: ${message}`),
-};
+// The sink's lines: Python logged them all under `awaydesk.render.sinks`. `sinks.ts` imports this
+// logger and, through `export *`, its callers get the `Logger` type from here.
+export const logger = getLogger("awaydesk.chat.slack.reply.sinks");
+export type { Logger };
 
 // chat.update errors that refuse the content itself (reference, read 2026-09-25): a plain retry
 // can pass where the blocks did not. A transient error such as `ratelimited` is not one.

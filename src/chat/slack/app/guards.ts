@@ -6,15 +6,9 @@
  */
 import { WebAPIPlatformError, type WebClient } from "@slack/web-api";
 import * as texts from "../../../core/texts.ts";
+import { getLogger, type Logger } from "../../../log.ts";
 
-/** Where a line goes; ids and error names only, never message content. */
-export interface Logger {
-  warning(message: string): void;
-}
-
-export const logger: Logger = {
-  warning: (message) => console.error(`WARNING chat.slack.app.guards: ${message}`),
-};
+export const logger = getLogger("awaydesk.chat.slack.app.guards");
 
 /** A Slack payload: JSON the library or a recording parsed. */
 export type Payload = Readonly<Record<string, unknown>>;
@@ -161,9 +155,9 @@ const SHARED_FLAGS = ["is_shared", "is_ext_shared", "is_org_shared", "is_pending
 export class ChannelGuard {
   readonly #slack: WebClient;
   readonly #identity: Identity;
-  readonly #log: Logger;
+  readonly #log: Pick<Logger, "warning">;
 
-  constructor(slack: WebClient, identity: Identity, log: Logger = logger) {
+  constructor(slack: WebClient, identity: Identity, log: Pick<Logger, "warning"> = logger) {
     this.#slack = slack;
     this.#identity = identity;
     this.#log = log;

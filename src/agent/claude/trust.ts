@@ -42,22 +42,10 @@ import { type BigIntStats, constants, type Stats } from "node:fs";
 import { lstat, open, readFile, readlink, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
+import { getLogger } from "../../log.ts";
 import type { Repository } from "../seam.ts";
 
-/** The three levels of the module's log; the session replaces it with the shared logger. */
-export interface Logger {
-  debug(message: string): void;
-  info(message: string): void;
-  warning(message: string): void;
-}
-
-const NAME = "agent.claude.trust";
-
-export const logger: Logger = {
-  debug: (message) => console.error(`DEBUG ${NAME}: ${message}`),
-  info: (message) => console.error(`INFO ${NAME}: ${message}`),
-  warning: (message) => console.error(`WARNING ${NAME}: ${message}`),
-};
+export const logger = getLogger("awaydesk.agent.claude.trust");
 
 /** git's own limit for a `.git` file (setup.c, read_gitfile_gently). */
 export const GITFILE_BYTES = 1 << 20;

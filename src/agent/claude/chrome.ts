@@ -16,21 +16,9 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { getLogger } from "../../log.ts";
 
-/** The three levels of the module's log; the session replaces it with the shared logger. */
-export interface Logger {
-  debug(message: string): void;
-  info(message: string): void;
-  warning(message: string): void;
-}
-
-const NAME = "agent.claude.chrome";
-
-export const logger: Logger = {
-  debug: (message) => console.error(`DEBUG ${NAME}: ${message}`),
-  info: (message) => console.error(`INFO ${NAME}: ${message}`),
-  warning: (message) => console.error(`WARNING ${NAME}: ${message}`),
-};
+export const logger = getLogger("awaydesk.agent.claude.chrome");
 
 // Python read the record as strict UTF-8 and kept a BOM in the text, where `json.loads` refuses it.
 const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
