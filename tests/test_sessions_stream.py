@@ -124,6 +124,74 @@ async def test_a_reply_waits_for_its_background_task_before_it_stops(
     assert {"type": "divider"} in h.slack.message_blocks()[0]
 
 
+async def test_a_process_lost_while_a_task_runs_says_so_in_the_reply_that_waits_for_it(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # Issue #202, seen live on 2026-10-10: the turn has ended, its background command still
+    # runs, and the Claude Code process is lost. The reply closed with its footer as if all had
+    # ended well; the cross on the root was the only sign.
+    from tests.fakes import EndOfStream
+
+    first, _notice, _injected = split_background()
+    h = harness_for({"turns": [first]})
+    await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
+    await asyncio.sleep(0.05)
+    assert open_streams(h) == h.slack.stream_ts  # the reply waits for its task
+    h.clients[0].inject([EndOfStream()])
+    await until(lambda: bool(h.slack.calls_to("chat.stopStream")))
+    await until(lambda: h.reactions()[-1] == Status.ERROR.value)
+    assert h.slack.stream_texts()[0].count("Claude Code reported an error") == 1
+    assert len(h.slack.stream_ts) == 1 and h.slack.pushes() == 1
+
+
+async def test_a_process_lost_after_its_task_was_reported_changes_nothing_in_the_thread(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # The reply of a task that ended and was reported is still tracked while the process lives:
+    # it has closed with its footer, so it waits for nothing and is left as it is.
+    from tests.fakes import EndOfStream
+
+    first, notice, injected = split_background()
+    h = harness_for({"turns": [first]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
+    h.clients[0].inject(notice + injected)
+    await until(lambda: bool(h.slack.calls_to("chat.stopStream")))
+    await until(lambda: h.reactions()[-1] == Status.DONE.value)
+    await asyncio.sleep(0.1)
+    writes = len(h.slack.calls)
+    h.clients[0].inject([EndOfStream()])
+    await until(lambda: session._client is None)
+    await asyncio.sleep(0.1)
+    assert h.reactions()[-1] == Status.DONE.value
+    later = [name for name, _ in h.slack.calls[writes:]]
+    assert [name for name in later if name != "assistant.threads.setStatus"] == []
+    assert "reported an error" not in str(h.slack.message_blocks())
+
+
+async def test_a_process_lost_while_the_session_is_idle_changes_nothing_in_the_thread(
+    harness_for: Callable[..., Harness],
+) -> None:
+    # Issue #202, seen live on 2026-10-10: nothing runs and nothing waits, so the reply that
+    # ended well keeps its check. The next message connects a new process.
+    from tests.fakes import EndOfStream
+
+    h = harness_for({"turns": [sdk_messages("usage")]}, {"turns": [sdk_messages("usage")]})
+    session = h.session()
+    await asyncio.wait_for((await session.submit("hello")).done.wait(), 2)
+    await until(lambda: h.reactions()[-1] == Status.DONE.value)
+    writes = len(h.slack.calls)
+    h.clients[0].inject([EndOfStream()])
+    await until(lambda: session._client is None)
+    await asyncio.sleep(0.1)
+    assert h.reactions()[-1] == Status.DONE.value
+    # Clearing a thread status that was already empty shows nothing: no message, no reaction.
+    later = [name for name, _ in h.slack.calls[writes:]]
+    assert [name for name in later if name != "assistant.threads.setStatus"] == []
+    await asyncio.wait_for((await session.submit("again")).done.wait(), 2)
+    assert len(h.clients) == 2
+
+
 async def test_a_reply_that_outlives_the_stream_ends_with_its_last_words_and_the_footer(
     harness_for: Callable[..., Harness],
 ) -> None:

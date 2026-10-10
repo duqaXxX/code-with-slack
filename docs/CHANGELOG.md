@@ -654,6 +654,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A Claude Code process lost while no turn is active is told where it matters. With a
+  background task of the session still running, the reply that waited for it closed with its
+  footer as if all had ended well, and the ❌ on the root was the only sign: the reply now
+  ends with `Claude Code reported an error: …`, the line a turn cut short already gets
+  (`ThreadSession._abandon`). With nothing running and nothing waiting, the root of a reply
+  that had ended well turned to ❌: it now keeps its reaction and nothing is written, since
+  the next message connects a new process. Seen live on 2026-10-10, both cases (#202).
 - A thread reply sent with **Also send to #channel** is a prompt of its thread. It was dropped
   with no answer: Slack delivers it as subtype `thread_broadcast`, and
   `guards.is_prompt_message` took `file_share` as the only subtype a person's message can have.
