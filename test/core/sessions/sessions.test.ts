@@ -7,7 +7,7 @@
  * options, the `--chrome` argument) is the agent module's, and is not here.
  */
 import assert from "node:assert/strict";
-import {
+import fs, {
   chmodSync,
   mkdirSync,
   mkdtempSync,
@@ -18,22 +18,30 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { agentInfo } from "../../../src/agent/claude/info.ts";
 import { questionResult } from "../../../src/agent/claude/requests.ts";
 import { ResumeRefused } from "../../../src/agent/seam.ts";
 import type { Reply } from "../../../src/chat/seam.ts";
-import { Status } from "../../../src/chat/slack/reply/status.ts";
+import { Status, ThreadStatus } from "../../../src/chat/slack/reply/status.ts";
 import type { TurnRenderer } from "../../../src/core/reply/renderer.ts";
 import { APPROVE, type Outcome } from "../../../src/core/requests.ts";
 import {
   ASKED_LIMIT,
+  DRAIN_POLL_SECONDS,
+  IDLE_CLOSE_SECONDS,
   INJECTED_TURN_WAIT,
   STOP_TAIL_WAIT,
 } from "../../../src/core/sessions/constants.ts";
-import { resolveDirectory } from "../../../src/core/sessions/directory.ts";
+import {
+  resolveDirectory,
+  shellQuote,
+  terminalLine,
+} from "../../../src/core/sessions/directory.ts";
+import { SessionClosed } from "../../../src/core/sessions/errors.ts";
 import { SessionManager } from "../../../src/core/sessions/manager.ts";
 import { ThreadSession } from "../../../src/core/sessions/session.ts";
 import { asked } from "../../../src/core/sessions/turn.ts";
@@ -50,9 +58,12 @@ import {
   THREAD,
 } from "../../support/fake-slack.ts";
 import { type JsonObject, sdkJson } from "../../support/fixtures.ts";
+import { GIT_LAYOUT } from "../../support/platform.ts";
 import {
+  anyRepository,
   canUseToolCall,
   END_OF_STREAM,
+  type FakeAgentSession,
   type Harness,
   harnessFor,
   hookRun,
@@ -66,16 +77,32 @@ import {
   WRITES,
 } from "../../support/sessions.ts";
 import {
+  expectedTurns,
+  footerWrites,
   inside,
   isReport,
+  isToolResult,
   logged,
+  nestedBackgroundEndingMidTurn,
+  nestedBackgroundRunning,
   pending,
   renamedBackground,
+  repoUnder,
+  splitAtTaskStart,
   splitBackground,
+  splitNestedBackground,
+  splitNestedCommand,
+  startedOf,
+  statusLines,
+  stoppedEnd,
   systemRecord,
+  taskCards,
   toolUseOf,
   withTaskStatus,
 } from "./helpers.ts";
+
+// Windows is not a supported host: a mode, a symbolic link and a git layout are read by POSIX rules.
+const POSIX_ONLY = { skip: process.platform === "win32" };
 
 const NESTED = texts.NESTED;
 
@@ -693,23 +720,26 @@ test("rate limit event invalidates usage", async (t) => {
 });
 
 test("logs hold no message content", async (t) => {
-  const h = harnessFor(t)({ turns: [sdkMessages("tools")] });
-  // Every line the daemon logs, down to DEBUG: the log's own writer, and the console the
-  // modules with a logger of their own still write to.
+  // A turn that asks for an approval, so that the session logs something to read.
+  const ask = canUseToolCall("Bash", { command: "SECRET-COMMAND-CONTENT" });
+  const h = harnessFor(t)({ turns: [[ask, ...sdkMessages("tools")]] });
+  // Every line the daemon logs, down to DEBUG: every module logs through `src/log.ts`.
   const lines: string[] = [];
   const writer = setWriter((line) => lines.push(line));
   setLevel("DEBUG");
-  t.mock.method(console, "error", (...words: unknown[]) => lines.push(words.join(" ")));
-  t.mock.method(console, "warn", (...words: unknown[]) => lines.push(words.join(" ")));
   try {
     const turn = await h.session().submit("SECRET-PROMPT-CONTENT");
+    await h.until(() => pending(h.approvals).length > 0);
+    resolve(h, APPROVE);
     await turn.done.wait();
     await h.idle();
   } finally {
     setLevel("INFO");
     setWriter(writer);
   }
+  assert.ok(lines.length > 0); // the log was read, not silent
   assert.ok(!lines.join("\n").includes("SECRET-PROMPT-CONTENT"));
+  assert.ok(!lines.join("\n").includes("SECRET-COMMAND-CONTENT"));
 });
 
 test("an api error is logged by category and thread never by its text", async (t) => {
@@ -792,7 +822,7 @@ test("stop channel stops every busy session of the channel", async (t) => {
   assert.equal(await h.manager.stopChannel(CHANNEL), false);
 });
 
-test("resolve directory", (t) => {
+test("resolve directory", POSIX_ONLY, (t) => {
   const tmpPath = realpathSync(mkdtempSync(join(tmpdir(), "awd-resolve-")));
   t.after(() => rmSync(tmpPath, { recursive: true, force: true }));
   const root = join(tmpPath, "root");
@@ -1681,7 +1711,7 @@ test("a missing directory starts nothing and says so", async (t) => {
   assert.equal(h.slack.pushes(), 1); // the reply's one stop: an error the owner has to act on
 });
 
-test("an unreadable directory says how to grant access", async (t) => {
+test("an unreadable directory says how to grant access", POSIX_ONLY, async (t) => {
   const h = harnessFor(t)({});
   const locked = join(h.tmpPath, "locked");
   mkdirSync(locked);
@@ -2113,4 +2143,2019 @@ test("the footer names the bound folder", async (t) => {
   const folder = h.tmpPath.split("/").at(-1);
   assert.ok(statuses(h).at(-1)?.startsWith("claude-haiku-4-5-20251001 · "));
   assert.ok(statuses(h).at(-1)?.includes(` · ${folder} · `));
+});
+
+/** A RegExp source that matches `text` literally. */
+function literal(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+test("the footer follows the folder the session works in", GIT_LAYOUT, async (t) => {
+  // The layout where the bound folder's branch was always missing (#37). The folder shown
+  // stays the channel's, where the owner bound it; the branch is the session's.
+  const make = harnessFor(t);
+  const repo = repoUnder(make.tmpPath);
+  const moved = { ...(sdkJson("stop-hook") as JsonObject), cwd: repo };
+  const h = make({ turns: [withStopHook(sdkMessages("tools"), moved)] });
+  const session = h.session();
+  await (await session.submit("list the files")).done.wait();
+  assert.match(
+    statuses(h).at(-1) ?? "",
+    new RegExp(
+      ` · ${literal(basename(h.tmpPath))} · feature-x · \\(\\+0,-0\\) · [\\d.]+[kM]? \\*tok\\* · \\*ctx\\* `,
+    ),
+  );
+  const lines = (await session.status()).split("\n");
+  assert.equal(lines[0], `Directory: \`${h.tmpPath}\``);
+  const values = lines.slice(lines.indexOf("Now: idle") + 1);
+  assert.equal(values[0], `Working in: \`${repo}\``);
+  assert.ok(values.includes("Branch: `feature-x`") && values.includes("Uncommitted: `(+0,-0)`"));
+});
+
+test("a tool s hook moves the branch when no stop hook runs", GIT_LAYOUT, async (t) => {
+  // A turn stopped or failed runs no Stop hook; PostToolUse still reports where the session
+  // went after the tool (measured 2026-09-27 on 2.1.283), so the footer is not left behind.
+  const make = harnessFor(t);
+  const repo = repoUnder(make.tmpPath);
+  const messages = sdkMessages("tools");
+  const firstResult = messages.findIndex(isToolResult);
+  assert.notEqual(firstResult, -1);
+  const moved = { ...(sdkJson("post-tool-use-hook") as JsonObject), cwd: repo };
+  const turn = [
+    ...messages.slice(0, firstResult + 1),
+    hookRun(moved, "PostToolUse"),
+    ...messages.slice(firstResult + 1),
+  ];
+  const h = make({ turns: [turn] });
+  const session = h.session();
+  await (await session.submit("list the files")).done.wait();
+  assert.ok(
+    statuses(h)
+      .at(-1)
+      ?.includes(` · ${basename(h.tmpPath)} · feature-x · (+0,-0) · `),
+  );
+  assert.equal(session.workingDirectory, repo);
+});
+
+test("the footer leaves out the branch of a repository not trusted", GIT_LAYOUT, async (t) => {
+  // The session went into a repo the owner never trusted in Claude Code: no git runs there,
+  // and neither the footer nor `!status` says anything in its place.
+  const make = harnessFor(t);
+  const repo = repoUnder(make.tmpPath);
+  const moved = { ...(sdkJson("stop-hook") as JsonObject), cwd: repo };
+  const h = make({ turns: [withStopHook(sdkMessages("tools"), moved)] });
+  h.backend.repository = async () => null;
+  const session = h.session();
+  await (await session.submit("list the files")).done.wait();
+  assert.ok(!statuses(h).at(-1)?.includes("feature-x") && !statuses(h).at(-1)?.includes("(+0,-0)"));
+  const text = await session.status();
+  assert.ok(text.includes(`Working in: \`${repo}\``));
+  assert.ok(!text.includes("Branch:") && !text.includes("Uncommitted:"));
+});
+
+test(
+  "the footer asks for the repository with the folder the session started in",
+  GIT_LAYOUT,
+  async (t) => {
+    // The agent moved into `repo`: the repository is looked up there, for the session whose
+    // folder is the bound one (a repository inside that folder is covered by its trust).
+    const make = harnessFor(t);
+    const repo = repoUnder(make.tmpPath);
+    const asked: Array<readonly [string, string]> = [];
+    const moved = { ...(sdkJson("stop-hook") as JsonObject), cwd: repo };
+    const h = make({ turns: [withStopHook(sdkMessages("tools"), moved)] });
+    h.backend.repository = async (folder, sessionFolder) => {
+      asked.push([folder, sessionFolder]);
+      return anyRepository(folder);
+    };
+    const session = h.session();
+    await (await session.submit("list the files")).done.wait();
+    await session.status();
+    assert.ok(asked.length > 0);
+    assert.deepEqual(
+      new Set(asked.map((pair) => pair.join("\n"))),
+      new Set([`${repo}\n${session.directory}`]),
+    );
+    assert.notEqual(session.directory, repo);
+  },
+);
+
+test("a restarted client starts again in the bound folder", GIT_LAYOUT, async (t) => {
+  const make = harnessFor(t);
+  const repo = repoUnder(make.tmpPath);
+  const moved = { ...(sdkJson("stop-hook") as JsonObject), cwd: repo };
+  const h = make({ turns: [withStopHook(sdkMessages("tools"), moved)] }, { turns: [] });
+  const session = h.session();
+  await (await session.submit("list the files")).done.wait();
+  assert.ok(statuses(h).at(-1)?.includes("feature-x"));
+  await h.manager.closeAll();
+  const text = await h.session().status();
+  assert.ok(!text.includes("Working in") && !text.includes("feature-x"));
+});
+
+test("status lists the footer s values of the latest reply", async (t) => {
+  // The session stayed in the channel's folder, which is no repo: no branch, no changes.
+  const make = harnessFor(t);
+  const stayed = { ...(sdkJson("stop-hook") as JsonObject), cwd: make.tmpPath };
+  const h = make({ turns: [withStopHook(sdkMessages("tools"), stayed)] });
+  const session = h.session();
+  await (await session.submit("list the files")).done.wait();
+  await h.until(() => h.usageFetches === 1); // the turn's own refresh of the limits
+  const text = await session.status();
+  assert.ok(text.startsWith("Directory:") && text.includes("Claude Code: `2.1.286`"));
+  const tokens = /([\d.]+[kM]?) \*tok\*/.exec(statuses(h).at(-1) ?? "");
+  assert.notEqual(tokens, null);
+  const lines = text.split("\n");
+  assert.deepEqual(lines.slice(lines.indexOf("Now: idle") + 1), [
+    "Model: `claude-haiku-4-5-20251001`",
+    "Effort: `medium`",
+    `Session tokens: \`${tokens?.[1]}\``,
+    "Context: `7%`",
+    "5h limit: `5%`",
+  ]);
+});
+
+test("status before any turn starts the client and leaves out the tokens", async (t) => {
+  const h = harnessFor(t)({ turns: [] });
+  const text = await h.session().status();
+  assert.ok(h.clients.length === 1 && h.clients[0]?.queries.length === 0);
+  // The version comes with a turn's `init` message, never on connect (measured 2026-09-26).
+  assert.ok(text.includes(`Claude Code: \`${texts.VERSION_PENDING}\``));
+  assert.ok(text.includes("Model: `claude-haiku-4-5-20251001`") && text.includes("Context: `7%`"));
+  // Only a turn's Stop hook, or `/effort`, reports the level: the settings do not say it.
+  assert.ok(!text.includes("Session tokens") && !text.includes("Effort"));
+  // No session exists yet, so there is nothing the terminal could fork (#12).
+  assert.ok(text.includes("Session: `new`\nMode: ") && !text.includes("Terminal:"));
+});
+
+test("status gives the command that forks the session in the terminal", async (t) => {
+  // A session born in Slack stays out of the terminal's picker; a fork of it is listed (#12).
+  const h = harnessFor(t)({ turns: [sdkMessages("tools")] });
+  const session = h.session();
+  await (await session.submit("list the files")).done.wait();
+  const stored = thread(h).sessionId;
+  const lines = (await session.status()).split("\n");
+  assert.equal(lines[1], `Session: \`${stored}\``);
+  const folder = shellQuote(h.tmpPath);
+  assert.equal(lines[2], `Terminal: \`cd ${folder} && claude --resume ${stored} --fork-session\``);
+  assert.ok(lines[3]?.startsWith("Mode: "));
+});
+
+test("a terminal command holding a backtick is escaped text not a code span", () => {
+  // A code span would end at the folder's backtick and the owner would copy half a command.
+  const line = terminalLine("/work/my`proj", "0000-id");
+  assert.equal(
+    line,
+    "Terminal: cd '/work/my\\`proj' \\&\\& claude --resume 0000-id --fork-session",
+  );
+});
+
+test("status leaves the terminal command out of a folder that cannot be used", async (t) => {
+  const h = harnessFor(t)({ turns: [sdkMessages("tools")] });
+  await (await h.session().submit("list the files")).done.wait();
+  await h.manager.closeAll();
+  h.backend.trusted = async () => false;
+  const text = await h.session().status();
+  const stored = thread(h).sessionId;
+  assert.ok(text.includes(`Session: \`${stored}\`\nMode: `) && !text.includes("Terminal:"));
+  assert.ok(text.endsWith(texts.fill(texts.DIRECTORY_UNTRUSTED, { directory: h.tmpPath })));
+});
+
+test("the terminal command quotes a folder the shell would split", async (t) => {
+  const make = harnessFor(t);
+  const spaced = join(make.tmpPath, "my project");
+  mkdirSync(spaced);
+  const h = make({ turns: [sdkMessages("tools")] });
+  h.state.bind(CHANNEL, spaced);
+  const session = h.session();
+  await (await session.submit("list the files")).done.wait();
+  assert.ok((await session.status()).includes(`Terminal: \`cd '${spaced}' && claude --resume `));
+});
+
+test("status says why claude code cannot start in place of the footer s values", async (t) => {
+  const h = harnessFor(t)({ turns: [] });
+  h.backend.trusted = async () => false;
+  const text = await h.session().status();
+  assert.deepEqual(h.clients, []);
+  assert.ok(text.includes("Claude Code: `not started`"));
+  assert.ok(
+    text.endsWith(`Now: idle\n${texts.fill(texts.DIRECTORY_UNTRUSTED, { directory: h.tmpPath })}`),
+  );
+});
+
+test("status during a turn shows the model and the context", async (t) => {
+  const h = harnessFor(t)({ turns: [sdkMessages("tools").slice(0, -1)] });
+  const session = h.session();
+  await session.submit("list the files");
+  await h.until(() => h.clients.length === 1 && h.clients[0]?.queries.length === 1);
+  assert.deepEqual(h.clients[0]?.queries, ["list the files"]);
+  const text = await session.status();
+  assert.ok(text.includes(texts.fill(texts.ACTIVITY_BUSY, { queued: 0 })));
+  assert.ok(text.includes("Model: `claude-haiku-4-5-20251001`") && text.includes("Context: `7%`"));
+});
+
+test("status shows a running task while the reply s own closing still waits", async (t) => {
+  // D1: the closing message (where the running count would show) waits for the task; `!status`
+  // is the one place that still shows it meanwhile.
+  const [first] = splitBackground();
+  const h = harnessFor(t)({ turns: [first] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  assert.equal(runningBlock(h.slack.messageBlocks().at(-1) ?? []), null);
+  assert.ok((await session.status()).endsWith("\nBackground: `1 shell`"));
+});
+
+test("status refreshes the usage limits and the next one shows them", async (t) => {
+  const h = harnessFor(t)({ turns: [] });
+  const session = h.session();
+  await session.status();
+  await h.until(() => h.usageFetches === 1);
+  assert.ok((await session.status()).includes("5h limit: `5%`"));
+});
+
+test("status after claude code restarts leaves out the old process s tokens", async (t) => {
+  const h = harnessFor(t)(
+    { turns: [withStopHook(sdkMessages("tools"), sdkJson("stop-hook") as JsonObject)] },
+    {},
+  );
+  const session = h.session();
+  await (await session.submit("list the files")).done.wait();
+  let text = await session.status();
+  assert.ok(text.includes("Session tokens") && text.includes("Effort: `medium`"));
+  h.clients[0]?.inject([END_OF_STREAM]);
+  await h.until(() => inside(session).client === null);
+  text = await session.status();
+  assert.ok(h.clients.length === 2 && text.includes("Context: `7%`"));
+  assert.ok(!text.includes("Session tokens") && !text.includes("Effort"));
+});
+
+test("status says claude code s error when it fails to start", async (t) => {
+  const h = harnessFor(t)({ startError: named("RuntimeError") });
+  const warnings = logged(t, "warning");
+  // The reason a prompt would get in the same state, never less.
+  const text = await h.session().status();
+  assert.ok(
+    text.endsWith(`Now: idle\n${texts.fill(texts.ERROR_REPLY, { error: "RuntimeError" })}`),
+  );
+  assert.ok(
+    warnings.some((line) => line.includes("could not read the footer's values for the status")),
+  );
+});
+
+test("status follows a reply that reports no tokens", async (t) => {
+  const h = harnessFor(t)({ turns: [sdkMessages("tools"), sdkMessages("usage")] });
+  const session = h.session();
+  await (await session.submit("list the files")).done.wait();
+  await (await session.submit("/usage")).done.wait();
+  assert.ok(!statuses(h).at(-1)?.includes(" tok"));
+  assert.ok(!(await session.status()).includes("Session tokens"));
+});
+
+test("a skill typed as a command shows its task while it runs", async (t) => {
+  // skill-fork-command.jsonl (CLI 2.1.286): the forked skill's task starts and ends before the
+  // turn's first message, and none of its calls is streamed.
+  const messages = sdkMessages("skill-fork-command");
+  const started = messages.findIndex((item) => isSystem(item, "task_started"));
+  const h = harnessFor(t)({ turns: [messages.slice(0, started + 1)] });
+  const turn = await h.session().submit("/list-files");
+  await h.until(
+    () =>
+      h
+        .cards()
+        .map((card) => card.status)
+        .join() === "in_progress",
+  );
+  assert.equal(at(h.cards(), 0).title, "/list-files");
+  h.clients[0]?.inject(messages.slice(started + 1));
+  await turn.done.wait();
+  assert.deepEqual(
+    h.cards().map((card) => [card.title, card.status]),
+    [["/list-files", "complete"]],
+  );
+  assert.equal(h.slack.streamTs.length, 1); // one reply: the task's card is the owner's turn's
+});
+
+test("a task started by a call does not start the owner s turn", async (t) => {
+  // foreground.jsonl: a long Bash call's task, whose tool_use_id names that call.
+  const h = harnessFor(t)({ turns: [[startedOf("foreground")]] });
+  const session = h.session();
+  await session.submit("run it");
+  await h.until(() => h.clients.length > 0 && h.clients[0]?.queries.join() === "run it");
+  await h.sleep(0.05);
+  assert.ok(inside(session).active === null && inside(session).held.length === 1);
+  // nothing is written: no task card in a reply, and no reply
+  assert.deepEqual(
+    h.slack.apiCalls.filter((call) => call.method.startsWith("chat.")),
+    [],
+  );
+});
+
+test("a command s task waits while a report turn is expected", async (t) => {
+  const h = harnessFor(t)({});
+  const session = h.session();
+  await session.submit("/list-files");
+  await h.until(() => h.clients.length > 0 && h.clients[0]?.queries.join() === "/list-files");
+  // The prompt is sent, and a report turn is expected meanwhile (a turn that crossed it).
+  inside(session).expectInjectedTurn();
+  h.clients[0]?.inject([startedOf("skill-fork-command")]);
+  await h.until(() => inside(session).held.length === 1);
+  assert.equal(inside(session).active, null);
+});
+
+/** The recorded subagent's turn as the main stream carries it, and the records of its own calls. */
+function subagentStream(): { turn: Item[]; children: Item[]; recorded: Item[] } {
+  const recorded = sdkMessages("subagent");
+  const turn = (splitTurns(recorded)[0] ?? []).filter((item) => !hasParent(item));
+  const children = recorded.filter(hasParent);
+  return { turn, children, recorded };
+}
+
+/** A task of the recorded subagent's start, as a task under it: `nested`, tied to `callId`. */
+function nestedStart(callId: string): Item {
+  const record = recordOf(startedOf("subagent"));
+  assert.ok(record !== null);
+  return { record: { ...record, task_id: "nested", tool_use_id: callId, description: "nested" } };
+}
+
+test("a task started after its call ended is an ordinary task of the agent s reply", async (t) => {
+  // The `nested` frame is hand-written, with no recording behind it: a subagent asked to start
+  // a subagent ran the command itself (2026-10-03, CLI 2.1.286), so no real task of type agent
+  // under an agent is known. A task that starts once its call has ended is not that call's
+  // foreground work: it is any background task, on the reply holding the agent.
+  const { turn, children } = subagentStream();
+  const childCall = children.map(toolUseOf).find((id) => id !== null);
+  assert.ok(childCall !== undefined && childCall !== null);
+  const nested = nestedStart(childCall);
+  const h = harnessFor(t)({ turns: [turn] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  const posted = h.slack.postedTs.length;
+  h.clients[0]?.inject([...children, nested]);
+  await h.until(() => h.cards().some((card) => card.title === "nested"));
+  assert.ok(h.slack.postedTs.length === posted && h.slack.streamTs.length === 1); // no reply of its own
+  assert.ok(inside(session).taskReplies.has("nested"));
+});
+
+test("a nested task that ends before its call s result is the agent s foreground work", async (t) => {
+  // Hand-written like the one above (an agent under an agent is unrecorded), in the order the
+  // recorded nested command has: the task's end comes before its call's result.
+  const { turn, children, recorded } = subagentStream();
+  const call = children.find((item) => toolUseOf(item) !== null);
+  assert.ok(call !== undefined);
+  const childCall = toolUseOf(call);
+  assert.ok(childCall !== null);
+  const nested = nestedStart(childCall);
+  const notification = recordOf(recorded.find((item) => isSystem(item, "task_notification")));
+  assert.ok(notification !== null);
+  const ended: Item = {
+    record: { ...notification, task_id: "nested", tool_use_id: childCall },
+  };
+  const h = harnessFor(t)({ turns: [turn] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  const after = children.indexOf(call) + 1;
+  h.clients[0]?.inject([...children.slice(0, after), nested, ended, ...children.slice(after)]);
+  await h.sleep(0.1);
+  assert.ok(!h.cards().some((card) => card.title === "nested"));
+  assert.ok(!inside(session).taskReplies.has("nested") && !inside(session).tasks.has("nested"));
+  assert.ok(inside(session).ended.length === 0 && inside(session).expiry === null);
+});
+
+/** A drain of the manager that has been started: whether it has returned, and how to end it. */
+interface Drain {
+  readonly cut: AbortController;
+  readonly promise: Promise<void>;
+  readonly done: () => boolean;
+}
+
+function startDrain(h: Harness): Drain {
+  const cut = new AbortController();
+  let finished = false;
+  const promise = h.manager.drain(cut.signal).then(() => {
+    finished = true;
+  });
+  return { cut, promise, done: () => finished };
+}
+
+/**
+ * One poll of the drain has passed: what is ready runs, and the sessions' clock moves on by the
+ * interval the drain sleeps between its checks. Where a Python test slept a moment and asserted
+ * the drain was still waiting, the drain has looked once more by the time this returns.
+ */
+async function polled(h: Harness): Promise<void> {
+  await h.idle();
+  await h.clock.advance(DRAIN_POLL_SECONDS);
+}
+
+/**
+ * Until the drain returns, one poll at a time. The turn it waits for ends with a real
+ * subprocess (the footer's `git`) and real file reads, which take as long as the machine lets
+ * them: each round gives them a moment of real time, and only the real-time bound fails the
+ * test, since a count of polls would give up early on a loaded machine.
+ */
+async function drainEnds(h: Harness, drain: Drain): Promise<void> {
+  const deadline = Date.now() + 20_000;
+  while (!drain.done()) {
+    if (Date.now() > deadline) throw new Error("the drain never returned");
+    await polled(h);
+    if (!drain.done()) await new Promise<void>((resolve) => setTimeout(resolve, 25));
+  }
+  await drain.promise;
+}
+
+test("a stop lets the running turn finish and ends the queued one", async (t) => {
+  const messages = sdkMessages("tools");
+  const running = messages.slice(0, -1);
+  const result = at(messages, -1);
+  const h = harnessFor(t)({ turns: [running, sdkMessages("tools")] });
+  const session = h.session();
+  const first = await session.submit("first");
+  const second = await session.submit("second");
+  await h.until(() => h.clients.length > 0 && h.clients[0]?.queries.join() === "first");
+  const drain = startDrain(h);
+  await second.done.wait();
+  assert.ok(!drain.done() && !first.done.isSet);
+  h.clients[0]?.inject([result]);
+  await drainEnds(h, drain);
+  assert.ok(first.done.isSet);
+  assert.deepEqual(h.clients[0]?.queries, ["first"]);
+  // the queued message gets no reply of its own: the running one's end names it
+  assert.equal(h.slack.streamTs.length, 1);
+  assert.ok(
+    h.slack
+      .streamTexts()[0]
+      ?.includes(texts.fill(texts.NOT_SENT_ONE, { because: texts.BECAUSE_RESTARTED })),
+  );
+  assert.equal(thread(h).sessionId, recordOf(result)?.session_id);
+});
+
+test("a stop waits for the reply s final write", async (t) => {
+  const messages = sdkMessages("tools");
+  const running = messages.slice(0, -1);
+  const result = at(messages, -1);
+  const h = harnessFor(t)({ turns: [running] });
+  const turn = await h.session().submit("first");
+  await h.until(() => h.clients.length > 0 && h.clients[0]?.queries.join() === "first");
+  const footerRead = new AsyncEvent();
+  const client = at(h.clients, 0);
+  const original = client.contextUsage.bind(client);
+  client.contextUsage = async () => {
+    await footerRead.wait();
+    return original();
+  };
+  const drain = startDrain(h);
+  client.inject([result]);
+  await polled(h);
+  assert.ok(!drain.done()); // the footer is still being read: the reply is not final yet
+  footerRead.set();
+  await drainEnds(h, drain);
+  assert.ok(turn.done.isSet);
+  assert.equal(h.slack.callsTo("chat.stopStream").length, 1); // the reply has ended, footer and all
+});
+
+for (const bypass of [true, false]) {
+  test(`a stop posts nothing in a thread that has nothing running [${bypass ? "True" : "False"}]`, async (t) => {
+    // Bypass outlives a restart (D3), so nothing is said about it: a message would only notify.
+    const h = harnessFor(t)({});
+    await h.session().setBypass(bypass);
+    h.state.setSession(CHANNEL, THREAD, "sess-ran");
+    await drainEnds(h, startDrain(h));
+    assert.deepEqual(h.slack.callsTo("chat.postMessage"), []);
+    assert.deepEqual(h.slack.callsTo("assistant.threads.setStatus"), []);
+  });
+}
+
+test("an approval asked during a stop stays open and the turn finishes", async (t) => {
+  const ask = canUseToolCall("Bash", { command: "ls" });
+  const h = harnessFor(t)({ turns: [[ask, ...sdkMessages("tools")]] });
+  const turn = await h.session().submit("first");
+  await h.until(() => pending(h.approvals).length > 0);
+  const drain = startDrain(h);
+  await polled(h);
+  assert.ok(!drain.done() && !turn.done.isSet);
+  // The owner answers while the daemon stops, as a Slack session that restarted it would need.
+  resolve(h, APPROVE);
+  await drainEnds(h, drain);
+  assert.ok(turn.done.isSet);
+  assert.deepEqual(h.clients[0]?.permissionResults[0], { allow: true });
+  assert.equal(h.clients[0]?.interrupts, 0);
+});
+
+test("a turn taken before a stop is never sent", async (t) => {
+  const gate = new AsyncEvent();
+  const h = harnessFor(t)({ startGate: gate, turns: [sdkMessages("tools")] });
+  const turn = await h.session().submit("first");
+  await h.until(() => h.clients.length > 0);
+  const drain = startDrain(h);
+  gate.set();
+  await drainEnds(h, drain);
+  assert.ok(turn.done.isSet && h.clients[0]?.queries.length === 0);
+  const [note, ...more] = h.slack.callsTo("chat.postMessage"); // nothing ran: the note is a message of its own
+  assert.equal(more.length, 0);
+  assert.ok(
+    String(note?.text).includes(
+      texts.fill(texts.NOT_SENT_ONE, { because: texts.BECAUSE_RESTARTED }),
+    ),
+  );
+});
+
+test("a second signal cuts the stop short", async (t) => {
+  const running = sdkMessages("tools").slice(0, -1);
+  const h = harnessFor(t)({ turns: [running] });
+  const turn = await h.session().submit("first");
+  await h.until(() => h.clients.length > 0 && h.clients[0]?.queries.join() === "first");
+  const drain = startDrain(h);
+  await polled(h);
+  assert.ok(!drain.done());
+  drain.cut.abort();
+  await drainEnds(h, drain);
+  assert.ok(!turn.done.isSet); // closeAll ends it, as before
+});
+
+test("a stop waits for a background task and the turn that reports it", async (t) => {
+  const [first, notice, injected] = splitBackground();
+  const ended = notice.filter((item) => !isSystem(item, "task_notification"));
+  const notification = notice.filter((item) => isSystem(item, "task_notification"));
+  const h = harnessFor(t)({ turns: [first] });
+  await (await h.session().submit("start it")).done.wait();
+  const drain = startDrain(h);
+  await polled(h);
+  assert.ok(!drain.done()); // the task still runs
+  // Live, the terminal task_updated came a moment before the notification (2026-09-26): the
+  // task's line is closed, yet the turn that reports it has not started.
+  h.clients[0]?.inject(ended);
+  await polled(h);
+  assert.ok(!drain.done());
+  h.clients[0]?.inject(notification);
+  await polled(h);
+  assert.ok(!drain.done()); // Claude Code is expected to report it
+  h.clients[0]?.inject(injected);
+  await drainEnds(h, drain);
+  assert.ok(h.replies().some(isReport));
+});
+
+test("a stop waits only a while for a notification that never comes", async (t) => {
+  // A task stopped with TaskStop can end with no notification (SDK TaskUpdatedMessage docstring).
+  const [first, notice] = splitBackground();
+  const ended = notice.filter((item) => !isSystem(item, "task_notification"));
+  const h = harnessFor(t)({ turns: [first] });
+  await (await h.session().submit("start it")).done.wait();
+  h.clients[0]?.inject(ended);
+  await h.idle();
+  const drain = startDrain(h);
+  await polled(h);
+  assert.ok(!drain.done());
+  await reportTurnNeverCame(h);
+  await drainEnds(h, drain);
+});
+
+test("a stop does not wait for a task its running turn starts afterwards", async (t) => {
+  // A session that ran `launchctl kill TERM` then waited in the background for the new process
+  // held the restart until `!stop` or the limit (issue #87, three times on 2026-09-30). The
+  // signal names no sender; the one that ordered it has a turn running when it arrives.
+  const [first] = splitBackground();
+  const [before, after] = splitAtTaskStart(first);
+  const h = harnessFor(t)({ turns: [before] });
+  const session = h.session();
+  const turn = await session.submit("restart the daemon");
+  await h.until(
+    () => h.clients.length > 0 && h.clients[0]?.queries.join() === "restart the daemon",
+  );
+  const drain = startDrain(h);
+  await polled(h);
+  assert.ok(!drain.done()); // its turn still runs
+  h.clients[0]?.inject(after);
+  await drainEnds(h, drain);
+  assert.ok(turn.done.isSet);
+  assert.ok(inside(session).runningTaskIds().length > 0); // still running: the shutdown ends it
+  await h.sleep(0.05);
+  assert.ok(!statusLines(h).some((line) => line.startsWith("Restart waits")));
+  await h.manager.closeAll(); // the shutdown that follows
+  const stored = thread(h);
+  assert.ok(stored.openReplies.length === 0 && stored.status === null);
+  // Its turn ended well: the task the shutdown ends is its own wait, not work cut short (decided
+  // 2026-10-01: ✅, as `!stop` showed before this change).
+  assert.equal(h.reactions().at(-1), Status.DONE);
+  assert.ok(!h.reactions().includes(Status.ERROR));
+});
+
+test("a stop still waits for a task the running turn started before it", async (t) => {
+  const [first] = splitBackground();
+  const running = first.slice(0, -1);
+  const result = at(first, -1);
+  const h = harnessFor(t)({ turns: [running] });
+  const turn = await h.session().submit("start it");
+  await h.until(() => h.clients.length > 0 && h.clients[0]?.queries.join() === "start it");
+  await h.until(() => inside(h.session()).runningTaskIds().length > 0);
+  const drain = startDrain(h);
+  h.clients[0]?.inject([result]);
+  await turn.done.wait();
+  await polled(h);
+  assert.ok(!drain.done()); // the task began before the signal: it is waited for
+  // Said by the thread's status line, never by a message: no push, and nothing left behind.
+  const waits = texts.fill(texts.RESTART_WAITS, { counts: "1 shell", them: "it" });
+  await h.until(() => statusLines(h).at(-1) === waits);
+  assert.equal(waits, "Restart waits for 1 shell · !stop ends it now");
+  assert.deepEqual(h.slack.callsTo("chat.postMessage"), []);
+  drain.cut.abort();
+  await drain.promise;
+});
+
+test("a stop held by a background task says so and bang stop ends it", async (t) => {
+  // A task that never ends (a watcher) held a restart for the whole limit (2026-09-27).
+  const [first, notice] = splitBackground();
+  const taskId = String(systemRecord(first, "task_started").task_id);
+  const h = harnessFor(t)({ turns: [first] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  const drain = startDrain(h);
+  await polled(h);
+  assert.ok(!drain.done());
+  // Said by the thread's status line, never by a message: no push, and nothing left behind.
+  const waits = texts.fill(texts.RESTART_WAITS, { counts: "1 shell", them: "it" });
+  await h.until(() => statusLines(h).at(-1) === waits);
+  assert.equal(waits, "Restart waits for 1 shell · !stop ends it now");
+  assert.deepEqual(h.slack.callsTo("chat.postMessage"), []);
+  assert.ok(await session.stop());
+  assert.deepEqual(h.clients[0]?.stoppedTasks, [taskId]);
+  assert.equal(h.clients[0]?.interrupts, 0); // no turn was running
+  // No report turn follows a stopped task, so the stop does not wait INJECTED_TURN_WAIT for one.
+  h.clients[0]?.inject(stoppedEnd(notice));
+  await drainEnds(h, drain);
+});
+
+test("a stop of a background task ends the reply like any other end", async (t) => {
+  // `!stop` (S2): the task's own end lets the reply's stream stop, with the footer, as a
+  // normal end does. Nothing is posted, and the ✅ is the stop's own.
+  const [first, notice] = splitBackground();
+  const h = harnessFor(t)({ turns: [first] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  assert.ok(await session.stop());
+  await h.sleep(0.05);
+  assert.deepEqual(h.slack.callsTo("chat.stopStream"), []); // the task has not ended yet
+  h.clients[0]?.inject(stoppedEnd(notice));
+  await h.until(() => h.slack.callsTo("chat.stopStream").length > 0);
+  assert.ok(
+    blocksOf(h.slack.callsTo("chat.stopStream").at(-1)).some(
+      (block) => block.type === "divider" && Object.keys(block).length === 1,
+    ),
+  );
+  assert.ok(h.slack.postedTs.length === 0 && h.slack.pushes() === 1);
+  assert.equal(h.reactions().at(-1), Status.DONE);
+});
+
+test("a stopped report turn ends like any other end", async (t) => {
+  // A report turn `!stop` cuts short ends like a stopped owner turn does: its reply's stream
+  // stops with the footer, once.
+  const [first, notice, injected] = splitBackground();
+  const partial = injected.filter((item) => !isResult(item));
+  const result = recordOf(injected.find(isResult));
+  assert.ok(result !== null);
+  const interrupted: Item = { record: { ...result, terminal_reason: "aborted_streaming" } };
+  const h = harnessFor(t)({ turns: [first] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  h.clients[0]?.inject(notice);
+  await h.until(() => inside(session).injectedExpected);
+  h.clients[0]?.inject(partial);
+  await h.until(() => inside(session).active !== null);
+  assert.equal(await session.stop(), true);
+  h.clients[0]?.inject([interrupted]);
+  await h.until(() => h.slack.callsTo("chat.stopStream").length > 0);
+  assert.ok(h.slack.postedTs.length === 0 && h.slack.pushes() === 1);
+  assert.ok(noStreamOpen(h));
+});
+
+test("the next prompt after bang stop does not wait for a report", async (t) => {
+  // Measured 2026-09-27 on Claude Code 2.1.283: the stopped task's notification stays queued
+  // and no turn reports it; the owner's next prompt waited INJECTED_TURN_WAIT (30 s).
+  const [first, notice] = splitBackground();
+  const h = harnessFor(t)({ turns: [first, sdkMessages("tools")] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  assert.ok(await session.stop());
+  h.clients[0]?.inject(stoppedEnd(notice));
+  await h.until(() => inside(session).runningCounts() === "");
+  const following = await session.submit("next");
+  await following.done.wait(); // no advance of the sessions' clock: it waits for nothing
+  assert.deepEqual(h.clients[0]?.queries, ["start it", "next"]);
+});
+
+test("bang stop ends background tasks outside a stop too", async (t) => {
+  const [first] = splitBackground();
+  const taskId = String(systemRecord(first, "task_started").task_id);
+  const h = harnessFor(t)({ turns: [first] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  assert.ok(await session.stop());
+  assert.deepEqual(h.clients[0]?.stoppedTasks, [taskId]);
+  assert.equal(h.clients[0]?.interrupts, 0); // no turn was running
+});
+
+/**
+ * Every line the daemon logs from here on, parsed: Python's `caplog` over the whole `awaydesk`
+ * logger tree, where `logged` reads one logger. Call `stop` when the part under test is over.
+ */
+function captureLog(): {
+  readonly entries: Array<{ level: string; name: string; message: string }>;
+  stop(): void;
+} {
+  const entries: Array<{ level: string; name: string; message: string }> = [];
+  const before = setWriter((line) => {
+    const parsed = /^\S+ \S+ ([A-Z]+) ([^:]+): (.*)$/s.exec(line);
+    if (parsed !== null) {
+      entries.push({
+        level: String(parsed[1]),
+        name: String(parsed[2]),
+        message: String(parsed[3]),
+      });
+    }
+  });
+  return { entries, stop: () => void setWriter(before) };
+}
+
+/** What a call that is still running will end with: its error, or null. Never rejects. */
+function outcome(call: Promise<unknown>): Promise<unknown> {
+  return call.then(
+    () => null,
+    (error: unknown) => error,
+  );
+}
+
+/** Whether a call has returned yet, kept by a flag since a promise cannot be asked. */
+function finishing(call: Promise<unknown>): { readonly done: () => boolean } {
+  let finished = false;
+  void call.then(
+    () => {
+      finished = true;
+    },
+    () => {
+      finished = true;
+    },
+  );
+  return { done: () => finished };
+}
+
+test("a close while a word starts the client leaves no process", async (t) => {
+  // `!help` or `!status` starts the client in its own task, outside the prompt queue; the
+  // trigger for a concurrent close is now closeAll at shutdown (and, later, an idle close).
+  const gate = new AsyncEvent();
+  const h = harnessFor(t)({ startGate: gate });
+  const session = h.session();
+  const word = session.ensureConnected();
+  const wordEnd = outcome(word);
+  await h.until(() => h.clients.length === 1);
+  const closing = session.close();
+  const closed = finishing(closing);
+  await h.sleep(0.05);
+  assert.ok(!closed.done()); // the close waits for the connect in progress
+  gate.set();
+  await closing;
+  await wordEnd;
+  assert.ok(h.clients.length === 1 && h.clients[0]?.connected === false);
+});
+
+test("bypass asked while the session closes is not stored", async (t) => {
+  const gate = new AsyncEvent();
+  const h = harnessFor(t)({ startGate: gate });
+  const session = h.session();
+  const wordEnd = outcome(session.setBypass(true));
+  await h.until(() => h.clients.length === 1);
+  const closing = session.close();
+  await h.sleep(0.05);
+  gate.set();
+  await closing;
+  assert.ok((await wordEnd) instanceof SessionClosed);
+  assert.equal(thread(h).bypass, null); // never stored
+});
+
+test("the status of a session closed meanwhile is not given", async (t) => {
+  const gate = new AsyncEvent();
+  const h = harnessFor(t)({ startGate: gate });
+  const session = h.session();
+  const wordEnd = outcome(session.status());
+  await h.until(() => h.clients.length === 1);
+  const closing = session.close();
+  await h.sleep(0.05);
+  gate.set();
+  await closing;
+  assert.ok((await wordEnd) instanceof SessionClosed); // connected before the close, read after it
+  await assert.rejects(session.status(), SessionClosed);
+});
+
+test("a closed session starts no client", async (t) => {
+  const h = harnessFor(t)();
+  const session = h.session();
+  await session.close();
+  await assert.rejects(session.ensureConnected(), SessionClosed);
+  assert.deepEqual(h.clients, []);
+});
+
+test("bypass whose client closes under it says the session closed", async (t) => {
+  const h = harnessFor(t)({});
+  const session = h.session();
+  const client = await session.ensureConnected();
+  (client as FakeAgentSession).setPermissionMode = async () => {
+    await session.close();
+    throw named("ConnectionError"); // the CLI went away
+  };
+  await assert.rejects(session.setBypass(true), SessionClosed);
+  assert.equal(thread(h).bypass, null); // never stored
+});
+
+// D9: the effort level `/effort` sets is stored per thread and passed back on the next connect;
+// a Claude Code process with nothing to do for an hour closes itself, and the next message
+// rebuilds it.
+
+test("a result reporting an effort change stores it", async (t) => {
+  const effortTurn = withResult(
+    sdkMessages("usage"),
+    "Set effort level to high (this session only): Comprehensive",
+  );
+  const h = harnessFor(t)({ turns: [effortTurn] });
+  await (await h.session().submit("/effort high")).done.wait();
+  assert.equal(thread(h).effort, "high");
+});
+
+test("setting effort back to auto stores the default", async (t) => {
+  const effortTurn = withResult(
+    sdkMessages("usage"),
+    "Effort level set to auto (this session only)",
+  );
+  const h = harnessFor(t)({ turns: [effortTurn] });
+  const session = h.session(); // opens the thread
+  h.state.setEffort(CHANNEL, THREAD, "high"); // a level was stored from an earlier turn
+  await (await session.submit("/effort auto")).done.wait();
+  assert.equal(thread(h).effort, null);
+});
+
+test("the client is launched with the stored effort", async (t) => {
+  const h = harnessFor(t)({});
+  h.session(); // opens the thread
+  h.state.setEffort(CHANNEL, THREAD, "low");
+  await h.session().ensureConnected();
+  assert.equal(h.clients[0]?.options.effort, "low");
+});
+
+test("the footer shows a stored effort at once after a reconnect", async (t) => {
+  // A stored `!effort` is sent to Claude Code on every reconnect; the footer must not show
+  // "unknown" for the level the daemon itself just asked for, before any turn reports another.
+  const h = harnessFor(t)({});
+  h.session();
+  h.state.setEffort(CHANNEL, THREAD, "low");
+  assert.ok((await h.session().status()).includes("Effort: `low`"));
+});
+
+/**
+ * The idle delay passes over a session that has nothing to do: it is idle first (a turn's last
+ * write has landed), and its timer, which starts on the next turn of the event loop, is
+ * running before the sessions' clock moves on.
+ */
+async function idleDelayPasses(h: Harness, session: ThreadSession, fraction = 1): Promise<void> {
+  await h.until(() => session.idle);
+  await h.idle();
+  await h.clock.advance(IDLE_CLOSE_SECONDS * fraction);
+}
+
+test("an idle session closes itself after the delay and posts nothing", async (t) => {
+  const h = harnessFor(t)({ turns: [sdkMessages("tools")] });
+  const session = h.session();
+  await (await session.submit("hi")).done.wait();
+  // `done` is set before the thread status's last write (the end now runs in its own task):
+  // let it land, so only the close itself is counted.
+  await h.sleep(0.02);
+  const callsBefore = h.slack.apiCalls.length; // every kind: postMessage, update, delete
+  await idleDelayPasses(h, session);
+  await h.until(() => h.clients[0]?.connected === false, 1);
+  assert.ok(session.closed);
+  assert.equal(h.slack.apiCalls.length, callsBefore); // a silent close
+});
+
+test("release closes an idle session silently and refuses one in use", async (t) => {
+  const ask = canUseToolCall("Bash", { command: "ls" });
+  const h = harnessFor(t)({ turns: [[ask, ...sdkMessages("tools")]] });
+  assert.ok(await h.manager.release(CHANNEL, THREAD)); // no live session: the thread is free
+  h.manager.free(CHANNEL, THREAD);
+  const session = h.session();
+  const turn = await session.submit("list the files");
+  await h.until(() => pending(h.approvals).length > 0);
+  assert.ok(!(await h.manager.release(CHANNEL, THREAD))); // waiting on the owner
+  assert.ok(!session.closed && h.clients[0]?.connected === true);
+  assert.ok(!h.manager.held(CHANNEL, THREAD)); // refused: nothing is held
+  resolve(h, APPROVE);
+  await turn.done.wait();
+  await h.until(() => session.idle);
+  await h.sleep(0.02); // the thread status's last write lands
+  const callsBefore = h.slack.apiCalls.length;
+  assert.ok(await h.manager.release(CHANNEL, THREAD));
+  assert.ok(session.closed && session.doneClosing.isSet);
+  assert.ok(!h.clients[0]?.connected);
+  assert.equal(h.slack.apiCalls.length, callsBefore); // as silent as the idle close
+  // Released, the thread is held: no session is rebuilt from the entry `state.json` still
+  // has, so a message sent while its messages are deleted starts nothing.
+  assert.ok(h.manager.held(CHANNEL, THREAD));
+  assert.notEqual(h.state.thread(CHANNEL, THREAD), null);
+  assert.equal(h.manager.get(CHANNEL, THREAD), null);
+  assert.equal(h.clients.length, 1);
+  h.manager.free(CHANNEL, THREAD);
+  assert.ok(!h.manager.held(CHANNEL, THREAD));
+  assert.notEqual(h.manager.get(CHANNEL, THREAD), null); // a delete that failed: usable again
+});
+
+test("the idle close does not fire while a turn runs", async (t) => {
+  const ask = canUseToolCall("Bash", { command: "ls" });
+  const h = harnessFor(t)({ turns: [[ask, ...sdkMessages("tools")]] });
+  const session = h.session();
+  const turn = await session.submit("list the files");
+  await h.until(() => pending(h.approvals).length > 0);
+  await h.idle(); // the timer starts on the next turn of the loop
+  await h.clock.advance(IDLE_CLOSE_SECONDS); // past the idle delay, still waiting on the owner's decision
+  assert.ok(!session.closed && h.clients[0]?.connected === true);
+  resolve(h, APPROVE);
+  await turn.done.wait();
+  await idleDelayPasses(h, session); // idle again: the timer restarted
+  await h.until(() => session.closed, 1);
+});
+
+test("the idle close waits for a background task", async (t) => {
+  const [first, notice, injected] = splitBackground();
+  const h = harnessFor(t)({ turns: [first] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  assert.ok(session.runningKinds !== ""); // the task outlived its turn
+  await h.idle(); // the timer starts on the next turn of the loop
+  await h.clock.advance(IDLE_CLOSE_SECONDS); // past the idle delay, the task is still running
+  assert.ok(!session.closed && h.clients[0]?.connected === true);
+  h.clients[0]?.inject([...notice, ...injected]);
+  await h.until(() => session.runningKinds === "");
+  await idleDelayPasses(h, session); // idle again once the task ends
+  await h.until(() => session.closed, 1);
+});
+
+test("the idle close waits for an expected report turn", async (t) => {
+  const [first, notice, injected] = splitBackground();
+  const h = harnessFor(t)({ turns: [first] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  h.clients[0]?.inject(notice); // a report turn is expected; not idle until it arrives
+  await h.idle();
+  // Python outlasted the idle delay inside the report's wait (0.05 s against 30 s); the real
+  // delay is the longer one, so what is checked is that no idle timer runs during the wait.
+  assert.equal(inside(session).idleExpiry, null);
+  await h.clock.advance(INJECTED_TURN_WAIT - 1);
+  assert.ok(!session.closed && h.clients[0]?.connected === true);
+  h.clients[0]?.inject(injected);
+  await h.until(() => isReport(h.bodies().at(-1) ?? ""));
+  await idleDelayPasses(h, session);
+  await h.until(() => session.closed, 1);
+});
+
+test("a message after a close gets a rebuilt session never the closed one", async (t) => {
+  const h = harnessFor(t)({ turns: [sdkMessages("tools")] });
+  const session = h.session();
+  h.state.setSession(CHANNEL, THREAD, "prior");
+  h.state.setEffort(CHANNEL, THREAD, "high");
+  await session.close();
+  assert.ok(session.closed);
+  const rebuilt = h.manager.get(CHANNEL, THREAD);
+  assert.ok(rebuilt !== null && rebuilt !== session);
+  const turn = await rebuilt.submit("next");
+  await turn.done.wait();
+  assert.equal(h.clients.at(-1)?.options.resume, "prior");
+  assert.equal(h.clients.at(-1)?.options.effort, "high");
+});
+
+test("the next message after an idle close resumes with effort", async (t) => {
+  const effortTurn = withResult(
+    sdkMessages("usage"),
+    "Set effort level to high (this session only): Comprehensive",
+  );
+  const h = harnessFor(t)({ turns: [effortTurn] }, { turns: [sdkMessages("tools")] });
+  const session = h.session();
+  await (await session.submit("/effort high")).done.wait();
+  await idleDelayPasses(h, session);
+  await h.until(() => session.closed, 1);
+  const stored = thread(h);
+  const rebuilt = h.manager.get(CHANNEL, THREAD);
+  assert.ok(rebuilt !== null && rebuilt !== session);
+  await (await rebuilt.submit("next")).done.wait();
+  assert.equal(h.clients[1]?.options.resume, stored.sessionId);
+  assert.equal(h.clients[1]?.options.effort, "high");
+});
+
+test("sessions of leaves out a closed session", async (t) => {
+  const h = harnessFor(t)({});
+  const session = h.session();
+  await session.close();
+  assert.deepEqual(h.manager.sessionsOf(CHANNEL), []);
+});
+
+test("a gone session is left out of sessions of", async (t) => {
+  // The case Task 2 left open: a resume that finds its session gone stays a closed entry
+  // in the manager until something looks it up again; sessionsOf must not show it meanwhile.
+  const h = harnessFor(t)({ startError: gone() });
+  const session = h.session();
+  h.state.setSession(CHANNEL, THREAD, "gone");
+  const turn = await session.submit("hello");
+  await turn.done.wait();
+  assert.ok(session.closed);
+  assert.deepEqual(h.manager.sessionsOf(CHANNEL), []);
+});
+
+// D9 races: the resume race, the routing race, the re-arm points after a word's connect and an
+// expired report wait, the effort edge cases and the eviction of a closed session.
+
+test("ensure connected waits for the predecessor s disconnect before resuming", async (t) => {
+  // The CLI needs real time to flush and exit after EOF: a rebuild must never resume the same
+  // session id while that is still in flight.
+  const gate = new AsyncEvent();
+  const h = harnessFor(t)({ closeGate: gate }, { turns: [sdkMessages("tools")] });
+  const session = h.session();
+  await session.ensureConnected();
+  h.state.setSession(CHANNEL, THREAD, "prior");
+  const closing = session.close();
+  const closingEnd = finishing(closing);
+  await h.sleep(0.05); // close() is now blocked inside the gated disconnect
+  assert.ok(!closingEnd.done());
+  assert.ok(session.closed); // closing has started...
+  assert.equal(h.clients[0]?.connected, true); // ...but has not finished
+  const rebuilt = h.manager.get(CHANNEL, THREAD);
+  assert.ok(rebuilt !== null && rebuilt !== session);
+  const connecting = rebuilt.ensureConnected();
+  const connectingEnd = finishing(connecting);
+  await h.sleep(0.05);
+  assert.ok(!connectingEnd.done()); // waiting on the predecessor: no second client started yet
+  assert.equal(h.clients.length, 1);
+  gate.set();
+  await closing;
+  await connecting;
+  assert.equal(h.clients.length, 2);
+  assert.equal(h.clients[1]?.options.resume, "prior");
+});
+
+test("close all waits for an idle close already in flight", async (t) => {
+  const gate = new AsyncEvent();
+  const h = harnessFor(t)({ closeGate: gate });
+  const session = h.session();
+  await session.ensureConnected();
+  await idleDelayPasses(h, session);
+  await h.until(() => session.closed, 1); // the idle close fired and is now in flight
+  assert.equal(h.clients[0]?.connected, true); // blocked inside the gated disconnect
+  const closingAll = h.manager.closeAll();
+  const closingAllEnd = finishing(closingAll);
+  await h.sleep(0.05);
+  assert.ok(!closingAllEnd.done()); // waits for the in-flight close rather than returning early
+  gate.set();
+  await closingAll;
+  assert.equal(h.clients[0]?.connected, false);
+});
+
+test("close all continues past a session whose close raises", async (t) => {
+  const h = harnessFor(t)({}, {});
+  const first = h.session(THREAD);
+  const second = h.session(OTHER_THREAD);
+  await first.ensureConnected();
+  await second.ensureConnected();
+  // A real `close()` always sets `doneClosing` from its own `finally`, whatever fails.
+  (first as { close: ThreadSession["close"] }).close = async () => {
+    first.doneClosing.set();
+    throw new Error("boom");
+  };
+  await h.manager.closeAll();
+  assert.equal(h.clients[1]?.connected, false); // the second session still closed
+  assert.deepEqual(h.manager.sessionsOf(CHANNEL), []);
+});
+
+test("a lookup touches the idle timer before any await", async (t) => {
+  // The timer armed when the turn ended is close to firing; a lookup (a message arriving) must
+  // reset it to a fresh IDLE_CLOSE_SECONDS, synchronously, before any slow step (a download, a
+  // Slack call) a caller might do on the way to its own submit.
+  const h = harnessFor(t)({ turns: [sdkMessages("tools")] });
+  const session = h.session();
+  await (await session.submit("hi")).done.wait();
+  await idleDelayPasses(h, session, 0.7); // close to the stale timer's own delay, not yet closed
+  const lookedUp = h.manager.get(CHANNEL, THREAD);
+  assert.equal(lookedUp, session);
+  await h.idle(); // the timer starts on the next turn of the loop
+  await h.clock.advance(IDLE_CLOSE_SECONDS * 0.7); // past where the STALE timer would have fired
+  assert.ok(!session.closed); // the touch gave it a fresh window instead
+});
+
+test("a lookup of an idle session still closes it eventually", async (t) => {
+  // The touch above resets the clock; it does not disarm it. A lookup with no submit ever
+  // following stays a session with nothing to do, and closes on its own new schedule.
+  const h = harnessFor(t)({ turns: [sdkMessages("tools")] });
+  const session = h.session();
+  await (await session.submit("hi")).done.wait();
+  assert.equal(h.manager.get(CHANNEL, THREAD), session);
+  await idleDelayPasses(h, session);
+  await h.until(() => session.closed, 1);
+});
+
+test("submit on a closed session raises session closed", async (t) => {
+  const h = harnessFor(t)({});
+  const session = h.session();
+  await session.close();
+  await assert.rejects(session.submit("hi"), SessionClosed);
+});
+
+test("ensure connected arms the idle close too", async (t) => {
+  // A daemon word (`!status`, `!help`, `!bypass`) connects with no turn ever submitted.
+  const h = harnessFor(t)({});
+  const session = h.session();
+  await session.ensureConnected();
+  await idleDelayPasses(h, session);
+  await h.until(() => session.closed, 1);
+});
+
+test("the idle close arms again when no report turn ever comes", async (t) => {
+  const [first, notice] = splitBackground();
+  const h = harnessFor(t)({ turns: [first] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  h.clients[0]?.inject(notice); // a report turn is expected, but never sent in this test
+  await reportTurnNeverCame(h); // INJECTED_TURN_WAIT elapses, then the timer
+  await idleDelayPasses(h, session);
+  await h.until(() => session.closed, 1);
+});
+
+test("a model change with no effort does not clear the stored level", async (t) => {
+  const modelTurn = withResult(
+    sdkMessages("usage"),
+    "Set model to `Sonnet 5` for this session only",
+  );
+  const h = harnessFor(t)({ turns: [modelTurn] });
+  const session = h.session(); // opens the thread
+  h.state.setEffort(CHANNEL, THREAD, "high"); // stored from an earlier turn
+  await (await session.submit("/model sonnet")).done.wait();
+  assert.equal(thread(h).effort, "high"); // unknown, not cleared
+});
+
+test("an unrecognized stored effort is dropped not sent", async (t) => {
+  const h = harnessFor(t)({});
+  h.session(); // opens the thread
+  h.state.setEffort(CHANNEL, THREAD, "ultra"); // not one of the SDK's EffortLevel values
+  await h.session().ensureConnected();
+  assert.equal(h.clients[0]?.options.effort, null);
+});
+
+test("an idle closed session is evicted even with no further lookup", async (t) => {
+  const h = harnessFor(t)({ turns: [sdkMessages("tools")] });
+  const session = h.session();
+  await (await session.submit("hi")).done.wait();
+  await idleDelayPasses(h, session);
+  await h.until(() => h.clients[0]?.connected === false, 1);
+  const live = (h.manager as unknown as { sessions: Map<string, ThreadSession> }).sessions;
+  await h.until(() => !live.has(`${CHANNEL}\n${THREAD}`), 1);
+});
+
+test("the idle close does not fire while a plain turn runs", async (t) => {
+  // No approval at all this time: just a turn that has not finished yet.
+  const h = harnessFor(t)({ turns: [[]] }); // a turn with no result: stays "sent" forever
+  const session = h.session();
+  const turn = await session.submit("still working");
+  await h.idle();
+  await h.clock.advance(IDLE_CLOSE_SECONDS);
+  assert.ok(!session.closed);
+  assert.ok(!turn.done.isSet);
+});
+
+test("drain suppresses the idle close", async (t) => {
+  const h = harnessFor(t)({ turns: [sdkMessages("tools")] });
+  const session = h.session();
+  await (await session.submit("hi")).done.wait();
+  session.draining = true;
+  await idleDelayPasses(h, session);
+  assert.ok(!session.closed);
+});
+
+// D9 close ordering: close() must signal doneClosing even when a step inside it raises, the
+// predecessor chain must hold past an unconnected middle generation, submit's own awaits must
+// not be closeable under it, and a few more missed re-arm points.
+
+test("close sets done closing even if a step inside it raises", async (t) => {
+  const h = harnessFor(t)({});
+  const session = h.session();
+  await session.ensureConnected();
+  (session as unknown as { stopTaskReplies: () => Promise<void> }).stopTaskReplies = async () => {
+    throw new Error("boom");
+  };
+  await assert.rejects(session.close(), /boom/);
+  assert.ok(session.doneClosing.isSet);
+  assert.deepEqual(h.manager.sessionsOf(CHANNEL), []); // onClosed still ran too
+});
+
+test("close all waits for a predecessor evicted before it but still disconnecting", async (t) => {
+  // A (idle-closing, gated) is evicted by a lookup that builds B; B never connects. closeAll
+  // only ever sees B in its map, yet must still wait for A's own disconnect to finish.
+  const gate = new AsyncEvent();
+  const h = harnessFor(t)({ closeGate: gate });
+  const sessionA = h.session();
+  await sessionA.ensureConnected();
+  const closingA = sessionA.close();
+  await h.sleep(0.05); // A is now blocked inside the gated disconnect
+  assert.ok(sessionA.closed && h.clients[0]?.connected === true);
+  const sessionB = h.manager.get(CHANNEL, THREAD);
+  assert.ok(sessionB !== null && sessionB !== sessionA);
+  const closingAll = h.manager.closeAll();
+  const closingAllEnd = finishing(closingAll);
+  await h.sleep(0.05);
+  assert.ok(!closingAllEnd.done()); // chained through B, waiting on A's still-gated disconnect
+  gate.set();
+  await closingA;
+  await closingAll;
+  assert.equal(h.clients[0]?.connected, false);
+});
+
+test("a third generation session waits through an unconnected middle one", async (t) => {
+  // A disconnecting (gated); B is built as its replacement but closes before ever connecting
+  // (so it never itself waited on A); C must still wait for A, through B's own close().
+  const gate = new AsyncEvent();
+  const h = harnessFor(t)({ closeGate: gate }, { turns: [sdkMessages("tools")] });
+  const sessionA = h.session();
+  await sessionA.ensureConnected();
+  h.state.setSession(CHANNEL, THREAD, "prior");
+  const closingA = sessionA.close();
+  await h.sleep(0.05); // A is now blocked inside the gated disconnect
+  assert.ok(sessionA.closed && h.clients[0]?.connected === true);
+  const sessionB = h.manager.get(CHANNEL, THREAD);
+  assert.ok(sessionB !== null && sessionB !== sessionA);
+  const closingB = sessionB.close();
+  const closingBEnd = finishing(closingB);
+  await h.sleep(0.05);
+  assert.ok(!closingBEnd.done()); // B's own close is chained behind A's still-open disconnect
+  const sessionC = h.manager.get(CHANNEL, THREAD);
+  assert.ok(sessionC !== null && sessionC !== sessionA && sessionC !== sessionB);
+  const connectingC = sessionC.ensureConnected();
+  const connectingCEnd = finishing(connectingC);
+  await h.sleep(0.05);
+  assert.ok(!connectingCEnd.done()); // must not resume the same id while A is still exiting
+  assert.equal(h.clients.length, 1);
+  gate.set();
+  await closingA;
+  await closingB;
+  await connectingC;
+  assert.equal(h.clients.length, 2);
+  assert.equal(h.clients[1]?.options.resume, "prior");
+});
+
+test("the idle close cannot fire during submit s own awaits", async (t) => {
+  // Python slowed `submit`'s own chat.postMessage calls (through `_sink`) past the idle delay;
+  // making the reply waits for nothing here, so the test holds `sink` as the tests above do.
+  // Without the fix, the timer armed at submit's own entry would reset instead of staying
+  // cancelled, and fire while `submit` is still awaiting the reply.
+  const h = harnessFor(t)({ turns: [sdkMessages("tools"), sdkMessages("tools")] });
+  const open = new AsyncEvent();
+  open.set();
+  const held = new AsyncEvent();
+  const sinks = gatedSinks(t, [open, held]);
+  const session = h.session();
+  await (await session.submit("hi")).done.wait();
+  await h.idle();
+  const again = session.submit("again");
+  await h.until(() => sinks.entered === 2);
+  await h.idle(); // the timer starts on the next turn of the loop
+  await h.clock.advance(IDLE_CLOSE_SECONDS); // longer than the idle delay, inside the submit
+  assert.ok(!session.closed);
+  held.set();
+  const turn = await again;
+  await turn.done.wait();
+  assert.deepEqual(h.clients[0]?.queries, ["hi", "again"]);
+});
+
+test("the crash tail re arms the idle close", async (t) => {
+  const h = harnessFor(t)({ turns: [[...sdkMessages("tools").slice(0, 3), END_OF_STREAM]] });
+  const session = h.session();
+  await (await session.submit("first")).done.wait();
+  await h.until(() => inside(session).client === null, 1); // the reader's crash tail ran
+  await h.idle(); // the timer starts on the next turn of the loop
+  await h.clock.advance(IDLE_CLOSE_SECONDS);
+  await h.until(() => session.closed, 1); // ...and re-armed the timer there
+});
+
+test("a failed query re arms the idle close", async (t) => {
+  const h = harnessFor(t)({});
+  const session = h.session();
+  await session.ensureConnected();
+  at(h.clients, 0).send = async () => {
+    throw new Error("boom");
+  };
+  const turn = await session.submit("hi");
+  await turn.done.wait();
+  await h.idle(); // the timer starts on the next turn of the loop
+  await h.clock.advance(IDLE_CLOSE_SECONDS);
+  await h.until(() => session.closed, 1);
+});
+
+// The status reaction (D10): one on each session's root message, driven by `ThreadSession`
+// itself. `Harness.reactions` reads it from `FakeSlack.apiCalls`, never a session's own internals.
+
+/** The reactions that stand on the root message after every add and remove, in call order. */
+function onRoot(h: Harness): Set<string> {
+  const shown = new Set<string>();
+  for (const { method, args } of h.slack.apiCalls) {
+    if (method === "reactions.add") shown.add(String(args.name));
+    else if (method === "reactions.remove") shown.delete(String(args.name));
+  }
+  return shown;
+}
+
+test("a plain turn shows working then done", async (t) => {
+  const h = harnessFor(t)({ turns: [sdkMessages("tools")] });
+  const turn = await h.session().submit("list the files");
+  await turn.done.wait();
+  // `turn.done` is set (`settle`) before the sweep that checks whether the session is now
+  // idle enough for ✅ (both run in `finish`'s own `finally`, in that order).
+  await h.until(() => h.reactions().join() === [Status.WORKING, Status.DONE].join());
+});
+
+test("a turn with an approval shows waiting then working again", async (t) => {
+  const ask = canUseToolCall("Bash", { command: "ls" });
+  const h = harnessFor(t)({ turns: [[ask, ...sdkMessages("tools")]] });
+  const turn = await h.session().submit("list the files");
+  await h.until(() => pending(h.approvals).length > 0);
+  assert.deepEqual(h.reactions(), [Status.WORKING, Status.WAITING]);
+  resolve(h, APPROVE);
+  await turn.done.wait();
+  const expected = [Status.WORKING, Status.WAITING, Status.WORKING, Status.DONE];
+  await h.until(() => h.reactions().join() === expected.join());
+});
+
+test("a background task outliving the turn stays working until its report closes", async (t) => {
+  const [first, notice, injected] = splitBackground();
+  const h = harnessFor(t)({ turns: [first] });
+  await (await h.session().submit("start it")).done.wait();
+  // The turn itself ended, but the task it started still runs: no ✅ yet.
+  assert.deepEqual(h.reactions(), [Status.WORKING]);
+  h.clients[0]?.inject([...notice, ...injected]);
+  await h.until(() => isReport(h.bodies()[0] ?? ""));
+  await h.sleep(0.05);
+  assert.deepEqual(h.reactions(), [Status.WORKING, Status.DONE]);
+});
+
+test("a failed turn shows error", async (t) => {
+  const h = harnessFor(t)({});
+  const session = h.session();
+  await session.ensureConnected();
+  at(h.clients, 0).send = async () => {
+    throw new Error("boom");
+  };
+  const turn = await session.submit("hi");
+  await turn.done.wait();
+  assert.deepEqual(h.reactions(), [Status.WORKING, Status.ERROR]);
+});
+
+test("stop shows done", async (t) => {
+  const h = harnessFor(t)({
+    turns: [[canUseToolCall("Bash", { command: "rm -rf build" }), ...sdkMessages("interrupt")]],
+  });
+  const session = h.session();
+  const turn = await session.submit("clean");
+  await h.until(() => pending(h.approvals).length > 0);
+  assert.equal(await session.stop(), true);
+  await turn.done.wait();
+  // A stop the owner gave is not an error: ✅, and it stands through the turn's own tail.
+  assert.equal(h.reactions().at(-1), Status.DONE);
+  assert.equal(inside(session).errorStanding, false);
+  assert.equal(thread(h).status, null);
+});
+
+test("quick turn after stop ends on working", async (t) => {
+  // D10 item 1: `StatusReaction.current` only updates once its own `reactions.add` returns.
+  // A quick turn right after a stop can end (and try to react working, then done) before
+  // that slow round trip lands, so gating on `current` alone missed the standing ❌ and let
+  // an already-in-flight ⏳ add stick with nothing left to ever remove it.
+  const h = harnessFor(t)({
+    turns: [
+      [canUseToolCall("Bash", { command: "rm -rf build" }), ...sdkMessages("interrupt")],
+      sdkMessages("tools"),
+    ],
+  });
+  const session = h.session();
+  const turn = await session.submit("clean");
+  await h.until(() => pending(h.approvals).length > 0);
+  assert.equal(await session.stop(), true);
+  await turn.done.wait();
+  await h.until(() => h.reactions().at(-1) === Status.DONE);
+  // A Slack round trip slower than the turn itself: every add waits at the gate.
+  h.slack.gateMethod = "reactions.add";
+  const gate = armGate(h);
+  const quick = await session.submit("quick");
+  await quick.done.wait();
+  await h.sleep(0.8);
+  openGate(h, gate);
+  await h.sleep(0.8);
+  assert.deepEqual(onRoot(h), new Set([Status.DONE]));
+});
+
+test("a gone session shows error", async (t) => {
+  const h = harnessFor(t)({ startError: gone() });
+  h.session(); // opens the thread
+  h.state.setSession(CHANNEL, THREAD, "gone");
+  const turn = await h.session().submit("hello");
+  await turn.done.wait();
+  assert.equal(h.reactions().at(-1), Status.ERROR);
+});
+
+test("a drain that cuts a busy session shows error", async (t) => {
+  const running = sdkMessages("tools").slice(0, -1);
+  const h = harnessFor(t)({ turns: [running] });
+  const turn = await h.session().submit("first");
+  await h.until(() => h.clients.length > 0 && h.clients[0]?.queries.join() === "first");
+  const drain = startDrain(h);
+  await polled(h);
+  drain.cut.abort();
+  await drainEnds(h, drain);
+  assert.ok(!turn.done.isSet); // not settled by the drain itself
+  await h.manager.closeAll(); // the shutdown that follows a cut-short drain
+  assert.equal(h.reactions().at(-1), Status.ERROR);
+});
+
+test("work drain path leaves hourglass", async (t) => {
+  // D10 item 2: `work`'s own draining branch dropped a taken turn's prompt with `fail`'s
+  // `notify=False`, which never reacted at all: the ⏳ (or ✅, once the session read idle) a
+  // submit had already shown stood as if that turn had gone through, though it never did.
+  const h = harnessFor(t)({ turns: [sdkMessages("tools")] });
+  const session = h.session();
+  await (await session.submit("first")).done.wait();
+  inside(session).settled.clear(); // a report turn still in flight: the worker waits on it
+  const second = await session.submit("second");
+  await h.until(() => inside(session).taken !== null);
+  session.draining = true;
+  inside(session).settled.set();
+  await second.done.wait();
+  await session.close();
+  await session.doneClosing.wait();
+  assert.deepEqual(onRoot(h), new Set([Status.ERROR]));
+});
+
+test("close leaves latest closing showing a running shell", async (t) => {
+  // item 3/7: `setRunning("")` on the latest, already-closed-out reply only debounces; a
+  // shutdown's own event loop iteration ends right after `close()` returns, so a `later`
+  // still waiting on its own timer never gets to run, and the closing keeps a stale count.
+  const [first] = splitBackground();
+  const h = harnessFor(t)({ turns: [first, sdkMessages("tools")] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  await (await session.submit("next")).done.wait();
+  assert.equal(runningBlock(h.slack.messageBlocks().at(-1) ?? []), "⏳ 1 shell");
+  await session.close();
+  await session.doneClosing.wait();
+  const shown = h.slack.messageBlocks().map((blocks) => runningBlock(blocks));
+  assert.ok(shown.every((running) => running === null));
+});
+
+test("a top level status word gets no reaction", async (t) => {
+  const h = harnessFor(t)({});
+  await h.session().status();
+  assert.deepEqual(h.reactions(), []);
+});
+
+test("owner query crossing a task notification is answered once with no error", async (t) => {
+  // `settle`: the turn's start guessed Claude Code's own report (`injectedExpected`), but
+  // the result says a person asked it after all, with the owner's own turn still in `sent`
+  // to redirect it to. The turn itself succeeded: no ❌, and its answer, already in the
+  // misrouted reply, is that reply's own: the owner turn's own reply is never written.
+  const h = harnessFor(t)({ turns: [] });
+  const session = h.session();
+  const owner = await session.submit("what happened");
+  await h.until(() => h.clients.length > 0 && h.clients[0]?.queries.join() === "what happened");
+  inside(session).injectedExpected = true; // Claude Code's own report was also expected right now
+  h.clients[0]?.inject(sdkMessages("tools")); // the result: a genuine human turn after all
+  await owner.done.wait();
+  await h.sleep(0.1);
+  assert.deepEqual(h.reactions(), [Status.WORKING]); // no ❌: this turn actually succeeded
+  assert.ok(h.slack.streamTs.length === 1 && h.slack.postedTs.length === 0);
+  assert.equal(h.slack.pushes(), 1);
+});
+
+test("an abandon s error stands through a later unreported expiry", async (t) => {
+  // D10: `expireUnreported`'s own tail used to call `reactDoneIfIdle` unconditionally,
+  // flipping a standing ❌ (here, `abandon({error: true})`, a crashed CLI) back to ✅ once the
+  // session reads idle again, even though no new work ever started.
+  const [first, notice] = splitBackground();
+  const ended = notice.filter((item) => !isSystem(item, "task_notification"));
+  const h = harnessFor(t)({ turns: [first] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  h.clients[0]?.inject(ended); // the task's terminal update, no notification yet: unreported
+  await h.idle();
+  assert.ok(inside(session).unreported.size > 0); // `expireUnreported`'s own timer is now scheduled
+  h.clients[0]?.inject([END_OF_STREAM]); // the CLI process is gone
+  await h.until(() => inside(session).client === null);
+  assert.equal(h.reactions().at(-1), Status.ERROR);
+  await reportTurnNeverCame(h); // past INJECTED_TURN_WAIT: the expiry timer has now fired
+  assert.equal(h.reactions().at(-1), Status.ERROR);
+});
+
+test("a dropped queued turn with a running task gets a note and no reply", async (t) => {
+  // A restart drain drops the queued turn while a background task still runs (drain lets it
+  // keep running): the message gets no reply of its own; no turn runs, so one note names it.
+  const [first] = splitBackground();
+  const h = harnessFor(t)({ turns: [first] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  // Queued, and dropped before the worker takes it. Python's `await submit()` ran straight
+  // through, so the drop came in the same step; `submit` queues in its synchronous part for
+  // the same reason, and awaiting it first would let the worker take the turn meanwhile.
+  const queuing = session.submit("next");
+  const dropping = session.dropQueued({ error: true });
+  const second = await queuing;
+  await dropping;
+  await second.done.wait();
+  assert.equal(h.slack.streamTs.length, 1); // the running reply's stream is the only one
+  const [note, ...more] = h.slack.callsTo("chat.postMessage");
+  assert.equal(more.length, 0);
+  assert.ok(
+    String(note?.text).includes(
+      texts.fill(texts.NOT_SENT_ONE, { because: texts.BECAUSE_RESTARTED }),
+    ),
+  );
+});
+
+test("closing a session with only a running task left shows error", async (t) => {
+  // `busy` (active or sent turns) misses a task that outlived its own turn: `close()` must
+  // still react ❌ for cutting it short, or the ⏳ from the turn that started it never clears.
+  const [first] = splitBackground();
+  const h = harnessFor(t)({ turns: [first] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  assert.deepEqual(h.reactions(), [Status.WORKING]); // the task still runs: no ✅ yet
+  assert.equal(session.busy, false); // the bug: `busy` alone would miss the running task
+  await session.close();
+  assert.deepEqual(h.reactions(), [Status.WORKING, Status.ERROR]);
+});
+
+test("a turn that finishes after a restart drain dropped a queued one ends on done", async (t) => {
+  // A restart drain drops a queued turn (❌) while the running turn waits on an approval the
+  // owner can still answer; the answer shows ⏳ again, and when that turn ends the root reads
+  // ✅: the ❌ stood only until the next state was asked for.
+  const ask = canUseToolCall("Bash", { command: "ls" });
+  const messages = sdkMessages("tools");
+  const h = harnessFor(t)({ turns: [[...messages.slice(0, 13), ask, ...messages.slice(13)]] });
+  const session = h.session();
+  const first = await session.submit("first");
+  const second = await session.submit("second");
+  await h.until(() => pending(h.approvals).length > 0);
+  const drain = startDrain(h);
+  await second.done.wait();
+  resolve(h, APPROVE);
+  await first.done.wait();
+  await drainEnds(h, drain);
+  await h.manager.closeAll();
+  await h.sleep(0.2);
+  assert.ok(h.reactions().includes(Status.ERROR));
+  assert.equal(h.reactions().at(-1), Status.DONE);
+});
+
+test("a close right after a turn ends leaves done alone on the root", async (t) => {
+  // Issue #104: the session reads idle while its reader is still between the two calls that
+  // move ⏳ to ✅. A restart's drain closes it there, and the close cancels the reader.
+  const h = harnessFor(t)({ turns: [sdkMessages("tools")] });
+  const session = h.session();
+  // A Slack round trip that is slow for the ⏳ removal only: held at the gate until the close
+  // has begun, where Python slept 0.3 s. The fake's gate holds a method whatever it removes,
+  // and the first removal of a thread's root is a strip of the other names, so this one is
+  // held by name.
+  const gate = new AsyncEvent();
+  const apiCall = h.slack.apiCall.bind(h.slack);
+  h.slack.apiCall = (method, options) =>
+    method === "reactions.remove" && options?.name === Status.WORKING
+      ? gate.wait().then(() => apiCall(method, options))
+      : apiCall(method, options);
+  await session.submit("list the files");
+  await h.until(() => h.reactions().includes(Status.DONE) && session.restartReady);
+  const closing = session.close();
+  await h.idle();
+  gate.set();
+  await closing;
+  await h.idle();
+  const removed = h.slack.callsTo("reactions.remove").map((args) => String(args.name));
+  assert.ok(removed.includes(Status.WORKING));
+  assert.ok(!removed.slice(removed.indexOf(Status.WORKING)).includes(Status.DONE));
+});
+
+// --- D8: hold reactions (Phase 3 final fix wave) ---
+
+test("hold end reacts from the thread s history after a client reset", async (t) => {
+  // `client === null` alone is not "brand-new thread": a D9 idle close or a restart evicts the
+  // object and hands the thread a fresh one on its next lookup, `client` reset but its
+  // history (a stored session id) intact.
+  const h = harnessFor(t)({ turns: [sdkMessages("tools")] });
+  const session = h.session();
+  await (await session.submit("list the files")).done.wait();
+  assert.notEqual(thread(h).sessionId, null);
+  inside(session).client = null; // what a D9 idle close or a restart hands the thread's next lookup
+  session.holdStart();
+  await h.idle(); // let the WAITING reaction's fire-and-forget task run
+  await session.holdEnd({ continued: false });
+  await h.until(() => h.reactions().at(-1) === Status.DONE);
+});
+
+test("hold end clears the reaction for a thread that never ran", async (t) => {
+  const h = harnessFor(t)({});
+  const session = h.session();
+  assert.equal(thread(h).sessionId, null);
+  session.holdStart();
+  await h.until(() => onRoot(h).has(Status.WAITING));
+  await session.holdEnd({ continued: false });
+  await h.until(() => onRoot(h).size === 0);
+});
+
+test("hold keeps a standing error and cancel restores it", async (t) => {
+  // `holdStart`'s own WAITING reaction must not reset `errorStanding` (it did, through
+  // `react`), or Cancel right after turns a standing ❌ back into ✅: a hold is not new work.
+  // The CLI process is gone in the middle of the turn: `abandon({error: true})`. One lost while
+  // the session is idle leaves no cross (issue #202).
+  const h = harnessFor(t)({ turns: [[...sdkMessages("tools").slice(0, 21), END_OF_STREAM]] });
+  const session = h.session();
+  await (await session.submit("go")).done.wait();
+  await h.until(() => inside(session).client === null);
+  await h.until(() => h.reactions().at(-1) === Status.ERROR);
+  session.holdStart();
+  assert.equal(inside(session).errorStanding, true); // not reset by the WAITING reaction
+  await h.idle();
+  await session.holdEnd({ continued: false });
+  await h.until(() => h.reactions().at(-1) === Status.ERROR); // Cancel restores it, not ✅
+  await h.idle();
+  assert.equal(h.reactions().at(-1), Status.ERROR);
+});
+
+test("cancel while another approval is open shows waiting not working", async (t) => {
+  // holdEnd's not-idle branch reacted WORKING unconditionally; a parallel approval this
+  // thread still holds must keep showing ✋, not ⏳ (`reactWaitingOrWorking`).
+  const h = harnessFor(t)({
+    turns: [[canUseToolCall("Bash", { command: "ls" }), ...sdkMessages("tools")]],
+  });
+  const session = h.session();
+  const turn = await session.submit("list the files");
+  await h.until(() => pending(h.approvals).length > 0);
+  assert.ok(session.waitingForOwner); // the approval is open
+  session.holdStart();
+  await h.idle();
+  await session.holdEnd({ continued: false });
+  await h.idle();
+  assert.equal(h.reactions().at(-1), Status.WAITING); // not WORKING: the approval is still open
+  resolve(h, APPROVE);
+  await turn.done.wait();
+});
+
+test("working in does not resolve a path on every lookup", async (t) => {
+  // `workingIn` used to resolve the path of every live session on every message; each
+  // session's folder is now resolved once, at construction. Python patched `Path.resolve`;
+  // here the `realpathSync` that `resolvePath` calls is replaced and the built-ins' ES
+  // bindings are synced to it.
+  const h = harnessFor(t)({
+    turns: [[canUseToolCall("Bash", { command: "ls" }), ...sdkMessages("tools")]],
+  });
+  const first = h.session(THREAD);
+  const second = h.session(OTHER_THREAD);
+  await first.submit("clean");
+  await h.until(() => pending(h.approvals).length > 0); // first is genuinely busy now
+  const real = fs.realpathSync;
+  fs.realpathSync = Object.assign(
+    () => {
+      throw new Error("workingIn must not resolve a path on every lookup");
+    },
+    { native: real.native },
+  );
+  syncBuiltinESMExports();
+  try {
+    assert.equal(h.manager.workingIn({ besides: second }), first);
+  } finally {
+    fs.realpathSync = real;
+    syncBuiltinESMExports();
+  }
+  resolve(h, APPROVE);
+});
+
+test("the manager names the threads with a live session", async (t) => {
+  const h = harnessFor(t)({ turns: [sdkMessages("tools")] });
+  assert.deepEqual(h.manager.liveThreads(), []);
+  const session = h.session();
+  assert.deepEqual(h.manager.liveThreads(), [[CHANNEL, THREAD]]);
+  await session.close();
+  assert.deepEqual(h.manager.liveThreads(), []); // a closed one is no longer in the way
+});
+
+test("a stop says what it waits for in a message where slack refuses a status", async (t) => {
+  // The token cannot set a thread status: Slack refused the first call, and the flag that
+  // says so is the process's (Python set `ThreadStatus._refused` directly).
+  const [first] = splitBackground();
+  const h = harnessFor(t)({ turns: [first] });
+  h.slack.responses["assistant.threads.setStatus"] = rejected("missing_scope");
+  await (await h.session().submit("start it")).done.wait();
+  await h.until(() => ThreadStatus.refused());
+  const statusCalls = h.slack.callsTo("assistant.threads.setStatus").length;
+  const drain = startDrain(h);
+  await polled(h);
+  await polled(h);
+  assert.ok(!drain.done());
+  const posted = h.slack.callsTo("chat.postMessage").map((args) => String(args.text));
+  assert.deepEqual(posted, [texts.fill(texts.RESTART_WAITS_MESSAGE, { counts: "1 shell" })]); // once, however long
+  assert.equal(h.slack.callsTo("assistant.threads.setStatus").length, statusCalls);
+  drain.cut.abort();
+  await drain.promise;
+});
+
+test("a post outside the session sets its thread status again", async (t) => {
+  const h = harnessFor(t)({}); // a turn that never answers: `Working…` shows
+  const session = h.session();
+  await session.submit("hello");
+  await h.until(() => statusLines(h).length > 0);
+  await h.idle();
+  const shown = statusLines(h).length;
+  h.manager.wrote(CHANNEL, "1790000000.999999"); // no live session there: nothing to set
+  await h.sleep(1);
+  assert.equal(statusLines(h).length, shown);
+  h.manager.wrote(CHANNEL, THREAD);
+  await h.until(() => statusLines(h).length > shown, 3); // set again within 2 s of the write
+});
+
+test("the commands a subagent runs arm no wait for a report turn", async (t) => {
+  // subagent-nested-command.jsonl: each long command the agent runs gets a task of its own on
+  // the main stream, started by a call that has a parent. Claude Code reports it to the agent,
+  // so no turn follows it.
+  const waits = expectedTurns(t);
+  const warnings = logged(t, "warning");
+  const [first, work, , ends] = splitNestedCommand();
+  const h = harnessFor(t)({ turns: [first] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  const agentTasks = [...inside(session).taskReplies.keys()];
+  assert.equal(agentTasks.length, 1);
+  h.clients[0]?.inject(work.slice(0, at(ends, 1) + 1));
+  await reportTurnNeverCame(h); // longer than the wait: nothing was armed to fire in it
+  assert.ok(waits.entered === 0 && inside(session).expiry === null);
+  assert.ok(inside(session).settled.isSet && !inside(session).injectedExpected);
+  assert.ok(!warnings.some((line) => line.includes("no turn followed a task notification")));
+  assert.deepEqual([...inside(session).tasks.keys()], agentTasks);
+  assert.deepEqual([...inside(session).taskReplies.keys()], agentTasks);
+  assert.ok(
+    inside(session).ended.length === 0 &&
+      inside(session).unreported.size === 0 &&
+      inside(session).held.length === 0,
+  );
+});
+
+test("an owner prompt is not held while a subagent s command ends", async (t) => {
+  const [first, work, , ends] = splitNestedCommand();
+  const h = harnessFor(t)({ turns: [first] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  h.clients[0]?.inject(work.slice(0, at(ends, 0) + 1));
+  await h.sleep(0.05);
+  await session.submit("and now?");
+  // INJECTED_TURN_WAIT is the production 30 s and the sessions' clock stays put: a held prompt
+  // would not reach the client here
+  await h.until(() => h.clients[0]?.queries.join("\n") === "start it\nand now?", 1.0);
+});
+
+test("a subagent s commands have no card and no end line in the report", async (t) => {
+  const waits = expectedTurns(t);
+  const [first, work, report] = splitNestedCommand();
+  const h = harnessFor(t)({ turns: [first] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  h.clients[0]?.inject(work);
+  h.clients[0]?.inject(report);
+  await h.until(() => session.idle && h.reactions().at(-1) === Status.DONE, 3.0);
+  assert.equal(waits.entered, 1); // the agent's own notification
+  const bodies = h.bodies(); // D1: the report renders into the reply that started the agent
+  assert.equal(bodies.length, 1);
+  const body = at(bodies, 0);
+  assert.ok(body.split("✓ ").length - 1 === 1 && body.includes('✓ Agent "'));
+  const cards = h.slack.messageCards(); // the two commands show on the agent's card
+  assert.equal(cards.length, 1);
+  assert.equal(at(cards, 0).length, 1);
+  const card = at(at(cards, 0), 0);
+  assert.ok(String(card.title).endsWith("· 2 calls") && card.status === "complete");
+  assert.ok(noStreamOpen(h));
+});
+
+test("a subagent s command whose reply is not tracked is held as before", async (t) => {
+  // A restart or an idle close dropped the reply that holds the agent's call: the session cannot
+  // tell the command's task is nested, and treats it as any task of no known reply (held, and a
+  // report turn expected). Ignoring it instead would drop a top-level task of an unknown call.
+  const waits = expectedTurns(t);
+  const [first, work, , ends] = splitNestedCommand();
+  const h = harnessFor(t)({ turns: [first] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  inside(session).taskReplies.clear();
+  const nested = recordOf(at(work, at(ends, 0)))?.task_id; // the frames of the first command's task alone
+  h.clients[0]?.inject(
+    work.slice(0, at(ends, 0) + 1).filter((item) => recordOf(item)?.task_id === nested),
+  );
+  await h.until(() => waits.entered === 1);
+  assert.ok(
+    inside(session).held.some((event) => (event as { type: string }).type === "task_ended"),
+  );
+});
+
+test("a subagent s command that outlives its call is a running shell", async (t) => {
+  // subagent-nested-background.jsonl: the command runs in the background of a subagent that
+  // ends (and reports) before it does; its own end follows the report turn.
+  const [first] = splitNestedBackground();
+  const h = harnessFor(t)({ turns: [first] });
+  const session = h.session();
+  const [command] = await nestedBackgroundRunning(h, session);
+  await h.until(() => inside(session).taskReplies.has(command) && inside(session).active === null);
+  await h.sleep(0.1);
+  assert.ok(
+    session.runningKinds === "1 shell" && inside(session).runningTaskIds().includes(command),
+  );
+  assert.ok(!session.idle && !session.restartReady);
+  assert.equal(h.reactions().at(-1), Status.WORKING); // the first report turn did not end it
+  const drain = startDrain(h);
+  await polled(h);
+  assert.ok(!drain.done()); // a drain waits for the command
+  drain.cut.abort();
+  await drain.promise;
+  assert.equal(await session.stop(), true);
+  assert.deepEqual(h.clients[0]?.stoppedTasks, [command]);
+});
+
+test("a background subagent s api error shows on its card and not in the text", async (t) => {
+  // subagent-api-error.jsonl (issue #161): a background subagent whose requests all fail,
+  // after the main turn's result; then Claude Code's report turn.
+  const [first, later] = splitTurns(sdkMessages("subagent-api-error")) as [Item[], Item[]];
+  const failed = later.filter((item) => isSystem(item, "task_notification"));
+  assert.equal(failed.length, 1);
+  assert.equal(recordOf(at(failed, 0))?.status, "failed");
+  const reason = "Agent terminated early due to an API error: API Error: 529";
+  assert.ok(String(recordOf(at(failed, 0))?.summary).startsWith(reason));
+  const h = harnessFor(t)({ turns: [first] });
+  const session = h.session();
+  const log = captureLog();
+  try {
+    await (await session.submit("start it")).done.wait();
+    h.clients[0]?.inject(later);
+    await h.until(() => h.reactions().at(-1) === Status.DONE && session.idle);
+  } finally {
+    log.stop();
+  }
+  const texts_ = h.slack.streamTexts();
+  assert.equal(texts_.length, 1);
+  const text = String(texts_[0]);
+  assert.ok(!text.includes("API Error")); // not at the top level, as no other text of a subagent is
+  assert.ok(text.split("\n").includes('✗ Agent "Synthetic subtask" failed'));
+  const card = at(taskCards(h), -1);
+  assert.ok(card.status === "error" && String(card.output).startsWith(reason));
+  assert.ok(!h.reactions().includes(Status.ERROR)); // the main turn and its report both succeeded
+  assert.deepEqual(
+    log.entries.filter((entry) => entry.level === "WARNING").map((entry) => entry.message),
+    [`Claude Code reported a subagent's error in ${CHANNEL}/${THREAD}: server_error`],
+  );
+});
+
+test("a foreground subagent s api error shows on its card", async (t) => {
+  // subagent-api-error-foreground.jsonl (CLI 2.1.286): the Agent call is asked to run in the
+  // foreground. No message with `error` is forwarded then: the task is notified as failed and
+  // the call's result, an error, says why.
+  const messages = sdkMessages("subagent-api-error-foreground");
+  assert.ok(!messages.some((item) => isRecord(item, "assistant") && recordOf(item)?.error));
+  const h = harnessFor(t)({ turns: [messages] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  await h.until(() => h.reactions().at(-1) === Status.DONE);
+  const card = at(taskCards(h), -1);
+  // One card for the whole run: the fold puts a failed call's output after its title.
+  assert.equal(card.status, "error");
+  assert.ok(
+    String(card.title).includes("Agent terminated early due to an API error: API Error: 529"),
+  );
+  assert.ok(!h.slack.streamTexts().join("").includes("API Error"));
+});
+
+test("a reply s end that brings no checkmark logs what held it", async (t) => {
+  // Issue #160: a root left on ⏳ could not be traced, since the check returned in silence.
+  const [first] = splitBackground();
+  const h = harnessFor(t)({ turns: [first] });
+  const log = captureLog();
+  try {
+    await (await h.session().submit("start it")).done.wait();
+    await h.sleep(0.1);
+  } finally {
+    log.stop();
+  }
+  const held = log.entries
+    .map((entry) => entry.message)
+    .filter((line) => line.includes("no done reaction"));
+  assert.ok(held.length > 0 && held.every((line) => line.includes("running=1 shell"))); // the command still runs
+  assert.equal(h.reactions().at(-1), Status.WORKING);
+});
+
+test("the reply is not ended while its turn is still active", async (t) => {
+  const [head, commandEnd, tail] = nestedBackgroundEndingMidTurn();
+  const h = harnessFor(t)({ turns: [[...head, ...commandEnd]] });
+  const session = h.session();
+  const turn = await session.submit("start it");
+  await h.until(() => h.slack.callsTo("chat.startStream").length > 0);
+  await h.sleep(0.2);
+  // The turn has no result yet: the end of the subagent's command may not end its reply.
+  assert.ok(inside(session).active !== null && !turn.done.isSet);
+  assert.deepEqual(h.slack.callsTo("chat.stopStream"), []);
+
+  h.clients[0]?.inject(tail);
+  await turn.done.wait();
+  await h.until(() => h.reactions().at(-1) === Status.DONE);
+  assert.deepEqual(footerWrites(h), ["chat.stopStream"]); // ended once, by its own turn, with the footer
+});
+
+test("a recorded turn that outlives its subagent s command ends once with its footer", async (t) => {
+  // subagent-nested-background-mid-turn.jsonl, in the order the CLI sent it (issue #149): the
+  // command a subagent left running ends, and is notified, while the owner's turn still runs
+  // a foreground command of its own; the agent then ends a second time and a report follows.
+  const [first, later] = splitTurns(sdkMessages("subagent-nested-background-mid-turn")) as [
+    Item[],
+    Item[],
+  ];
+  const result = first.findIndex(isResult);
+  const endedMidTurn = first
+    .slice(0, result)
+    .filter((item) => isSystem(item, "task_notification") && recordOf(item)?.status === "completed")
+    .map((item) => recordOf(item)?.task_id);
+  assert.equal(endedMidTurn.length, 3); // the agent, its command, the turn's own command
+  const h = harnessFor(t)({ turns: [first] });
+  const session = h.session();
+  await (await session.submit("start it")).done.wait();
+  await h.until(() => h.reactions().at(-1) === Status.DONE);
+  assert.deepEqual(footerWrites(h).slice(0, 1), ["chat.stopStream"]); // the footer rode on the stream's stop
+  assert.equal(h.slack.callsTo("chat.stopStream").length, 1); // at the turn's end, not before
+  assert.deepEqual(h.slack.callsTo("chat.postMessage"), []); // no closing message of its own
+
+  h.clients[0]?.inject(later); // the agent's second end, then Claude Code's report turn
+  await h.until(() => h.slack.callsTo("chat.stopStream").length === 2);
+  await h.until(() => h.reactions().at(-1) === Status.DONE && session.idle);
+  const stops = h.slack.callsTo("chat.stopStream");
+  assert.ok(
+    stops.every((stop) =>
+      blocksOf(stop).some((block) => block.type === "divider" && Object.keys(block).length === 1),
+    ),
+  );
+  assert.deepEqual(h.slack.callsTo("chat.postMessage"), []);
+});
+
+test("a subagent s command and the agent s second end close the reply as before", async (t) => {
+  const [first] = splitNestedBackground();
+  const h = harnessFor(t)({ turns: [first] });
+  const session = h.session();
+  const [command, tail, reportTwo] = await nestedBackgroundRunning(h, session);
+  await h.until(() => inside(session).taskReplies.has(command) && inside(session).active === null);
+  h.clients[0]?.inject(tail);
+  h.clients[0]?.inject(reportTwo);
+  await h.until(() => session.idle && h.reactions().at(-1) === Status.DONE, 3.0);
+  assert.ok(session.runningKinds === "" && inside(session).runningTaskIds().length === 0);
+  assert.equal(inside(session).unlanded.size, 0);
+  assert.ok(noStreamOpen(h));
+  assert.deepEqual(
+    h.cards().map((card) => card.status),
+    ["complete", "complete"],
+  );
+  assert.equal(h.slack.streamTs.length, 1); // every report rendered into the reply that began it
+});
+
+test("a posted and a removed request are logged by id and age only", async (t) => {
+  // Issue #71: the push of a request is matched to its timing from the log.
+  const recorded = recordedQuestion();
+  const ask = canUseToolCall("Bash", { command: "SECRET-COMMAND-TEXT" });
+  const question = canUseToolCall(recorded.toolName, recorded.input, "toolu_fake_2");
+  const h = harnessFor(t)({ turns: [[ask, question, ...sdkMessages("tools")]] });
+  const log = captureLog();
+  let turn: Awaited<ReturnType<ThreadSession["submit"]>>;
+  let approvalTs: string | undefined;
+  let questionTs: string | undefined;
+  try {
+    const session = h.session();
+    turn = await session.submit("SECRET-PROMPT-CONTENT");
+    await h.until(() => pending(h.approvals).length > 0);
+    approvalTs = h.slack.postedTs.at(-1);
+    resolve(h, APPROVE);
+    await h.until(() => pending(h.approvals).length > 0);
+    questionTs = h.slack.postedTs.at(-1);
+    assert.equal(await session.stop(), true);
+    await session.stopLanded();
+    await turn.done.wait();
+    await h.until(() => log.entries.some((entry) => entry.message.startsWith("removed a request")));
+  } finally {
+    log.stop();
+  }
+  const lines = log.entries.map((entry) => entry.message);
+  assert.ok(
+    lines.includes(`posted an approval request in ${CHANNEL}/${THREAD}: message ${approvalTs}`),
+  );
+  assert.ok(
+    lines.includes(`posted a question request in ${CHANNEL}/${THREAD}: message ${questionTs}`),
+  );
+  const removed = lines.filter((line) => line.startsWith("removed a request"));
+  assert.equal(removed.length, 1);
+  assert.ok(
+    String(removed[0]).startsWith(`removed a request in ${CHANNEL}: message ${questionTs}, `),
+  );
+  assert.ok(String(removed[0]).endsWith("s after it was posted"));
+  const everything = log.entries.map((entry) => entry.message).join("\n");
+  assert.ok(!everything.includes("SECRET-PROMPT-CONTENT"));
+  assert.ok(!everything.includes("SECRET-COMMAND-TEXT"));
 });

@@ -611,12 +611,15 @@ export class Harness {
    * Wait for a condition on the fakes, as Python's `until` polled it: what is ready runs, and
    * Slack's clock moves on a hundredth of a second at a time, for two seconds at most, so a
    * reply's debounce passes as it did while Python polled. The sessions' clock stays put.
+   * Each step also yields a moment of real time: some of what a test waits for ends in real
+   * file reads and a `git` subprocess, and a loaded machine must not use up the steps first.
    */
   async until(condition: () => boolean, limit = 2.0): Promise<void> {
     await this.idle();
     for (let waited = 0; !condition(); waited += 0.01) {
       if (waited >= limit) throw new Error("the condition never held");
       await this.slackClock.advance(0.01);
+      if (!condition()) await new Promise<void>((resolve) => setTimeout(resolve, 2));
     }
   }
 }
@@ -628,7 +631,7 @@ export class Harness {
 export function harnessFor(
   t: TestContext,
   options: HarnessOptions = {},
-): (...scripts: Script[]) => Harness {
+): ((...scripts: Script[]) => Harness) & { readonly tmpPath: string } {
   const made: Harness[] = [];
   const slack = new FakeSlack();
   const tmpPath = realpathSync(mkdtempSync(join(tmpdir(), "awd-sessions-")));
@@ -637,14 +640,24 @@ export function harnessFor(
   // The daemon's log stays out of the test report, as pytest kept it: a test that reads a line
   // replaces the logger's method (`mock.method`), which this does not touch.
   const writer = setWriter(() => {});
+  // A timer that keeps the loop alive for the test's duration: on Node 22 a test that awaits
+  // something which never comes, with only unref'd timers pending, lets the process finish and
+  // cancels the rest of the file. With this it waits for the runner's own timeout instead.
+  const guard = setInterval(() => {}, 1_000);
   t.after(async () => {
+    clearInterval(guard);
     for (const harness of made) await harness.manager.closeAll();
     rmSync(tmpPath, { recursive: true, force: true });
     setWriter(writer);
   });
-  return (...scripts) => {
-    const harness = new Harness(slack, tmpPath, scripts, options);
-    made.push(harness);
-    return harness;
-  };
+  // `tmpPath` is there before any harness, for a test that arranges the folder first (Python's
+  // `tmp_path` fixture, which `repo` and the harness shared).
+  return Object.assign(
+    (...scripts: Script[]) => {
+      const harness = new Harness(slack, tmpPath, scripts, options);
+      made.push(harness);
+      return harness;
+    },
+    { tmpPath },
+  );
 }

@@ -66,6 +66,8 @@ export interface Inside {
   idleTimerCheck(): void;
   reactDoneIfIdle(signal?: AbortSignal): Promise<void>;
   threadLine(): readonly [string, string];
+  runningTaskIds(): string[];
+  runningCounts(): string;
 }
 
 export function inside(session: ThreadSession): Inside {
