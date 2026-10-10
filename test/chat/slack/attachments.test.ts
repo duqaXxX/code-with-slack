@@ -371,3 +371,96 @@ test("a size shown in megabytes rounds a tie to even, as Python does", () => {
     texts.fill(texts.UPLOAD_FILE_SIZE, { size: "100.2MB", limit: "100.0MB" }),
   );
 });
+
+// Review round 2026-10-10: a declared size that is not a finite non-negative integer, as a number
+// or as ASCII digits, is refused. Python's `int()` raised on most of these, which dropped the
+// message; on `"999_999_999"` and on non-ASCII digits it read a number (a refusal for the first
+// because it is over the limits, none for the second). Here every one is refused with the text of
+// a file awaydesk cannot take, the closest existing one, since no size can be shown.
+const UNREADABLE_SIZES: Array<[string, unknown]> = [
+  ["abc", "abc"],
+  ["Infinity", "Infinity"],
+  ["Infinity as a number", Number.POSITIVE_INFINITY],
+  ["underscores", "999_999_999"],
+  ["arabic-indic digits", "٣٤"],
+  ["exponent", "1e3"],
+  ["fraction", "1.5"],
+  ["fraction as a number", 1.5],
+  ["negative", -5],
+  ["negative as a string", "-5"],
+  ["padded", " 12 "],
+  ["plus sign", "+5"],
+  ["true", true],
+  ["list", [1]],
+  ["object", { a: 1 }],
+];
+
+for (const [label, size] of UNREADABLE_SIZES) {
+  test(`a size that is not a whole number of bytes is refused [${label}]`, () => {
+    assert.equal(refusal(shared("image", { size })), texts.UPLOAD_NOT_SHARED);
+    assert.equal(refusal(shared("snippet", { size })), texts.UPLOAD_NOT_SHARED);
+  });
+
+  test(`a size that is not a whole number of bytes refuses the images together [${label}]`, () => {
+    const image = shared("image", { size, name: "photo & co.png" });
+    assert.equal(
+      imagesRefusal([image]),
+      texts.fill(texts.UPLOAD_FAILED, {
+        name: "photo &amp; co.png",
+        reason: texts.UPLOAD_NOT_SHARED,
+      }),
+    );
+  });
+}
+
+test("one unreadable size among images is refused whatever the others weigh", () => {
+  const small = shared("image", { size: 1_000 });
+  const odd = shared("image", { size: "abc", name: "odd.png" });
+  assert.equal(
+    imagesRefusal([small, odd]),
+    texts.fill(texts.UPLOAD_FAILED, { name: "odd.png", reason: texts.UPLOAD_NOT_SHARED }),
+  );
+});
+
+test("a file whose size is unreadable and has no name is called by its id", () => {
+  const { name: _name, ...image } = shared("image", { size: "abc", id: "F000FILE" });
+  assert.equal(
+    imagesRefusal([image]),
+    texts.fill(texts.UPLOAD_FAILED, { name: "F000FILE", reason: texts.UPLOAD_NOT_SHARED }),
+  );
+});
+
+// Python: an absent or false size is 0, and the digits of a string are the size.
+const READABLE_SIZES: Array<[string, unknown, string | null]> = [
+  ["missing", undefined, null],
+  ["null", null, null],
+  ["empty string", "", null],
+  ["zero", 0, null],
+  ["digits", "1000", null],
+  ["over the limit as a number", 30_000_000, "28.6MB"],
+  ["over the limit as digits", "30000000", "28.6MB"],
+];
+
+for (const [label, size, shown] of READABLE_SIZES) {
+  test(`a readable size is checked as Python did [${label}]`, () => {
+    const expected =
+      shown === null ? null : texts.fill(texts.UPLOAD_IMAGE_SIZE, { size: shown, limit: "7.2MB" });
+    assert.equal(refusal(shared("image", { size })), expected);
+    assert.equal(refusal(shared("snippet", { size })), null);
+  });
+}
+
+test("a size too large for a double keeps its digits, as Python shows them", () => {
+  // Python: int("9" * 30) / (1024 * 1024) formats as 953674316406250018963456.0.
+  const shown = "953674316406250018963456.0MB";
+  for (const size of ["9".repeat(30), 1e30]) {
+    assert.equal(
+      refusal(shared("image", { size })),
+      texts.fill(texts.UPLOAD_IMAGE_SIZE, { size: shown, limit: "7.2MB" }),
+    );
+    assert.equal(
+      refusal(shared("snippet", { size })),
+      texts.fill(texts.UPLOAD_FILE_SIZE, { size: shown, limit: "100.0MB" }),
+    );
+  }
+});

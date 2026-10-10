@@ -1,8 +1,46 @@
-/** One daemon at a time: Socket Mode spreads events across every open connection. */
+/**
+ * One daemon at a time: Socket Mode spreads events across every open connection.
+ *
+ * What holds, by platform (`singleInstance` picks the mechanism):
+ *
+ * - macOS, the only supported host: the lock is the open file description of the configuration
+ *   directory itself, opened with `O_EXLOCK | O_NONBLOCK`. That is `flock(LOCK_EX | LOCK_NB)` on
+ *   the directory, exactly the lock the Python daemon takes, so a Python daemon and this one
+ *   refuse each other. It adds no file, and the kernel drops it when the process dies, a killed
+ *   one included, and whatever child processes outlive it (the descriptor is close-on-exec).
+ *   Renaming or removing `lock.sock` or any other file in the directory changes nothing.
+ * - Linux: a listening Unix socket `lock.sock` in the directory, with `lock.sock.claim` taken
+ *   around every start so that the recovery of a stale socket is never raced. Linux has no
+ *   `O_EXLOCK`, and Node has no `flock`. This lock does not exclude the Python daemon, which
+ *   holds a `flock` on the directory, and a path-named lock has one more limit: removing
+ *   `lock.sock` under a live holder lets a second start in, since the new socket is a different
+ *   file. A claim file left behind blocks a start for at most `CLAIM_STALE_MS`.
+ * - Windows: a named pipe derived from the directory's real path. The system drops it with its
+ *   process and refuses a second one of the same name; no claim file is involved. It does not
+ *   exclude the Python daemon either.
+ */
 import { createHash } from "node:crypto";
-import { chmodSync, lstatSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  lstatSync,
+  openSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import net from "node:net";
 import { join } from "node:path";
+
+// `O_EXLOCK` of macOS's `open(2)`: "atomically obtain an exclusive lock", with flock(2) semantics;
+// `#define O_EXLOCK 0x00000020` in `sys/fcntl.h` of the MacOSX SDK (`man 2 open` and that header,
+// read on 2026-10-10). Node's `fs.constants` does not export it and Linux has no such flag; Node
+// hands the number to `open(2)` through libuv. Measured on macOS the same day, on Node 22 and 26:
+// it conflicts with Python's `fcntl.flock(fd, LOCK_EX | LOCK_NB)` on the directory in both
+// directions, failing with `EAGAIN` (macOS's `EWOULDBLOCK`, which `open(2)` documents).
+const O_EXLOCK = 0x20;
 
 // A Unix socket path must fit `sun_path`: 104 bytes on macOS and the BSDs, 108 on Linux, one of
 // them the terminating NUL.
@@ -54,8 +92,10 @@ function lockAddress(directory: string): string {
 }
 
 /** Listens on `address`; resolves to the server, rejects with the listen error (`EADDRINUSE`...). */
-function listen(address: string): Promise<net.Server> {
-  return new Promise((resolve, reject) => {
+export type ListenFn = (address: string) => Promise<net.Server>;
+
+export const listenLocal: ListenFn = (address) =>
+  new Promise((resolve, reject) => {
     // The lock accepts no data: whoever connects is told nothing and dropped at once.
     const server = net.createServer((connection) => connection.destroy());
     server.once("error", reject);
@@ -64,7 +104,6 @@ function listen(address: string): Promise<net.Server> {
       resolve(server);
     });
   });
-}
 
 /** True when a process accepts connections at `path`, false when nothing is listening there. */
 function accepts(path: string): Promise<boolean> {
@@ -83,22 +122,17 @@ function accepts(path: string): Promise<boolean> {
   });
 }
 
-/** True when a process with this pid exists (one of another user counts as existing). */
-function processExists(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return errorCode(error) !== "ESRCH";
-  }
-}
+/** A claim older than this by its mtime is dead: a recovery takes milliseconds. */
+export const CLAIM_STALE_MS = 5_000;
 
 /**
- * Takes the right to remove a stale socket file: an exclusive create of `claim`, holding this
- * pid. A claim left by a process that no longer exists (it died in the few milliseconds of its
- * recovery) is cleared and taken once more.
+ * Takes the claim around a start: an exclusive create of `claim`. A claim file older than
+ * `CLAIM_STALE_MS` by its mtime is cleared and taken once more, whatever it holds: a starter that
+ * died in the milliseconds of its start, or failed to write its pid, leaves one behind. Two
+ * starters that both find the same stale claim may both clear it, the second one removing the
+ * first's fresh claim; `replaceStale` checks the socket file again for that case.
  */
-function takeClaim(claim: string): boolean {
+function takeClaim(claim: string, now: () => number): boolean {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       writeFileSync(claim, String(process.pid), { flag: "wx", mode: 0o600 });
@@ -106,15 +140,14 @@ function takeClaim(claim: string): boolean {
     } catch (error) {
       if (errorCode(error) !== "EEXIST") throw error;
     }
-    let owner: number;
+    let age: number;
     try {
-      owner = Number.parseInt(readFileSync(claim, "utf8"), 10);
+      age = now() - statSync(claim).mtimeMs;
     } catch (error) {
       if (errorCode(error) === "ENOENT") continue; // released meanwhile: take it
       throw error;
     }
-    // An empty file is a claim being written: its owner is alive.
-    if (Number.isNaN(owner) || processExists(owner)) return false;
+    if (age <= CLAIM_STALE_MS) return false;
     rmSync(claim, { force: true });
   }
   return false;
@@ -131,68 +164,120 @@ function inodeAt(path: string): number | undefined {
 }
 
 /**
- * Replaces a socket file whose process is dead by a listener of this one. Two starters that
- * both find the stale file must not both remove it: the second would delete the first's live
- * socket and both would run. So one of them, the holder of an exclusive claim file, removes it
- * and listens while the other is told the lock is taken. Under the claim the file is probed
- * again and removed only if it is still the inode that was probed (the two steps are
- * synchronous calls with no await between them). Rejects with `refusal` when the lock is, or is
- * being, taken.
+ * Replaces a socket file whose process is dead by a listener of this one, under the claim. The
+ * file is removed only if it is still the inode that was probed and still refuses connections
+ * (the removal follows the second look with no await between them): the claim keeps another
+ * starter out, and this keeps a holder that started without it, or took a stolen claim, alive.
+ * Rejects with `refusal` when the lock is, or is being, taken.
  */
-async function replaceStale(address: string, refusal: AlreadyRunning): Promise<net.Server> {
-  const claim = `${address}.claim`;
-  if (!takeClaim(claim)) throw refusal;
+async function replaceStale(
+  address: string,
+  refusal: AlreadyRunning,
+  listenOn: ListenFn,
+): Promise<net.Server> {
+  const probed = inodeAt(address);
+  // A socket file outlives a process killed before it could remove it: a connection that is
+  // accepted means the holder is alive, one that is refused means the file is stale.
+  if (await accepts(address)) throw refusal;
+  if (inodeAt(address) !== probed) throw refusal; // the file was replaced under us
+  rmSync(address, { force: true });
   try {
-    const probed = inodeAt(address);
-    if (await accepts(address)) throw refusal; // a holder started while we waited for the claim
-    if (inodeAt(address) !== probed) throw refusal; // the file was replaced under us
-    rmSync(address, { force: true });
+    return await listenOn(address);
+  } catch (error) {
+    // A starter that found no file listened first: it holds the lock.
+    throw nameTaken(error) ? refusal : error;
+  }
+}
+
+/** What `socketLock` may be given: a test passes its own clock and its own `listen`. */
+export interface SocketLockDeps {
+  readonly now?: () => number;
+  readonly listen?: ListenFn;
+}
+
+/**
+ * The socket mechanism (Linux, Windows): takes the lock by listening on a local socket in
+ * `directory`, so the kernel drops it when the process dies. Rejects with `AlreadyRunning` while
+ * another process holds it. Exported so its tests run on macOS too, where `singleInstance`
+ * does not use it.
+ *
+ * The claim is taken before the first `listen`, not only for a recovery: a starter that has bound
+ * its socket and not yet called `listen` refuses connections, and a second starter that probed
+ * it then would read it as stale and remove it. A start that finds a fresh claim is refused.
+ */
+export async function socketLock(
+  directory: string,
+  deps: SocketLockDeps = {},
+): Promise<InstanceLock> {
+  const { now = Date.now, listen: listenOn = listenLocal } = deps;
+  const address = lockAddress(directory);
+  const refusal = new AlreadyRunning(`another awaydesk is running (lock on ${directory})`);
+  // A named pipe is created whole or refused by the system: no claim is needed there.
+  const claim = process.platform === "win32" ? null : `${address}.claim`;
+  if (claim !== null && !takeClaim(claim, now)) throw refusal;
+  try {
+    let server: net.Server;
     try {
-      return await listen(address);
+      server = await listenOn(address);
     } catch (error) {
-      // A starter that found no file listened first: it holds the lock.
-      throw nameTaken(error) ? refusal : error;
+      if (!nameTaken(error)) throw error;
+      // A named pipe vanishes with its process: one in use is always a live holder.
+      if (claim === null) throw refusal;
+      server = await replaceStale(address, refusal, listenOn);
     }
+    if (claim !== null) {
+      // The kernel lets only a user with write access connect to a socket, and a new one takes
+      // the umask's mode: close it to everyone else right after listening, without touching the
+      // process-wide umask.
+      try {
+        chmodSync(address, 0o600);
+      } catch (error) {
+        server.close(); // the file is not ours any more: do not run as a holder nobody can reach
+        throw error;
+      }
+    }
+    return {
+      // libuv unlinks the socket file when the listener closes.
+      release: () =>
+        new Promise<void>((resolve, reject) =>
+          server.close((error) => (error === undefined ? resolve() : reject(error))),
+        ),
+    };
   } finally {
-    rmSync(claim, { force: true });
+    if (claim !== null) rmSync(claim, { force: true });
   }
 }
 
 /**
- * Takes the lock by listening on a local socket in `directory`, so the kernel drops it when the
- * process dies. Rejects with `AlreadyRunning` while another process holds it.
+ * The macOS mechanism: the lock is the open file description of `directory`, opened with
+ * `O_EXLOCK | O_NONBLOCK`, which is the `flock` the Python daemon takes on the same directory.
  */
-export async function singleInstance(directory: string): Promise<InstanceLock> {
-  const address = lockAddress(directory);
-  const refusal = new AlreadyRunning(`another awaydesk is running (lock on ${directory})`);
-  let server: net.Server;
+async function directoryLock(directory: string): Promise<InstanceLock> {
+  let fd: number;
   try {
-    server = await listen(address);
+    fd = openSync(directory, constants.O_RDONLY | O_EXLOCK | constants.O_NONBLOCK);
   } catch (error) {
-    if (!nameTaken(error)) throw error;
-    // A named pipe vanishes with its process: one in use is always a live holder.
-    if (process.platform === "win32") throw refusal;
-    // A socket file outlives a process killed before it could remove it: a connection that
-    // is accepted means the holder is alive, one that is refused means the file is stale.
-    if (await accepts(address)) throw refusal;
-    server = await replaceStale(address, refusal);
-  }
-  if (process.platform !== "win32") {
-    // The kernel lets only a user with write access connect to a socket, and a new one takes the
-    // umask's mode: close it to everyone else right after listening, without touching the
-    // process-wide umask.
-    try {
-      chmodSync(address, 0o600);
-    } catch (error) {
-      server.close(); // the file is not ours any more: do not run as a holder nobody can reach
-      throw error;
+    const code = errorCode(error);
+    if (code === "EAGAIN" || code === "EWOULDBLOCK") {
+      throw new AlreadyRunning(`another awaydesk is running (lock on ${directory})`);
     }
+    throw error;
   }
+  let open = true;
   return {
-    // libuv unlinks the socket file when the listener closes.
-    release: () =>
-      new Promise<void>((resolve, reject) =>
-        server.close((error) => (error === undefined ? resolve() : reject(error))),
-      ),
+    release: async () => {
+      // A second close would close whatever descriptor the number was handed to since.
+      if (!open) return;
+      open = false;
+      closeSync(fd);
+    },
   };
+}
+
+/**
+ * Takes the lock on `directory` by the mechanism of this platform (see the header). Rejects with
+ * `AlreadyRunning` while another process holds it.
+ */
+export function singleInstance(directory: string): Promise<InstanceLock> {
+  return process.platform === "darwin" ? directoryLock(directory) : socketLock(directory);
 }

@@ -32,6 +32,22 @@ function text(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+/** Python's `bool(value)` for a parsed JSON value: `[]`, `{}`, `""`, `0`, `false` and null are false. */
+function truthy(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  switch (typeof value) {
+    case "object":
+      return Object.keys(value).length > 0;
+    case "string":
+      return value.length > 0;
+    case "number":
+      return value !== 0;
+    default:
+      return Boolean(value);
+  }
+}
+
 function record(value: unknown): Payload {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Payload)
@@ -57,29 +73,40 @@ export function isOwner(
  * the stricter of the two.
  */
 export function messageActor(event: Payload, body: Payload): Actor {
-  let team = text(event.team);
-  const files = event.files;
-  const hasFiles = Array.isArray(files) && files.length > 0;
-  if (team === null && hasFiles) {
-    const teams = new Set(files.map((file) => text(record(file).user_team)));
-    const [only] = teams;
-    team = teams.size === 1 && only !== undefined ? only : null;
-  } else if (
-    team === null &&
-    event.subtype === "thread_broadcast" &&
-    body.is_ext_shared_channel === false
-  ) {
+  let team: string | null;
+  // Python falls back only on a missing or null `team`: a value of another type is a team nobody
+  // has, never a reason to read the files or the envelope instead.
+  if (event.team !== undefined && event.team !== null) {
+    team = text(event.team);
+  } else if (truthy(event.files)) {
+    team = filesTeam(event.files);
+  } else if (event.subtype === "thread_broadcast" && body.is_ext_shared_channel === false) {
     team = text(body.team_id);
+  } else {
+    team = null;
   }
   return [text(event.user), team];
+}
+
+/**
+ * The one workspace all the files name, else null. Python raised on a `files` that is not a list
+ * of objects, which dropped the message; here it names no workspace, which refuses it.
+ */
+function filesTeam(files: unknown): string | null {
+  if (!Array.isArray(files)) return null;
+  const teams = new Set(files.map((file) => text(record(file).user_team)));
+  const [only] = teams;
+  return teams.size === 1 && only !== undefined ? only : null;
 }
 
 /** The user and the workspace of a click; a user whose home team differs counts as foreign. */
 export function interactionActor(body: Payload): Actor {
   const user = record(body.user);
   const team = text(record(body.team).id);
-  const home = text(user.team_id);
-  return [text(user.id), home === null || home === team ? team : null];
+  // Python compares the home team as it came: only a missing or null one defers to `team`.
+  const home = user.team_id;
+  const same = home === undefined || home === null || (typeof home === "string" && home === team);
+  return [text(user.id), same ? team : null];
 }
 
 // The subtypes a message a person wrote can carry: a message with files, and a thread reply also
@@ -156,9 +183,11 @@ export class ChannelGuard {
       this.#log.warning(`could not read channel ${channelId}: ${failure(error)}`);
       return texts.REASON_UNREADABLE;
     }
-    if (!info.is_private || info.is_im || info.is_mpim) return texts.REASON_NOT_PRIVATE;
-    if (SHARED_FLAGS.some((flag) => info[flag])) return texts.REASON_SHARED;
-    const more = members.response_metadata?.next_cursor;
+    if (!truthy(info.is_private) || truthy(info.is_im) || truthy(info.is_mpim)) {
+      return texts.REASON_NOT_PRIVATE;
+    }
+    if (SHARED_FLAGS.some((flag) => truthy(info[flag]))) return texts.REASON_SHARED;
+    const more = truthy(members.response_metadata?.next_cursor);
     if (members.members === undefined) throw new Error("conversations.members answered no members");
     const present = new Set(members.members);
     const expected = new Set([this.#identity.ownerUserId, this.#identity.botUserId]);

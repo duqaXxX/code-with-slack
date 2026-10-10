@@ -1,7 +1,7 @@
 /** Load the daemon's configuration from ~/.config/awaydesk/.env. */
 import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { parseEnv } from "node:util";
 
 export const CONFIG_DIR = join(homedir(), ".config", "awaydesk");
@@ -43,20 +43,80 @@ function errorCode(error: unknown): string | undefined {
     : undefined;
 }
 
-/** `~` and `~/x` to the home directory, as `Path.expanduser` does (`~user` is not expanded). */
-function expandUser(path: string): string {
-  if (path === "~") return homedir();
-  return path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
+/** The variables a `${NAME}` may name besides the file's own; the process environment by default. */
+export type Env = Readonly<Record<string, string | undefined>>;
+
+// python-dotenv's own pattern (`dotenv/variables.py`, 1.2.4): `${NAME}` and `${NAME:-default}`.
+// `$NAME` without braces, a lone `$` and `${NAME:other}` stay as they are.
+const VARIABLE = /\$\{([^}:]*)(?::-([^}]*))?\}/g;
+
+/**
+ * The key names of `text` in the order the file defines them. `util.parseEnv` returns its keys
+ * sorted, which loses the order python-dotenv resolves in: a name defined later in the file does
+ * not exist yet for the values before it. A key `parseEnv` read that no line start names (should
+ * a syntax differ) goes last, so no key is dropped.
+ */
+function fileOrder(text: string, keys: readonly string[]): string[] {
+  const wanted = new Set(keys);
+  const ordered = new Set<string>();
+  for (const [, key] of text.matchAll(/^[ \t]*(?:export[ \t]+)?([^\s=#]+)[ \t]*=/gm)) {
+    if (key !== undefined && wanted.has(key)) ordered.add(key);
+  }
+  return [...ordered, ...keys.filter((key) => !ordered.has(key))];
 }
 
-/** Absolute, symlinks resolved as far as the path exists, as `Path.resolve()` does. */
+/**
+ * The values of a `.env` text with `${NAME}` and `${NAME:-default}` expanded as python-dotenv does
+ * by default (`interpolate=True`, which this file was read with before). A name resolves from the
+ * values the file defined above it, else from `env`, else to its default, else to nothing; an
+ * `env` entry that is empty counts as set. The expanded value is final: nothing in it is expanded
+ * again. Quotes were dropped by `parseEnv` and python-dotenv expands inside single quotes too, so
+ * every value is expanded alike. Not ported: a key repeated in the file (the last value is used
+ * and expanded once, where python-dotenv expands each occurrence) and a bare `NAME` line with no
+ * `=` (python-dotenv records it as unset and `${NAME:-d}` then gives nothing; here `d`).
+ */
+export function expandEnv(text: string, env: Env = process.env): Record<string, string> {
+  const raw = new Map(Object.entries(parseEnv(text)));
+  const resolved = new Map<string, string>();
+  for (const key of fileOrder(text, [...raw.keys()])) {
+    const value = raw.get(key);
+    if (value === undefined) continue;
+    resolved.set(
+      key,
+      value.replace(VARIABLE, (_match, name: string, fallback: string | undefined) => {
+        const defined = resolved.get(name);
+        if (defined !== undefined) return defined;
+        const inherited = Object.hasOwn(env, name) ? env[name] : undefined;
+        return inherited ?? fallback ?? "";
+      }),
+    );
+  }
+  return Object.fromEntries(resolved);
+}
+
+/**
+ * `~` and `~/x` to the home directory, as `Path.expanduser` does (`~user` is not expanded). Joined
+ * as text: `path.join` would fold a `link/..` that the disk has to follow first.
+ */
+function expandUser(path: string): string {
+  if (path !== "~" && !path.startsWith("~/")) return path;
+  return homedir().replace(/\/+$/, "") + path.slice(1) || "/";
+}
+
+/**
+ * Absolute, symlinks resolved as far as the path exists, as `Path.resolve()` does. Made absolute
+ * as text and never normalized, since `resolve` would fold `link/..` before the link is followed
+ * and name another folder than the one the kernel reaches; `realpathSync.native` is libuv's
+ * `realpath(3)`, which follows it, where the JavaScript `realpathSync` normalizes first. What does
+ * not exist is kept, with the `..` in it folded, as Python does.
+ */
 function resolvePath(path: string): string {
-  const absolute = resolve(path);
+  const absolute = isAbsolute(path) ? path : `${process.cwd()}/${path}`;
   const rest: string[] = [];
   let head = absolute;
   for (;;) {
     try {
-      return join(realpathSync(head), ...rest);
+      return join(realpathSync.native(head), ...rest);
     } catch (error) {
       const code = errorCode(error);
       if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
@@ -94,7 +154,7 @@ function hiddenTokens(
 }
 
 /** Read and validate `.env`; throws ConfigError, never touches `process.env`. */
-export function loadConfig(configDir: string = CONFIG_DIR): Config {
+export function loadConfig(configDir: string = CONFIG_DIR, env: Env = process.env): Config {
   const envPath = join(configDir, ".env");
   let st: ReturnType<typeof lstatSync>;
   try {
@@ -122,7 +182,7 @@ export function loadConfig(configDir: string = CONFIG_DIR): Config {
   const values: Record<string, string> = {};
   // A byte order mark would become part of the first variable's name.
   const text = readFileSync(envPath, "utf8").replace(/^\ufeff/, "");
-  for (const [key, raw] of Object.entries(parseEnv(text))) {
+  for (const [key, raw] of Object.entries(expandEnv(text, env))) {
     const value = raw?.trim();
     if (value) values[key] = value;
   }

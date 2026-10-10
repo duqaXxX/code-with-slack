@@ -16,6 +16,7 @@ import { join } from "node:path";
 import type { ImagePart, PromptContent, TextPart } from "../../agent/seam.ts";
 import * as texts from "../../core/texts.ts";
 import { getLogger } from "../../log.ts";
+import { mrkdwnEscape } from "./reply/escape.ts";
 
 /** A Slack file object, read field by field since it is wire data. */
 export type SlackFile = object;
@@ -86,9 +87,27 @@ function integer(value: unknown): number {
   return Number.isFinite(number) ? Math.trunc(number) : 0;
 }
 
+/**
+ * A declared size in bytes: a finite non-negative integer, as a number or as ASCII digits, and an
+ * absent or false one is 0, as Python's `int(value or 0)` read it. Null for anything else, which
+ * Python either raised on (dropping the message) or read more loosely than Slack ever writes
+ * (`"999_999_999"`, non-ASCII digits, a sign or padding): a file of that kind is refused.
+ */
+function declaredSize(value: unknown): number | null {
+  if (value === undefined || value === null || value === false || value === 0 || value === "") {
+    return 0;
+  }
+  if (typeof value === "number") return Number.isInteger(value) && value > 0 ? value : null;
+  if (typeof value !== "string" || !/^[0-9]+$/.test(value)) return null;
+  const size = Number(value);
+  return Number.isFinite(size) ? size : null;
+}
+
 /** Python's `f"{size / (1024 * 1024):.1f}MB"`: a tie rounds to even, which `toFixed` does not. */
 function megabytes(size: number): string {
   const value = size / (1024 * 1024);
+  // `toFixed` switches to an exponent from 1e21; Python prints every digit of the double.
+  if (value >= 1e21) return `${BigInt(value)}.0MB`;
   // Only a quarter of a megabyte is both exact in binary and a tie at one decimal.
   const quarters = value * 4;
   if (Number.isInteger(quarters) && quarters % 2 !== 0) {
@@ -118,7 +137,8 @@ export function refusal(file: SlackFile): string | null {
     return texts.UPLOAD_NOT_SHARED;
   }
   const mimetype = String(field(file, "mimetype") || "");
-  const size = integer(field(file, "size"));
+  const size = declaredSize(field(file, "size"));
+  if (size === null) return texts.UPLOAD_NOT_SHARED;
   if (mimetype.startsWith("image/")) {
     if (!IMAGE_TYPES.has(mimetype)) return texts.fill(texts.UPLOAD_IMAGE_TYPE, { mimetype });
     if (size > IMAGE_LIMIT) {
@@ -155,7 +175,19 @@ export function imagesRefusal(files: readonly SlackFile[]): string | null {
       limit: IMAGES_PER_MESSAGE,
     });
   }
-  const total = images.reduce((sum, file) => sum + integer(field(file, "size")), 0);
+  let total = 0;
+  for (const file of images) {
+    const size = declaredSize(field(file, "size"));
+    // `refusal` speaks for one file; the images together are told as a whole sentence.
+    if (size === null) {
+      const name = field(file, "name") || field(file, "id");
+      return texts.fill(texts.UPLOAD_FAILED, {
+        name: mrkdwnEscape(String(name ?? "None")),
+        reason: texts.UPLOAD_NOT_SHARED,
+      });
+    }
+    total += size;
+  }
   if (total > IMAGES_LIMIT) {
     return texts.fill(texts.UPLOAD_TOO_HEAVY, {
       size: megabytes(total),
