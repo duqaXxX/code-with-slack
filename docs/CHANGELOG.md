@@ -270,6 +270,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `claude-agent-sdk` 0.2.165, which bundles Claude Code 2.1.294 (was 0.2.164 with 2.1.292). The
+  probe certified it on 2026-10-10: all 23 claims hold, every row of `docs/sdk-surface.md` is
+  still in the package and every `reference` row is still named by the reference. The two
+  private helpers `resume.py` imports from `claude_agent_sdk._internal.sessions` are unchanged.
+  The recorded fixtures stay those of the releases they name. The commands a session is offered
+  still differ from the recorded `server-info.json` by `/plugin-authoring` alone (#225).
 - `!stop`, `!resume` and `!bind <folder>` typed in a thread that holds no session change
   nothing and say where to send them, for the owner alone. They acted as if typed in the
   channel: `!stop` under the answer to a `!bind` stopped every session of the channel, and
