@@ -323,6 +323,10 @@ All notable changes to this project are documented here. The format follows
     an error and went on; Node documents the process as unsafe to resume after one. If that
     stop has not ended after 30 seconds the process exits anyway. A rejected promise nothing
     handled is logged by its name and the daemon goes on, as before.
+  - With the network gone the daemon tries to get its Slack connection back at least every
+    60 seconds, for as long as it takes. `@slack/socket-mode` 3.1.0 by itself waits longer
+    after each failure with no upper limit: 26 minutes between two tries after two hours
+    offline.
   - Once a stop has closed the sessions, a message or a click still being handled does nothing
     more: no session starts, nothing is written to `state.json`, nothing is posted. The
     process ends as soon as the stop is over, as the Python one did: the Socket Mode

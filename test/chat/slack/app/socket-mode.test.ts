@@ -12,8 +12,9 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { App } from "@slack/bolt";
-import type { FetchFunction } from "@slack/web-api";
+import { type FetchFunction, WebClient } from "@slack/web-api";
 import { socketReceiver } from "../../../../src/chat/slack/app/app.ts";
+import { silentLogger } from "../../../../src/chat/slack/quiet-logger.ts";
 import { setLevel, setWriter } from "../../../../src/log.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..", "..", "..");
@@ -178,4 +179,109 @@ test("a reconnect that cannot get a new URL shows only as an unhandled rejection
   assert.deepEqual(seen.unhandled, ["invalid_auth"]);
   // Told that it was reconnecting, never that it gave up.
   assert.deepEqual(seen.events, ["reconnecting"]);
+});
+
+// The network gone for a long time. `SocketModeClient` asks for the new WebSocket URL through a
+// web client of its own, and by itself gives it `retryConfig { retries: 100, factor: 1.3 }` with
+// no upper wait (`SocketModeClient.js`, the constructor): the wait before the next try grows to
+// about a third of the time already spent offline, 18 minutes after an hour. The daemon caps
+// it (`RECONNECT_WAIT_SECONDS`). Eighty minutes offline pass on mocked timers, in a child
+// process: the timers are the libraries' own. Eighty, since the list of 100 waits lasts 88 and
+// what comes after it is the test below this one.
+test("with the network gone the connection is tried again at least every minute", () => {
+  const script = `
+    import { mock } from "node:test";
+    import { socketReceiver, RECONNECT_WAIT_SECONDS } from "./src/chat/slack/app/app.ts";
+    mock.timers.enable({ apis: ["setTimeout", "Date"] });
+    const body = JSON.stringify({ ok: true, url: "wss://localhost.invalid/link" });
+    let online = false;
+    const attempts = [];
+    const fetch = async (url) => {
+      attempts.push(Date.now());
+      if (!online) throw new TypeError("fetch failed");
+      return {
+        ok: true, status: 200, statusText: "OK", url: String(url),
+        headers: { get: () => null, entries: () => [] },
+        arrayBuffer: async () => new ArrayBuffer(0),
+        json: async () => JSON.parse(body), text: async () => body,
+      };
+    };
+    const unhandled = [];
+    process.on("unhandledRejection", (reason) => unhandled.push(String(reason?.code ?? reason)));
+    const receiver = socketReceiver(${JSON.stringify(APP_TOKEN)}, { clientOptions: { fetch } });
+    let authenticated = null;
+    receiver.client.on("authenticated", () => { authenticated ??= Date.now(); });
+    const second = async () => {
+      mock.timers.tick(1000);
+      for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+    };
+    receiver.client.emit("close"); // the socket closed: a reconnect is scheduled
+    for (let passed = 0; passed < 4800; passed += 1) await second();
+    const offline = attempts.length;
+    const gaps = attempts.slice(1).map((at, index) => at - attempts[index]);
+    online = true;
+    const back = Date.now();
+    for (let passed = 0; passed < 600 && authenticated === null; passed += 1) await second();
+    console.log(JSON.stringify({
+      offline, longest: Math.max(...gaps), unhandled, limit: RECONNECT_WAIT_SECONDS,
+      waited: authenticated === null ? null : authenticated - back,
+    }));
+    process.exit(0);
+  `;
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+    cwd: ROOT,
+    encoding: "utf8",
+  });
+  const lines = result.stdout.trim().split("\n");
+  const seen = JSON.parse(lines.at(-1) ?? "{}") as {
+    offline: number;
+    longest: number;
+    unhandled: string[];
+    limit: number;
+    waited: number | null;
+  };
+  assert.equal(seen.limit, 60);
+  // At least one try in each of the 80 minutes.
+  assert.ok(seen.offline >= 80, `${seen.offline} tries in 80 minutes`);
+  assert.ok(seen.longest <= 60_000, `${seen.longest} ms between two tries`);
+  // Nothing was rejected, and the first try with the network back got in.
+  assert.deepEqual(seen.unhandled, []);
+  assert.ok(seen.waited !== null && seen.waited <= 60_000, `${seen.waited} ms after the network`);
+});
+
+// Past the list of waits. `forever` makes the `retry` package (0.13.1, under `p-retry` 4.6.2)
+// go on with the last wait once its list is used up, where it would otherwise reject, and the
+// client would be left with no connection and nothing trying. Real timers, a few milliseconds
+// each: what is checked is the libraries on this Node, with a list of two waits for the 100.
+test("retries told to go on for good outlast their list of waits", async () => {
+  let online = false;
+  let attempts = 0;
+  const body = JSON.stringify({ ok: true, url: "wss://localhost.invalid/link" });
+  const fetch: FetchFunction = async (url) => {
+    attempts += 1;
+    if (!online) throw new TypeError("fetch failed");
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      url: String(url),
+      headers: { get: () => null, entries: () => [] },
+      arrayBuffer: async () => new ArrayBuffer(0),
+      json: async () => JSON.parse(body),
+      text: async () => body,
+    };
+  };
+  const client = new WebClient("xap" + "p-1", {
+    fetch,
+    logger: silentLogger(),
+    retryConfig: { forever: true, retries: 2, factor: 1, minTimeout: 5, maxTimeout: 5 },
+  });
+  const answer = client.apiCall("apps.connections.open");
+  const deadline = Date.now() + 5_000;
+  while (attempts < 12 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.ok(attempts >= 12, `${attempts} tries: the list of two waits was the end of it`);
+  online = true;
+  assert.equal((await answer).ok, true);
 });

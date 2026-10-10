@@ -172,6 +172,14 @@ replies and a Claude Code process per session. One rejection leaves the daemon r
 WebSocket URL is rejected there with no event for it. The log then holds
 `unhandled rejection: invalid_auth`, and the daemon needs a working token and a restart.
 
+When the network is gone the Socket Mode client asks Slack for a new WebSocket URL again and
+again until it gets one. `app.socketReceiver` sets how: the waits start at one second, grow by
+1.3 each time, stop growing at `app.RECONNECT_WAIT_SECONDS` (60), and the client never gives up,
+so a try follows the one that failed by a minute at most. Left to itself `@slack/socket-mode`
+3.1.0 lets the wait grow with no limit: with the network gone for two hours it tried 30 times,
+the last wait 26 minutes (run on mocked timers, 2026-10-10). The log holds
+`socket mode: reconnecting`, then one warning per failed try.
+
 Logs are lines on standard error (`log.getLogger`), which the LaunchAgent writes to
 `~/Library/Logs/awaydesk/awaydesk.log`. A line reads `<time> <LEVEL> <name>: <message>`, the time
 local, the name that of the module (`awaydesk.core.state`); lines below `INFO` are not written

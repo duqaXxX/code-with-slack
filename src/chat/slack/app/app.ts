@@ -59,6 +59,7 @@ import {
 import { Listings } from "../openfile/listing.ts";
 import { OPEN_BUTTON_ACTION, OPEN_FORM, QUERY_ACTION } from "../openfile/modal.ts";
 import { levelLogger } from "../quiet-logger.ts";
+import { REQUEST_TIMEOUT_MS } from "../reply/clients.ts";
 import type { Limiter } from "../reply/limiter.ts";
 import {
   APPROVAL_ALLOW,
@@ -141,6 +142,26 @@ export interface BuiltApp {
   close(): void;
 }
 
+// The longest wait between two tries to get the connection back.
+export const RECONNECT_WAIT_SECONDS = 60;
+
+// The web client `@slack/socket-mode` 3.1.0 asks Slack for a WebSocket URL with. Left to itself
+// the library gives it 100 retries, each wait 1.3 times the one before with no upper limit: with
+// the network gone for two hours it tried 30 times, the last wait 26 minutes, and was still
+// waiting 10 minutes after the network was back (run on mocked timers, 2026-10-10). The waits
+// start as the library's and stop growing at the limit, and the client never gives up, so the
+// connection is back within the limit of the network's return. A try that gets no answer ends
+// at the timeout of the daemon's other clients.
+const RECONNECT: WebClientOptions = {
+  timeout: REQUEST_TIMEOUT_MS,
+  retryConfig: {
+    forever: true,
+    retries: 100,
+    factor: 1.3,
+    maxTimeout: RECONNECT_WAIT_SECONDS * 1000,
+  },
+};
+
 /** What `socketReceiver` can be given besides the token: the network and the pace of a test. */
 export interface SocketOptions {
   /** The options of the client that asks Slack for the WebSocket URL (`fetch`, in a test). */
@@ -162,9 +183,7 @@ export function socketReceiver(appToken: string, options: SocketOptions = {}): S
     ...(options.clientPingTimeout !== undefined && {
       clientPingTimeout: options.clientPingTimeout,
     }),
-    ...(options.clientOptions !== undefined && {
-      installerOptions: { clientOptions: options.clientOptions },
-    }),
+    installerOptions: { clientOptions: { ...RECONNECT, ...options.clientOptions } },
   });
   receiver.client.on("connected", () => logger.info("socket mode: connected"));
   receiver.client.on("reconnecting", () => logger.warning("socket mode: reconnecting"));
