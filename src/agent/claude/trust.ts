@@ -96,6 +96,14 @@ function isValueError(error: unknown): boolean {
   return error instanceof Error && (error as { code?: unknown }).code === "ERR_INVALID_ARG_VALUE";
 }
 
+/**
+ * What a path somebody else wrote can do to a lookup: a system error, a NUL in it, or a chain of
+ * symlinks `realpath` gives up on. An exported function answers closed on any of them.
+ */
+function isFilesystemOddity(error: unknown): boolean {
+  return isOsError(error) || isValueError(error) || error instanceof SymlinkChainTooDeep;
+}
+
 function isMissing(error: unknown): boolean {
   const code = (error as { code?: unknown } | null)?.code;
   return code === "ENOENT" || code === "ENOTDIR";
@@ -108,6 +116,19 @@ function errorName(error: unknown): string {
     return typeof code === "string" ? code : error.name;
   }
   return typeof error;
+}
+
+// Python kept the bytes of a path it read apart (surrogate escapes), so `m\xff` never named a folder
+// called `m\ufffd`; a replacement character would. A path read from a file is decoded strictly, and
+// one that is not UTF-8 is metadata this module cannot use.
+const FATAL_UTF8 = new TextDecoder("utf-8", { fatal: true });
+
+function decodePath(bytes: Buffer): string | null {
+  try {
+    return FATAL_UTF8.decode(bytes);
+  } catch {
+    return null;
+  }
 }
 
 // Python read the record as strict UTF-8 and kept a BOM in the text, where `json.loads` refuses it.
@@ -203,7 +224,11 @@ async function joinRealpath(
  * that does not exist is kept, where `fs.realpath` throws on a missing path.
  */
 async function realpath(filename: string): Promise<string> {
-  const [path] = await joinRealpath("/", resolve(filename), new Map(), 0);
+  // The path goes to the walk as it is, never through `resolve`: that would fold a `..` into the
+  // component before it, and the kernel, git and Python's `_joinrealpath` follow the symlink first.
+  const absolute = isAbsolute(filename) ? filename : `${process.cwd()}/${filename}`;
+  const [path] = await joinRealpath("/", absolute, new Map(), 0);
+  // Python's `abspath` at the end: lexical, as `resolve` is.
   return resolve(path);
 }
 
@@ -245,8 +270,10 @@ async function regularFile(path: string): Promise<Buffer | null> {
     if (!found.isFile() || found.size > GITFILE_BYTES) {
       return null;
     }
-    const buffer = Buffer.allocUnsafe(found.size);
-    const { bytesRead } = await handle.read(buffer, 0, found.size, 0);
+    // Up to the limit, not up to `found.size`: a file that grew since the `fstat` is read whole, as
+    // Python's `os.read(fd, GITFILE_BYTES)` did, where a prefix would name another path.
+    const buffer = Buffer.allocUnsafe(GITFILE_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, GITFILE_BYTES, 0);
     return buffer.subarray(0, bytesRead);
   } catch {
     return null;
@@ -291,7 +318,7 @@ async function gitfileTarget(gitfile: string): Promise<string | null> {
     return null;
   }
   // git strips line ends only: a trailing space belongs to the path.
-  const target = stripEnd(content.subarray(8), [CR, LF]).toString();
+  const target = decodePath(stripEnd(content.subarray(8), [CR, LF]));
   return target ? realpath(joinPath(dirname(gitfile), target)) : null;
 }
 
@@ -319,7 +346,11 @@ async function mainCheckout(gitDir: string, root: string): Promise<string | null
   // An absolute path, or one relative to this directory (`git worktree add --relative-paths`).
   // git strips trailing whitespace here (`strbuf_rtrim`, worktree.c get_linked_worktree), and
   // whitespace is those four bytes for it (ctype.c, `sane_ctype`).
-  const registered = joinPath(gitDir, stripEnd(content, [SPACE, TAB, CR, LF]).toString());
+  const name = decodePath(stripEnd(content, [SPACE, TAB, CR, LF]));
+  if (name === null) {
+    return null;
+  }
+  const registered = joinPath(gitDir, name);
   // The two folders are compared as directories on disk: the same one whatever the case or
   // the Unicode form git wrote, another one for a name one space longer. Not the `.git` files:
   // a file can be hard-linked into a second folder.
@@ -354,7 +385,7 @@ export async function locate(directory: string): Promise<Repository | null> {
   } catch (error) {
     // What a `.git` file or symlink names is somebody else's text: a NUL in it is no path, and
     // `realpath` gives up on a long enough chain of symlinks.
-    if (isOsError(error) || isValueError(error) || error instanceof SymlinkChainTooDeep) {
+    if (isFilesystemOddity(error)) {
       throw new Unkeyed(error);
     }
     throw error;
@@ -459,7 +490,11 @@ async function readTrusted(recordPath: string): Promise<ReadonlySet<string>> {
   }
   const accepted = new Set<string>();
   for (const [path, state] of Object.entries(projects)) {
+    // A lone surrogate cannot be encoded as a path: Python's lookup of it failed, where Node's
+    // would name the folder with a replacement character. With the `u` flag a pair is one code
+    // point, so `\p{Surrogate}` finds only a lone one (`isWellFormed` is not in the project's lib).
     if (
+      !LONE_SURROGATE.test(path) &&
       typeof state === "object" &&
       state !== null &&
       !Array.isArray(state) &&
@@ -470,6 +505,8 @@ async function readTrusted(recordPath: string): Promise<ReadonlySet<string>> {
   }
   return accepted;
 }
+
+const LONE_SURROGATE = /\p{Surrogate}/u;
 
 const RECORDED_BATCH = 64;
 
@@ -485,7 +522,7 @@ async function spellsFolder(recorded: string, mine: BigIntStats): Promise<boolea
       (await realpath(recorded)) === recorded
     );
   } catch (error) {
-    if (isOsError(error) || isValueError(error)) {
+    if (isFilesystemOddity(error)) {
       return false;
     }
     throw error;
@@ -533,8 +570,17 @@ async function isTrusted(path: string, home: string): Promise<boolean> {
  * folder that leads elsewhere is not inside it.
  */
 async function isInside(path: string, folder: string): Promise<boolean> {
-  const real = await realpath(folder);
-  const resolved = await realpath(path);
+  let real: string;
+  let resolved: string;
+  try {
+    real = await realpath(folder);
+    resolved = await realpath(path);
+  } catch (error) {
+    if (isFilesystemOddity(error)) {
+      return false;
+    }
+    throw error;
+  }
   return resolved !== real && resolved.startsWith(real.endsWith("/") ? real : `${real}/`);
 }
 
@@ -552,10 +598,14 @@ async function commonDir(gitDir: string): Promise<string | null> {
   if (content === null || content.length === 0) {
     return null;
   }
+  const name = decodePath(stripEnd(content, [CR, LF]));
+  if (name === null) {
+    return null;
+  }
   try {
-    return await realpath(joinPath(gitDir, stripEnd(content, [CR, LF]).toString()));
+    return await realpath(joinPath(gitDir, name));
   } catch (error) {
-    if (isOsError(error) || isValueError(error) || error instanceof SymlinkChainTooDeep) {
+    if (isFilesystemOddity(error)) {
       return null;
     }
     throw error;
@@ -649,7 +699,16 @@ export async function workspaceTrusted(
   if (repository !== null) {
     return isTrusted(repository.key, home);
   }
-  for (const path of withParents(await realpath(directory))) {
+  let folder: string;
+  try {
+    folder = await realpath(directory);
+  } catch (error) {
+    if (isFilesystemOddity(error)) {
+      return false;
+    }
+    throw error;
+  }
+  for (const path of withParents(folder)) {
     if (await isTrusted(path, home)) {
       return true;
     }

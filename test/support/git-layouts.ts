@@ -99,6 +99,14 @@ export function bareLayout(path: string, config: Record<string, string> = {}): s
   return path;
 }
 
+/** A folder git takes for a git dir by its entries alone: a HEAD, `objects` and `refs`. */
+export function gitDirAt(path: string): string {
+  mkdirSync(join(path, "objects"), { recursive: true });
+  mkdirSync(join(path, "refs"));
+  writeFileSync(join(path, "HEAD"), "ref: refs/heads/main\n");
+  return path;
+}
+
 /** Whether git, run in `folder`, answers `rev-parse <asked>` with `claimed`. */
 export function gitTakesItFor(folder: string, asked: string, claimed: string): boolean {
   return sameFile(git(folder, "rev-parse", "--path-format=absolute", asked), claimed);

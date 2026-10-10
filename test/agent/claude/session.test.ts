@@ -422,6 +422,108 @@ test("a request with no request id of its own gets one", LIMIT, async (t) => {
   assert.ok(request !== undefined && request.requestId !== "");
 });
 
+// The review round of 2026-10-10: a request that cannot be answered is a deny, never a rejection.
+// SDK 0.3.296 answers a callback that rejects with a `control_response` of subtype `error`
+// (`handleControlRequest`, sdk.mjs), which is not a deny.
+
+const UNSHOWN = "awaydesk could not show this request in Slack, so nobody approved it.";
+const SECRET = "a secret sentence from the tool's input";
+
+/** One Bash call against `handler`, with the error log recorded; what the SDK was answered. */
+async function askBash(t: TestContext, handler: RequestHandler, errors: string[]) {
+  t.mock.method(logger, "error", (message: string) => errors.push(message));
+  const { session, query, events } = await started(
+    t,
+    { turns: [[...TOOLS.slice(0, 2), ask({ toolName: "Bash", input: BASH }), ...TOOLS.slice(-1)]] },
+    {},
+    handler,
+  );
+  await session.send(PROMPT);
+  await until(events, "turn_ended");
+  return query.permissionResults;
+}
+
+test(
+  "a handler that rejects is a deny, and the log has the error's name alone",
+  LIMIT,
+  async (t) => {
+    const errors: string[] = [];
+    const failure = Object.assign(new Error(SECRET), { name: "SlackDown" });
+    const handler: RequestHandler = {
+      permission: async () => {
+        throw failure;
+      },
+      question: async () => ({ answered: false, message: "" }),
+    };
+    assert.deepEqual(await askBash(t, handler, errors), [{ behavior: "deny", message: UNSHOWN }]);
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0]?.includes("SlackDown"));
+    assert.ok(!errors[0]?.includes(SECRET));
+  },
+);
+
+test("a handler that throws at once is a deny", LIMIT, async (t) => {
+  const errors: string[] = [];
+  const handler: RequestHandler = {
+    permission: () => {
+      throw new TypeError(SECRET);
+    },
+    question: async () => ({ answered: false, message: "" }),
+  };
+  assert.deepEqual(await askBash(t, handler, errors), [{ behavior: "deny", message: UNSHOWN }]);
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0]?.includes("TypeError"));
+  assert.ok(!errors[0]?.includes(SECRET));
+});
+
+test("a question whose input cannot be read is a deny", LIMIT, async (t) => {
+  const errors: string[] = [];
+  t.mock.method(logger, "error", (message: string) => errors.push(message));
+  const handler = handlerOf();
+  const { session, query, events } = await started(
+    t,
+    {
+      turns: [
+        [
+          ...TOOLS.slice(0, 2),
+          ask({ toolName: "AskUserQuestion", input: null as never }),
+          ...TOOLS.slice(-1),
+        ],
+      ],
+    },
+    {},
+    handler,
+  );
+  await session.send(PROMPT);
+  await until(events, "turn_ended");
+  assert.deepEqual(query.permissionResults, [{ behavior: "deny", message: UNSHOWN }]);
+  assert.deepEqual(handler.asked, []);
+  assert.deepEqual(errors, ["could not ask the owner about a call: TypeError"]);
+});
+
+test(
+  "the deny message of a request that could not be shown is the session's option",
+  LIMIT,
+  async (t) => {
+    t.mock.method(logger, "error", () => undefined);
+    const sdk = new FakeSdk({
+      turns: [[...TOOLS.slice(0, 2), ask({ toolName: "Bash", input: BASH }), ...TOOLS.slice(-1)]],
+    });
+    const handler: RequestHandler = {
+      permission: async () => {
+        throw new Error("down");
+      },
+      question: async () => ({ answered: false, message: "" }),
+    };
+    const session = new ClaudeSession(CONFIG, handler, sdk.query, "Nobody saw it.");
+    t.after(() => session.close());
+    await session.ready();
+    await session.send(PROMPT);
+    await until(session.events[Symbol.asyncIterator](), "turn_ended");
+    assert.deepEqual(sdk.only.permissionResults, [{ behavior: "deny", message: "Nobody saw it." }]);
+  },
+);
+
 // Hooks.
 
 test(
@@ -656,3 +758,29 @@ test(
     await assert.rejects(session.ready(), (error) => error === failure);
   },
 );
+
+test("a query whose close throws does not make the pump reject", LIMIT, async (t) => {
+  const errors: string[] = [];
+  t.mock.method(logger, "error", (message: string) => errors.push(message));
+  const failure = Object.assign(new Error(SECRET), { name: "KillFailed" });
+  const { session, events } = await started(t, {
+    turns: [[...TOOLS.slice(0, 3), END]],
+    closeThrows: failure,
+  });
+  await session.send(PROMPT);
+  await until(events, "process_lost");
+  assert.deepEqual(await events.next(), { done: true, value: undefined });
+  await assert.doesNotReject(session.close());
+  assert.ok(errors.some((line) => line.includes("KillFailed")));
+  assert.ok(!errors.some((line) => line.includes(SECRET)));
+});
+
+test("a query whose close throws does not make a close of the session reject", LIMIT, async (t) => {
+  const errors: string[] = [];
+  t.mock.method(logger, "error", (message: string) => errors.push(message));
+  const failure = Object.assign(new Error(SECRET), { name: "KillFailed" });
+  const { session } = await started(t, { turns: [], closeThrows: failure });
+  await assert.doesNotReject(session.close());
+  assert.ok(errors.some((line) => line.includes("KillFailed")));
+  assert.ok(!errors.some((line) => line.includes(SECRET)));
+});

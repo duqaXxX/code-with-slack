@@ -8,7 +8,9 @@
  * the test fails when the package names its folders differently.
  */
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, realpath, utimes, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { closeSync, constants, openSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -17,6 +19,7 @@ import {
   byLastActivity,
   directorySessions,
   LONG_PROJECT_KEY,
+  lastMessageMs,
   logger,
   projectKey,
   projectsDir,
@@ -273,4 +276,46 @@ test("the projects directory is the config directory's, else the owner's home", 
     projectsDir({ CLAUDE_CONFIG_DIR: "" }, "/home/dev"),
     join("/home/dev", ".claude", "projects"),
   );
+});
+
+// The review round of 2026-10-10: a transcript is a regular file, opened without following a link
+// and without waiting on a FIFO. Python's `_last_message_ms` used `path.open("rb")`, which follows
+// a symlink and blocks on a FIFO; the stricter read is a difference, not a port.
+
+const POSIX = { ...LIMIT, skip: process.platform === "win32" };
+const ENTRY = `${JSON.stringify({ type: "user", timestamp: "2026-09-25T10:00:00.000Z" })}\n`;
+
+async function folderOf(t: TestContext): Promise<string> {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "awaydesk-stamp-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  return root;
+}
+
+test("the last message time of a regular transcript is read", LIMIT, async (t) => {
+  const file = join(await folderOf(t), "a.jsonl");
+  await writeFile(file, ENTRY);
+  assert.equal(await lastMessageMs(file), Date.parse("2026-09-25T10:00:00.000Z"));
+});
+
+test("a transcript that is a symlink is not read", POSIX, async (t) => {
+  const root = await folderOf(t);
+  await writeFile(join(root, "elsewhere.jsonl"), ENTRY);
+  await symlink(join(root, "elsewhere.jsonl"), join(root, "a.jsonl"));
+  assert.equal(await lastMessageMs(join(root, "a.jsonl")), null);
+});
+
+test("a transcript that is a FIFO does not hold the read", POSIX, async (t) => {
+  const file = join(await folderOf(t), "a.jsonl");
+  execFileSync("mkfifo", [file]);
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("the read is blocked on the FIFO")), 2_000);
+  });
+  try {
+    assert.equal(await Promise.race([lastMessageMs(file), expired]), null);
+  } finally {
+    clearTimeout(timer);
+    // A read that is still blocked in the pool is released by a writer, so the run can end.
+    closeSync(openSync(file, constants.O_RDWR | constants.O_NONBLOCK));
+  }
 });

@@ -51,6 +51,9 @@ const PERMISSION_MODES: ReadonlySet<string> = new Set([
 ]);
 // What Python reported when the stream ended without an exception.
 const PROCESS_EXITED = "the Claude Code process exited";
+// What a call is told when nobody could be asked about it. The daemon's own text for it
+// (`APPROVAL_UNPOSTED`) is passed to the constructor: this layer does not import `src/core/`.
+const REQUEST_UNSHOWN = "awaydesk could not show this request in Slack, so nobody approved it.";
 
 /** The members of the SDK's `Query` this class calls: a test passes a fake that has these. */
 export interface QueryHandle extends AsyncIterable<unknown> {
@@ -160,6 +163,7 @@ export class ClaudeSession implements AgentSession {
   readonly #queue = new AsyncQueue<SessionEvent>();
   readonly #input = new AsyncQueue<SDKUserMessage>();
   readonly #query: QueryHandle;
+  readonly #unshownMessage: string;
   readonly #finished: Promise<void>;
   #closing = false;
   #ended = false;
@@ -172,8 +176,10 @@ export class ClaudeSession implements AgentSession {
     config: SessionConfig,
     requests: RequestHandler,
     queryFunction: QueryFunction = sdkQuery,
+    unshownMessage: string = REQUEST_UNSHOWN,
   ) {
     this.#config = config;
+    this.#unshownMessage = unshownMessage;
     this.events = this.#queue;
     this.#query = queryFunction({
       prompt: this.#input,
@@ -208,16 +214,25 @@ export class ClaudeSession implements AgentSession {
       allowDangerouslySkipPermissions: true,
       extraArgs,
       canUseTool: async (toolName, input, context) => {
-        const request = toRequest(
-          words(context.requestId) ?? randomUUID(),
-          toolName,
-          input,
-          context,
-        );
-        if (request.type === "question") {
-          return questionResult(await requests.question(request), input);
+        // A callback that rejects is answered with a `control_response` of subtype `error`
+        // (`handleControlRequest`, SDK 0.3.296), which is not a deny. A request nobody could be
+        // asked about is refused here, and only the error's name is kept: its message may quote
+        // the tool's input.
+        try {
+          const request = toRequest(
+            words(context.requestId) ?? randomUUID(),
+            toolName,
+            input,
+            context,
+          );
+          if (request.type === "question") {
+            return questionResult(await requests.question(request), input);
+          }
+          return permissionResult(await requests.permission(request), input);
+        } catch (error) {
+          logger.error(`could not ask the owner about a call: ${errorName(error)}`);
+          return { behavior: "deny", message: this.#unshownMessage };
         }
-        return permissionResult(await requests.permission(request), input);
       },
       // The Stop hook's input carries the effort level Claude Code runs at: the footer's only
       // source for it, since no message reports it. Every hook input carries the `cwd` the
@@ -264,7 +279,11 @@ export class ClaudeSession implements AgentSession {
     }
     this.#queue.end();
     // The process may still be running (a stream that failed): reap it.
-    this.#query.close();
+    try {
+      this.#query.close();
+    } catch (error) {
+      logger.error(`could not close the process: ${errorName(error)}`);
+    }
   }
 
   /**
@@ -335,7 +354,11 @@ export class ClaudeSession implements AgentSession {
     if (!this.#closing) {
       this.#closing = true;
       this.#input.end();
-      this.#query.close();
+      try {
+        this.#query.close();
+      } catch (error) {
+        logger.error(`could not close the process: ${errorName(error)}`);
+      }
     }
     await this.#finished;
   }

@@ -15,6 +15,7 @@
  * this derivation puts it and has the SDK's own `listSessions` find it, so a change in the
  * package fails a test.
  */
+import { constants } from "node:fs";
 import { open, readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -123,9 +124,16 @@ export async function directorySessions(directory: string): Promise<ListedSessio
 export async function lastMessageMs(path: string): Promise<number | null> {
   let tail: string;
   try {
-    const file = await open(path, "r");
+    // As `trust.ts` opens its small files: a link is not followed and a FIFO is not waited on
+    // (Python's `path.open` did both). The flags do not exist on Windows.
+    const file = await open(
+      path,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+    );
     try {
-      const { size } = await file.stat();
+      const found = await file.stat();
+      if (!found.isFile()) return null;
+      const { size } = found;
       const start = Math.max(0, size - TAIL_BYTES);
       const buffer = Buffer.alloc(size - start);
       const { bytesRead } = await file.read(buffer, 0, buffer.length, start);

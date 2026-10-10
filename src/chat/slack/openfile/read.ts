@@ -5,7 +5,7 @@
  */
 import { type BigIntStats, constants, type Stats } from "node:fs";
 import { open, realpath, stat } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, posix, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, posix, sep } from "node:path";
 import type { WebClient } from "@slack/web-api";
 import { compareCodePoints, relativeTo } from "./paths.ts";
 
@@ -49,7 +49,9 @@ export interface Opened {
 
 /** Python's non-strict `os.path.realpath`: the links of what exists are resolved, the rest kept. */
 export async function realpathLoose(path: string): Promise<string> {
-  const absolute = resolve(path);
+  // Made absolute as text and never normalized: `resolve` would fold `link/..` before the link
+  // is followed, and name another folder than the one the kernel reaches.
+  const absolute = isAbsolute(path) ? path : `${process.cwd()}/${path}`;
   try {
     return await realpath(absolute);
   } catch {

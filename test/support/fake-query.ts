@@ -96,6 +96,8 @@ export interface FakeScript {
   readonly rejects?: Partial<Record<ControlCall["method"], Error>>;
   /** `close()` ends the stream only when `finishClose()` is called. */
   readonly holdClose?: boolean;
+  /** `close()` throws this, after it has done its work, as a transport that fails to kill. */
+  readonly closeThrows?: Error;
 }
 
 function isAsk(item: Scripted): item is AskCall {
@@ -270,6 +272,7 @@ export class FakeQuery implements QueryHandle {
     this.calls.push({ method: "close" });
     this.#stop.abort();
     if (!this.#script.holdClose) this.#feed.end();
+    if (this.#script.closeThrows !== undefined) throw this.#script.closeThrows;
   }
 }
 

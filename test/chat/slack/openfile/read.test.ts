@@ -10,6 +10,7 @@ import {
   type Opened,
   readOnce,
   readOpenable,
+  realpathLoose,
   regularFiles,
   SNIPPET_LIMIT,
   TooLarge,
@@ -210,5 +211,20 @@ test("a file is shared as its bytes, named by its basename and titled by its pat
   assert.deepEqual(
     slack.uploaded.map((posted) => posted.data),
     [bytes],
+  );
+});
+
+test("a folder named through a link and .. is the one the link leads to", POSIX, async () => {
+  // Python's `os.path.realpath` follows the link before it takes the `..`, as the kernel does:
+  // folding `link/..` as text first would name the folder that holds the link.
+  const trusted = join(tmp.dir, "trusted");
+  const deep = join(tmp.dir, "elsewhere", "deep");
+  mkdirSync(trusted);
+  mkdirSync(deep, { recursive: true });
+  symlinkSync(deep, join(trusted, "link"));
+  assert.equal(await realpathLoose(`${trusted}/link/..`), join(tmp.dir, "elsewhere"));
+  assert.equal(
+    await realpathLoose(`${trusted}/link/../missing/x`),
+    join(tmp.dir, "elsewhere", "missing", "x"),
   );
 });
