@@ -24,15 +24,38 @@ function probeOn(sdk: FakeSdk, clock = new FakeClock()): { probe: UsageProbe; cl
   return { probe, clock };
 }
 
+/** Lets real file reads finish: the back end reads the owner's Chrome choice before it starts. */
+async function started(sdk: FakeSdk): Promise<void> {
+  while (sdk.queries.length === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+}
+
 test("a usage probe with no answer gives up and closes", LIMIT, async () => {
   const sdk = new FakeSdk(); // no scripted turn: /usage never answers
   const { probe, clock } = probeOn(sdk);
   const reading = probe.read();
   const outcome = assert.rejects(reading, { name: "TimeoutError" });
+  // The session exists before the time runs out, as in a real minute: on a loaded machine the
+  // fake clock could otherwise cross the timeout while the start still read a file.
+  await started(sdk);
   await clock.advance(USAGE_TIMEOUT / 1000);
   await outcome;
   assert.equal(sdk.only.closed, true); // the next refresh starts from a clean session
 });
+
+test(
+  "a usage probe that times out before its session started closes it when it comes",
+  LIMIT,
+  async () => {
+    const sdk = new FakeSdk();
+    const { probe, clock } = probeOn(sdk);
+    const outcome = assert.rejects(probe.read(), { name: "TimeoutError" });
+    await clock.advance(USAGE_TIMEOUT / 1000); // at once: the start may still be on its way
+    await outcome;
+    await started(sdk);
+    while (!sdk.only.closed) await new Promise((resolve) => setTimeout(resolve, 1));
+    assert.equal(sdk.only.closed, true);
+  },
+);
 
 test("the probe asks /usage and reads the limits off the answer", LIMIT, async () => {
   const sdk = new FakeSdk({ turns: [sdkRecords("usage")] });
