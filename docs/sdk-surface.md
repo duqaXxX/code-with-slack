@@ -4,8 +4,8 @@ Every type, function, method, option, field, key and value of `claude-agent-sdk`
 under `src/code_with_slack/` reads, calls or decides on, with where each is known from. A new SDK
 release is checked against this table before it is pinned.
 
-Read against claude-agent-sdk 0.2.164 (bundled Claude Code 2.1.292) and the
-[Agent SDK reference for Python](https://code.claude.com/docs/en/agent-sdk/python) on 2026-10-07.
+Read against claude-agent-sdk 0.2.165 (bundled Claude Code 2.1.294) and the
+[Agent SDK reference for Python](https://code.claude.com/docs/en/agent-sdk/python) on 2026-10-10.
 
 ## How to read it
 
