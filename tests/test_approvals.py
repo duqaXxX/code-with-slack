@@ -8,7 +8,7 @@ from claude_agent_sdk.types import (
     ToolPermissionContext,
 )
 
-from code_with_slack.approvals import (
+from awaydesk.approvals import (
     OPTION_TEXT_LIMIT,
     SECTION_LIMIT,
     TYPED_LIMIT,

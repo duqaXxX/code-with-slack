@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from code_with_slack.state import ChannelRecord, StateError, StateStore, ThreadState, _parse_thread
+from awaydesk.state import ChannelRecord, StateError, StateStore, ThreadState, _parse_thread
 
 CHANNEL = "C000CHAN"
 OTHER_CHANNEL = "C000OTHR"

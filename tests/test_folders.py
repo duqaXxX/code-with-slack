@@ -4,8 +4,8 @@ from typing import Any
 
 import pytest
 
-from code_with_slack import texts
-from code_with_slack.folders import FOLDER_ROWS, TRUST_BATCH, bind_blocks, bindable_folders
+from awaydesk import texts
+from awaydesk.folders import FOLDER_ROWS, TRUST_BATCH, bind_blocks, bindable_folders
 
 
 async def trusted_unless_named_untrusted(directory: Path) -> bool:

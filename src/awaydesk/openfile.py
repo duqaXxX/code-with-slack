@@ -2,7 +2,7 @@
 shows it (Markdown rendered, the thread open beside it).
 
 Which files the search offers is read from the folder's disk. Inside a repository the daemon's git
-may run in (`code_with_slack.trust.trusted_repository`: the repository holding the session's
+may run in (`awaydesk.trust.trusted_repository`: the repository holding the session's
 folder, or the ones found at most two levels below it) the files come from git, through the
 footer's `run_git`: the tracked ones and the untracked ones that are not ignored. That is what the
 terminal's `@` file picker does, since its setting `respectGitignore` defaults to `true` and
@@ -49,12 +49,12 @@ from itertools import chain
 from pathlib import Path
 from typing import Any
 
-from code_with_slack import texts
-from code_with_slack.folders import folders_within
-from code_with_slack.footer import GIT_TIMEOUT, run_git
-from code_with_slack.render.escape import shown_as_written
-from code_with_slack.render.sinks import context_block, describe, plain_text_object
-from code_with_slack.trust import Repository
+from awaydesk import texts
+from awaydesk.folders import folders_within
+from awaydesk.footer import GIT_TIMEOUT, run_git
+from awaydesk.render.escape import shown_as_written
+from awaydesk.render.sinks import context_block, describe, plain_text_object
+from awaydesk.trust import Repository
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ REPOSITORIES_TTL = 5.0
 GIT_CHAINS = 4
 
 # Answers for a repository: the one holding a directory, usable for a session started in a folder
-# (`code_with_slack.trust.trusted_repository`, whose arguments they are).
+# (`awaydesk.trust.trusted_repository`, whose arguments they are).
 RepositoryLookup = Callable[[Path, Path], Awaitable[Repository | None]]
 
 

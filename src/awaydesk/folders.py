@@ -2,7 +2,7 @@
 
 Claude Code has no folder picker: the terminal starts in the folder it is launched from. The list
 holds the allowed root and the folders two levels below it that Claude Code trusts
-(`code_with_slack.trust`), since a session starts nowhere else. It never descends into a git
+(`awaydesk.trust`), since a session starts nowhere else. It never descends into a git
 repository: its subfolders belong to that one project.
 """
 
@@ -13,9 +13,9 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from code_with_slack import texts
-from code_with_slack.render.escape import shown_as_written
-from code_with_slack.render.sinks import context_block
+from awaydesk import texts
+from awaydesk.render.escape import shown_as_written
+from awaydesk.render.sinks import context_block
 
 logger = logging.getLogger(__name__)
 FOLDER_ROWS = 20

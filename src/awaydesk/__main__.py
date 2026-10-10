@@ -1,4 +1,4 @@
-"""`code-with-slack`: start the daemon (normally from the LaunchAgent in docs/setup.md)."""
+"""`awaydesk`: start the daemon (normally from the LaunchAgent in docs/setup.md)."""
 
 import asyncio
 import contextlib
@@ -15,34 +15,34 @@ from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from slack_sdk.http_retry.builtin_async_handlers import AsyncRateLimitErrorRetryHandler
 from slack_sdk.web.async_client import AsyncWebClient
 
-from code_with_slack import texts
-from code_with_slack.approvals import Approvals
-from code_with_slack.attachments import prepare_uploads, uploads_dir
-from code_with_slack.cleanup import CLEAN_EVERY_SECONDS, clean
-from code_with_slack.config import CONFIG_DIR, ConfigError, load_config
-from code_with_slack.delete import ThreadDeleter
-from code_with_slack.footer import UsageCache, UsageProbe
-from code_with_slack.guards import ChannelGuard, Identity
-from code_with_slack.hold import Holds
-from code_with_slack.home import Home
-from code_with_slack.lock import AlreadyRunning, single_instance
-from code_with_slack.render.sinks import (
+from awaydesk import texts
+from awaydesk.approvals import Approvals
+from awaydesk.attachments import prepare_uploads, uploads_dir
+from awaydesk.cleanup import CLEAN_EVERY_SECONDS, clean
+from awaydesk.config import CONFIG_DIR, ConfigError, load_config
+from awaydesk.delete import ThreadDeleter
+from awaydesk.footer import UsageCache, UsageProbe
+from awaydesk.guards import ChannelGuard, Identity
+from awaydesk.hold import Holds
+from awaydesk.home import Home
+from awaydesk.lock import AlreadyRunning, single_instance
+from awaydesk.render.sinks import (
     ConnectionRetryUnlessCreating,
     context_block,
     describe,
     notice_text,
 )
-from code_with_slack.repair import repair_crash
-from code_with_slack.sessions import (
+from awaydesk.repair import repair_crash
+from awaydesk.sessions import (
     SessionDeps,
     SessionManager,
     default_client_factory,
     directory_sessions,
 )
-from code_with_slack.slack_app import build_app
-from code_with_slack.state import StateError, StateStore
+from awaydesk.slack_app import build_app
+from awaydesk.state import StateError, StateStore
 
-logger = logging.getLogger("code_with_slack")
+logger = logging.getLogger("awaydesk")
 
 # How long a stop waits for running turns before it ends them itself. It holds after
 # `launchctl kill TERM`, which only sends the signal; a stop launchd makes itself (`bootout`,

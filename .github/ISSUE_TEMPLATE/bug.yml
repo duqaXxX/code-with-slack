@@ -1,5 +1,5 @@
 name: Bug report
-description: Something code-with-slack does differs from what the docs say it does.
+description: Something awaydesk does differs from what the docs say it does.
 labels: ["bug"]
 body:
   - type: markdown
@@ -11,7 +11,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: code-with-slack version or commit
+      label: awaydesk version or commit
       description: The release tag, or the commit you installed from.
       placeholder: 0.1.0, or 79fc27b
     validations:
@@ -20,7 +20,7 @@ body:
     id: claude-version
     attributes:
       label: Claude Code version
-      description: The output of `claude --version` on the machine that runs code-with-slack.
+      description: The output of `claude --version` on the machine that runs awaydesk.
       placeholder: 2.1.280 (Claude Code)
     validations:
       required: true

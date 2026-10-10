@@ -6,8 +6,8 @@ from typing import Any
 import pytest
 from aiohttp import web
 
-from code_with_slack import texts
-from code_with_slack.attachments import (
+from awaydesk import texts
+from awaydesk.attachments import (
     FILE_LIMIT,
     IMAGE_LIMIT,
     IMAGES_LIMIT,

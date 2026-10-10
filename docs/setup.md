@@ -1,7 +1,7 @@
 # Setup
 
 This guide takes a Mac from `git clone` to the first reply in Slack. It covers the Slack app, the
-configuration code-with-slack reads, how it starts on macOS, and the security settings the design
+configuration awaydesk reads, how it starts on macOS, and the security settings the design
 relies on.
 
 Status: no tagged release yet. [features.md](features.md) lists what is tested and what is still
@@ -21,7 +21,7 @@ detail the sequence leaves out.
 - A Slack workspace where you are the only member: a workspace admin could read or export what
   Claude prints, and whoever controls your Slack account controls the machine. On the free plan
   Slack allows one workspace; use it only if nobody else is in it (see Part 5).
-- Full Disk Access for the Python interpreter that runs code-with-slack, only if your projects
+- Full Disk Access for the Python interpreter that runs awaydesk, only if your projects
   live in a folder macOS protects, such as `~/Documents` or `~/Desktop`. Without it a session
   there fails to start. The step is under [Folders macOS protects](#folders-macos-protects).
 
@@ -30,25 +30,25 @@ detail the sequence leaves out.
 1. Clone the repository and install the command:
 
    ```bash
-   git clone https://github.com/duqaXxX/code-with-slack.git
-   cd code-with-slack
+   git clone https://github.com/duqaXxX/awaydesk.git
+   cd awaydesk
    uv tool install .
    ```
 
-This puts the `code-with-slack` command in `~/.local/bin`, where the LaunchAgent of Part 4 runs
+This puts the `awaydesk` command in `~/.local/bin`, where the LaunchAgent of Part 4 runs
 it. To update, pull and run `uv tool install --reinstall .`.
 
-code-with-slack runs the Claude Code CLI that ships inside the Claude Agent SDK it depends on,
+awaydesk runs the Claude Code CLI that ships inside the Claude Agent SDK it depends on,
 not the `claude` on your `PATH`. Both read the same login, so logging in once with `claude` and
 `/login` covers both.
 
 ### Checkpoint 1: the command is installed
 
 ```bash
-command -v code-with-slack
+command -v awaydesk
 ```
 
-It prints the command's path, which ends in `.local/bin/code-with-slack`. If it prints nothing,
+It prints the command's path, which ends in `.local/bin/awaydesk`. If it prints nothing,
 `~/.local/bin` is not on your `PATH`: run `uv tool update-shell` and open a new terminal.
 
 ## Part 1: the Slack app
@@ -63,7 +63,7 @@ It prints the command's path, which ends in `.local/bin/code-with-slack`. If it 
      [`slack-app-manifest.json`](../slack-app-manifest.json). To give the bot a name of your own,
      change `features.bot_user.display_name`: it is the name Slack shows on every reply and at
      the top of the bot's profile. Leave `display_information.name`, the app's name, as
-     `code-with-slack`. Choose **Next**.
+     `awaydesk`. Choose **Next**.
    - Check the summary and choose **Create**.
 
 The manifest asks for private channels only (`groups:history`, `groups:read`,
@@ -72,14 +72,14 @@ The manifest asks for private channels only (`groups:history`, `groups:read`,
 `reactions:write` for the status reaction on a session's root message. It subscribes to one more
 event, `file_change`, which is how the app learns that Slack has written the transcript of an
 audio clip you sent; reading it needs `files:read` and no scope of its own. It also switches on the
-app's **Home** tab, where code-with-slack keeps the list of your sessions; publishing it needs no
+app's **Home** tab, where awaydesk keeps the list of your sessions; publishing it needs no
 scope and no event.
 The app registers no slash command: commands are typed as `!word` messages. Socket Mode is on,
 so the app needs no public URL and your machine opens no inbound port.
 
-code-with-slack needs none of the app's agent features: leave **Agent experience** and the
+awaydesk needs none of the app's agent features: leave **Agent experience** and the
 **Slack Model Context Protocol (MCP) Server** off in the app settings. The MCP server lets an app
-act on behalf of Slack users, which code-with-slack never needs.
+act on behalf of Slack users, which awaydesk never needs.
 
 ### Install it and collect two tokens
 
@@ -104,7 +104,7 @@ deleting them takes a token that acts as you.
 - Reinstall the app to your workspace when Slack asks.
 - Copy the **User OAuth Token** (`xoxp-…`) into `.env` as `SLACK_USER_TOKEN` (Part 2).
 
-This token can post, edit and delete messages as you, anywhere you can. code-with-slack uses it
+This token can post, edit and delete messages as you, anywhere you can. awaydesk uses it
 for two calls: `auth.test` at startup, to check the token is yours, and `chat.delete`, on the
 messages that are not the bot's in a thread you chose to delete or a channel you chose to clean
 up. It is the one credential in `.env` that acts under your name: leave it out if you do not
@@ -123,7 +123,7 @@ no such token.
    - Create a channel and turn on **Make private**. Name it after the project, with a common
      prefix so the channels sort together, for example `cc-myproject`. Custom sidebar sections
      would group them better, but Slack offers those on paid plans only.
-   - In the channel, run `/invite @code-with-slack`.
+   - In the channel, run `/invite @awaydesk`.
    - Open the channel's notification settings. A reply, an approval request and a question post
      inside their own Slack thread, and Slack notifies you on a new message in a thread you
      started, whatever this setting is. It governs only the bot's top-level messages (the answer
@@ -136,23 +136,23 @@ The bot sees private channels it was invited to, and nothing else.
 
 ## Part 2: configuration
 
-code-with-slack keeps its files in `~/.config/code-with-slack/`. `.env` is the one you write;
-`state.json` is written by code-with-slack and never needs editing (what it holds is under
+awaydesk keeps its files in `~/.config/awaydesk/`. `.env` is the one you write;
+`state.json` is written by awaydesk and never needs editing (what it holds is under
 [The config directory and `state.json`](#the-config-directory-and-statejson)).
 
-code-with-slack refuses to start when `.env` is readable by anyone else, is a symbolic link, or
+awaydesk refuses to start when `.env` is readable by anyone else, is a symbolic link, or
 belongs to another user, and when a token is of the wrong kind (`xoxb-` for the bot token,
 `xapp-` for the app-level token).
 
 7. Create the directory and the file, readable by you only:
 
    ```bash
-   mkdir -p ~/.config/code-with-slack
-   touch ~/.config/code-with-slack/.env
-   chmod 600 ~/.config/code-with-slack/.env
+   mkdir -p ~/.config/awaydesk
+   touch ~/.config/awaydesk/.env
+   chmod 600 ~/.config/awaydesk/.env
    ```
 
-8. Open the file in an editor (`nano ~/.config/code-with-slack/.env` works) and write the
+8. Open the file in an editor (`nano ~/.config/awaydesk/.env` works) and write the
    variables, one `NAME=value` per line. Replace each `<...>` placeholder, brackets included,
    with the value from Part 1:
 
@@ -174,10 +174,10 @@ belongs to another user, and when a token is of the wrong kind (`xoxb-` for the 
 | `ALLOWED_ROOT` | the directory `!bind` accepts paths under, for example `~/code` |
 | `SLACK_USER_TOKEN` | optional: your own `xoxp-…` token, for the Home tab's Delete and Clean up |
 
-The workspace ID is not configured: code-with-slack reads it from Slack at startup with the bot
+The workspace ID is not configured: awaydesk reads it from Slack at startup with the bot
 token and rejects events from any other workspace.
 
-With `SLACK_USER_TOKEN` set, code-with-slack asks Slack at startup whose token it is and refuses
+With `SLACK_USER_TOKEN` set, awaydesk asks Slack at startup whose token it is and refuses
 to start unless it is yours (`SLACK_OWNER_USER_ID`) in the bot's workspace.
 
 `ALLOWED_ROOT` guards against a typo such as `!bind /`. It is not a security boundary:
@@ -188,29 +188,29 @@ Claude Code can read and run outside its working directory once you approve it.
 Run the daemon in the foreground once, before the LaunchAgent exists:
 
 ```bash
-code-with-slack
+awaydesk
 ```
 
 Within a few seconds the terminal prints a line that ends with:
 
 ```
-INFO code_with_slack: connected to Slack workspace <workspace id>
+INFO awaydesk: connected to Slack workspace <workspace id>
 ```
 
 Press Ctrl-C to stop it: it logs `shutting down` and exits. A problem in `.env` ends the start at
-once with a line that holds `ERROR code_with_slack:` and ends with what to fix, for example:
+once with a line that holds `ERROR awaydesk:` and ends with what to fix, for example:
 
 ```
-ERROR code_with_slack: SLACK_BOT_TOKEN must be the Bot User OAuth Token (xoxb-...)
+ERROR awaydesk: SLACK_BOT_TOKEN must be the Bot User OAuth Token (xoxb-...)
 ```
 
 and exit status 1. A token that Slack itself refuses ends the start with a Python traceback
-instead. `another code-with-slack is running` means another instance holds the lock: stop it
+instead. `another awaydesk is running` means another instance holds the lock: stop it
 first. Leave no foreground run going when you start the LaunchAgent in Part 4.
 
 ## Part 3: Claude Code
 
-code-with-slack drives Claude Code through the Claude Agent SDK, with the login already on the
+awaydesk drives Claude Code through the Claude Agent SDK, with the login already on the
 machine. Your own Claude Code settings apply: `~/.claude/settings.json`, the project's
 `.claude/settings.json`, and `.claude/settings.local.json`. Whatever Claude Code asks your
 approval for reaches Slack as **Approve** and **Deny** buttons, with the tool's whole input.
@@ -251,21 +251,21 @@ they do in the terminal.
 Claude Code's [Chrome integration](https://code.claude.com/docs/en/chrome) follows your choice in
 Claude Code. When `/chrome` shows **Enabled by default: Yes** in the terminal, a session started
 from Slack has the browser tools too, and Claude opens its tabs in the Chrome running on the
-machine, with your sign-ins. Nothing about it is set in code-with-slack: turn it on or off with
+machine, with your sign-ins. Nothing about it is set in awaydesk: turn it on or off with
 `/chrome` in the terminal, and a thread follows the change from its next start or resume. The
 permissions are Claude Code's own: when it asks before a browser action, the request reaches
 Slack as **Approve** and **Deny** buttons, and the sites Claude may act on are the ones the
 extension allows. Chrome has to be open, with the extension signed in to the account Claude Code
 uses.
 
-## Part 4: starting code-with-slack on macOS
+## Part 4: starting awaydesk on macOS
 
-code-with-slack runs as a user LaunchAgent: it starts when you log in and restarts if it exits.
+awaydesk runs as a user LaunchAgent: it starts when you log in and restarts if it exits.
 It has to run inside your login session, because Claude Code keeps its credentials in the macOS
 Keychain. After the Mac restarts, it starts again when you log in.
 
 Only one instance may run. Slack spreads a Socket Mode app's events across all its open
-connections, so a second instance would receive part of your messages; code-with-slack refuses to
+connections, so a second instance would receive part of your messages; awaydesk refuses to
 start while another instance holds its lock.
 
 ### Folders macOS protects
@@ -275,25 +275,25 @@ start while another instance holds its lock.
     starts, or the first session in such a folder fails.
 
 macOS keeps `~/Documents`, `~/Desktop`, `~/Downloads` and a few other folders private to the
-apps you allowed. A program started from Terminal uses Terminal's permission; code-with-slack,
+apps you allowed. A program started from Terminal uses Terminal's permission; awaydesk,
 started by launchd, has none, and Claude Code fails to start in a directory there. The permission
-goes to the Python interpreter that runs code-with-slack:
+goes to the Python interpreter that runs awaydesk:
 
 - Show the interpreter in Finder (it sits in a hidden folder, so this is the simplest way to
   reach it):
 
   ```bash
-  open -R "$(readlink -f "$(head -1 ~/.local/share/uv/tools/code-with-slack/bin/code-with-slack | cut -c3-)")"
+  open -R "$(readlink -f "$(head -1 ~/.local/share/uv/tools/awaydesk/bin/awaydesk | cut -c3-)")"
   ```
 
-  The installed `code-with-slack` script starts with a line naming its interpreter (`#!` and a
+  The installed `awaydesk` script starts with a line naming its interpreter (`#!` and a
   path). The command cuts that path out, resolves the links to the real file, and shows it in
   Finder. That file is what launchd starts, so it is the one macOS asks permission for.
 - Open **System Settings**, **Privacy & Security**, **Full Disk Access**, and drag the selected
   file (`python3.12` or similar) from Finder into the list. Alternatively choose **+** and press
   **⌘⇧.** in the file picker to show hidden folders.
 - Check that the new entry is turned on. If the service is already running, restart it:
-  `launchctl kill TERM gui/$(id -u)/local.code-with-slack`.
+  `launchctl kill TERM gui/$(id -u)/local.awaydesk`.
 
 The permission belongs to that interpreter, which uv shares between the tools that use the same
 Python version: any of them started outside Terminal gets the same access. Projects outside the
@@ -301,24 +301,24 @@ protected folders need no permission at all.
 
 ### Write the plist and start it
 
-The plist lives at `~/Library/LaunchAgents/local.code-with-slack.plist`. launchd does not expand
+The plist lives at `~/Library/LaunchAgents/local.awaydesk.plist`. launchd does not expand
 `~` or `$HOME`, so the command below lets the shell write your home directory in full wherever
 the file needs it.
 
 11. Write the plist, then check it with `plutil`:
 
 ```bash
-mkdir -p ~/Library/LaunchAgents ~/Library/Logs/code-with-slack
-cat > ~/Library/LaunchAgents/local.code-with-slack.plist <<EOF
+mkdir -p ~/Library/LaunchAgents ~/Library/Logs/awaydesk
+cat > ~/Library/LaunchAgents/local.awaydesk.plist <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>local.code-with-slack</string>
+  <string>local.awaydesk</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$HOME/.local/bin/code-with-slack</string>
+    <string>$HOME/.local/bin/awaydesk</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -332,36 +332,36 @@ cat > ~/Library/LaunchAgents/local.code-with-slack.plist <<EOF
   <key>ExitTimeOut</key>
   <integer>60</integer>
   <key>StandardOutPath</key>
-  <string>$HOME/Library/Logs/code-with-slack/code-with-slack.log</string>
+  <string>$HOME/Library/Logs/awaydesk/awaydesk.log</string>
   <key>StandardErrorPath</key>
-  <string>$HOME/Library/Logs/code-with-slack/code-with-slack.log</string>
+  <string>$HOME/Library/Logs/awaydesk/awaydesk.log</string>
 </dict>
 </plist>
 EOF
-plutil -lint ~/Library/LaunchAgents/local.code-with-slack.plist
+plutil -lint ~/Library/LaunchAgents/local.awaydesk.plist
 ```
 
-`plutil -lint` prints `<path>/local.code-with-slack.plist: OK` when the file is well formed.
+`plutil -lint` prints `<path>/local.awaydesk.plist: OK` when the file is well formed.
 
 12. Load it. It starts at once, and again at every login:
 
     ```bash
-    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.code-with-slack.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.awaydesk.plist
     ```
 
 ### Checkpoint 3: the LaunchAgent runs it
 
 ```bash
-tail -n 5 ~/Library/Logs/code-with-slack/code-with-slack.log
+tail -n 5 ~/Library/Logs/awaydesk/awaydesk.log
 ```
 
 After a few seconds the log ends with the line of checkpoint 2:
 
 ```
-INFO code_with_slack: connected to Slack workspace <workspace id>
+INFO awaydesk: connected to Slack workspace <workspace id>
 ```
 
-A start that fails logs `ERROR code_with_slack:` and what to fix; launchd starts the daemon again
+A start that fails logs `ERROR awaydesk:` and what to fix; launchd starts the daemon again
 after each exit (`KeepAlive`), so the same line repeats until you fix it and restart the service.
 
 The log holds what the service did, never the content of your messages.
@@ -369,9 +369,9 @@ The log holds what the service did, never the content of your messages.
 To restart it, stop it, or read its state later:
 
 ```bash
-launchctl kill TERM gui/$(id -u)/local.code-with-slack
-launchctl bootout gui/$(id -u)/local.code-with-slack
-launchctl print gui/$(id -u)/local.code-with-slack
+launchctl kill TERM gui/$(id -u)/local.awaydesk
+launchctl bootout gui/$(id -u)/local.awaydesk
+launchctl print gui/$(id -u)/local.awaydesk
 ```
 
 What a restart waits for, and what each way of stopping does, is under
@@ -393,16 +393,16 @@ The bot answers one person, and the rest of this list protects what that person 
 - Your workspace has no other member and no other admin. The bot checks who writes; a workspace
   admin could still read or export what Claude prints.
 - Two-factor authentication is on for your Slack account. Whoever controls that account controls
-  the machine, and no check in code-with-slack can tell them apart from you.
-- Every channel is private and holds you and the bot only. code-with-slack refuses a channel that
+  the machine, and no check in awaydesk can tell them apart from you.
+- Every channel is private and holds you and the bot only. awaydesk refuses a channel that
   is public, shared, Slack Connect, or has a third member.
 - The app stays undistributed: never turn on public distribution under **Manage Distribution**.
 - The Slack MCP server stays off.
-- The Home tab is published to you alone: code-with-slack writes that page for no other member.
-- `~/.config/code-with-slack/.env` is mode `600`.
+- The Home tab is published to you alone: awaydesk writes that page for no other member.
+- `~/.config/awaydesk/.env` is mode `600`.
 - `SLACK_USER_TOKEN` is set only if you use the Home tab's Delete or Clean up: it acts as you in the whole
   workspace, and whoever reads `.env` can post and delete under your name.
-- Files you attach are copied to `$TMPDIR/code-with-slack/` (mode `700`) and stay there for 3
+- Files you attach are copied to `$TMPDIR/awaydesk/` (mode `700`) and stay there for 3
   days, so a conversation resumed after a restart still finds them.
 - Trust a folder in Claude Code only after reading its `.claude/` settings and hooks: trusting it
   is what lets a session from Slack start there.
@@ -436,17 +436,17 @@ sent to it resumes the session, as `claude --resume <id>` would.
 An audio clip recorded in Slack (the microphone in the message field, or **Record an Audio Clip**
 on the phone) can be the message. Send the clip, then choose **Generate transcript** on it: a
 long press on the message on the phone, the transcript button beside the player on desktop. When
-Slack has written the transcript, code-with-slack sends its text to Claude as if you had typed
+Slack has written the transcript, awaydesk sends its text to Claude as if you had typed
 it, in a new thread for a clip sent in the channel and in the same session for a clip sent in a
 thread. Until then it tells you, for you alone,
 ``Waiting for this clip's transcript: choose `Generate transcript` on the clip, and its text is sent to Claude.``
 A clip with no transcript after
 5 minutes is dropped, and you are told that nothing was sent; so is a clip that waits when
-code-with-slack restarts, without a message. Text you type with the clip comes before the
+awaydesk restarts, without a message. Text you type with the clip comes before the
 transcript. What Slack heard is always the message, never a `!word`: a clip cannot turn bypass
 on or stop a session.
 
-The transcript is Slack's: code-with-slack does not listen to the audio and sends it nowhere.
+The transcript is Slack's: awaydesk does not listen to the audio and sends it nowhere.
 Slack chooses the language it hears by itself, clip by clip. Of three clips spoken in Italian in
 a workspace set to English (Slack free plan, iOS app, 2026-10-09), it wrote one in Italian and
 two as English words that were not what was said, and those would have reached Claude as they
@@ -484,7 +484,7 @@ thread's folder, which is where the picker and `!resume` in the channel then lis
 
 ### Finding a session again: the Home tab
 
-Open code-with-slack from Slack's sidebar and choose its **Home** tab. It lists the sessions your
+Open awaydesk from Slack's sidebar and choose its **Home** tab. It lists the sessions your
 threads hold, one group per bound channel, the channel used last first. A channel shows its five
 newest sessions and, when it has more, a **Show all** button. Each session takes two lines, with
 a blank row before the next:
@@ -499,14 +499,14 @@ session.
 
 Four controls at the top of the page narrow it: a channel, a status, a period (`Last 48 hours`,
 `Today`, `Yesterday`, `Last 7 days`, `Last 30 days`, `Any time`, by the thread's last reply,
-the days being those of the machine code-with-slack runs on)
+the days being those of the machine awaydesk runs on)
 and a search on the titles (type a word and press Enter). The page starts on `Last 48 hours`.
 The controls add up, and with a channel, a status or a search chosen a channel shows every
 session that matches, not five. **Show all** chooses that channel. The choices last until
-code-with-slack restarts.
+awaydesk restarts.
 
 The page leaves out a thread whose root message was deleted and a channel Slack no longer has.
-It holds about 30 sessions at once and says so when it stops short. code-with-slack rewrites it
+It holds about 30 sessions at once and says so when it stops short. awaydesk rewrites it
 whenever a session starts, ends or changes status, and nothing notifies you when it does. The
 number of replies is read when a session starts or ends a turn, so a word typed in a thread
 (`!status`) is counted at the thread's next turn.
@@ -526,7 +526,7 @@ buttons `Delete thread` and `Cancel`:
 “Fix the footer” in #cc-articles, 19 replies. Every message of the thread is deleted from Slack, yours and the bot's. This cannot be undone. The session stays in Claude Code and can be resumed with !resume. Deleting takes about a minute.
 ```
 
-Confirmed, code-with-slack closes the thread's session if it is idle, deletes every message of
+Confirmed, awaydesk closes the thread's session if it is idle, deletes every message of
 the thread, the first one last, and forgets the thread. The Claude Code session is not touched:
 `!resume` lists it again.
 
@@ -549,7 +549,7 @@ then stays on the page:
 
 A message you send in a thread while it is being deleted starts nothing: you are told
 ``This thread holds no session.``, and the message goes with the rest. A restart of
-code-with-slack cuts a delete short; Delete continues it. Without the token the page has no
+awaydesk cuts a delete short; Delete continues it. Without the token the page has no
 Edit button.
 
 #### Cleaning up a channel
@@ -574,7 +574,7 @@ way. If Slack stops it, a line under the header names the channel and says
 If Slack refuses some messages, the rest still goes and the line reads
 `` Slack refused to delete 2 of that channel's messages (`cant_delete_message`): your workspace does not let you delete them. Every other one is gone. ``
 
-To keep the page one click away, star the app: open code-with-slack in Slack on desktop and
+To keep the page one click away, star the app: open awaydesk in Slack on desktop and
 click the star beside its name at the top of its page, or drag it from the apps list into
 **Starred**. It then sits in the **Starred** section at the top of the sidebar, and a click on
 it opens the Home tab. Slack's own steps for starring, mobile included, are in its Help Center
@@ -596,13 +596,13 @@ a `!` is never a command.
 
 | Word | At the top level (answered by a post in the channel) | Inside a session's thread (answered for you alone) |
 |---|---|---|
-| `!guide` | Explains in a few lines how code-with-slack works | Same, as an ephemeral message you alone see |
+| `!guide` | Explains in a few lines how awaydesk works | Same, as an ephemeral message you alone see |
 | `!bind` | Lists `ALLOWED_ROOT` itself (shown as `.`) and the folders up to two levels below it, never inside a git repository, that Claude Code trusts, with a **Bind** button each; the channel's own folder is marked when it is listed. At most 20 are shown, in path order; when there are more, the higher levels fill the list first. A click never ends a running turn: it is refused until every session of the channel is idle | Refused, in an ephemeral message: `!bind works in the channel, not inside a thread.` |
 | `!bind <folder>` | Binds the channel to a folder under `ALLOWED_ROOT`, given relative to it (`!bind my-project`); an absolute path inside it works too. A new channel does nothing else until bound. The answer names the folder each existing thread keeps working in, when it differs from the new one; every prompt sent in that thread after the bind gets the same notice, as an ephemeral message | Same refusal as above |
-| `!bypass on` / `off` | Refused, in a post in the channel: `Bypass belongs to one session: send !bypass on inside its thread.` | Switches that session to `bypassPermissions` and back, kept in `state.json` per thread: an idle close and a restart of code-with-slack keep it, `!resume` starts a session with it off. The answer is a line only you see, `Bypass is on in this session: every tool runs without asking, until !bypass off. It survives a restart.` or `Bypass is off in this session: Claude Code follows your permission settings again.`, and a ✅ on your word, which stays after a reload. Before the setup's Start (the setup waits, or was cancelled) the word changes nothing and answers `This session has not started yet: tick Bypass in its setup and press Start. If no setup is shown, send a message here first.` |
+| `!bypass on` / `off` | Refused, in a post in the channel: `Bypass belongs to one session: send !bypass on inside its thread.` | Switches that session to `bypassPermissions` and back, kept in `state.json` per thread: an idle close and a restart of awaydesk keep it, `!resume` starts a session with it off. The answer is a line only you see, `Bypass is on in this session: every tool runs without asking, until !bypass off. It survives a restart.` or `Bypass is off in this session: Claude Code follows your permission settings again.`, and a ✅ on your word, which stays after a reload. Before the setup's Start (the setup waits, or was cancelled) the word changes nothing and answers `This session has not started yet: tick Bypass in its setup and press Start. If no setup is shown, send a message here first.` |
 | `!status` | The channel's directory, then every live session of it, each linked to its thread, busy, waiting or idle, its bypass and running tasks, and its folder when it moved elsewhere | That session's directory, session id, the command that continues it in the terminal, its mode, the folder it works in when it moved elsewhere, then the footer's values one per line, in an ephemeral message |
 | `!stop` | Stops every running session of the channel and its background tasks, and denies its pending approvals; the answer is `Stopped what was running in this channel.`, or `Nothing is running in this channel.`; each stopped session's root shows ✅ | Stops that session the same way; the answer is `Stopped.`, or `Nothing is running in this session.`, in a message that stays in the thread; ✅ on the session's root. A stop you gave is not an error, so it never shows ❌ |
-| `!help [text]` | Says what makes a message a command, then lists code-with-slack's own words; Claude Code's own commands are listed inside a session's thread | The same line, then code-with-slack's own words and every command that session offers now, in an ephemeral message; with a text, only the lines whose name or description contains it, for example `!help model` |
+| `!help [text]` | Says what makes a message a command, then lists awaydesk's own words; Claude Code's own commands are listed inside a session's thread | The same line, then awaydesk's own words and every command that session offers now, in an ephemeral message; with a text, only the lines whose name or description contains it, for example `!help model` |
 | `!open` | Refused, in a post in the channel: ``Opening a file belongs to one session: send `!open` inside its thread.`` | Posts in the thread a message with a `Choose a file` button. It opens a modal with a search field and up to 10 rows, one for each file (its name, its folder below): the files changed in the session (left out when nothing changed or the folder holds no repository git may run in) while the field is empty, the files whose path contains what you type otherwise, updated on each character. `Open` shares the chosen row into the thread, where Slack opens it in its file viewer, and closes the modal; with no row chosen it says `Choose a file first.` and stays open |
 | `!open <path or words>` | Refused, as above | Shares the file at that path, relative to the session's folder, into the thread. Words that are no path open the file whose path contains them, in the same listing as the search, ignoring case; several matches post ``N files match `<words>` `` with the `Choose a file` button, which opens the modal with the words in its field. ``No file matches `<words>`.`` when none does. A path outside the folder, one that is no regular file, an empty file and a file over 1 MB are refused with a line only you see; `files:write` missing says so, and any other refusal by Slack shows Slack's error code |
 | `!resume` | Lists the twenty newest sessions of the channel's directory that no thread holds (not of other worktrees), terminal and Slack alike, as a post in the channel, each with the first 8 characters of its session id and a **Resume** button. A session already open in a thread of any channel has no row: the twenty rows are sessions you can resume, and a line under the list counts the open ones (`3 more are open in their own threads.`). A click resumes the session in the thread of your `!resume` message and removes the list from the channel; a list posted before that change answers `This list is out of date: send !resume again for a current one.` | Refused, in an ephemeral message: `!resume works in the channel, not inside a thread.` |
@@ -673,7 +673,7 @@ session never runs in two threads at once.
 A message with files: Claude sees a JPEG, PNG, GIF or WebP image (up to 7.5 MB and 8000x8000 px;
 at most 5 images and 15 MB of images per message) as an image. Any other image type (SVG, HEIC,
 TIFF...) is refused. A text, source code, PDF, JSON, XML, YAML or Jupyter notebook file, up to 100
-MB, reaches Claude as the path of a copy in `$TMPDIR/code-with-slack/`, kept 3 days; any other
+MB, reaches Claude as the path of a copy in `$TMPDIR/awaydesk/`, kept 3 days; any other
 file (archives, Office documents, binaries) is refused. A file past a limit, or one that fails to
 download, stops the whole message, and the reply says which file and why.
 
@@ -712,7 +712,7 @@ or with the thread opened on iOS first, it shows on both (seen on 2026-10-04, fi
 eye, one per condition; the method's reference does not describe it). The reply's cards and
 its footer do not depend on it.
 
-What code-with-slack says on its own (the answer to `!bind`, `!bypass` or `!stop`, a notice that
+What awaydesk says on its own (the answer to `!bind`, `!bypass` or `!stop`, a notice that
 it is restarting, a refused attachment, an error) shows small and grey, as the footer does, so it
 reads apart from Claude's replies. `!help`, `!guide`, `!status` and the answer to a resume show at
 full size.
@@ -736,7 +736,7 @@ its last tool; `!status` names that folder when it is not the thread's own. The 
 the one Claude Code reported at the end of the last turn, or the one set since with `!effort` (or
 `!model`); it reads `default` on a model that takes no effort level. A level set with `!effort` is
 kept for this thread and reapplied on every reconnect, so it survives an idle close and a restart
-of code-with-slack: the footer shows that level at once after the reconnect, until Claude Code's
+of awaydesk: the footer shows that level at once after the reconnect, until Claude Code's
 own report at the end of the next turn corrects it. With no stored level, the field is left out
 after a restart or an idle close until a turn ends normally (an interrupted turn or an API error
 reports no level either way). A model set with `!model` needs no such help, since Claude Code's
@@ -782,9 +782,9 @@ in [features.md](features.md#notifications), not restated here.
 | `Claude Code has not been trusted in ...`, after a message or a `!bind` | Open `claude` in that folder (the repository root) in the terminal, accept the trust dialog, and send the message again. For a worktree whose folder was moved by hand, run `git worktree repair` in it |
 | The terminal shows the trust dialog in a folder you already use from Slack, or Slack asks for approvals the folder's allow rules cover | The folder is outside a repository and only a parent folder is trusted, which Claude Code does not count for the `permissions.allow` rules and `additionalDirectories` of the folder's `.claude/settings.json`. Accept the dialog in that folder: it lists them |
 | `The directory ... no longer exists` | The thread's directory was moved or deleted: restore it to keep using this thread, or, in the channel, bind another folder with `!bind <path>` and send a new message to start a session there |
-| `macOS does not let code-with-slack read ...` | The directory is in a folder macOS protects: see Part 4, "Folders macOS protects" |
-| `another code-with-slack is running` in the log | A second instance tried to start; only one may run |
-| The app has no **Home** tab, or it stays empty | **Home Tab** is off in the app's settings, and the log says `the Home tab is not enabled in the Slack app`: turn it on under **App Home**, **Show Tabs**, then restart code-with-slack |
+| `macOS does not let awaydesk read ...` | The directory is in a folder macOS protects: see Part 4, "Folders macOS protects" |
+| `another awaydesk is running` in the log | A second instance tried to start; only one may run |
+| The app has no **Home** tab, or it stays empty | **Home Tab** is off in the app's settings, and the log says `the Home tab is not enabled in the Slack app`: turn it on under **App Home**, **Show Tabs**, then restart awaydesk |
 | `forgot channel ...: Slack no longer has it` in the log | The channel was deleted, or the bot was removed from it: its binding and its threads are gone from `state.json`. If the bot is back in it, send `!bind` there again |
 | `Slack finds none of the ... bound channels: nothing is forgotten` in the log | Every bound channel is out of the bot's reach: check that `SLACK_BOT_TOKEN` is the one of this workspace and that the bot is still in its channels |
 | A session is missing from the Home tab | The page starts on `Last 48 hours`: choose `Any time`. A thread whose root message was deleted, and a channel the bot is no longer in, are left out |
@@ -798,7 +798,7 @@ Detail that the install sequence links to, kept out of its way.
 | File | Written by | Holds |
 |---|---|---|
 | `.env` | you | the tokens and the settings of Part 2 |
-| `state.json` | code-with-slack | for each channel, its directory; for each of its threads, the folder it was opened in, its Claude Code session id, its bypass choice (on, off or never chosen), the effort level set with `/effort` and the status reaction on its root message |
+| `state.json` | awaydesk | for each channel, its directory; for each of its threads, the folder it was opened in, its Claude Code session id, its bypass choice (on, off or never chosen), the effort level set with `/effort` and the status reaction on its root message |
 
 `state.json` looks like this; you never need to edit it:
 
@@ -806,7 +806,7 @@ Detail that the install sequence links to, kept out of its way.
 {"version": 2, "channels": {"C0123456789": {"directory": "/home/dev/code/project", "notice_pending": false, "threads": {"1700000000.000100": {"directory": "/home/dev/code/project", "session_id": "...", "bypass": false, "effort": null}}}}}
 ```
 
-code-with-slack keeps `state.json` clean on its own, when it starts and then every 6 hours. It
+awaydesk keeps `state.json` clean on its own, when it starts and then every 6 hours. It
 forgets a channel Slack answers `channel_not_found` about, with its threads, and a thread whose
 Claude Code session no longer exists. Anything it cannot tell for certain stays: a rate limit, a
 server error or an unreadable folder removes nothing, and neither does a thread or a channel
@@ -819,10 +819,10 @@ the folder's sessions, which stay on disk.
 
 ### Restarts and shutdown
 
-On `SIGTERM` code-with-slack stops starting turns and lets everything already running finish: the
+On `SIGTERM` awaydesk stops starting turns and lets everything already running finish: the
 turns, the background commands and agents, which end with the Claude Code process, and the turn in
 which Claude reports each one. Then it exits, and `KeepAlive` starts it again. Meanwhile a new
-message gets `code-with-slack is restarting; send this again in a moment.`, a queued one ends with
+message gets `awaydesk is restarting; send this again in a moment.`, a queued one ends with
 the same request. Under that sentence the refusal lists each thread the restart still waits for,
 with a link to it and what holds it there (a turn, an approval or a question waiting for you,
 background tasks), so you know where to answer or send `!stop`; `!status` typed in a channel
@@ -831,15 +831,15 @@ them, since its answer is a post every member of the channel reads. An approval 
 a session that restarts the daemon can still finish its turn. The daemon's `!words` keep working:
 `!stop` ends a long turn so the restart goes on. A thread left with only background tasks says so
 in the line under its last message (`Restart waits for 1 shell · !stop ends it now`), since
-code-with-slack cannot tell whether a task such as a dev server ever ends; `!stop` there stops
+awaydesk cannot tell whether a task such as a dev server ever ends; `!stop` there stops
 them and the restart goes on. That line is no message: it does not ring, and it goes with the
 restart. A restart posts nothing in a thread that has nothing running, bypass on or not, since
 bypass outlives it. If Slack refuses the app that line, one message says what the restart waits
 for instead. The signal does not say who sent it, and a session that sends it
 has a turn running at that moment: for every session with a turn running when the signal arrives,
-code-with-slack waits for the turn but not for a background task the session starts after the
+awaydesk waits for the turn but not for a background task the session starts after the
 signal, such as a loop waiting for the new process, which could only end once this one has exited.
-The shutdown ends those tasks, and the session's root shows ✅. After 29 minutes code-with-slack stops waiting and ends what still
+The shutdown ends those tasks, and the session's root shows ✅. After 29 minutes awaydesk stops waiting and ends what still
 runs, whose replies say that it stopped. Sending the signal a second time stops without waiting.
 `SIGINT` (Ctrl-C in a terminal) stops without waiting too, because the terminal sends it to the
 Claude Code processes as well.
@@ -894,7 +894,7 @@ not widened: a repository that Claude Code does not trust is still refused.
 A channel bound by a version that held one session per channel keeps its directory, loses its old
 session pointer and bypass switch, and gets this message once, posted top-level, not as a reply:
 
-> code-with-slack now runs one Claude Code session per thread. Send a new message in the channel
+> awaydesk now runs one Claude Code session per thread. Send a new message in the channel
 > to start a session; reply in its thread to continue it. The session this channel had is still
 > in the folder: !resume brings it into a thread. Bypass is now set per session: send !bypass on
 > inside a thread.

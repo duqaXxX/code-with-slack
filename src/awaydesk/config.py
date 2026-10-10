@@ -1,4 +1,4 @@
-"""Load the daemon's configuration from ~/.config/code-with-slack/.env."""
+"""Load the daemon's configuration from ~/.config/awaydesk/.env."""
 
 import os
 import stat
@@ -7,7 +7,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
-CONFIG_DIR = Path.home() / ".config" / "code-with-slack"
+CONFIG_DIR = Path.home() / ".config" / "awaydesk"
 REQUIRED = ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_OWNER_USER_ID", "ALLOWED_ROOT")
 
 
@@ -23,7 +23,7 @@ class Config:
     allowed_root: Path
     config_dir: Path
     # The owner's own user token, optional: what deleting a thread's messages that are the
-    # owner's needs (`code_with_slack.delete`). None: the Home tab offers no delete.
+    # owner's needs (`awaydesk.delete`). None: the Home tab offers no delete.
     user_token: str | None = field(default=None, repr=False)
 
 
@@ -37,7 +37,7 @@ def load_config(config_dir: Path = CONFIG_DIR) -> Config:
     if not stat.S_ISREG(st.st_mode):
         raise ConfigError(f"{env_path} must be a regular file, not a link")
     if st.st_uid != os.getuid():
-        raise ConfigError(f"{env_path} must belong to the user running code-with-slack")
+        raise ConfigError(f"{env_path} must belong to the user running awaydesk")
     # The tokens drive a shell on this machine: nobody but the owner may read them.
     if st.st_mode & 0o077:
         raise ConfigError(f"{env_path} is readable by others; run: chmod 600 {env_path}")

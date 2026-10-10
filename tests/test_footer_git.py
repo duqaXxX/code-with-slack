@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from code_with_slack import footer
-from code_with_slack.footer import git_state
-from code_with_slack.trust import Repository, trusted_repository
+from awaydesk import footer
+from awaydesk.footer import git_state
+from awaydesk.trust import Repository, trusted_repository
 from tests.git_layouts import add_worktree, bare_layout, committed, git, trust
 
 Lookup = Callable[[Path], Awaitable[Repository | None]]

@@ -19,8 +19,8 @@ Neither card carries `details` or `output`: Slack appends both to what a card al
 
 from dataclasses import dataclass, field, replace
 
-from code_with_slack.render.previews import folded
-from code_with_slack.render.renderer import STOPPED, TaskStatus, TaskUpdate
+from awaydesk.render.previews import folded
+from awaydesk.render.renderer import STOPPED, TaskStatus, TaskUpdate
 
 ENDED = ("complete", "error")
 SEPARATOR = " · "

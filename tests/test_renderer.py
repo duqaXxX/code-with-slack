@@ -14,8 +14,8 @@ from claude_agent_sdk.types import (
     ToolUseBlock,
 )
 
-from code_with_slack import texts
-from code_with_slack.render.renderer import (
+from awaydesk import texts
+from awaydesk.render.renderer import (
     BACKGROUND,
     STOPPED,
     TaskUpdate,
@@ -332,7 +332,7 @@ async def test_statuses_are_only_the_ones_slack_accepts(name: str) -> None:
 
 
 def test_the_renderer_never_branches_on_a_tool_name() -> None:
-    source = (Path(__file__).parents[1] / "src/code_with_slack/render/renderer.py").read_text()
+    source = (Path(__file__).parents[1] / "src/awaydesk/render/renderer.py").read_text()
     assert not re.search(
         r"[\"'](Bash|Read|Write|Edit|Agent|Task|TodoWrite|AskUserQuestion|WebSearch)[\"']", source
     )

@@ -1,6 +1,6 @@
 {
   "display_information": {
-    "name": "code-with-slack",
+    "name": "awaydesk",
     "description": "Drive the Claude Code sessions on your own machine from private Slack channels. Powered by Claude.",
     "background_color": "#1f2328"
   },
@@ -11,7 +11,7 @@
       "messages_tab_read_only_enabled": true
     },
     "bot_user": {
-      "display_name": "code-with-slack",
+      "display_name": "awaydesk",
       "always_online": true
     }
   },

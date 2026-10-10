@@ -1,8 +1,8 @@
 from typing import Any
 
-from code_with_slack.render.fold import Fold
-from code_with_slack.render.previews import Preview
-from code_with_slack.render.renderer import STOPPED, TaskUpdate
+from awaydesk.render.fold import Fold
+from awaydesk.render.previews import Preview
+from awaydesk.render.renderer import STOPPED, TaskUpdate
 
 
 def call(id: str, name: str, status: str = "in_progress", **fields: Any) -> TaskUpdate:

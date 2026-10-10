@@ -1,7 +1,7 @@
 from typing import Any
 
-from code_with_slack import texts
-from code_with_slack.setup import (
+from awaydesk import texts
+from awaydesk.setup import (
     DEFAULT,
     SETUP_BLOCK,
     SETUP_BYPASS,

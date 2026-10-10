@@ -22,8 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from code_with_slack import openfile, texts
-from code_with_slack.openfile import (
+from awaydesk import openfile, texts
+from awaydesk.openfile import (
     CHOICE_ACTION,
     CHOICE_BLOCK,
     OPEN_BUTTON_ACTION,
@@ -53,7 +53,7 @@ from code_with_slack.openfile import (
     usable,
     walk_files,
 )
-from code_with_slack.trust import Repository, locate, trusted_repository
+from awaydesk.trust import Repository, locate, trusted_repository
 from tests.fakes import any_repository
 from tests.git_layouts import commit_at, committed, git, git_at, git_init, trust
 
@@ -87,7 +87,7 @@ def app(tmp_path: Path) -> Path:
 def test_basename_matches_come_first_then_the_shorter_path() -> None:
     paths = [
         "setup/readme.md",
-        "src/code_with_slack/setup.py",
+        "src/awaydesk/setup.py",
         "tests/test_setup.py",
         "docs/setup.md",
         "SETUP",
@@ -96,7 +96,7 @@ def test_basename_matches_come_first_then_the_shorter_path() -> None:
         "SETUP",
         "docs/setup.md",
         "tests/test_setup.py",
-        "src/code_with_slack/setup.py",
+        "src/awaydesk/setup.py",
         "setup/readme.md",
     ]
 
@@ -788,7 +788,7 @@ async def test_a_folder_inside_a_repository_lists_what_git_does_not_ignore(app: 
 async def test_the_files_of_nested_repositories_come_from_git_and_the_rest_from_disk(
     work: Path, lookup: Callable[[Path, Path], Awaitable[Repository | None]]
 ) -> None:
-    nested = git_init(work / "code-with-slack-workspace")
+    nested = git_init(work / "awaydesk-workspace")
     write(nested, ".gitignore", ".venv/\n")
     write_all(nested, "docs/setup.md", ".venv/lib/pkg.py")
     commit_all(nested)
@@ -801,9 +801,9 @@ async def test_the_files_of_nested_repositories_come_from_git_and_the_rest_from_
         "a/b/c/.venv/y.txt",
         "a/b/c/x.txt",
         "a/readme.md",
-        "code-with-slack-workspace/.gitignore",
-        "code-with-slack-workspace/docs/new.md",
-        "code-with-slack-workspace/docs/setup.md",
+        "awaydesk-workspace/.gitignore",
+        "awaydesk-workspace/docs/new.md",
+        "awaydesk-workspace/docs/setup.md",
         "notes.md",
     ]
 

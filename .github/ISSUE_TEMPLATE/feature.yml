@@ -1,5 +1,5 @@
 name: Feature request
-description: Something code-with-slack should do and does not.
+description: Something awaydesk should do and does not.
 labels: ["enhancement"]
 body:
   - type: markdown
@@ -11,14 +11,14 @@ body:
     id: problem
     attributes:
       label: The problem
-      description: What you tried to do from Slack, and where code-with-slack got in the way.
+      description: What you tried to do from Slack, and where awaydesk got in the way.
     validations:
       required: true
   - type: textarea
     id: terminal
     attributes:
       label: How the Claude Code terminal does it
-      description: code-with-slack follows the terminal. Say how the same thing looks or works there, if it exists.
+      description: awaydesk follows the terminal. Say how the same thing looks or works there, if it exists.
   - type: textarea
     id: proposal
     attributes:

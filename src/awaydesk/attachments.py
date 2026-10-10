@@ -23,8 +23,8 @@ from urllib.parse import urlsplit
 
 import aiohttp
 
-from code_with_slack import texts
-from code_with_slack.prompt import ContentBlock, Prompt
+from awaydesk import texts
+from awaydesk.prompt import ContentBlock, Prompt
 
 # Claude's vision limits (platform.claude.com, "Vision", read 2026-09-25): JPEG, PNG, GIF and
 # WebP, 10 MB base64-encoded per image through the API, 8000x8000 px.
@@ -163,7 +163,7 @@ def saved_name(file: dict[str, Any]) -> str:
 
 
 def uploads_dir() -> Path:
-    return Path(tempfile.gettempdir()) / "code-with-slack"
+    return Path(tempfile.gettempdir()) / "awaydesk"
 
 
 def _private(folder: Path) -> bool:

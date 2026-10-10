@@ -21,7 +21,7 @@ BASE = {"pinned": "0.2.158", "latest": "0.2.160", "latest_cli": "2.1.285", "fixt
 
 def test_a_new_release_names_its_versions_and_asks_for_the_checks() -> None:
     out = report(**BASE, outcome="pass", last_commented="")
-    assert out["title"] == "claude-agent-sdk 0.2.160: test code-with-slack against it"
+    assert out["title"] == "claude-agent-sdk 0.2.160: test awaydesk against it"
     body = out["body"]
     for value in ("0.2.158", "0.2.160", "2.1.285", "2.1.280", "pass"):
         assert value in body

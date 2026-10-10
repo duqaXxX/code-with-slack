@@ -3,7 +3,7 @@
 UNBOUND = (
     "This channel is not bound to a folder yet. Send `!bind` to choose one of the folders "
     "Claude Code trusts, or `!bind <folder>` with the folder's path relative to `{root}`, for "
-    "example `!bind my-project`. `!guide` explains how code-with-slack works."
+    "example `!bind my-project`. `!guide` explains how awaydesk works."
 )
 AUTH_FAILED = (
     "Claude Code is not logged in on the host. On that machine, run `claude`, then `/login`. "
@@ -18,7 +18,7 @@ LOGOUT_ON_HOST = (
     "It is never done from Slack."
 )
 CHANNEL_REFUSED = (
-    "code-with-slack does not work in this channel: {reason}. It answers only in a private "
+    "awaydesk does not work in this channel: {reason}. It answers only in a private "
     "channel whose only members are you and the bot."
 )
 REASON_NOT_PRIVATE = "it is not a private channel"
@@ -36,7 +36,7 @@ DIRECTORY_UNTRUSTED = (
     "send your message again."
 )
 DIRECTORY_UNREADABLE = (
-    "macOS does not let code-with-slack read `{directory}`. Grant access in System Settings, "
+    "macOS does not let awaydesk read `{directory}`. Grant access in System Settings, "
     "Privacy & Security, Full Disk Access (see docs/setup.md, Part 4)."
 )
 SESSION_GONE = (
@@ -91,16 +91,16 @@ STOP_OUTSIDE_SESSION = (
 )
 CLEAR_IN_THREAD = "One thread is one session: send a new message in the channel to start a new one."
 UPGRADE_NOTICE = (
-    "code-with-slack now runs one Claude Code session per thread. Send a new message in the "
+    "awaydesk now runs one Claude Code session per thread. Send a new message in the "
     "channel to start a session; reply in its thread to continue it. The session this channel "
     "had is still in the folder: !resume brings it into a thread. Bypass is now set per "
     "session: send !bypass on inside a thread."
 )
 ERROR_REPLY = "Claude Code reported an error: `{error}`"
 ENDED = "_This reply ended before an answer: {reason}._"
-ENDED_SHUTDOWN = "code-with-slack stopped"
+ENDED_SHUTDOWN = "awaydesk stopped"
 # Crash repair (issue #19): what a reply the daemon died in the middle of ends with.
-STOPPED_BEFORE_ANSWER = "code-with-slack stopped before this answer."
+STOPPED_BEFORE_ANSWER = "awaydesk stopped before this answer."
 # Messages a restart or a failure dropped from the queue (S3): they get no reply of their own,
 # one note names them. `{because}` is one of the two phrases below.
 NOT_SENT_ONE = "1 message was not sent because {because}: send it again."
@@ -114,17 +114,17 @@ TAKEN_INTO_REPLY_MANY = (
     "Claude Code took {count} messages into this reply: "
     "send them again if they are not answered here."
 )
-BECAUSE_RESTARTED = "code-with-slack restarted"
-BECAUSE_SHUTDOWN = "code-with-slack stopped"
+BECAUSE_RESTARTED = "awaydesk restarted"
+BECAUSE_SHUTDOWN = "awaydesk stopped"
 BECAUSE_STOPPED = "Claude Code stopped"
-ENDED_RESTARTING = "code-with-slack is restarting; send your message again in a moment"
+ENDED_RESTARTING = "awaydesk is restarting; send your message again in a moment"
 # Never shown: an idle close (D9) always finds nothing running, sent or queued to end with it.
-ENDED_IDLE = "code-with-slack closed this idle session"
-RESTARTING = "code-with-slack is restarting; send this again in a moment."
+ENDED_IDLE = "awaydesk closed this idle session"
+RESTARTING = "awaydesk is restarting; send this again in a moment."
 # Under RESTARTING, and after a channel's `!status`, while a stop waits: one row per thread that
 # holds it (issue #119). mrkdwn.
 RESTART_WAITS_FOR = "It is waiting for:"
-RESTART_WAITS_HEADER = "code-with-slack is restarting. " + RESTART_WAITS_FOR
+RESTART_WAITS_HEADER = "awaydesk is restarting. " + RESTART_WAITS_FOR
 RESTART_WAIT_ROW = "• <#{channel}>, {link}: {hold}"
 RESTART_WAIT_SESSION = "Session"  # the link's label for a session with no title yet
 RESTART_WAIT_STOP = "`!stop` in a thread ends the wait there."
@@ -182,7 +182,7 @@ UPLOAD_IMAGE_TYPE = (
 UPLOAD_IMAGE_SIZE = "is {size}, over the {limit} Claude accepts for an image"
 UPLOAD_IMAGE_SIDE = "is {width}x{height} px, over the 8000x8000 px Claude accepts for an image"
 UPLOAD_FILE_TYPE = (
-    "is a `{mimetype}` file, and code-with-slack passes on only text, source code, PDF, JSON, "
+    "is a `{mimetype}` file, and awaydesk passes on only text, source code, PDF, JSON, "
     "XML, YAML and notebook files"
 )
 UPLOAD_FILE_SIZE = "is {size}, over the {limit} limit for a file"
@@ -197,7 +197,7 @@ SESSION_CLOSED = (
     "Nothing was done: this session closed while it ran (idle for a while, or the daemon "
     "restarted). Send it again if it is still meant."
 )
-UPLOAD_NOT_SHARED = "is not a file shared in this channel that code-with-slack can download"
+UPLOAD_NOT_SHARED = "is not a file shared in this channel that awaydesk can download"
 UPLOAD_DOWNLOAD = "could not be downloaded ({error})"
 BIND_LIST = "Folders under `{root}` that Claude Code trusts:"
 BIND_EMPTY = (
@@ -238,8 +238,7 @@ RESTART_WAITS = "Restart waits for {counts} · !stop ends {them} now"
 RESTART_WAITS_STATUS = "is waiting to restart: {counts} still running"
 # The same as a message, only where Slack refuses the app a thread status.
 RESTART_WAITS_MESSAGE = (
-    "code-with-slack is restarting once these background tasks end: {counts}. "
-    "`!stop` ends them now."
+    "awaydesk is restarting once these background tasks end: {counts}. `!stop` ends them now."
 )
 NOTHING_TO_STOP = "Nothing is running in this channel."
 # Both answers to `!stop` in a thread are posts that stay: an ephemeral line is gone on reload.
@@ -252,12 +251,9 @@ HOLD_QUESTION = "Another session is working in this folder: {link}. Send anyway?
 HOLD_CONTINUE_BUTTON = "Send anyway"
 HOLD_CANCEL_BUTTON = "Don't send"
 HOLD_UNPOSTED = (
-    "code-with-slack could not show this question in Slack, so the message was not sent. "
-    "Send it again."
+    "awaydesk could not show this question in Slack, so the message was not sent. Send it again."
 )
-HOLD_GONE = (
-    "This question is no longer open: it was already answered, or code-with-slack restarted."
-)
+HOLD_GONE = "This question is no longer open: it was already answered, or awaydesk restarted."
 NOT_SENT = "Not sent."
 # Session setup: asked once per top-level message, before the first prompt of a new session.
 SETUP_FALLBACK = "Set up this session"
@@ -314,13 +310,13 @@ STATUS_CHANNEL_SESSION = "Session"  # the link's label for a session with no tit
 STATUS_CHANNEL_BYPASS = " · ⚡ bypass"
 STATUS_CHANNEL_FOLDER = " · folder `{directory}`"
 STATUS_CHANNEL_LINK_FALLBACK = "thread `{thread_ts}`"
-HELP_OWN = "**code-with-slack**"
+HELP_OWN = "**awaydesk**"
 HELP_RULE = (
     "A message that starts with `!` is a command, in code or bold too. To send it as text, put "
     "anything before the `!`, as in `\\!goal`."
 )
 HELP_WORDS = (
-    "`!guide` how code-with-slack works, in a few lines; in the channel or inside a thread",
+    "`!guide` how awaydesk works, in a few lines; in the channel or inside a thread",
     "`!help [text]` this list, or only the lines that contain the text; in the channel or "
     "inside a thread",
     "`!status` in the channel: every session's state; inside a thread: that session's "
@@ -358,8 +354,8 @@ QUESTION_NEXT = "Next ({number}/{count})"
 QUESTION_OTHER = "Other"
 QUESTION_OTHER_HINT = "Or type your own answer"
 APPROVAL_CUT = "_{count} characters of this request are not shown: Deny it unless you know them._"
-APPROVAL_UNPOSTED = "code-with-slack could not show this request in Slack, so nobody approved it."
-APPROVAL_GONE = "This request is no longer pending: the turn ended or code-with-slack restarted."
+APPROVAL_UNPOSTED = "awaydesk could not show this request in Slack, so nobody approved it."
+APPROVAL_GONE = "This request is no longer pending: the turn ended or awaydesk restarted."
 RESUME_LIST = "Sessions in `{directory}`, newest first:"
 RESUME_EMPTY = "No sessions in `{directory}` yet."
 # Every session of the folder is already open in a thread: the list has no row to offer.
@@ -483,7 +479,7 @@ HOME_SEARCH_LABEL = "Search titles"
 HOME_SEARCH_HINT = "Type a word and press Enter"
 # `!guide`: how to use the bot, in the owner's words. tests/test_commands.py fails when a word of
 # the daemon is missing here; keep the tone plain and every line true of the current behaviour.
-GUIDE = """**code-with-slack**
+GUIDE = """**awaydesk**
 This channel runs Claude Code on your Mac, in one folder, and answers you alone. One Slack \
 thread is one Claude Code session: a top-level message starts a new one, and a reply inside its \
 thread continues it, even days later.
@@ -505,7 +501,7 @@ message with those choices, and `!stop` cancels it instead.
 **Commands**
 Claude Code's commands start with `!` instead of `/`: `!compact`, `!model opus`. They run inside \
 a session's thread, where `!help` lists every command that session offers, and `!help <text>` \
-filters the list; typed in the channel, `!help` lists code-with-slack's own words instead. \
+filters the list; typed in the channel, `!help` lists awaydesk's own words instead. \
 `!clear` (`!reset`, `!new`) is refused inside a thread (one thread is one session): start a \
 fresh session with a new top-level message instead.
 
@@ -533,7 +529,7 @@ leaves out what `.gitignore` excludes inside a git repository. A file over 1 MB 
 
 **Bypass**
 `!bypass on`, sent inside a session's thread, lets Claude Code run every tool without asking in \
-that session, until `!bypass off`; a restart of code-with-slack keeps it. The footer shows ⚡ \
+that session, until `!bypass off`; a restart of awaydesk keeps it. The footer shows ⚡ \
 bypass while it is on.
 
 `!guide` shows this text again."""

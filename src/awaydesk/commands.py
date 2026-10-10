@@ -1,4 +1,4 @@
-"""Commands typed as messages: `!word`. A few words are code-with-slack's own; any other
+"""Commands typed as messages: `!word`. A few words are awaydesk's own; any other
 `!name args` is a Claude Code command, so a command a new Claude Code release adds works at once.
 
 Slack never delivers a message that starts with `/` to the bot (measured 2026-09-23), so
@@ -9,8 +9,8 @@ Claude Code's own slash is replaced by `!`, as the official Claude app for Slack
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from code_with_slack import texts
-from code_with_slack.render.escape import markdown_escape
+from awaydesk import texts
+from awaydesk.render.escape import markdown_escape
 
 
 @dataclass(frozen=True)

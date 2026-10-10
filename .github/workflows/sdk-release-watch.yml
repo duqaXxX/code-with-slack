@@ -1,4 +1,4 @@
-# code-with-slack pins claude-agent-sdk and runs the Claude Code CLI it bundles, whose message
+# awaydesk pins claude-agent-sdk and runs the Claude Code CLI it bundles, whose message
 # shapes the tests' fixtures record. This asks, every day, whether the suite still passes on the
 # SDK release PyPI serves now, and keeps one issue with the answer and the checks left to do by hand.
 # Dependabot's weekly pull request still moves the pin; this is the checklist beside it.

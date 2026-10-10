@@ -27,9 +27,9 @@ from claude_agent_sdk.types import (
     ToolUseBlock,
 )
 
-from code_with_slack import texts
-from code_with_slack.footer import format_tokens
-from code_with_slack.render.previews import PREVIEWED, Preview, answered, preview
+from awaydesk import texts
+from awaydesk.footer import format_tokens
+from awaydesk.render.previews import PREVIEWED, Preview, answered, preview
 
 TaskStatus = Literal["pending", "in_progress", "complete", "error"]
 TaskFrame = TaskStartedMessage | TaskProgressMessage | TaskNotificationMessage | TaskUpdatedMessage

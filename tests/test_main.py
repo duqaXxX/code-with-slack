@@ -12,11 +12,11 @@ from typing import Any
 import pytest
 from claude_agent_sdk import SDKSessionInfo
 
-from code_with_slack import __main__ as entry
-from code_with_slack import texts
-from code_with_slack.home import Home
-from code_with_slack.lock import single_instance
-from code_with_slack.state import StateStore
+from awaydesk import __main__ as entry
+from awaydesk import texts
+from awaydesk.home import Home
+from awaydesk.lock import single_instance
+from awaydesk.state import StateStore
 from tests.fakes import CHANNEL, FakeSlack, slack_payload
 from tests.test_repair import slack_error
 from tests.test_sessions import until
@@ -76,7 +76,7 @@ async def test_run_prunes_stale_threads_and_survives_alive_raising(
     def broken_list_sessions(*, directory: str, include_worktrees: bool) -> list[SDKSessionInfo]:
         raise PermissionError("transcripts unreadable")
 
-    monkeypatch.setattr("code_with_slack.sessions.list_sessions", broken_list_sessions)
+    monkeypatch.setattr("awaydesk.sessions.list_sessions", broken_list_sessions)
     monkeypatch.setattr(entry, "AsyncWebClient", lambda token, retry_handlers=None: FakeSlack())
     monkeypatch.setattr(entry, "AsyncSocketModeHandler", _FakeHandler)
 
@@ -147,7 +147,7 @@ async def test_run_publishes_the_session_index_once_started_and_after_a_change(
         stores.append(StateStore(path))
         return stores[-1]
 
-    monkeypatch.setattr("code_with_slack.sessions.list_sessions", one_session)
+    monkeypatch.setattr("awaydesk.sessions.list_sessions", one_session)
     monkeypatch.setattr(entry, "AsyncWebClient", lambda token, retry_handlers=None: fake_slack)
     monkeypatch.setattr(entry, "AsyncSocketModeHandler", _FakeHandler)
     monkeypatch.setattr(entry, "StateStore", recording_store)
@@ -324,7 +324,7 @@ def test_no_name_carries_claude_code() -> None:
     ]
     pyproject = (ROOT / "pyproject.toml").read_text()
     assert all("claude code" not in n.lower() for n in names)
-    assert 'name = "code-with-slack"' in pyproject
+    assert 'name = "awaydesk"' in pyproject
 
 
 def test_the_manifest_asks_for_the_minimum() -> None:
@@ -391,7 +391,7 @@ def test_alive_sessions_reads_directory_sessions(
         assert directory == str(tmp_path) and include_worktrees is False
         return [SDKSessionInfo("sid-1", "", 0, 1), SDKSessionInfo("sid-2", "", 0, 1)]
 
-    monkeypatch.setattr("code_with_slack.sessions.list_sessions", fake_list_sessions)
+    monkeypatch.setattr("awaydesk.sessions.list_sessions", fake_list_sessions)
     assert entry._alive_sessions(tmp_path) == {"sid-1", "sid-2"}
 
 
@@ -413,7 +413,7 @@ def test_alive_sessions_keeps_a_transcript_list_sessions_filters_out(
     def fake_list_sessions(*, directory: str, include_worktrees: bool) -> list[SDKSessionInfo]:
         return []  # filtered out by the SDK's own listing rules, not actually gone
 
-    monkeypatch.setattr("code_with_slack.sessions.list_sessions", fake_list_sessions)
+    monkeypatch.setattr("awaydesk.sessions.list_sessions", fake_list_sessions)
     assert entry._alive_sessions(project) == {"68da9311-0000-4000-8000-000000000001"}
 
 
@@ -447,7 +447,7 @@ def test_prune_uses_alive_sessions_to_drop_a_gone_thread(
     def fake_list_sessions(*, directory: str, include_worktrees: bool) -> list[SDKSessionInfo]:
         return []
 
-    monkeypatch.setattr("code_with_slack.sessions.list_sessions", fake_list_sessions)
+    monkeypatch.setattr("awaydesk.sessions.list_sessions", fake_list_sessions)
     removed = state.prune(entry._alive_sessions, time.time())
     assert removed == 1
     assert state.thread(CHANNEL, "1780000000.000001") is None
@@ -461,7 +461,7 @@ def test_alive_sessions_cannot_decide_a_long_folder_it_does_not_find(
     # there proves nothing, so `_alive_sessions` answers None and prune keeps the threads.
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / ("p" * 220)
-    monkeypatch.setattr("code_with_slack.sessions.list_sessions", lambda **_: [])
+    monkeypatch.setattr("awaydesk.sessions.list_sessions", lambda **_: [])
     assert entry._alive_sessions(project) is None
 
 
@@ -469,15 +469,15 @@ def test_alive_sessions_decides_a_short_folder_it_does_not_find(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setattr("code_with_slack.sessions.list_sessions", lambda **_: [])
+    monkeypatch.setattr("awaydesk.sessions.list_sessions", lambda **_: [])
     assert entry._alive_sessions(tmp_path / "project") == set()
 
 
 async def test_the_user_token_must_be_the_owner_s_own_in_the_bot_s_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from code_with_slack.config import ConfigError
-    from code_with_slack.guards import Identity
+    from awaydesk.config import ConfigError
+    from awaydesk.guards import Identity
 
     identity = Identity("U000ALICE", "T000TEAM", "U000BOT")
     state = StateStore(tmp_path / "state.json")

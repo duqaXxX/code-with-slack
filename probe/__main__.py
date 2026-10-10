@@ -1,4 +1,4 @@
-"""Does code-with-slack still work on this claude-agent-sdk release?
+"""Does awaydesk still work on this claude-agent-sdk release?
 
     uv run python -m probe            run if the pinned claude-agent-sdk is not certified yet
     uv run python -m probe --force    run anyway

@@ -14,11 +14,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage
 
-from code_with_slack.render.escape import mrkdwn_escape
-from code_with_slack.trust import Repository
+from awaydesk.render.escape import mrkdwn_escape
+from awaydesk.trust import Repository
 
 if TYPE_CHECKING:  # sessions imports this module
-    from code_with_slack.sessions import ClaudeClient
+    from awaydesk.sessions import ClaudeClient
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +161,7 @@ class UsageProbe:
 
 async def run_git(repository: Repository, *args: str) -> str | None:
     """`git` on `repository`: its output, or None when it fails. The caller holds the time
-    limit (`git_state` here, `code_with_slack.openfile` for `!open`), and chooses commands that
+    limit (`git_state` here, `awaydesk.openfile` for `!open`), and chooses commands that
     never write the index (see `_changes`)."""
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -234,7 +234,7 @@ async def git_state(
     """The branch and the changes of the repository holding `here`, each None when unknown.
 
     `repository` answers only for a repository the owner trusted in Claude Code, or one inside the
-    folder the session started in (`code_with_slack.trust.trusted_repository`): anywhere else no
+    folder the session started in (`awaydesk.trust.trusted_repository`): anywhere else no
     git runs, since a diff runs the filters a repository's config names. Every call shares one
     `GIT_TIMEOUT`.
     """

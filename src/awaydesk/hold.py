@@ -14,7 +14,7 @@ import secrets
 from dataclasses import dataclass, field
 from typing import Any
 
-from code_with_slack import texts
+from awaydesk import texts
 
 HOLD_CONTINUE = "hold_continue"
 HOLD_CANCEL = "hold_cancel"

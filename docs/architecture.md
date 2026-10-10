@@ -1,6 +1,6 @@
 # Architecture
 
-code-with-slack is one Python process. It holds a Slack Socket Mode connection and one Claude
+awaydesk is one Python process. It holds a Slack Socket Mode connection and one Claude
 Agent SDK client per live thread session, across every bound channel, all on one asyncio event
 loop.
 
@@ -82,7 +82,7 @@ in "Measured platform behaviour" at the end.
 
 ## Startup
 
-`code-with-slack` (`code_with_slack.__main__.main`) starts in this order:
+`awaydesk` (`awaydesk.__main__.main`) starts in this order:
 
 1. It loads the configuration (`config.load_config`), so a bad `.env` fails before anything else.
 2. It takes the single-instance lock (`lock.single_instance`), so a second daemon fails before it
@@ -93,8 +93,8 @@ in "Measured platform behaviour" at the end.
 5. It installs the `SIGTERM` and `SIGINT` handlers, so a signal that arrives during a long repair
    is caught and not left to Python's default, which would end the process at once.
 6. With that client, Socket Mode not opened yet, it repairs what a crashed daemon left open
-   (`code_with_slack.repair.repair_crash`, see "State and the single-instance lock") and then
-   cleans `state.json` (`code_with_slack.cleanup.clean`, see "Cleaning `state.json`"). Cleaning
+   (`awaydesk.repair.repair_crash`, see "State and the single-instance lock") and then
+   cleans `state.json` (`awaydesk.cleanup.clean`, see "Cleaning `state.json`"). Cleaning
    runs only after repair, so a pruned thread's leftovers are still repaired first, and it runs
    again every `cleanup.CLEAN_EVERY_SECONDS` until a stop begins.
 7. It asks for the first session index (`Home.request`, see "The session index").
@@ -103,7 +103,7 @@ in "Measured platform behaviour" at the end.
    message of its own, not a reply.
 
 Logs go to standard error, which the LaunchAgent writes to
-`~/Library/Logs/code-with-slack/code-with-slack.log`.
+`~/Library/Logs/awaydesk/awaydesk.log`.
 
 ### Shutdown
 
@@ -117,7 +117,7 @@ Logs go to standard error, which the LaunchAgent writes to
 - A new prompt gets `texts.RESTARTING` and, under it, the threads the stop still waits for
   (`refuse_restarting`, from `SessionManager.restart_holds`).
 - A queued turn is dropped without a reply of its own (`ThreadSession.drop_queued`). One note
-  (`sessions.not_sent`, `N messages were not sent because code-with-slack restarted: send them
+  (`sessions.not_sent`, `N messages were not sent because awaydesk restarted: send them
   again.`, with the start of each) is added to the end of the thread's running reply, or posted as
   a message of its own when nothing runs.
 - Approvals and questions stay open: the Socket Mode connection closes only after the drain.
@@ -145,18 +145,18 @@ claude-agent-sdk starts in the daemon's process group.
 
 ## Configuration
 
-`code_with_slack.config.load_config` reads `~/.config/code-with-slack/.env` with
+`awaydesk.config.load_config` reads `~/.config/awaydesk/.env` with
 `python-dotenv`, without copying anything into the process environment. It refuses a file that
 is not a regular file, belongs to another user, or is readable by group or others, and it
 refuses tokens of the wrong kind. [setup.md](setup.md) lists the variables.
 
 ## State and the single-instance lock
 
-`code_with_slack.state.StateStore` keeps, for each bound channel, its directory and, for each of
+`awaydesk.state.StateStore` keeps, for each bound channel, its directory and, for each of
 its threads, the folder it was opened in, its Claude Code session id, its bypass choice (on, off, or
 never chosen), the effort level set with `/effort` and `ended`, the reaction name of its root once
 ✅ or ❌ is requested (cleared when the root turns ⏳ or ✋ again; read only by the session index),
-in `~/.config/code-with-slack/state.json` (version 2). `bypass` is `true` for on and `false` for
+in `~/.config/awaydesk/state.json` (version 2). `bypass` is `true` for on and `false` for
 not on; an explicit off also writes `bypass_off: true`, and a thread with `bypass` false and no
 `bypass_off` has never chosen. A reader that does not know `bypass_off` takes an off as not on.
 Every change is written to a temporary file beside it, synced, and renamed over it, so a crash
@@ -183,7 +183,7 @@ A graceful close (`ThreadSession.close`) clears all three for its thread once it
 the fields looked like partway through (`StateStore.clear_repair`), so only a crash ever leaves
 them set.
 
-On start, before the Socket Mode connection opens, `code_with_slack.repair.repair_crash` repairs
+On start, before the Socket Mode connection opens, `awaydesk.repair.repair_crash` repairs
 every thread `state.json` still shows as left open. For each open reply it stops the message's
 stream (`chat.stopStream`; `message_not_in_streaming_state` means Slack closed it already, at 5
 minutes, and is fine), reads the message back by its own ts (`conversations.replies` with `ts`
@@ -198,13 +198,13 @@ attempted, successfully or not (a failed `state.json` write here is logged and s
 left to break startup), so a second start never retries what an earlier one gave up on; one
 thread's failure is logged and does not stop the others.
 
-`code_with_slack.lock.single_instance` holds an exclusive `flock` on the configuration directory
+`awaydesk.lock.single_instance` holds an exclusive `flock` on the configuration directory
 itself. A second process fails to start. The kernel releases the lock when the holder exits, so
 a crash leaves no stale lock and no lock file.
 
 ### Cleaning `state.json`
 
-`code_with_slack.cleanup.clean` runs on start and then every `cleanup.CLEAN_EVERY_SECONDS`
+`awaydesk.cleanup.clean` runs on start and then every `cleanup.CLEAN_EVERY_SECONDS`
 (`__main__._clean_every`), and removes only what an answer makes certain:
 
 - `cleanup.forget_gone_channels` asks `conversations.info` about each bound channel and removes,
@@ -228,10 +228,10 @@ one tries again.
 Every inbound path that acts (a message, including a `!word`, and a button) runs two checks of its
 own before anything reaches Claude Code:
 
-1. `code_with_slack.guards.is_owner`: the Slack user is the configured owner AND the workspace is
+1. `awaydesk.guards.is_owner`: the Slack user is the configured owner AND the workspace is
    the one `auth.test` reported at startup. A click from a user whose home workspace differs is
    refused.
-2. `code_with_slack.guards.ChannelGuard.refusal`: the channel is private, not shared with another
+2. `awaydesk.guards.ChannelGuard.refusal`: the channel is private, not shared with another
    workspace, and its members are exactly the owner and the bot. It is read from Slack every
    time, so inviting a third person stops the bot in that channel at once.
 
@@ -273,7 +273,7 @@ and a value in any other shape answers `texts.RESUME_STALE`.
 
 ## Attached files
 
-`code_with_slack.attachments` handles the files of a `file_share` message before anything reaches
+`awaydesk.attachments` handles the files of a `file_share` message before anything reaches
 Claude Code. Every file is checked first (`attachments.refusal`): its download URL must be
 `https://files.slack.com/...`, the only host that receives the bot token, and an image must be JPEG,
 PNG, GIF or WebP, at most 7.5 MB (10 MB once base64-encoded) and 8000x8000 px, the limits of
@@ -285,7 +285,7 @@ sent again at every turn, and a request is capped at 32 MB. Then the files are d
 with the bot token and no redirect followed; `attachments.download` checks the host again beside the
 header. Slack answers 302 when the app lacks `files:read` (measured: "Download without files:read").
 An image becomes an image block, and the turn's prompt one user message of content blocks, sent
-through the SDK's streaming input; any other file is saved to `$TMPDIR/code-with-slack/` and its
+through the SDK's streaming input; any other file is saved to `$TMPDIR/awaydesk/` and its
 path is appended to the prompt, but only once every file arrived, so a failed message leaves no
 copy. The folder must be a directory of this user with mode 700, or nothing is written there; at
 each start the files older than 3 days are removed, so a conversation resumed after a restart still
@@ -297,7 +297,7 @@ submit is retried once against a freshly looked-up session for the same thread.
 
 ## Rendering
 
-`code_with_slack.render.renderer.TurnRenderer` reads SDK message types only, never tool names, so
+`awaydesk.render.renderer.TurnRenderer` reads SDK message types only, never tool names, so
 a tool Claude Code adds later shows in the reply with no code change. The table says "line" for
 what the model holds per tool (`renderer.TaskUpdate`); the sink draws the lines on task cards, two
 for a run of calls and one for a line with a view of its own (see below).
@@ -370,7 +370,7 @@ second `TaskStartedMessage`.
 
 ## Writing to Slack
 
-`code_with_slack.render.sinks.ReplySink` writes each reply as a native Slack stream inside the
+`awaydesk.render.sinks.ReplySink` writes each reply as a native Slack stream inside the
 session's own thread, below the message that asked for it (`chat.startStream` in chunks mode,
 addressed to the owner's user and team). The stream starts with Claude's first content, its first
 text or the card of the first tool when a turn opens with one, and never with a placeholder. It
@@ -689,7 +689,7 @@ for another reason, it ends with the error line a prompt would get.
 ## Opening a file
 
 `!open` shares a file of a session's folder into its thread, where Slack shows it in its own file
-viewer. `code_with_slack.openfile` holds the logic and `slack_app` the handlers (`open_word`,
+viewer. `awaydesk.openfile` holds the logic and `slack_app` the handlers (`open_word`,
 `open_file`, `open_modal`, `update_modal`, `on_open_choose`, `on_open_query`, `on_open_submit`).
 The file goes up with
 `AsyncWebClient.files_upload_v2` (`files:write`): the file itself, its basename as the name and its
@@ -798,7 +798,7 @@ following links and with no size limit.
 
 ## Sessions
 
-`code_with_slack.sessions.SessionManager` keeps one `ThreadSession` per open Slack thread, across
+`awaydesk.sessions.SessionManager` keeps one `ThreadSession` per open Slack thread, across
 every bound channel. A top-level message opens one in the channel's current folder
 (`SessionManager.open`); a reply inside a thread hands back its existing one, rebuilding it first if
 a restart, an idle close or a gone resume dropped it (`SessionManager.get`); a Resume click or
@@ -814,7 +814,7 @@ refuses while any of the channel's threads is not idle (`SessionManager.bind`).
   trusted in Claude Code. An SDK session never shows Claude Code's trust dialog, and Claude Code
   uses a repository's own hooks, `env` block and helper commands there whether the folder was
   trusted or not.
-  `code_with_slack.trust.workspace_trusted` reads Claude Code's record
+  `awaydesk.trust.workspace_trusted` reads Claude Code's record
   (`projects["<path>"].hasTrustDialogAccepted` in `~/.claude.json`) by Claude Code's rules: in a
   git repository the repository root decides (the main checkout's root for a worktree) and a
   trusted parent does not cover it; outside git, a trusted folder covers its subdirectories.
@@ -1095,7 +1095,7 @@ waits on any other thread.
 
 ## The session index
 
-`code_with_slack.home.Home` publishes the owner's Home tab with `views.publish`, which takes no
+`awaydesk.home.Home` publishes the owner's Home tab with `views.publish`, which takes no
 scope and needs no event from the owner. It always publishes to the configured owner's user id.
 
 `Home.publish` reads the bound channels (`StateStore.channels`) and asks Slack for each one's
@@ -1242,7 +1242,7 @@ and tried again after `home.RETRY_SECONDS`.
 
 ## Slack handlers
 
-`code_with_slack.slack_app.build_app` registers one listener per inbound path: `message` events,
+`awaydesk.slack_app.build_app` registers one listener per inbound path: `message` events,
 the `file_change` event (below, "An audio clip"), the
 Approve, Deny, Answer and Skip buttons, the setup's Model select and Start, the question form's Next
 and Submit, `!open`'s Choose a file button with its modal's search field and Open, and the session
@@ -1272,7 +1272,7 @@ before any wait. A clip waits `voice.WAIT_SECONDS`, in memory only.
 A `message` event is routed by whether it is a reply in an existing thread:
 `slack_app.handle_message` reads `sessions.get(channel, thread_ts)` for a reply (`None` for a thread
 that holds no session), and always `None` for a top-level one (`thread_ts == ts`), even in a channel
-that is bound. `code_with_slack.commands.parse_bang` reads a message starting with `!` (none for one
+that is bound. `awaydesk.commands.parse_bang` reads a message starting with `!` (none for one
 carrying files, which is always a prompt). `handle_message` gives it the event's `text` first, then
 what `commands.unformatted` makes of it. Slack puts the formatting marks in `text` (a backtick
 before the `!` of a message in inline code) and sends the same message in the `rich_text` block of
@@ -1309,7 +1309,7 @@ session (`SessionManager.open`); a message in a thread that holds no session and
 word gets `texts.NOT_A_SESSION`, with nowhere to send it.
 
 `!resume` stands in for Claude Code's interactive `/resume`, which an SDK session does not offer:
-`code_with_slack.resume` lists the directory's sessions from the SDK's `list_sessions` with the
+`awaydesk.resume` lists the directory's sessions from the SDK's `list_sessions` with the
 columns of the terminal's picker (name or title, time since the last activity, git branch, size),
 the first 8 characters of the session id and a Resume button each, or matches `!resume <id or
 name>`. The terminal's picker shows no id; the list shows its start because `!resume` takes a full
@@ -1338,10 +1338,10 @@ A shorter target is read only as a title.
 The list holds the directory's own sessions, not other worktrees', as the terminal's picker
 starts. A Resume click is checked like any other button, and the session must still be one of
 the directory's.
-`!bind` alone lists, through `code_with_slack.folders`, the folders where a session can start:
+`!bind` alone lists, through `awaydesk.folders`, the folders where a session can start:
 `ALLOWED_ROOT`, then its folders, then theirs, skipping hidden folders and symlinks and never
 descending into a git repository (a `.git` directory or file). A folder is kept when
-`code_with_slack.trust` accepts it. The checks run eight at a time and stop once one more than
+`awaydesk.trust` accepts it. The checks run eight at a time and stop once one more than
 the 20 rows shown is found, so the higher levels fill the rows, which are then shown in path
 order. The trust record is parsed again only
 when its mtime or size changes. A Bind click is checked like any other button, its folder goes

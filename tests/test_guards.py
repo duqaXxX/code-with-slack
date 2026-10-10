@@ -3,8 +3,8 @@ from typing import Any
 
 import pytest
 
-from code_with_slack import texts
-from code_with_slack.guards import (
+from awaydesk import texts
+from awaydesk.guards import (
     ChannelGuard,
     Identity,
     interaction_actor,

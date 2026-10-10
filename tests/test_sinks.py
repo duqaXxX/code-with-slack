@@ -11,11 +11,11 @@ import pytest
 from claude_agent_sdk import AssistantMessage, ToolUseBlock, UserMessage
 from slack_sdk.errors import SlackApiError
 
-from code_with_slack import texts
-from code_with_slack.render import sinks
-from code_with_slack.render.previews import Preview
-from code_with_slack.render.renderer import STOPPED, TaskUpdate, TurnRenderer
-from code_with_slack.render.sinks import ReplySink, UpdateLimiter
+from awaydesk import texts
+from awaydesk.render import sinks
+from awaydesk.render.previews import Preview
+from awaydesk.render.renderer import STOPPED, TaskUpdate, TurnRenderer
+from awaydesk.render.sinks import ReplySink, UpdateLimiter
 from tests.fakes import (
     BOT,
     CHANNEL,
@@ -1174,7 +1174,7 @@ async def test_the_open_reply_is_the_stream_until_the_end_lands(slack: FakeSlack
 
 
 async def test_two_sinks_never_step_on_each_other_s_entry(slack: FakeSlack, tmp_path: Path) -> None:
-    from code_with_slack.state import StateStore
+    from awaydesk.state import StateStore
 
     store = StateStore(tmp_path / "state.json")
     store.bind(CHANNEL, tmp_path)
@@ -1216,7 +1216,7 @@ async def test_a_failed_end_keeps_the_reply_tracked_until_the_retry_lands(
 async def test_a_failed_tracking_write_never_orphans_the_stored_ts(
     slack: FakeSlack, tmp_path: Path
 ) -> None:
-    from code_with_slack.state import StateStore
+    from awaydesk.state import StateStore
 
     store = StateStore(tmp_path / "state.json")
     store.bind(CHANNEL, tmp_path)
@@ -3125,12 +3125,12 @@ async def test_a_request_slack_refuses_to_delete_is_not_logged_as_removed(
 ) -> None:
     # Issue #71 reads the removal's timing from the log: a delete that failed must not be in it.
     slack.responses["chat.delete"] = {"ok": False, "error": "cant_delete_message"}
-    with caplog.at_level(logging.INFO, logger="code_with_slack"):
+    with caplog.at_level(logging.INFO, logger="awaydesk"):
         await sinks.delete_request(slack, channel=CHANNEL, ts="1790000000.000100")
     assert "could not remove a request" in caplog.text
     assert "removed a request" not in caplog.text
     slack.responses["chat.delete"] = {"ok": False, "error": "message_not_found"}
-    with caplog.at_level(logging.INFO, logger="code_with_slack"):
+    with caplog.at_level(logging.INFO, logger="awaydesk"):
         await sinks.delete_request(slack, channel=CHANNEL, ts="1790000000.000100")
     assert "removed a request" in caplog.text  # already gone counts as done
 
@@ -3409,7 +3409,7 @@ async def test_an_update_refused_for_too_many_blocks_goes_on_in_a_new_message(
     await settled()
     await clock.advance(sinks.STREAM_SECONDS + 1)
     items = "".join(f"\n- item {n}\n\n## Heading {n}\n" for n in range(1, 41))
-    with caplog.at_level(logging.WARNING, logger="code_with_slack.render.sinks"):
+    with caplog.at_level(logging.WARNING, logger="awaydesk.render.sinks"):
         await sink.text(items)
         await settled()
         await sink.finish([])

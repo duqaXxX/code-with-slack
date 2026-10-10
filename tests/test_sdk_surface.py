@@ -21,7 +21,7 @@ from probe.surface import (
     surface,
 )
 
-SRC = Path(__file__).resolve().parents[1] / "src" / "code_with_slack"
+SRC = Path(__file__).resolve().parents[1] / "src" / "awaydesk"
 ROWS = surface()
 
 

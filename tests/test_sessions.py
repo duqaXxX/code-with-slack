@@ -32,16 +32,16 @@ from claude_agent_sdk.types import (
     TaskUpdatedMessage,
 )
 
-from code_with_slack import sessions, texts
-from code_with_slack.approvals import Answer, Approvals, Approve
-from code_with_slack.footer import UsageCache
-from code_with_slack.guards import Identity
-from code_with_slack.render.renderer import TurnRenderer
-from code_with_slack.render.sinks import UpdateLimiter
-from code_with_slack.render.status import Status, ThreadStatus
-from code_with_slack.sessions import SessionDeps, SessionManager, resolve_directory
-from code_with_slack.state import StateStore
-from code_with_slack.trust import Repository
+from awaydesk import sessions, texts
+from awaydesk.approvals import Answer, Approvals, Approve
+from awaydesk.footer import UsageCache
+from awaydesk.guards import Identity
+from awaydesk.render.renderer import TurnRenderer
+from awaydesk.render.sinks import UpdateLimiter
+from awaydesk.render.status import Status, ThreadStatus
+from awaydesk.sessions import SessionDeps, SessionManager, resolve_directory
+from awaydesk.state import StateStore
+from awaydesk.trust import Repository
 from tests.fakes import (
     BOT,
     CHANNEL,
@@ -842,7 +842,7 @@ async def test_logs_hold_no_message_content(
     harness_for: Callable[..., Harness], caplog: pytest.LogCaptureFixture
 ) -> None:
     h = harness_for({"turns": [sdk_messages("tools")]})
-    with caplog.at_level(logging.DEBUG, logger="code_with_slack"):
+    with caplog.at_level(logging.DEBUG, logger="awaydesk"):
         turn = await h.session().submit("SECRET-PROMPT-CONTENT")
         await asyncio.wait_for(turn.done.wait(), 2)
     assert "SECRET-PROMPT-CONTENT" not in caplog.text
@@ -855,11 +855,11 @@ async def test_an_api_error_is_logged_by_category_and_thread_never_by_its_text(
     (words,) = [m.result for m in messages if isinstance(m, ResultMessage)]
     assert words
     h = harness_for({"turns": [messages]})
-    with caplog.at_level(logging.DEBUG, logger="code_with_slack"):
+    with caplog.at_level(logging.DEBUG, logger="awaydesk"):
         session = h.session()
         turn = await session.submit("hello")
         await asyncio.wait_for(turn.done.wait(), 2)
-    logged = [r.getMessage() for r in caplog.records if r.name == "code_with_slack.sessions"]
+    logged = [r.getMessage() for r in caplog.records if r.name == "awaydesk.sessions"]
     (line,) = [m for m in logged if "reported an error" in m]
     assert line.endswith(f"{session.channel_id}/{session.thread_ts}: server_error")
     assert not any(words in m for m in logged)
@@ -4366,7 +4366,7 @@ async def test_a_background_subagent_s_api_error_shows_on_its_card_and_not_in_th
     assert failed.summary.startswith(reason)
     h = harness_for({"turns": [first]})
     session = h.session()
-    with caplog.at_level(logging.INFO, logger="code_with_slack"):
+    with caplog.at_level(logging.INFO, logger="awaydesk"):
         await asyncio.wait_for((await session.submit("start it")).done.wait(), 2)
         h.clients[0].inject(later)
         await until(lambda: h.reactions()[-1] == Status.DONE.value and session.idle)
@@ -4430,7 +4430,7 @@ async def test_a_reply_s_end_that_brings_no_checkmark_logs_what_held_it(
     # Issue #160: a root left on ⏳ could not be traced, since the check returned in silence.
     first = split_background()[0]
     h = harness_for({"turns": [first]})
-    with caplog.at_level(logging.INFO, logger="code_with_slack.sessions"):
+    with caplog.at_level(logging.INFO, logger="awaydesk.sessions"):
         await asyncio.wait_for((await h.session().submit("start it")).done.wait(), 2)
         await asyncio.sleep(0.1)
     held = [r.getMessage() for r in caplog.records if "no done reaction" in r.getMessage()]
@@ -4514,7 +4514,7 @@ async def test_a_posted_and_a_removed_request_are_logged_by_id_and_age_only(
     ask = CanUseToolCall("Bash", {"command": "SECRET-COMMAND-TEXT"})
     question = CanUseToolCall(recorded["tool_name"], recorded["input"])
     h = harness_for({"turns": [[ask, question, *sdk_messages("tools")]]})
-    with caplog.at_level(logging.INFO, logger="code_with_slack"):
+    with caplog.at_level(logging.INFO, logger="awaydesk"):
         session = h.session()
         turn = await session.submit("SECRET-PROMPT-CONTENT")
         await until(lambda: bool(h.approvals._pending))

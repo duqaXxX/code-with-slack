@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Sensitive-data scan for the code-with-slack repo.
+# Sensitive-data scan for the awaydesk repo.
 #
 # Reads a unified diff on stdin and fails if any ADDED line looks like private data. The repo is
 # public: a leak committed once stays in the history forever, so this runs in CI on every push and

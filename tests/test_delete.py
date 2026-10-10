@@ -3,9 +3,9 @@ from typing import Any
 
 import pytest
 
-from code_with_slack import texts
-from code_with_slack.delete import PAGE, ThreadDeleter
-from code_with_slack.state import StateStore
+from awaydesk import texts
+from awaydesk.delete import PAGE, ThreadDeleter
+from awaydesk.state import StateStore
 from tests.fakes import FakeSlack
 from tests.test_repair import slack_error
 

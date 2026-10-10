@@ -51,13 +51,13 @@ from claude_agent_sdk import SDKSessionInfo
 from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
-from code_with_slack import texts
-from code_with_slack.render.escape import mrkdwn_escape, shown_as_written
-from code_with_slack.render.renderer import one_line
-from code_with_slack.render.sinks import context_block, describe, plain_text_object
-from code_with_slack.render.status import Status
-from code_with_slack.resume import ID_SHOWN, TITLE_LIMIT
-from code_with_slack.state import StateStore
+from awaydesk import texts
+from awaydesk.render.escape import mrkdwn_escape, shown_as_written
+from awaydesk.render.renderer import one_line
+from awaydesk.render.sinks import context_block, describe, plain_text_object
+from awaydesk.render.status import Status
+from awaydesk.resume import ID_SHOWN, TITLE_LIMIT
+from awaydesk.state import StateStore
 
 logger = logging.getLogger(__name__)
 

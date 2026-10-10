@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from code_with_slack.config import ConfigError, load_config
+from awaydesk.config import ConfigError, load_config
 
 BOT = "xox" + "b-000-fake"
 APP = "xap" + "p-000-fake"

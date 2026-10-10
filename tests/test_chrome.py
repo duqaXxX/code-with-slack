@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from code_with_slack.chrome import chrome_enabled
+from awaydesk.chrome import chrome_enabled
 
 
 @pytest.fixture

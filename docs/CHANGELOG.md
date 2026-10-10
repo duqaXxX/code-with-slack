@@ -183,7 +183,7 @@ All notable changes to this project are documented here. The format follows
   the rest of the run. It never notifies and stores nothing. Known limit (issue #130): the iOS
   app can show no status for a thread that Slack on desktop already has open; `docs/setup.md`
   says so.
-- Cleanup of `state.json` (new module `code_with_slack.cleanup`): on start and then every 6
+- Cleanup of `state.json` (new module `awaydesk.cleanup`): on start and then every 6
   hours, a bound channel Slack answers `channel_not_found` about is forgotten with its threads
   (`StateStore.remove_channel`), and the pruning of threads whose session is gone, which ran on
   start alone, runs on the same schedule. A failure that is not that answer removes nothing, a
@@ -191,7 +191,7 @@ All notable changes to this project are documented here. The format follows
   the bound channels nothing is forgotten. A private channel the bot was removed from is
   forgotten like a deleted one: `!bind` there again once the bot is back.
 - Session index: the app's Home tab lists the sessions the threads hold, grouped by channel, the
-  channel and the session used last first (new module `code_with_slack.home`). A channel shows
+  channel and the session used last first (new module `awaydesk.home`). A channel shows
   its five newest sessions and a Show all button; each session is two lines, the root's status
   reaction and the title, then the status in a word, the thread's number of replies, the time of
   its last reply and an Open link to the thread. The replies and the last reply are read from
@@ -220,7 +220,7 @@ All notable changes to this project are documented here. The format follows
   started it, so more than one can be open at once), the ts of every approval, question and D8
   hold request still carrying buttons, and the root's reaction while it is ⏳ or ✋, ids only,
   never message content (`state.json` stays version 2, additive). On start, before the Socket
-  Mode connection opens, `code_with_slack.repair.repair_crash` reads each open reply back by its
+  Mode connection opens, `awaydesk.repair.repair_crash` reads each open reply back by its
   own ts and rewrites it to say the daemon stopped before an answer, dropping the daemon's own
   status line (found by its own fixed block_id, since Slack assigns one to a block that was
   posted without one) rather than the whole message; deletes each stale request; and sets ❌ on a
@@ -242,7 +242,7 @@ All notable changes to this project are documented here. The format follows
 - Probe claim P14: a hook's `cwd` follows a `cd`, which the footer's branch depends on.
 - One Claude Code session per Slack thread, instead of one per channel: a top-level message opens
   a new thread with its own session id, bypass switch and effort level, kept in `state.json`
-  (now version 2); a reply inside a thread continues that session, even after code-with-slack
+  (now version 2); a reply inside a thread continues that session, even after awaydesk
   restarts or the thread's Claude Code process closes from an hour with nothing to do (the next
   message resumes it). A channel bound under version 1 keeps its directory and gets one top-level
   notice explaining the new model, with its old session still reachable through `!resume`.
@@ -270,6 +270,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The project is named `awaydesk` (was `code-with-slack`). The package, the command, the
+  repository, the Slack app and its bot take the new name. On a machine that ran the old name,
+  four places move: the configuration folder is `~/.config/awaydesk/`, the LaunchAgent is
+  `local.awaydesk`, the log is `~/Library/Logs/awaydesk/awaydesk.log`, and the command is
+  `awaydesk`. Nothing is read from the old places.
 - `claude-agent-sdk` 0.2.165, which bundles Claude Code 2.1.294 (was 0.2.164 with 2.1.292). The
   probe certified it on 2026-10-10: all 23 claims hold, every row of `docs/sdk-surface.md` is
   still in the package and every `reference` row is still named by the reference. The two
@@ -303,7 +308,7 @@ All notable changes to this project are documented here. The format follows
 - The README is a landing page: what the daemon is for, what it needs before an install, the
   steps of the setup, what a session shows and one row per command. The detail of each command
   lives in `docs/setup.md` alone. `tests/test_docs.py` fails when the README's command table
-  differs from the `Word` union of `code_with_slack.commands`, when the version or the Python it
+  differs from the `Word` union of `awaydesk.commands`, when the version or the Python it
   states differ from `pyproject.toml`, and when it passes `README_WORD_LIMIT` words.
 
 - A reply ends with ❌ whenever an edit Slack refused left one of its messages short of what
@@ -483,7 +488,7 @@ All notable changes to this project are documented here. The format follows
   2026-10-03) does not say whether a delete notifies; a bot deleting its own message in a
   thread was silent when measured on 2026-09-29, and the top-level case is a check by hand.
 - A message refused while the daemon stops names what the stop waits for (issue #119). Under
-  `code-with-slack is restarting; send this again in a moment.` the refusal lists each thread
+  `awaydesk is restarting; send this again in a moment.` the refusal lists each thread
   that still holds the restart, of any channel: its channel, a link to the thread labelled with
   the session's title as the Home tab names it (`Session` when it has none, or when the
   folder's sessions cannot be listed), and what holds it there
@@ -603,10 +608,10 @@ All notable changes to this project are documented here. The format follows
 - `!stop`, a restart and an error end a reply through the same path as a normal end: the stream
   stops with the footer (a push), and the root shows ✅ or ❌ as before. A message queued in a
   thread when a restart drops it gets no reply of its own: the end of the running reply, or one
-  message when nothing runs, says `N messages were not sent because code-with-slack restarted:
+  message when nothing runs, says `N messages were not sent because awaydesk restarted:
   send them again.` with the start of each (`sessions.not_sent`).
 - Crash repair stops each open reply's stream first (`message_not_in_streaming_state` is fine),
-  then edits the message: a card left running becomes an error, and `code-with-slack stopped
+  then edits the message: a card left running becomes an error, and `awaydesk stopped
   before this answer.` is appended. Nothing is posted. `open_replies` in `state.json` now holds
   the ts of the reply's stream or message.
 - `docs/features.md` and `docs/setup.md` describe the notification behaviour above: one push when
@@ -641,7 +646,7 @@ All notable changes to this project are documented here. The format follows
 - An Edit or Write diff shows whole, as the terminal shows it, in a collapsible full-width
   container closed by default: the call's line is its title and `Added … lines, removed … lines`
   its subtitle. It no longer stops at 20 lines.
-- code-with-slack's own notices (the answer to `!bind`, `!bypass` and `!stop`, a restart, a
+- awaydesk's own notices (the answer to `!bind`, `!bypass` and `!stop`, a restart, a
   refused attachment, the ephemeral errors, and the lines of the `!bind` and `!resume` lists)
   are a context block, small and grey as the footer, so they read apart from Claude's replies.
   `!help`, `!guide`, `!status` and the answer to a resume stay full size.
@@ -691,7 +696,7 @@ All notable changes to this project are documented here. The format follows
   turn that opens with no replay is the report. The correction at the turn's end stays, for the
   turns no recording covers: one that opens with a compaction, a command, a prompt with an
   image, a turn that fails before its first word.
-- The setup guide and the docstring of `code_with_slack.trust` say what a trusted parent folder
+- The setup guide and the docstring of `awaydesk.trust` say what a trusted parent folder
   leaves out (#9). Outside a repository a parent's trust lets a session start, and Claude Code
   still holds the `permissions.allow` rules and `additionalDirectories` of the folder's own
   `.claude/settings.json` until the dialog is accepted in that folder, which is why the terminal
@@ -1134,10 +1139,10 @@ First release.
 - Package scaffold: `pyproject.toml` with pinned dependencies, MIT license, docs test.
 - CI (sensitive-data scan; tests, types, lint), the published text scan, Dependabot for uv and
   GitHub Actions.
-- Configuration loading from `~/.config/code-with-slack/.env` with the mode 600 check.
+- Configuration loading from `~/.config/awaydesk/.env` with the mode 600 check.
 - `state.json` with atomic writes, and a single-instance lock on the configuration directory.
 - Identity and channel guards on every inbound path: messages, buttons and form submissions.
-- The `code-with-slack` entry point, started by a user LaunchAgent.
+- The `awaydesk` entry point, started by a user LaunchAgent.
 - One Claude Code session per channel with a turn queue, resume after a restart, stale-session
   recovery, bypass held in memory, and stop. Shutting down or rebinding a channel ends every
   waiting reply with the reason.

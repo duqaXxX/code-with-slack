@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from code_with_slack.lock import AlreadyRunning, single_instance
+from awaydesk.lock import AlreadyRunning, single_instance
 
 
 def test_a_second_holder_is_refused(tmp_path: Path) -> None:
@@ -24,7 +24,7 @@ def test_another_process_is_refused(tmp_path: Path) -> None:
     holder = textwrap.dedent(f"""
         import sys, time
         from pathlib import Path
-        from code_with_slack.lock import single_instance
+        from awaydesk.lock import single_instance
         with single_instance(Path({str(tmp_path)!r})):
             print("held", flush=True)
             time.sleep(30)
