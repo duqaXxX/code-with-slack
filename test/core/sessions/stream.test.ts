@@ -446,6 +446,9 @@ test("a reply whose appends slack refuses ends whole with the checkmark", async 
   h.slack.responses["chat.appendStream"] = { ok: false, error: "msg_too_long" };
   h.clients[0]?.inject([...notice, ...injected]);
   await h.until(() => h.slack.callsTo("chat.appendStream").length > 0); // the refusal did happen
+  // The report turn ends on a footer, which runs git in real time: on a slow machine the fake
+  // clock's 0.2 seconds pass before it does, so the end is waited for and the 0.2 come after.
+  await h.until(() => h.reactions().at(-1) === Status.DONE);
   await h.sleep(0.2); // past where a failed end's retry would have shown the cross
   assert.equal(h.reactions().at(-1), Status.DONE);
   assert.ok(!h.reactions().includes(Status.ERROR));
