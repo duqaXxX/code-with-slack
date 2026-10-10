@@ -101,7 +101,7 @@ test("a start where Claude Code refuses the resume rejects with ResumeRefused", 
   assert.equal(sdk.only.closed, true);
 });
 
-test("a folder is trusted as Claude Code's record says", LIMIT, async () => {
+test("a folder is trusted as Claude Code's record says", { ...LIMIT, ...GIT_LAYOUT }, async () => {
   const trusted = join(tmp, "trusted");
   const other = join(tmp, "other");
   await mkdir(trusted);
