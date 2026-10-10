@@ -35,7 +35,7 @@ let home = "";
 let warnings: string[] = [];
 
 beforeEach(() => {
-  tmp = realpathSync(mkdtempSync(join(tmpdir(), "awaydesk-trust-")));
+  tmp = realpathSync.native(mkdtempSync(join(tmpdir(), "awaydesk-trust-")));
   home = join(tmp, "home");
   mkdirSync(home);
   warnings = [];
@@ -460,7 +460,8 @@ test("known limit a folder at the path of a deleted worktree passes for it", asy
   assert.ok(await workspaceTrusted(worktree, home));
 });
 
-test("a folder s name never reaches the log", async () => {
+// A folder name on Windows cannot hold a line break.
+test("a folder s name never reaches the log", POSIX, async () => {
   const app = makeApp();
   const logged: string[] = [];
   for (const level of ["debug", "info", "warning"] as const) {

@@ -169,8 +169,9 @@ export async function singleInstance(directory: string): Promise<InstanceLock> {
   try {
     server = await listen(address);
   } catch (error) {
+    if (!nameTaken(error)) throw error;
     // A named pipe vanishes with its process: one in use is always a live holder.
-    if (!nameTaken(error) || process.platform === "win32") throw error;
+    if (process.platform === "win32") throw refusal;
     // A socket file outlives a process killed before it could remove it: a connection that
     // is accepted means the holder is alive, one that is refused means the file is stale.
     if (await accepts(address)) throw refusal;

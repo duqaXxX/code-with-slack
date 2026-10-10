@@ -23,7 +23,7 @@ const APP = `${"xap"}p-000-fake`;
 const made: string[] = [];
 
 function scratch(): string {
-  const directory = realpathSync(mkdtempSync(join(tmpdir(), "awd-config-")));
+  const directory = realpathSync.native(mkdtempSync(join(tmpdir(), "awd-config-")));
   made.push(directory);
   return directory;
 }
